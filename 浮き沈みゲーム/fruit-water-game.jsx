@@ -1,0 +1,1420 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// ─────────────── DATA ───────────────
+// tier: 1=最初から, 2=スコア50以上, 3=スコア120以上
+const ALL_ITEMS = [
+  { id:'garlic',      emoji:'🧄', name:'にんにく',     density:1.10, volume:2,  tier:1 },
+  { id:'cherry',      emoji:'🍒', name:'さくらんぼ',   density:1.00, volume:2,  tier:1 },
+  { id:'blueberry',   emoji:'🫐', name:'ブルーベリー', density:1.04, volume:2,  tier:2 },
+  { id:'grapes',      emoji:'🍇', name:'ぶどう',       density:1.06, volume:3,  tier:1 },
+  { id:'strawberry',  emoji:'🍓', name:'いちご',       density:0.96, volume:3,  tier:1 },
+  { id:'kiwi',        emoji:'🥝', name:'キウイ',       density:1.02, volume:4,  tier:1 },
+  { id:'lemon',       emoji:'🍋', name:'レモン',       density:0.90, volume:4,  tier:1 },
+  { id:'lime',        emoji:'🍋', name:'ライム',       density:1.00, volume:4,  tier:2 },
+  { id:'peach',       emoji:'🍑', name:'もも',         density:0.88, volume:5,  tier:1 },
+  { id:'pepper',      emoji:'🫑', name:'ピーマン',     density:0.51, volume:5,  tier:1 },
+  { id:'carrot',      emoji:'🥕', name:'にんじん',     density:1.01, volume:5,  tier:1 },
+  { id:'plum',        emoji:'🍑', name:'すもも',       density:1.06, volume:5,  tier:2 },
+  { id:'onion',       emoji:'🧅', name:'たまねぎ',     density:1.05, volume:6,  tier:2 },
+  { id:'orange',      emoji:'🍊', name:'みかん',       density:0.84, volume:6,  tier:1 },
+  { id:'tomato',      emoji:'🍅', name:'トマト',       density:0.94, volume:6,  tier:1 },
+  { id:'fig',         emoji:'🍈', name:'いちじく',     density:1.05, volume:6,  tier:3 },
+  { id:'pear',        emoji:'🍐', name:'洋なし',       density:1.02, volume:7,  tier:2 },
+  { id:'cucumber',    emoji:'🥒', name:'きゅうり',     density:0.97, volume:7,  tier:2 },
+  { id:'mango',       emoji:'🥭', name:'マンゴー',     density:1.02, volume:8,  tier:2 },
+  { id:'banana',      emoji:'🍌', name:'バナナ',       density:0.94, volume:8,  tier:1 },
+  { id:'apple',       emoji:'🍎', name:'りんご',       density:0.82, volume:8,  tier:1 },
+  { id:'potato',      emoji:'🥔', name:'じゃがいも',   density:1.08, volume:8,  tier:1 },
+  { id:'sweetpotato', emoji:'🍠', name:'さつまいも',   density:1.05, volume:9,  tier:2 },
+  { id:'eggplant',    emoji:'🍆', name:'なす',         density:0.98, volume:10, tier:2 },
+  { id:'corn',        emoji:'🌽', name:'とうもろこし', density:0.82, volume:10, tier:2 },
+  { id:'pomelo',      emoji:'🍊', name:'ぶんたん',     density:0.89, volume:11, tier:3 },
+  { id:'pineapple',   emoji:'🍍', name:'パイナップル', density:1.01, volume:11, tier:3 },
+  { id:'daikon',      emoji:'🥖', name:'だいこん',     density:1.00, volume:11, tier:3 },
+  { id:'broccoli',    emoji:'🥦', name:'ブロッコリー', density:0.85, volume:12, tier:1 },
+  { id:'coconut',     emoji:'🥥', name:'ココナッツ',   density:0.67, volume:13, tier:3 },
+  { id:'cabbage',     emoji:'🥬', name:'キャベツ',     density:0.45, volume:14, tier:3 },
+  { id:'durian',      emoji:'🍈', name:'ドリアン',     density:1.04, volume:16, tier:3 },
+  { id:'pumpkin',     emoji:'🎃', name:'かぼちゃ',     density:0.88, volume:18, tier:3 },
+  { id:'melon',       emoji:'🍈', name:'メロン',       density:0.91, volume:20, tier:3 },
+  { id:'watermelon',  emoji:'🍉', name:'スイカ',       density:0.92, volume:25, tier:1 },
+];
+
+const LEVELS = [
+  { lv:1, name:'はじめての池',  capacity:160, water:35, goal:8,  color:'#4ac8ee', bg:'#b8ecff', bowlW:310, innerW:272, preItems:[], preDesc:'初期の錘なし', icon:'🏊' },
+  { lv:2, name:'ちょっと狭い桶',capacity:140, water:40, goal:10, color:'#5abb5a', bg:'#c0f0c0', bowlW:285, innerW:248, preItems:[], preDesc:'初期の錘なし', icon:'🪣' },
+  { lv:3, name:'タライ',        capacity:120, water:45, goal:12, color:'#f0a030', bg:'#ffe8b0', bowlW:260, innerW:224, preItems:['potato'], preDesc:'じゃがいもが沈んでいる', icon:'🛁' },
+  { lv:4, name:'バケツ',        capacity:105, water:48, goal:14, color:'#e05858', bg:'#ffc8c8', bowlW:235, innerW:200, preItems:['potato','onion'], preDesc:'じゃがいも・たまねぎが沈んでいる', icon:'🪣' },
+  { lv:5, name:'小さなカップ',  capacity:90,  water:52, goal:16, color:'#9040c0', bg:'#e0c0ff', bowlW:210, innerW:176, preItems:['potato','onion','carrot'], preDesc:'じゃがいも・たまねぎ・にんじんが沈んでいる', icon:'🧪' },
+];
+
+const MISSIONS_POOL = [
+  { id:'float5',  text:'浮くものを5個入れよう🌊',   bonus:60,  check:items=>items.filter(i=>i.floats).length>=5 },
+  { id:'sink5',   text:'沈むものを5個入れよう⬇️',   bonus:60,  check:items=>items.filter(i=>!i.floats).length>=5 },
+  { id:'wmelon',  text:'スイカを入れよう🍉',         bonus:100, check:items=>items.some(i=>i.id==='watermelon') },
+  { id:'ten',     text:'合計10個入れよう🎯',         bonus:80,  check:items=>items.length>=10 },
+  { id:'big3',    text:'大きいもの(10L以上)を3個⬆️', bonus:70,  check:items=>items.filter(i=>i.volume>=10).length>=3 },
+  { id:'small5',  text:'小さいもの(5L以下)を5個🐜', bonus:50,  check:items=>items.filter(i=>i.volume<=5).length>=5 },
+  { id:'fruit5',  text:'果物だけ5個入れよう🍎',      bonus:55,  check:items=>items.filter(i=>['apple','banana','orange','peach','grapes','strawberry','lemon','cherry','kiwi','mango','pear','melon','watermelon','blueberry','plum','lime','fig','pomelo','coconut'].includes(i.id)).length>=5 },
+  { id:'noover',  text:'水位80%以内でキープ💧',      bonus:90,  check:(items,fill)=>fill<=80 },
+];
+
+const ACHIEVEMENTS = [
+  { id:'first',    emoji:'🌊', name:'初入水',     desc:'初めてアイテムを入れた',         check:s=>s.totalItems>=1 },
+  { id:'wmelon',   emoji:'🍉', name:'スイカ王',   desc:'スイカを入れた',                 check:s=>s.usedWatermelon },
+  { id:'ten',      emoji:'🔟', name:'10個達成',   desc:'1ゲームで10個入れた',            check:s=>s.maxItemsInGame>=10 },
+  { id:'twenty',   emoji:'💪', name:'20個の猛者', desc:'1ゲームで20個入れた',            check:s=>s.maxItemsInGame>=20 },
+  { id:'aiwin',    emoji:'🤖', name:'AI撃破！',   desc:'AI対戦で勝利した',               check:s=>s.aiWins>=1 },
+  { id:'danger',   emoji:'😅', name:'ぎりぎり名人',desc:'水位90%超えを生き延びた',      check:s=>s.dangerSurvived },
+  { id:'floater',  emoji:'🎈', name:'浮力マスター',desc:'浮くものだけを8個入れた',       check:s=>s.allFloatRecord>=8 },
+  { id:'score100', emoji:'💯', name:'百点侍',     desc:'累計スコア100点を突破した',      check:s=>s.totalScore>=100 },
+  { id:'tier3',    emoji:'🔓', name:'コレクター', desc:'全アイテムをアンロックした',     check:s=>s.totalScore>=120 },
+  { id:'lv5',      emoji:'👑', name:'マスター',   desc:'レベル5をクリアした',            check:s=>s.maxLevelCleared>=5 },
+];
+
+const MIN_V=2, MAX_V=25, BOWL_H=260;
+function volToSize(v){ const t=(v-MIN_V)/(MAX_V-MIN_V); return 0.85+t*3.6; }
+function getDisp(item){ return item.density<1?item.volume*item.density:item.volume; }
+function pick2Missions(){ const pool=[...MISSIONS_POOL].sort(()=>Math.random()-0.5); return pool.slice(0,2); }
+
+// ─────────────── SOUND ENGINE ───────────────
+function useSoundEngine() {
+  const ctxRef = useRef(null);
+  const bgmRef = useRef(null);
+  const [soundOn, setSoundOn] = useState(true);
+
+  function getCtx() {
+    if (!ctxRef.current) ctxRef.current = new (window.AudioContext||window.webkitAudioContext)();
+    if (ctxRef.current.state==='suspended') ctxRef.current.resume();
+    return ctxRef.current;
+  }
+
+  const playTone = useCallback((freq, dur, type='sine', vol=0.15, delay=0) => {
+    if (!soundOn) return;
+    try {
+      const ctx=getCtx(); const t=ctx.currentTime+delay;
+      const osc=ctx.createOscillator(); const g=ctx.createGain();
+      osc.connect(g); g.connect(ctx.destination);
+      osc.type=type; osc.frequency.setValueAtTime(freq,t);
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(vol,t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+      osc.start(t); osc.stop(t+dur);
+    } catch(e){}
+  },[soundOn]);
+
+  const playSplash = useCallback(()=>{ playTone(440,0.12,'sine',0.12); playTone(330,0.18,'sine',0.08,0.04); },[playTone]);
+  const playFloat  = useCallback(()=>{ [523,659,784].forEach((f,i)=>playTone(f,0.15,'sine',0.1,i*0.07)); },[playTone]);
+  const playSink   = useCallback(()=>{ [330,262,196].forEach((f,i)=>playTone(f,0.18,'sine',0.1,i*0.07)); },[playTone]);
+  const playOverflow=useCallback(()=>{ [220,196,165,147].forEach((f,i)=>playTone(f,0.25,'sawtooth',0.12,i*0.12)); },[playTone]);
+  const playWin    = useCallback(()=>{ [523,659,784,1047].forEach((f,i)=>playTone(f,0.22,'sine',0.12,i*0.1)); },[playTone]);
+  const playLvUp   = useCallback(()=>{ [392,494,587,784].forEach((f,i)=>playTone(f,0.3,'sine',0.15,i*0.12)); },[playTone]);
+  const playAchieve= useCallback(()=>{ [784,880,1047].forEach((f,i)=>playTone(f,0.25,'sine',0.14,i*0.09)); },[playTone]);
+  const playMission= useCallback(()=>{ [523,784,1047].forEach((f,i)=>playTone(f,0.2,'triangle',0.12,i*0.1)); },[playTone]);
+
+  // BGM: simple cheerful melody loop
+  const startBGM = useCallback(()=>{
+    if (!soundOn) return;
+    if (bgmRef.current) return;
+    try {
+      const ctx=getCtx();
+      const notes=[523,659,784,659,523,784,659,523,440,523,659,523];
+      const durs= [0.25,0.25,0.25,0.25,0.5,0.25,0.25,0.5,0.25,0.25,0.5,0.5];
+      let idx=0; let nextTime=ctx.currentTime+0.2;
+      function scheduleNext(){
+        while(nextTime < ctx.currentTime+2){
+          const freq=notes[idx%notes.length];
+          const dur=durs[idx%durs.length];
+          const osc=ctx.createOscillator(); const g=ctx.createGain();
+          osc.connect(g); g.connect(ctx.destination);
+          osc.type='triangle'; osc.frequency.setValueAtTime(freq/2,nextTime);
+          g.gain.setValueAtTime(0,nextTime);
+          g.gain.linearRampToValueAtTime(0.05,nextTime+0.03);
+          g.gain.exponentialRampToValueAtTime(0.001,nextTime+dur-0.05);
+          osc.start(nextTime); osc.stop(nextTime+dur);
+          nextTime+=dur; idx++;
+        }
+      }
+      scheduleNext();
+      bgmRef.current=setInterval(scheduleNext,500);
+    } catch(e){}
+  },[soundOn]);
+
+  const stopBGM = useCallback(()=>{
+    if (bgmRef.current){ clearInterval(bgmRef.current); bgmRef.current=null; }
+  },[]);
+
+  useEffect(()=>()=>stopBGM(),[stopBGM]);
+
+  return { soundOn, setSoundOn, playSplash, playFloat, playSink, playOverflow, playWin, playLvUp, playAchieve, playMission, startBGM, stopBGM };
+}
+
+// ─────────────── STORAGE ───────────────
+const SAVE_KEY='fruit-bowl-v2';
+const defaultSave={totalScore:0,highScores:[],achievements:[],maxLevelCleared:0,stats:{totalItems:0,maxItemsInGame:0,aiWins:0,usedWatermelon:false,dangerSurvived:false,allFloatRecord:0,totalScore:0}};
+
+async function loadSave(){
+  try{
+    const timeout = new Promise(res => setTimeout(() => res(null), 1500));
+    const r = await Promise.race([window.storage.get(SAVE_KEY), timeout]);
+    return r ? JSON.parse(r.value) : defaultSave;
+  } catch{ return defaultSave; }
+}
+async function writeSave(data){
+  try{ await window.storage.set(SAVE_KEY,JSON.stringify(data)); }catch{}
+}
+
+// ─────────────── SVG COMPONENTS ───────────────
+function WholeWatermelon({size,dimmed}){
+  const px=size*16;
+  return <svg width={px} height={px} viewBox="0 0 100 100" style={{display:'block',filter:dimmed?'brightness(0.55) saturate(0.5)':'none'}}>
+    {/* 影 */}
+    <ellipse cx="50" cy="95" rx="38" ry="5" fill="rgba(0,0,0,0.1)"/>
+    {/* 外皮ベース（濃い緑） */}
+    <circle cx="50" cy="49" r="46" fill="#1e7a1e"/>
+    {/* 薄い緑のシマ模様（縦縞） */}
+    <path d="M50,3 C62,3 74,10 82,22 C70,18 62,15 50,15 C38,15 30,18 18,22 C26,10 38,3 50,3Z" fill="#4ec44e" opacity="0.85"/>
+    <path d="M50,3 C38,8 30,18 26,32 C28,26 30,20 32,15 C38,10 44,6 50,3Z" fill="#4ec44e" opacity="0.7"/>
+    <path d="M50,3 C62,8 70,18 74,32 C72,26 70,20 68,15 C62,10 56,6 50,3Z" fill="#4ec44e" opacity="0.7"/>
+    <path d="M18,22 C10,34 6,46 6,49 C6,56 8,63 12,69 C10,60 10,50 14,38 C15,32 16,27 18,22Z" fill="#4ec44e" opacity="0.7"/>
+    <path d="M82,22 C90,34 94,46 94,49 C94,56 92,63 88,69 C90,60 90,50 86,38 C85,32 84,27 82,22Z" fill="#4ec44e" opacity="0.7"/>
+    <path d="M12,69 C18,80 30,90 50,93 C70,90 82,80 88,69 C76,78 64,82 50,82 C36,82 24,78 12,69Z" fill="#4ec44e" opacity="0.7"/>
+    {/* へた */}
+    <ellipse cx="50" cy="5" rx="4" ry="3" fill="#2d5a0a"/>
+    <path d="M48,3 Q50,0 52,3" stroke="#2d5a0a" strokeWidth="2" fill="none" strokeLinecap="round"/>
+    <path d="M46,5 Q44,1 47,2" stroke="#3a7a10" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+    <path d="M54,5 Q56,1 53,2" stroke="#3a7a10" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+    {/* ハイライト（つやつや） */}
+    <ellipse cx="34" cy="26" rx="10" ry="6" fill="rgba(255,255,255,0.28)" transform="rotate(-35 34 26)"/>
+    <ellipse cx="28" cy="34" rx="4" ry="2.5" fill="rgba(255,255,255,0.18)" transform="rotate(-35 28 34)"/>
+  </svg>;
+}
+
+function WholeMelon({size,dimmed}){
+  const px=size*16;
+  return <svg width={px} height={px} viewBox="0 0 100 100" style={{display:'block',filter:dimmed?'brightness(0.55) saturate(0.5)':'none'}}>
+    <circle cx="50" cy="50" r="48" fill="#c8e060"/>
+    {[15,28,41,54,67,80].map((x,i)=><line key={'v'+i} x1={x} y1="10" x2={x+8} y2="90" stroke="#a8c040" strokeWidth="1.5" opacity="0.7"/>)}
+    {[15,28,41,54,67,80].map((y,i)=><line key={'h'+i} x1="10" y1={y} x2="90" y2={y+5} stroke="#a8c040" strokeWidth="1.5" opacity="0.7"/>)}
+    <circle cx="50" cy="50" r="48" fill="none" stroke="#c8e060" strokeWidth="3"/>
+    <ellipse cx="50" cy="6" rx="5" ry="3" fill="#6a8a20"/>
+    <rect x="48" y="3" width="4" height="8" rx="2" fill="#6a8a20"/>
+    <circle cx="50" cy="50" r="38" fill="white"/>
+    <circle cx="50" cy="50" r="35" fill="#e8f8e0"/>
+    <circle cx="50" cy="50" r="26" fill="#d0f0c0"/>
+    <circle cx="50" cy="50" r="14" fill="#ffe8a0" opacity="0.7"/>
+    {[[44,44],[56,44],[40,52],[50,57],[60,52],[45,60],[55,60]].map(([x,y],i)=>
+      <ellipse key={i} cx={x} cy={y} rx="2.2" ry="3.5" fill="#c8a830" transform={`rotate(${(i*40)%50-25} ${x} ${y})`}/>
+    )}
+    <ellipse cx="35" cy="33" rx="9" ry="5" fill="rgba(255,255,255,0.35)" transform="rotate(-30 35 33)"/>
+  </svg>;
+}
+
+function WholeDaikon({size,dimmed}){
+  const px=size*16;
+  return <svg width={px} height={px*1.4} viewBox="0 0 60 90" style={{display:'block',filter:dimmed?'brightness(0.55) saturate(0.5)':'none'}}>
+    <ellipse cx="22" cy="14" rx="7" ry="12" fill="#4a9a30" transform="rotate(-30 22 14)"/>
+    <ellipse cx="30" cy="10" rx="6" ry="11" fill="#5aaa3a" transform="rotate(-5 30 10)"/>
+    <ellipse cx="38" cy="14" rx="7" ry="12" fill="#4a9a30" transform="rotate(25 38 14)"/>
+    <rect x="27" y="18" width="6" height="6" rx="3" fill="#6aba40"/>
+    <path d="M20,22 Q14,40 16,62 Q18,78 30,85 Q42,78 44,62 Q46,40 40,22 Z" fill="white"/>
+    <path d="M20,22 Q14,40 16,62 Q18,78 30,85 Q42,78 44,62 Q46,40 40,22 Z" fill="none" stroke="#ddd" strokeWidth="1.5"/>
+    {[-6,-2,2,6].map((dx,i)=><path key={i} d={`M${30+dx},24 Q${30+dx+1},54 ${30+dx},82`} stroke="#eee" strokeWidth="0.8" fill="none"/>)}
+    <line x1="18" y1="55" x2="12" y2="58" stroke="#ccc" strokeWidth="1"/>
+    <line x1="42" y1="55" x2="48" y2="58" stroke="#ccc" strokeWidth="1"/>
+    <ellipse cx="24" cy="36" rx="3" ry="10" fill="rgba(255,255,255,0.5)" transform="rotate(-10 24 36)"/>
+  </svg>;
+}
+
+function ItemIcon({item,sizePx,dimmed=false}){
+  if(item.id==='watermelon') return <WholeWatermelon size={sizePx} dimmed={dimmed}/>;
+  if(item.id==='melon')      return <WholeMelon size={sizePx} dimmed={dimmed}/>;
+  if(item.id==='daikon')     return <WholeDaikon size={sizePx} dimmed={dimmed}/>;
+  return <span style={{fontSize:`${sizePx}rem`,lineHeight:1.05,display:'block',filter:dimmed?'brightness(0.55) saturate(0.5)':'none'}}>{item.emoji}</span>;
+}
+
+// ─────────────── AI ───────────────
+async function askAI(totalVol, capacity, history){
+  const remaining=capacity-totalVol;
+  const prompt=`あなたはボールに野菜・果物を入れるゲームのAIです。
+ボール容量: ${capacity}L / 現在使用: ${totalVol}L / 残り: ${remaining}L
+あふれさせたプレイヤーが負け。
+選択肢: ${ALL_ITEMS.map(i=>`${i.id}(${i.name}:${i.volume}L)`).join(', ')}
+履歴: ${history.map(h=>`${h.who==='player'?'相手':'自分'}→${h.name}`).join(', ')||'なし'}
+1つ選び必ずJSONのみで返答:{"itemId":"ID","comment":"ひとこと30文字以内"}`;
+  try{
+    const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:150,system:"ゲームAI。JSON形式のみで返答。",messages:[{role:"user",content:prompt}]})});
+    const data=await res.json();
+    const text=data.content?.find(b=>b.type==="text")?.text||"";
+    const parsed=JSON.parse(text.replace(/```json|```/g,"").trim());
+    const chosen=ALL_ITEMS.find(i=>i.id===parsed.itemId);
+    return {item:chosen||ALL_ITEMS[Math.floor(Math.random()*ALL_ITEMS.length)],comment:parsed.comment||"…"};
+  }catch{
+    const safe=ALL_ITEMS.filter(i=>i.volume<remaining);
+    const item=safe.length>0?safe.reduce((b,c)=>c.volume>b.volume?c:b):ALL_ITEMS[0];
+    return {item,comment:"む…通信エラー。でも負けない！"};
+  }
+}
+
+// ─────────────── TUTORIAL ───────────────
+const TUTORIAL_SLIDES=[
+  {title:"🌊 うかぶ？しずむ？",body:"野菜や果物をボールに入れていくゲームだよ！\nボールがあふれたらゲームオーバー！",icon:"🎮"},
+  {title:"浮く？沈む？",body:"密度が1未満のものは水に浮く🌊\n密度が1以上のものは沈む⬇️\n大きいものほど水位への影響が大きい！",icon:"⚛️"},
+  {title:"ゲームモード",body:"🎮 ソロ：レベルごとにクリアを目指す！\n🤖 AI対戦：あふれさせた方が負け！\nミッションをクリアするとボーナス点！",icon:"🏆"},
+  {title:"アイテムをアンロック",body:"スコアを稼ぐと新しいアイテムが解放されるよ！\n🔒 ブロンズ：スコア50以上\n🔒 ゴールド：スコア120以上",icon:"🔓"},
+  {title:"さあ始めよう！",body:"ミッションをクリアして\n実績バッジを集めよう！\nハイスコアに挑戦だ！🌟",icon:"🚀"},
+];
+
+function TutorialScreen({onClose}){
+  const [slide,setSlide]=useState(0);
+  const s=TUTORIAL_SLIDES[slide];
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}}>
+      <div style={{background:'white',borderRadius:'28px',padding:'32px 28px',maxWidth:'340px',width:'90%',textAlign:'center',boxShadow:'0 20px 60px rgba(0,0,0,0.3)',animation:'popIn 0.4s cubic-bezier(0.34,1.56,0.64,1)'}}>
+        <div style={{fontSize:'3.5rem',marginBottom:'8px'}}>{s.icon}</div>
+        <h2 style={{margin:'0 0 12px',color:'#0d5a8a',fontSize:'1.3rem',fontWeight:900}}>{s.title}</h2>
+        <p style={{color:'#555',fontSize:'0.9rem',lineHeight:1.7,whiteSpace:'pre-line',margin:'0 0 24px'}}>{s.body}</p>
+        <div style={{display:'flex',gap:'6px',justifyContent:'center',marginBottom:'20px'}}>
+          {TUTORIAL_SLIDES.map((_,i)=>(
+            <div key={i} onClick={()=>setSlide(i)} style={{width:i===slide?'20px':'8px',height:'8px',borderRadius:'4px',background:i===slide?'#0d5a8a':'#ccc',transition:'all 0.3s',cursor:'pointer'}}/>
+          ))}
+        </div>
+        <div style={{display:'flex',gap:'10px',justifyContent:'center'}}>
+          {slide>0&&<button onClick={()=>setSlide(s=>s-1)} style={btnStyle('#aaa')}>← 前へ</button>}
+          {slide<TUTORIAL_SLIDES.length-1
+            ?<button onClick={()=>setSlide(s=>s+1)} style={btnStyle('#1a7bbb')}>次へ →</button>
+            :<button onClick={onClose} style={btnStyle('#e04020')}>🚀 はじめる！</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────── RANKING SCREEN ───────────────
+function RankingScreen({scores,onClose}){
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}}>
+      <div style={{background:'white',borderRadius:'28px',padding:'28px 24px',maxWidth:'320px',width:'90%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)',animation:'popIn 0.4s ease'}}>
+        <h2 style={{margin:'0 0 16px',textAlign:'center',color:'#0d5a8a',fontSize:'1.4rem',fontWeight:900}}>🏆 ハイスコア</h2>
+        {scores.length===0
+          ?<p style={{textAlign:'center',color:'#aaa'}}>まだ記録がありません</p>
+          :scores.map((s,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 14px',background:i===0?'#fff8e0':i===1?'#f8f8f8':'white',borderRadius:'14px',marginBottom:'6px',border:`1px solid ${i===0?'#f0c820':i===1?'#ddd':'#eee'}`}}>
+              <span style={{fontSize:'1.4rem'}}>{['🥇','🥈','🥉','4️⃣','5️⃣'][i]}</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:900,color:'#333',fontSize:'1.1rem'}}>{s.score}点</div>
+                <div style={{fontSize:'0.72rem',color:'#888'}}>{s.mode} / Lv{s.level||1} / {s.date}</div>
+              </div>
+            </div>
+          ))
+        }
+        <button onClick={onClose} style={{...btnStyle('#555'),width:'100%',marginTop:'14px'}}>閉じる</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────── ACHIEVEMENT SCREEN ───────────────
+function AchievementScreen({earned,onClose}){
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}}>
+      <div style={{background:'white',borderRadius:'28px',padding:'28px 20px',maxWidth:'340px',width:'92%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)',animation:'popIn 0.4s ease',maxHeight:'85vh',overflowY:'auto'}}>
+        <h2 style={{margin:'0 0 16px',textAlign:'center',color:'#0d5a8a',fontSize:'1.3rem',fontWeight:900}}>🏅 実績 ({earned.length}/{ACHIEVEMENTS.length})</h2>
+        <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          {ACHIEVEMENTS.map(a=>{
+            const done=earned.includes(a.id);
+            return(
+              <div key={a.id} style={{display:'flex',gap:'12px',alignItems:'center',padding:'10px 14px',borderRadius:'14px',background:done?'#f0fff0':'#f8f8f8',border:`1px solid ${done?'#80c880':'#eee'}`,opacity:done?1:0.5}}>
+                <span style={{fontSize:'1.8rem',filter:done?'none':'grayscale(1)'}}>{a.emoji}</span>
+                <div>
+                  <div style={{fontWeight:900,color:'#333',fontSize:'0.92rem'}}>{done?a.name:'???'}</div>
+                  <div style={{fontSize:'0.72rem',color:'#888'}}>{done?a.desc:'未達成'}</div>
+                </div>
+                {done&&<span style={{marginLeft:'auto',fontSize:'0.7rem',background:'#4aa840',color:'white',borderRadius:'50px',padding:'2px 8px',fontWeight:900}}>獲得</span>}
+              </div>
+            );
+          })}
+        </div>
+        <button onClick={onClose} style={{...btnStyle('#555'),width:'100%',marginTop:'14px'}}>閉じる</button>
+      </div>
+    </div>
+  );
+}
+
+function btnStyle(bg){ return {background:`linear-gradient(135deg,${bg},${bg}dd)`,color:'white',border:'none',borderRadius:'50px',padding:'10px 22px',fontSize:'0.95rem',fontWeight:900,cursor:'pointer'}; }
+
+// ─────────────── LAYOUT HELPERS ───────────────
+const INNER_W = 280; // ボール内幅(px)
+const PAD = 8;       // 左右余白
+
+function itemPx(volume){ return volToSize(volume) * 16; }
+
+// 棚詰めアルゴリズム：左から右へ並べ、はみ出したら新しい棚へ
+function shelfPack(items, getSize, baseY, direction = 'up', innerW = INNER_W) {
+  let shelfX = PAD;
+  let shelfY = baseY;
+  let shelfH = 0;
+  const result = [];
+
+  items.forEach(item => {
+    const sz = getSize(item);
+    const gap = 5;
+    if (shelfX + sz > innerW - PAD && shelfX > PAD) {
+      shelfY = direction === 'up' ? shelfY + shelfH + gap : shelfY - shelfH - gap;
+      shelfX = PAD;
+      shelfH = 0;
+    }
+    const cx = shelfX + sz / 2;
+    result.push({ item, cx, y: shelfY });
+    shelfX += sz + gap;
+    shelfH = Math.max(shelfH, sz);
+  });
+  return result;
+}
+
+function layoutSinkers(sinkers, innerW = INNER_W) {
+  const packed = shelfPack(sinkers, i => itemPx(i.volume), 22, 'up', innerW);
+  return packed.map(({ item, cx, y }) => ({
+    item,
+    bottom: y,
+    left: cx / innerW * 100,
+  }));
+}
+
+function layoutFloaters(floaters, waterTopPx, innerW = INNER_W) {
+  const packed = shelfPack(floaters, i => itemPx(i.volume), 0, 'up', innerW);
+  return packed.map(({ item, cx, y }) => {
+    const sz = itemPx(item.volume);
+    return {
+      item,
+      left: cx / innerW * 100,
+      top: waterTopPx - sz * 0.65 - y,
+    };
+  });
+}
+
+// 浮くアイテムがボールの幅に収まるか判定
+function canFloaterFit(currentFloaters, newItem, waterTopPx, innerW) {
+  const MIN_TOP = 16;
+  const simulated = [...currentFloaters, { ...newItem, floats: true }];
+  const packed = shelfPack(simulated, i => itemPx(i.volume), 0, 'up', innerW);
+  for (const { item, y } of packed) {
+    const sz = itemPx(item.volume);
+    const top = waterTopPx - sz * 0.65 - y;
+    if (top < MIN_TOP) return false;
+  }
+  return true;
+}
+function Bowl({gameItems, totalVol, capacity, lvCfg, danger, overflowing, ripple, waterVol}){
+  const {color:bowlColor, bowlW, innerW} = lvCfg;
+  const W = bowlW;
+  const H = BOWL_H;
+
+  const sinkersVol=gameItems.filter(i=>!i.floats).reduce((s,i)=>s+i.volume,0);
+  const eff=Math.min((waterVol+sinkersVol)/capacity*100,100);
+  const waterH=(eff/100)*H;
+  const waterTopPx=H-waterH;
+  const fillPct=Math.min(totalVol/capacity*100,100);
+
+  const sinkers=gameItems.filter(i=>!i.floats);
+  const floaters=gameItems.filter(i=>i.floats);
+  const sinkerLayout=layoutSinkers(sinkers, innerW);
+  const floaterLayout=layoutFloaters(floaters, waterTopPx, innerW);
+
+  const gid=`bowl${W}`;
+  const borderCol = danger ? '#ff4444' : bowlColor;
+
+  return(
+    <div style={{position:'relative', width:`${W+48}px`, margin:'0 auto'}}>
+
+      {/* あふれ水滴 */}
+      {overflowing&&[0,1,2,3].map(i=>(
+        <div key={i} style={{position:'absolute',top:-4,left:`${24+i*20}%`,
+          fontSize:'1.4rem',animation:`drip 1.1s ${i*0.15}s ease-in infinite`,zIndex:40,
+          filter:'drop-shadow(0 2px 4px rgba(0,150,255,0.5))'}}>💧</div>
+      ))}
+
+      {/* 容器 */}
+      <div style={{
+        position:'relative', width:`${W}px`, height:`${H}px`,
+        margin:'0 auto',
+        borderRadius:'24px',
+        overflow:'hidden',
+        border:`4px solid ${borderCol}`,
+        background:'linear-gradient(180deg, #e8f8ff 0%, #d0f0ff 100%)',
+        boxShadow: danger
+          ? `0 0 0 3px #ff444433, 0 12px 40px rgba(255,60,60,0.35), inset 0 0 30px rgba(255,200,200,0.2)`
+          : `0 12px 40px rgba(0,100,200,0.18), inset 0 0 30px rgba(255,255,255,0.3)`,
+        transition:'border-color 0.3s, box-shadow 0.3s',
+        animation: overflowing ? 'shake 0.35s ease-in-out 2' : 'none',
+      }}>
+
+        {/* ガラス風左ハイライト */}
+        <div style={{position:'absolute',top:0,left:8,width:12,height:'85%',
+          background:'linear-gradient(180deg,rgba(255,255,255,0.5),rgba(255,255,255,0.05))',
+          borderRadius:'0 0 8px 8px',zIndex:12,pointerEvents:'none'}}/>
+        {/* ガラス風右ハイライト */}
+        <div style={{position:'absolute',top:0,right:8,width:6,height:'60%',
+          background:'linear-gradient(180deg,rgba(255,255,255,0.3),transparent)',
+          borderRadius:'0 0 4px 4px',zIndex:12,pointerEvents:'none'}}/>
+
+        {/* 砂底 */}
+        <div style={{position:'absolute',bottom:0,left:0,right:0,height:'26px',
+          background:'linear-gradient(180deg,#f5e4a0,#d4a84a)',
+          borderRadius:'0 0 20px 20px',zIndex:6,
+          display:'flex',alignItems:'center',justifyContent:'space-around',padding:'0 16px'}}>
+          {['🐚','⭐','🪨','⭐','🐚'].map((s,i)=>(
+            <span key={i} style={{fontSize:'0.5rem',opacity:0.85,filter:'drop-shadow(0 1px 1px rgba(0,0,0,0.2))'}}>{s}</span>
+          ))}
+        </div>
+
+        {/* 水 */}
+        <div style={{
+          position:'absolute',bottom:0,left:0,right:0,height:`${waterH}px`,
+          background: danger
+            ?'linear-gradient(180deg,rgba(255,120,100,0.6),rgba(200,30,30,0.82))'
+            :'linear-gradient(180deg,rgba(80,200,255,0.55),rgba(0,110,210,0.85))',
+          transition:'height 0.75s cubic-bezier(0.23,1,0.32,1),background 0.5s',
+          zIndex:3,
+        }}>
+          {/* 波1 */}
+          <div style={{position:'absolute',top:-16,left:'-10%',width:'120%',height:'30px',
+            background: danger?'rgba(255,150,130,0.5)':'rgba(150,230,255,0.55)',
+            borderRadius:'50%',animation:'wave1 2.5s ease-in-out infinite'}}/>
+          {/* 波2 */}
+          <div style={{position:'absolute',top:-9,left:'-10%',width:'120%',height:'18px',
+            background: danger?'rgba(255,180,160,0.35)':'rgba(200,245,255,0.4)',
+            borderRadius:'50%',animation:'wave2 2.0s ease-in-out infinite'}}/>
+          {/* 水中の泡 */}
+          {[{l:'18%',b:'30%',s:'5px'},{l:'55%',b:'55%',s:'4px'},{l:'75%',b:'25%',s:'6px'}].map((b,i)=>(
+            <div key={i} style={{position:'absolute',bottom:b.b,left:b.l,
+              width:b.s,height:b.s,borderRadius:'50%',
+              background:'rgba(255,255,255,0.35)',animation:`bob ${2+i*0.6}s ease-in-out infinite`}}/>
+          ))}
+        </div>
+
+        {/* 波紋 */}
+        {ripple&&<div key={ripple} style={{
+          position:'absolute',top:waterTopPx-14,left:'50%',marginLeft:'-24px',
+          width:'48px',height:'48px',
+          border:'3px solid rgba(100,210,255,0.9)',borderRadius:'50%',
+          animation:'splash 0.65s ease-out forwards',zIndex:10,pointerEvents:'none'}}/>}
+
+        {/* 沈むアイテム */}
+        {sinkerLayout.map(({item,bottom,left})=>(
+          <div key={item.instanceId} style={{
+            position:'absolute',bottom:`${bottom+26}px`,left:`${left}%`,
+            transform:'translateX(-50%)',zIndex:7,
+            animation:item.entering?'sink 0.7s cubic-bezier(0.34,1.2,0.64,1) forwards':'none',
+            transition:'bottom 0.9s cubic-bezier(0.23,1,0.32,1)',
+            filter:'drop-shadow(0 2px 4px rgba(0,0,0,0.25))',
+          }}>
+            <div style={{position:'relative'}}>
+              <ItemIcon item={item} sizePx={volToSize(item.volume)} dimmed/>
+              {item.isPreset&&(
+                <span style={{position:'absolute',top:-5,right:-5,fontSize:'0.65rem',
+                  background:'linear-gradient(135deg,#555,#333)',color:'#ffd',borderRadius:'50%',
+                  width:'15px',height:'15px',display:'flex',alignItems:'center',
+                  justifyContent:'center',zIndex:9,boxShadow:'0 1px 4px rgba(0,0,0,0.4)'}}>⛓</span>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {/* 浮くアイテム */}
+        {floaterLayout.map(({item,left,top},i)=>(
+          <div key={item.instanceId} style={{
+            position:'absolute',top:`${top}px`,left:`${left}%`,
+            transform:'translateX(-50%)',zIndex:8,
+            transition:item.entering?'none':'top 0.8s ease',
+            animation:item.entering?'none':`bob ${1.9+(i%5)*0.35}s ease-in-out infinite`,
+            filter:'drop-shadow(0 3px 6px rgba(0,0,0,0.2))',
+          }}>
+            <ItemIcon item={item} sizePx={volToSize(item.volume)}/>
+          </div>
+        ))}
+
+        {/* 危険赤オーバーレイ */}
+        {danger&&<div style={{position:'absolute',inset:0,borderRadius:'20px',
+          background:'rgba(255,0,0,0.04)',
+          animation:'pulse 0.9s infinite',zIndex:15,pointerEvents:'none'}}/>}
+      </div>
+
+      {/* 右サイド水位ゲージ */}
+      <div style={{position:'absolute',right:4,top:12,bottom:12,width:'18px',
+        display:'flex',flexDirection:'column',alignItems:'center',gap:'3px'}}>
+        {/* ゲージ背景 */}
+        <div style={{flex:1,width:'12px',
+          background:'rgba(255,255,255,0.4)',
+          borderRadius:'6px',overflow:'hidden',position:'relative',
+          border:`1.5px solid ${borderCol}44`,
+          boxShadow:'inset 0 2px 4px rgba(0,0,0,0.1)'}}>
+          <div style={{
+            position:'absolute',bottom:0,left:0,right:0,
+            height:`${fillPct}%`,
+            background: danger
+              ? 'linear-gradient(180deg,#ff8888,#cc0000)'
+              : `linear-gradient(180deg,${bowlColor},${bowlColor}cc)`,
+            transition:'height 0.7s ease,background 0.4s',
+            borderRadius:'4px',
+          }}/>
+          {[25,50,75].map(p=>(
+            <div key={p} style={{position:'absolute',bottom:`${p}%`,left:0,right:0,
+              height:'1.5px',background:'rgba(255,255,255,0.5)'}}/>
+          ))}
+        </div>
+        <div style={{fontSize:'0.48rem',fontWeight:900,color:borderCol,opacity:0.8,
+          fontFamily:'monospace'}}>{Math.round(fillPct)}%</div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────── MAIN APP ───────────────
+export default function App(){
+  const [screen,setScreen]=useState('menu');
+  const [save,setSave]=useState(defaultSave);
+  const [saveLoaded,setSaveLoaded]=useState(true); // 即表示、バックグラウンドでロード
+
+  // Game state
+  const [mode,setMode]=useState('solo');
+  const [level,setLevel]=useState(1);
+  const [gameItems,setGameItems]=useState([]);
+  const [totalVol,setTotalVol]=useState(0);
+  const [waterVol,setWaterVol]=useState(0);
+  const [turn,setTurn]=useState('player');
+  const [aiThinking,setAiThinking]=useState(false);
+  const [aiComment,setAiComment]=useState('');
+  const [history,setHistory]=useState([]);
+  const [result,setResult]=useState(null);
+  const [overflowing,setOverflowing]=useState(false);
+  const [lastItem,setLastItem]=useState(null);
+  const [ripple,setRipple]=useState(null);
+  const [score,setScore]=useState(0);
+  const [missions,setMissions]=useState([]);
+  const [missionsDone,setMissionsDone]=useState([]);
+  const [newAchievements,setNewAchievements]=useState([]);
+  const [showRanking,setShowRanking]=useState(false);
+  const [showAchievements,setShowAchievements]=useState(false);
+  const [notification,setNotification]=useState(null);
+
+  // ── Refs to always hold latest values (fix stale closure bugs) ──
+  const totalVolRef    = useRef(0);
+  const waterVolRef    = useRef(0);
+  const gameItemsRef   = useRef([]);
+  const scoreRef       = useRef(0);
+  const missionsRef    = useRef([]);
+  const missionsDoneRef= useRef([]);
+  const modeRef        = useRef('solo');
+  const levelRef       = useRef(1);
+  const capacityRef    = useRef(160);
+  const resultRef      = useRef(null);
+  const aiThinkingRef  = useRef(false);
+
+  const sound=useSoundEngine();
+  const lvCfg=LEVELS[level-1];
+  const CAPACITY=lvCfg?.capacity||120;
+
+  // Keep refs in sync with state
+  useEffect(()=>{ totalVolRef.current=totalVol; },[totalVol]);
+  useEffect(()=>{ waterVolRef.current=waterVol; },[waterVol]);
+  useEffect(()=>{ gameItemsRef.current=gameItems; },[gameItems]);
+  useEffect(()=>{ scoreRef.current=score; },[score]);
+  useEffect(()=>{ missionsRef.current=missions; },[missions]);
+  useEffect(()=>{ missionsDoneRef.current=missionsDone; },[missionsDone]);
+  useEffect(()=>{ modeRef.current=mode; },[mode]);
+  useEffect(()=>{ levelRef.current=level; },[level]);
+  useEffect(()=>{ capacityRef.current=CAPACITY; },[CAPACITY]);
+  useEffect(()=>{ resultRef.current=result; },[result]);
+  useEffect(()=>{ aiThinkingRef.current=aiThinking; },[aiThinking]);
+
+  // Unlock tier based on totalScore
+  const unlockedTier = save.stats.totalScore>=120?3:save.stats.totalScore>=50?2:1;
+  const ITEMS=ALL_ITEMS.filter(i=>i.tier<=unlockedTier);
+
+  const remaining=CAPACITY-totalVol;
+  const sinkersVol=gameItems.filter(i=>!i.floats).reduce((s,i)=>s+i.volume,0);
+  const waterPct=Math.min((waterVol+sinkersVol)/CAPACITY*100,100);
+  const fillPct=Math.min(totalVol/CAPACITY*100,100);
+  const danger=fillPct>80;
+  const warning=fillPct>62;
+
+  useEffect(()=>{ loadSave().then(d=>{ setSave(d); setSaveLoaded(true); }); },[]);
+
+  const notifyRef=useRef(null);
+  function notify(msg,color='#0d5a8a'){
+    setNotification({msg,color});
+    if(notifyRef.current) clearTimeout(notifyRef.current);
+    notifyRef.current=setTimeout(()=>setNotification(null),2200);
+  }
+
+  function startGame(m,lv){
+    const cfg=LEVELS[lv-1];
+
+    // 初期錘を生成
+    const preItems = cfg.preItems.map(id => {
+      const def = ALL_ITEMS.find(i => i.id === id);
+      const floats = def.density < 1;
+      const disp = getDisp(def);
+      return { ...def, instanceId: Date.now()+Math.random(), floats, x: 8+Math.random()*72, entering: false, byAI: false, isPreset: true, _disp: disp };
+    });
+    const preVol  = preItems.reduce((s,i) => s + i.volume, 0);
+    const preDisp = preItems.reduce((s,i) => s + i._disp, 0);
+    const initTotal = cfg.water + preVol;
+    const initWater = cfg.water + preDisp;
+
+    // Reset refs immediately
+    totalVolRef.current   = initTotal;
+    waterVolRef.current   = initWater;
+    gameItemsRef.current  = preItems;
+    scoreRef.current      = 0;
+    modeRef.current       = m;
+    levelRef.current      = lv;
+    capacityRef.current   = cfg.capacity;
+    resultRef.current     = null;
+    aiThinkingRef.current = false;
+    const ms=pick2Missions();
+    missionsRef.current    = ms;
+    missionsDoneRef.current= [];
+
+    setMode(m); setLevel(lv);
+    setGameItems(preItems); setTotalVol(initTotal); setWaterVol(initWater);
+    setResult(null); setOverflowing(false); setLastItem(null);
+    setRipple(null); setScore(0); setHistory([]); setAiComment('');
+    setTurn('player'); setAiThinking(false);
+    setMissions(ms); setMissionsDone([]);
+    setNewAchievements([]);
+    sound.startBGM();
+    setScreen('game');
+  }
+
+  function goMenu(){ sound.stopBGM(); setScreen('menu'); setResult(null); resultRef.current=null; }
+
+  // checkMissions reads from refs — no stale closure
+  function checkMissions(items, fill){
+    missionsRef.current.forEach(m=>{
+      if(!missionsDoneRef.current.includes(m.id)){
+        const ok=m.id==='noover'?m.check(items,fill):m.check(items);
+        if(ok){
+          missionsDoneRef.current=[...missionsDoneRef.current,m.id];
+          setMissionsDone(prev=>[...prev,m.id]);
+          scoreRef.current+=m.bonus;
+          setScore(prev=>prev+m.bonus);
+          sound.playMission();
+          notify(`🎯 ミッション達成！+${m.bonus}点「${m.text}」`,'#1a8a2a');
+        }
+      }
+    });
+  }
+
+  // finishGame receives currentScore as param — no stale score
+  async function finishGame(items, currentScore, res, finalVol, cap){
+    const d=await loadSave();
+    const allFloatCount=items.filter(i=>i.floats&&!i.byAI).length;
+    const totalItems=items.length;
+    const isAiWin=res==='ai_lose';
+    const dangerSurvived=finalVol/cap>=0.9&&res!=='player_lose';
+    const curMode=modeRef.current;
+    const curLevel=levelRef.current;
+
+    const newStats={
+      ...d.stats,
+      totalItems:d.stats.totalItems+totalItems,
+      maxItemsInGame:Math.max(d.stats.maxItemsInGame,totalItems),
+      aiWins:d.stats.aiWins+(isAiWin?1:0),
+      usedWatermelon:d.stats.usedWatermelon||items.some(i=>i.id==='watermelon'),
+      dangerSurvived:d.stats.dangerSurvived||dangerSurvived,
+      allFloatRecord:Math.max(d.stats.allFloatRecord||0,allFloatCount),
+      totalScore:d.stats.totalScore+currentScore,
+    };
+
+    const entry={score:currentScore,mode:curMode,level:curLevel,date:new Date().toLocaleDateString('ja-JP')};
+    const hs=[...d.highScores,entry].sort((a,b)=>b.score-a.score).slice(0,5);
+    const maxLv=res==='level_clear'?Math.max(d.maxLevelCleared,curLevel):d.maxLevelCleared;
+    const checkStats={...newStats,maxLevelCleared:maxLv};
+    const newEarned=ACHIEVEMENTS.filter(a=>!d.achievements.includes(a.id)&&a.check(checkStats)).map(a=>a.id);
+    if(newEarned.length>0){ sound.playAchieve(); setNewAchievements(newEarned); }
+
+    const newSave={...d,stats:newStats,highScores:hs,achievements:[...d.achievements,...newEarned],maxLevelCleared:maxLv};
+    setSave(newSave);
+    await writeSave(newSave);
+  }
+
+  // placeItem reads from refs — no stale closure
+  function placeItem(itemDef, who){
+    const cap=capacityRef.current;
+    const curTotal=totalVolRef.current;
+    const curWater=waterVolRef.current;
+    const curItems=gameItemsRef.current;
+    const curMode=modeRef.current;
+    const curLevel=levelRef.current;
+
+    const floats=itemDef.density<1;
+    const disp=getDisp(itemDef);
+    const newTotal=curTotal+itemDef.volume;
+    const newWater=curWater+disp;
+    const overflow=newTotal>=cap;
+
+    const newItem={...itemDef,instanceId:Date.now()+Math.random(),floats,x:8+Math.random()*72,entering:true,byAI:who==='ai'};
+    const newItems=[...curItems,newItem];
+
+    // Update refs immediately
+    totalVolRef.current=newTotal;
+    waterVolRef.current=newWater;
+    gameItemsRef.current=newItems;
+    const baseScore=Math.round(itemDef.volume*2+(floats?5:3));
+    scoreRef.current+=baseScore;
+
+    // Update state
+    setGameItems(prev=>[...prev,newItem]);
+    setLastItem({...newItem,disp:Math.round(disp*10)/10});
+    setRipple(Date.now());
+    setTotalVol(newTotal);
+    setWaterVol(newWater);
+    setScore(prev=>prev+baseScore);
+    setHistory(prev=>[...prev,{who,name:itemDef.name,volume:itemDef.volume}]);
+    setTimeout(()=>{ setGameItems(prev=>prev.map(i=>i.instanceId===newItem.instanceId?{...i,entering:false}:i)); },60);
+
+    if(floats) sound.playFloat(); else sound.playSink();
+
+    // Check missions with latest data
+    const newFill=(newTotal/cap)*100;
+    checkMissions(newItems,newFill);
+
+    if(overflow){
+      setOverflowing(true);
+      sound.playOverflow();
+      resultRef.current='pending';
+      setTimeout(()=>{
+        const winner=who==='player'?'player_lose':'ai_lose';
+        resultRef.current=winner;
+        setResult(winner);
+        if(winner==='ai_lose') sound.playWin();
+        sound.stopBGM();
+        finishGame(newItems,scoreRef.current,winner,newTotal,cap);
+      },1400);
+      return true;
+    }
+
+    // Level clear check (solo)
+    if(curMode==='solo'&&who==='player'){
+      const cfg=LEVELS[curLevel-1];
+      if(newItems.length>=cfg.goal){
+        resultRef.current='pending';
+        setTimeout(()=>{
+          resultRef.current='level_clear';
+          setResult('level_clear');
+          sound.playLvUp();
+          sound.stopBGM();
+          finishGame(newItems,scoreRef.current,'level_clear',newTotal,cap);
+        },500);
+        return false;
+      }
+    }
+    return false;
+  }
+
+  function handlePlayerPick(itemDef){
+    if(resultRef.current||aiThinkingRef.current) return;
+    if(modeRef.current==='vs'&&turn!=='player') return;
+    const ov=placeItem(itemDef,'player');
+    if(!ov&&modeRef.current==='vs') setTurn('ai');
+  }
+
+  // AI turn — uses refs to avoid stale closures
+  useEffect(()=>{
+    if(mode!=='vs'||turn!=='ai'||result) return;
+    if(aiThinkingRef.current) return;
+    aiThinkingRef.current=true;
+    setAiThinking(true);
+    setAiComment('🤔 考え中…');
+    const cap=capacityRef.current;
+    const snapTotal=totalVolRef.current;
+    const snapHistory=[...history];
+    const delay=1000+Math.random()*800;
+    setTimeout(async()=>{
+      const {item,comment}=await askAI(snapTotal,cap,snapHistory);
+      setAiComment(comment);
+      aiThinkingRef.current=false;
+      setAiThinking(false);
+      setTimeout(()=>{
+        if(resultRef.current) return;
+        const ov=placeItem(item,'ai');
+        if(!ov) setTurn('player');
+      },600);
+    },delay);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[turn, mode, result]);
+
+  const lvClear=result==='level_clear';
+  const playerLose=result==='player_lose';
+  const aiLose=result==='ai_lose';
+
+  const THEMES = [
+    {from:'#0ea5e9',to:'#0284c7',bg1:'#e0f7ff',bg2:'#bae6fd'},
+    {from:'#22c55e',to:'#15803d',bg1:'#dcfce7',bg2:'#bbf7d0'},
+    {from:'#f59e0b',to:'#d97706',bg1:'#fef9c3',bg2:'#fde68a'},
+    {from:'#ef4444',to:'#b91c1c',bg1:'#fee2e2',bg2:'#fecaca'},
+    {from:'#a855f7',to:'#7e22ce',bg1:'#f3e8ff',bg2:'#e9d5ff'},
+  ];
+  const theme = THEMES[Math.min(level-1, THEMES.length-1)];
+
+  if(!saveLoaded) return(
+    <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
+      background:'linear-gradient(135deg,#1e3a5f,#0d3b6e,#1a4e3a)',
+      fontFamily:"'Hiragino Maru Gothic ProN','M PLUS Rounded 1c',sans-serif"}}>
+      <div style={{fontSize:'4rem'}}>🌊</div>
+      <div style={{color:'white',fontWeight:900,fontSize:'1.2rem',marginTop:'12px',opacity:0.85}}>ロード中…</div>
+    </div>
+  );
+
+  return(
+    <div style={{
+      minHeight:'100vh',
+      background: screen==='game'
+        ? `linear-gradient(160deg,${theme.bg1} 0%,${theme.bg2} 55%,#ffffff 100%)`
+        : 'linear-gradient(155deg,#e0f7ff 0%,#bae6fd 40%,#ddd6fe 100%)',
+      display:'flex',flexDirection:'column',alignItems:'center',
+      padding:'0 0 28px',
+      fontFamily:"'Hiragino Maru Gothic ProN','M PLUS Rounded 1c',sans-serif",
+      userSelect:'none',transition:'background 0.7s',
+    }}>
+      <style>{`
+        @keyframes wave1{0%,100%{transform:translateX(0)}50%{transform:translateX(12px)}}
+        @keyframes wave2{0%,100%{transform:translateX(0)}50%{transform:translateX(-12px)}}
+        @keyframes bob{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(-7px)}}
+        @keyframes splash{0%{transform:scale(0);opacity:1}100%{transform:scale(3.5);opacity:0}}
+        @keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg)}75%{transform:rotate(3deg)}}
+        @keyframes drip{0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(44px)}}
+        @keyframes popIn{from{opacity:0;transform:scale(0.55) translateY(16px)}to{opacity:1;transform:scale(1) translateY(0)}}
+        @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,50,50,0.5)}60%{box-shadow:0 0 0 12px rgba(255,50,50,0)}}
+        @keyframes sink{from{opacity:0;transform:translateX(-50%) translateY(-30px) scale(0.6)}to{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}}
+        @keyframes slideDown{from{opacity:0;transform:translateY(-18px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+        @keyframes starPop{0%{transform:scale(0) rotate(0)}60%{transform:scale(1.3) rotate(10deg)}100%{transform:scale(1) rotate(0)}}
+        button:active{transform:scale(0.92)!important;opacity:0.9}
+      `}</style>
+
+      {/* トースト通知 */}
+      {notification&&(
+        <div style={{position:'fixed',top:'16px',left:'50%',transform:'translateX(-50%)',
+          background:notification.color,color:'white',borderRadius:'50px',
+          padding:'11px 26px',fontWeight:900,fontSize:'0.9rem',
+          boxShadow:'0 8px 28px rgba(0,0,0,0.22)',zIndex:9999,
+          animation:'slideDown 0.35s cubic-bezier(0.34,1.56,0.64,1)',
+          whiteSpace:'nowrap',maxWidth:'92vw',textAlign:'center',
+          border:'2.5px solid rgba(255,255,255,0.35)'}}>
+          {notification.msg}
+        </div>
+      )}
+
+      {showRanking&&<RankingScreen scores={save.highScores} onClose={()=>setShowRanking(false)}/>}
+      {showAchievements&&<AchievementScreen earned={save.achievements} onClose={()=>setShowAchievements(false)}/>}
+      {screen==='tutorial'&&<TutorialScreen onClose={()=>setScreen('menu')}/>}
+
+      {/* ════════ MENU ════════ */}
+      {screen==='menu'&&(
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',
+          width:'100%',maxWidth:'420px',
+          animation:'popIn 0.5s cubic-bezier(0.34,1.56,0.64,1)'}}>
+
+          {/* ヒーローヘッダー */}
+          <div style={{
+            width:'100%',
+            background:'linear-gradient(135deg,#0ea5e9 0%,#6366f1 60%,#a855f7 100%)',
+            padding:'34px 20px 30px',textAlign:'center',
+            borderRadius:'0 0 44px 44px',
+            boxShadow:'0 10px 40px rgba(99,102,241,0.45)',
+            position:'relative',overflow:'hidden',
+          }}>
+            {['🍉','🍎','🥦','🍋','🥭','🍊','🥕'].map((e,i)=>(
+              <div key={i} style={{position:'absolute',
+                top:`${8+i*11}%`,
+                left:i%2===0?`${3+i*9}%`:`${68-i*7}%`,
+                fontSize:`${0.85+i*0.12}rem`,opacity:0.22,
+                animation:`bob ${2.2+i*0.3}s ease-in-out ${i*0.25}s infinite`}}>{e}</div>
+            ))}
+            <div style={{fontSize:'3.4rem',marginBottom:'10px',
+              filter:'drop-shadow(0 4px 10px rgba(0,0,0,0.35))',position:'relative'}}>🌊</div>
+            <h1 style={{
+              margin:'0 0 6px',fontSize:'2rem',fontWeight:900,color:'white',
+              textShadow:'0 3px 14px rgba(0,0,0,0.3)',letterSpacing:'0.03em',
+              position:'relative',
+            }}>うかぶ？しずむ？</h1>
+            <p style={{margin:0,color:'rgba(255,255,255,0.88)',fontSize:'0.82rem',
+              fontWeight:700,position:'relative'}}>
+              野菜・果物をボールに入れよう！あふれたらゲームオーバー！
+            </p>
+          </div>
+
+          <div style={{width:'100%',padding:'16px 16px 0',display:'flex',flexDirection:'column',gap:'12px'}}>
+
+            {/* スタッツ */}
+            <div style={{display:'flex',gap:'8px'}}>
+              {[
+                {icon:'🏅',val:`${save.achievements.length}/${ACHIEVEMENTS.length}`,label:'実績',color:'#f59e0b',action:()=>setShowAchievements(true)},
+                {icon:'🏆',val:save.highScores[0]?`${save.highScores[0].score}pt`:'--',label:'最高点',color:'#ef4444',action:()=>setShowRanking(true)},
+                {icon:'🔓',val:`Tier ${unlockedTier}/3`,label:'解放済み',color:'#8b5cf6'},
+              ].map(({icon,val,label,color,action})=>(
+                <div key={label} onClick={action} style={{
+                  flex:1,background:'white',borderRadius:'18px',padding:'10px 6px',
+                  textAlign:'center',cursor:action?'pointer':'default',
+                  boxShadow:'0 4px 16px rgba(0,0,0,0.07)',
+                  border:`2px solid ${color}20`,
+                  transition:'transform 0.15s,box-shadow 0.15s',
+                }}
+                onMouseEnter={e=>action&&(e.currentTarget.style.transform='translateY(-2px)',e.currentTarget.style.boxShadow=`0 8px 20px ${color}30`)}
+                onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.07)';}}>
+                  <div style={{fontSize:'1.35rem'}}>{icon}</div>
+                  <div style={{fontWeight:900,fontSize:'0.95rem',color}}>{val}</div>
+                  <div style={{fontSize:'0.58rem',color:'#9ca3af',fontWeight:700}}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* モードボタン */}
+            <div style={{display:'flex',gap:'10px'}}>
+              {[
+                {icon:'🎮',label:'ソロプレイ',sub:'レベルクリアを目指せ！',
+                 grad:'linear-gradient(135deg,#0ea5e9,#2563eb)',sh:'rgba(14,165,233,0.45)',
+                 action:()=>{sound.playSplash();startGame('solo',level);}},
+                {icon:'🤖',label:'AI対戦',sub:'あふれさせたら負け！',
+                 grad:'linear-gradient(135deg,#f97316,#dc2626)',sh:'rgba(249,115,22,0.45)',
+                 action:()=>{sound.playSplash();startGame('vs',level);}},
+              ].map(({icon,label,sub,grad,sh,action})=>(
+                <button key={label} onClick={action} style={{
+                  flex:1,background:grad,color:'white',border:'none',
+                  borderRadius:'22px',padding:'18px 10px',fontWeight:900,
+                  cursor:'pointer',boxShadow:`0 8px 24px ${sh}`,
+                  display:'flex',flexDirection:'column',alignItems:'center',gap:'5px',
+                  transition:'transform 0.15s,box-shadow 0.15s',
+                }}
+                onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-4px)';e.currentTarget.style.boxShadow=`0 16px 36px ${sh}`;}}
+                onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow=`0 8px 24px ${sh}`;}}>
+                  <span style={{fontSize:'2.5rem',filter:'drop-shadow(0 3px 8px rgba(0,0,0,0.25))'}}>{icon}</span>
+                  <span style={{fontSize:'1rem'}}>{label}</span>
+                  <span style={{fontSize:'0.65rem',opacity:0.9,fontWeight:700}}>{sub}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* ステージ選択 */}
+            <div style={{background:'white',borderRadius:'22px',padding:'14px',
+              boxShadow:'0 4px 16px rgba(0,0,0,0.07)'}}>
+              <div style={{fontWeight:900,color:'#374151',fontSize:'0.82rem',marginBottom:'10px',textAlign:'center'}}>
+                📊 ステージ選択
+              </div>
+              <div style={{display:'flex',gap:'6px',justifyContent:'center',flexWrap:'wrap'}}>
+                {LEVELS.map(lv=>{
+                  const cleared=save.maxLevelCleared>=lv.lv;
+                  const locked=lv.lv>1&&save.maxLevelCleared<lv.lv-1;
+                  const active=level===lv.lv;
+                  const t=THEMES[lv.lv-1];
+                  return(
+                    <button key={lv.lv} onClick={()=>!locked&&setLevel(lv.lv)} style={{
+                      background:locked?'#f9fafb':active?`linear-gradient(135deg,${t.from},${t.to})`:'white',
+                      color:active?'white':locked?'#d1d5db':'#374151',
+                      border:`2px solid ${active?'transparent':locked?'#f3f4f6':t.from+'44'}`,
+                      borderRadius:'16px',padding:'8px 10px',
+                      fontWeight:900,cursor:locked?'not-allowed':'pointer',fontSize:'0.75rem',
+                      minWidth:'56px',boxShadow:active?`0 4px 16px ${t.from}55`:'0 2px 6px rgba(0,0,0,0.05)',
+                      transition:'all 0.2s',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',
+                    }}>
+                      <span style={{fontSize:'1.15rem'}}>{locked?'🔒':cleared?'✅':lv.icon}</span>
+                      <span>Lv{lv.lv}</span>
+                      <span style={{fontSize:'0.5rem',opacity:0.85,whiteSpace:'nowrap'}}>{lv.name}</span>
+                      {lv.preItems.length>0&&<span style={{fontSize:'0.46rem',color:active?'rgba(255,255,255,0.8)':'#ef4444',fontWeight:900}}>⛓×{lv.preItems.length}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              {LEVELS[level-1].preItems.length>0&&(
+                <div style={{textAlign:'center',marginTop:'8px',fontSize:'0.7rem',
+                  color:'#ef4444',fontWeight:800,
+                  background:'#fee2e2',borderRadius:'8px',padding:'4px 10px'}}>
+                  ⛓ {LEVELS[level-1].preDesc}
+                </div>
+              )}
+            </div>
+
+            {/* サブアクション */}
+            <div style={{display:'flex',gap:'8px',justifyContent:'center',flexWrap:'wrap'}}>
+              {[
+                {l:'📖 あそびかた',c:'#6366f1',a:()=>setScreen('tutorial')},
+                {l:'🏆 ランキング',c:'#f59e0b',a:()=>setShowRanking(true)},
+                {l:sound.soundOn?'🔊 ON':'🔇 OFF',c:sound.soundOn?'#22c55e':'#9ca3af',a:()=>sound.setSoundOn(v=>!v)},
+              ].map(({l,c,a})=>(
+                <button key={l} onClick={a} style={{
+                  background:`${c}15`,border:`2px solid ${c}40`,color:c,
+                  borderRadius:'50px',padding:'8px 16px',fontWeight:900,
+                  cursor:'pointer',fontSize:'0.78rem',transition:'all 0.15s',
+                }}
+                onMouseEnter={e=>e.currentTarget.style.background=`${c}28`}
+                onMouseLeave={e=>e.currentTarget.style.background=`${c}15`}>{l}</button>
+              ))}
+            </div>
+
+            {/* アンロック進捗バー */}
+            {unlockedTier<3&&(
+              <div style={{background:'white',borderRadius:'16px',padding:'12px 16px',
+                boxShadow:'0 3px 12px rgba(139,92,246,0.12)',border:'1.5px solid #e9d5ff'}}>
+                <div style={{fontSize:'0.72rem',color:'#7c3aed',fontWeight:800,marginBottom:'6px',display:'flex',justifyContent:'space-between'}}>
+                  <span>🔒 次のTier{unlockedTier+1}解放まで</span>
+                  <span style={{color:'#a78bfa'}}>あと{Math.max(0,(unlockedTier===1?50:120)-save.stats.totalScore)}点</span>
+                </div>
+                <div style={{height:'8px',background:'#f3e8ff',borderRadius:'4px',overflow:'hidden'}}>
+                  <div style={{
+                    height:'100%',
+                    width:`${Math.min(100,(save.stats.totalScore/(unlockedTier===1?50:120))*100)}%`,
+                    background:'linear-gradient(90deg,#8b5cf6,#c084fc)',
+                    borderRadius:'4px',transition:'width 0.6s ease',
+                  }}/>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ════════ GAME ════════ */}
+      {screen==='game'&&(
+        <>
+          {/* トップバー */}
+          <div style={{
+            width:'100%',maxWidth:'480px',
+            background:`linear-gradient(135deg,${theme.from},${theme.to})`,
+            padding:'12px 16px',
+            display:'flex',alignItems:'center',justifyContent:'space-between',
+            borderRadius:'0 0 26px 26px',
+            boxShadow:`0 6px 24px ${theme.from}55`,
+          }}>
+            <button onClick={goMenu} style={{
+              background:'rgba(255,255,255,0.22)',border:'none',borderRadius:'50px',
+              padding:'7px 14px',cursor:'pointer',fontWeight:900,fontSize:'0.8rem',
+              color:'white',backdropFilter:'blur(4px)',transition:'background 0.15s',
+            }}
+            onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.32)'}
+            onMouseLeave={e=>e.currentTarget.style.background='rgba(255,255,255,0.22)'}>
+              ← メニュー
+            </button>
+            <div style={{fontWeight:900,color:'white',fontSize:'0.95rem',
+              textShadow:'0 2px 6px rgba(0,0,0,0.2)',textAlign:'center',letterSpacing:'0.02em'}}>
+              {mode==='vs'?'🤖 AI対戦':`${lvCfg.icon} Lv${level} ${lvCfg.name}`}
+            </div>
+            <button onClick={()=>sound.setSoundOn(v=>!v)} style={{
+              background:'rgba(255,255,255,0.22)',border:'none',borderRadius:'50px',
+              padding:'7px 12px',cursor:'pointer',fontWeight:900,fontSize:'0.9rem',color:'white'}}>
+              {sound.soundOn?'🔊':'🔇'}
+            </button>
+          </div>
+
+          {/* HUD（スタッツ） */}
+          <div style={{display:'flex',gap:'7px',marginTop:'10px',flexWrap:'wrap',
+            justifyContent:'center',padding:'0 12px',width:'100%',maxWidth:'480px'}}>
+
+            {mode==='vs'&&!result&&[
+              {who:'player',label:'👤 あなた',c:'#0ea5e9'},
+              {who:'ai',label:'🤖 AI',c:'#f97316'},
+            ].map(({who,label,c})=>(
+              <div key={who} style={{
+                background:turn===who?`linear-gradient(135deg,${c},${c}dd)`:'rgba(255,255,255,0.75)',
+                color:turn===who?'white':'#9ca3af',
+                borderRadius:'50px',padding:'6px 16px',fontWeight:900,fontSize:'0.85rem',
+                boxShadow:turn===who?`0 4px 16px ${c}55`:'none',
+                border:turn===who?'none':'2px solid #e5e7eb',
+                transition:'all 0.35s',
+              }}>
+                {label}{turn===who&&(who==='ai'&&aiThinking?' ⏳':'  ◀')}
+              </div>
+            ))}
+
+            {[
+              {l:'💧',v:`残り ${Math.round(remaining)}L`,
+                bg:danger?'#fee2e2':warning?'#fef9c3':'#e0f7ff',
+                c:danger?'#dc2626':warning?'#d97706':'#0284c7',
+                border:danger?'#fca5a5':warning?'#fde68a':'#7dd3fc'},
+              {l:'📊',v:`水位 ${Math.round(waterPct)}%`,bg:'#f5f3ff',c:'#7c3aed',border:'#c4b5fd'},
+              {l:'💫',v:`${score}点`,bg:'#fefce8',c:'#b45309',border:'#fde68a'},
+            ].map(({l,v,bg,c,border})=>(
+              <div key={l} style={{
+                background:bg,border:`2px solid ${border}`,
+                borderRadius:'50px',padding:'5px 14px',
+                fontWeight:800,color:c,fontSize:'0.82rem',
+                boxShadow:'0 2px 8px rgba(0,0,0,0.06)',
+              }}>{l} {v}</div>
+            ))}
+
+            {mode==='solo'&&!result&&(
+              <div style={{
+                background:`linear-gradient(135deg,${theme.from}20,${theme.to}20)`,
+                border:`2px solid ${theme.from}50`,
+                borderRadius:'50px',padding:'5px 14px',
+                fontWeight:800,color:theme.to,fontSize:'0.82rem',
+              }}>
+                🎯 {gameItems.filter(i=>!i.byAI).length}/{lvCfg.goal}個
+              </div>
+            )}
+          </div>
+
+          {/* Bowl */}
+          <div style={{marginTop:'10px'}}>
+            <Bowl gameItems={gameItems} totalVol={totalVol} capacity={CAPACITY}
+              lvCfg={lvCfg} danger={danger} overflowing={overflowing} ripple={ripple} waterVol={waterVol}/>
+          </div>
+
+          {/* ミッション */}
+          {missions.length>0&&!result&&(
+            <div style={{display:'flex',gap:'6px',flexWrap:'wrap',justifyContent:'center',
+              padding:'0 12px',marginTop:'4px'}}>
+              {missions.map(m=>{
+                const done=missionsDone.includes(m.id);
+                return(
+                  <div key={m.id} style={{
+                    background:done?'linear-gradient(135deg,#d1fae5,#a7f3d0)':'rgba(255,255,255,0.88)',
+                    border:`1.5px solid ${done?'#34d399':'#e5e7eb'}`,
+                    borderRadius:'50px',padding:'5px 12px',fontSize:'0.7rem',fontWeight:800,
+                    color:done?'#065f46':'#6b7280',
+                    display:'flex',gap:'5px',alignItems:'center',
+                    boxShadow:done?'0 2px 8px rgba(52,211,153,0.3)':'none',
+                  }}>
+                    {done?'✅':'🎯'} {m.text}
+                    <span style={{color:done?'#059669':'#d97706',fontWeight:900}}>+{m.bonus}点</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* AIコメント */}
+          {mode==='vs'&&aiComment&&!result&&(
+            <div style={{
+              background:'linear-gradient(135deg,#fff7ed,#fed7aa)',
+              border:'2px solid #fdba74',borderRadius:'20px',padding:'8px 18px',
+              fontSize:'0.85rem',fontWeight:800,color:'#92400e',
+              display:'flex',gap:'8px',alignItems:'center',
+              boxShadow:'0 4px 14px rgba(249,115,22,0.2)',
+              animation:aiThinking?'bounce 0.8s ease-in-out infinite':'slideDown 0.3s ease',
+              maxWidth:'340px',
+            }}>
+              <span style={{fontSize:'1.5rem'}}>🤖</span>
+              <span>{aiComment}</span>
+            </div>
+          )}
+
+          {/* 最後のアイテム */}
+          {lastItem&&!result&&(
+            <div style={{
+              background:'white',borderRadius:'50px',
+              padding:'6px 18px',display:'flex',gap:'8px',alignItems:'center',
+              boxShadow:'0 4px 18px rgba(0,0,0,0.1)',
+              animation:'popIn 0.35s cubic-bezier(0.34,1.56,0.64,1)',
+              fontSize:'0.82rem',fontWeight:800,border:'1.5px solid #e5e7eb',
+            }}>
+              <ItemIcon item={lastItem} sizePx={Math.min(volToSize(lastItem.volume),1.5)}/>
+              <span style={{color:'#374151'}}>{lastItem.name}</span>
+              <span style={{
+                background:lastItem.floats?'#e0f7ff':'#fee2e2',
+                color:lastItem.floats?'#0284c7':'#dc2626',
+                borderRadius:'50px',padding:'2px 10px',fontSize:'0.75rem',fontWeight:900,
+              }}>{lastItem.floats?'🌊 うく！':'⬇️ しずむ！'}</span>
+              <span style={{color:'#9ca3af',fontSize:'0.68rem'}}>{lastItem.volume}L</span>
+            </div>
+          )}
+
+          {/* 新実績 */}
+          {newAchievements.length>0&&result&&(
+            <div style={{display:'flex',flexWrap:'wrap',gap:'6px',justifyContent:'center',
+              animation:'popIn 0.5s ease',padding:'0 12px'}}>
+              {newAchievements.map(id=>{
+                const a=ACHIEVEMENTS.find(x=>x.id===id);
+                return a&&(
+                  <div key={id} style={{
+                    background:'linear-gradient(135deg,#fef9c3,#fde68a)',
+                    border:'2px solid #f59e0b',borderRadius:'50px',
+                    padding:'7px 16px',display:'flex',gap:'7px',alignItems:'center',
+                    fontWeight:900,fontSize:'0.8rem',
+                    boxShadow:'0 4px 14px rgba(245,158,11,0.35)',
+                    animation:'starPop 0.5s cubic-bezier(0.34,1.56,0.64,1)',
+                  }}>
+                    <span style={{fontSize:'1.3rem'}}>{a.emoji}</span>
+                    <span style={{color:'#92400e'}}>{a.name} 獲得！</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* リザルト */}
+          {result&&(
+            <div style={{
+              background:'white',borderRadius:'32px',padding:'28px 28px',
+              textAlign:'center',boxShadow:'0 20px 60px rgba(0,0,0,0.16)',
+              animation:'popIn 0.5s cubic-bezier(0.34,1.56,0.64,1)',
+              maxWidth:'320px',margin:'0 16px',
+              border:`3px solid ${lvClear?'#34d399':playerLose?'#fca5a5':'#6ee7b7'}`,
+            }}>
+              {lvClear&&<>
+                <div style={{fontSize:'3.5rem',animation:'bounce 0.6s ease-in-out 3'}}>🏆✨🎉</div>
+                <div style={{fontSize:'1.5rem',fontWeight:900,color:'#059669',margin:'8px 0 3px'}}>レベル {level} クリア！</div>
+                {level<5&&<div style={{color:'#6b7280',fontSize:'0.88rem'}}>次のステージが解放されました！</div>}
+              </>}
+              {playerLose&&<>
+                <div style={{fontSize:'3.5rem'}}>🌊💦😱</div>
+                <div style={{fontSize:'1.5rem',fontWeight:900,color:'#dc2626',margin:'8px 0 3px'}}>
+                  {mode==='vs'?'負けちゃった…':'あふれた！'}
+                </div>
+                {mode==='vs'&&<div style={{fontWeight:800,color:'#f97316',fontSize:'0.95rem'}}>🤖 AIの勝ち！</div>}
+              </>}
+              {aiLose&&<>
+                <div style={{fontSize:'3.5rem',animation:'bounce 0.6s ease-in-out 3'}}>🎊🥳🎉</div>
+                <div style={{fontSize:'1.5rem',fontWeight:900,color:'#059669',margin:'8px 0 3px'}}>AIに勝った！！</div>
+                <div style={{color:'#6b7280',fontSize:'0.88rem'}}>🤖 AIがあふれさせた！</div>
+              </>}
+              <div style={{
+                fontSize:'1.6rem',fontWeight:900,margin:'12px 0 4px',
+                background:'linear-gradient(90deg,#f59e0b,#ef4444,#8b5cf6)',
+                WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',
+                backgroundSize:'200% auto',
+              }}>💫 {score} 点</div>
+              <div style={{color:'#9ca3af',fontSize:'0.8rem',marginBottom:'20px'}}>
+                {gameItems.length}個 / ミッション {missionsDone.length}/{missions.length}達成
+              </div>
+              <div style={{display:'flex',gap:'8px',justifyContent:'center',flexWrap:'wrap'}}>
+                {lvClear&&level<5&&(
+                  <button onClick={()=>startGame('solo',level+1)} style={{
+                    background:'linear-gradient(135deg,#22c55e,#15803d)',color:'white',
+                    border:'none',borderRadius:'50px',padding:'11px 18px',
+                    fontWeight:900,cursor:'pointer',fontSize:'0.88rem',
+                    boxShadow:'0 4px 16px rgba(34,197,94,0.45)',
+                  }}>次のステージ →</button>
+                )}
+                <button onClick={()=>startGame(mode,level)} style={{
+                  background:`linear-gradient(135deg,${theme.from},${theme.to})`,color:'white',
+                  border:'none',borderRadius:'50px',padding:'11px 18px',
+                  fontWeight:900,cursor:'pointer',fontSize:'0.88rem',
+                  boxShadow:`0 4px 16px ${theme.from}55`,
+                }}>もう一度</button>
+                <button onClick={goMenu} style={{
+                  background:'#f9fafb',color:'#6b7280',
+                  border:'2px solid #e5e7eb',borderRadius:'50px',padding:'11px 18px',
+                  fontWeight:900,cursor:'pointer',fontSize:'0.88rem',
+                }}>メニュー</button>
+              </div>
+            </div>
+          )}
+
+          {/* アイテムセレクター */}
+          {!result&&(()=>{
+            const sVol=gameItems.filter(i=>!i.floats).reduce((s,i)=>s+i.volume,0);
+            const wPct=Math.min((waterVol+sVol)/CAPACITY*100,100);
+            const wTopPx=BOWL_H-(wPct/100)*BOWL_H;
+            const currentFloaters=gameItems.filter(i=>i.floats);
+            const noWidthItems=new Set(
+              ITEMS.filter(item=>item.density<1&&!canFloaterFit(currentFloaters,item,wTopPx,lvCfg.innerW)).map(i=>i.id)
+            );
+            const isAiTurn=mode==='vs'&&turn==='ai';
+            return(
+              <div style={{
+                background:isAiTurn?'rgba(243,244,246,0.8)':'white',
+                borderRadius:'28px',padding:'14px 12px',
+                width:'100%',maxWidth:'440px',
+                boxShadow:'0 4px 24px rgba(0,0,0,0.09)',
+                opacity:isAiTurn?0.5:1,
+                pointerEvents:isAiTurn?'none':'auto',
+                transition:'opacity 0.3s',
+                margin:'0 12px',
+                border:'1.5px solid #e5e7eb',
+              }}>
+                <div style={{textAlign:'center',fontWeight:900,marginBottom:'10px',fontSize:'0.82rem',
+                  color:isAiTurn?'#9ca3af':'#374151'}}>
+                  {isAiTurn?'🤖 AIが選んでいます…':'▼ 入れるものをえらぼう！'}
+                </div>
+
+                {noWidthItems.size>0&&(
+                  <div style={{
+                    background:'linear-gradient(135deg,#fffbeb,#fef9c3)',
+                    border:'1.5px solid #fde68a',borderRadius:'12px',
+                    padding:'6px 14px',marginBottom:'10px',
+                    fontSize:'0.7rem',fontWeight:800,color:'#92400e',
+                    textAlign:'center',display:'flex',gap:'5px',alignItems:'center',justifyContent:'center',
+                  }}>🚫 グレーのアイテムはボールの幅がいっぱいで入れられません</div>
+                )}
+
+                <div style={{display:'flex',flexWrap:'wrap',gap:'5px',justifyContent:'center'}}>
+                  {ITEMS.map(item=>{
+                    const floats=item.density<1;
+                    const sz=volToSize(item.volume);
+                    const btnW=40+(item.volume-MIN_V)/(MAX_V-MIN_V)*28;
+                    const willOver=item.volume>=remaining;
+                    const noWidth=noWidthItems.has(item.id);
+                    const disabled=noWidth;
+
+                    let bg,bord,sh;
+                    if(disabled){bg='#f3f4f6';bord='#e5e7eb';sh='none';}
+                    else if(willOver){bg='linear-gradient(135deg,#fee2e2,#fecaca)';bord='#fca5a5';sh='0 2px 8px rgba(239,68,68,0.18)';}
+                    else if(floats){bg='linear-gradient(135deg,#e0f7ff,#bae6fd)';bord='#7dd3fc';sh='0 2px 8px rgba(14,165,233,0.18)';}
+                    else{bg='linear-gradient(135deg,#fff7ed,#fed7aa)';bord='#fdba74';sh='0 2px 8px rgba(249,115,22,0.15)';}
+
+                    return(
+                      <button key={item.id}
+                        onClick={()=>!disabled&&handlePlayerPick(item)}
+                        title={noWidth?`${item.name}は幅がいっぱいです`:`体積:${item.volume}L`}
+                        style={{
+                          background:bg,border:`2px solid ${bord}`,
+                          borderRadius:'14px',padding:'5px 5px 4px',
+                          cursor:disabled?'not-allowed':'pointer',
+                          display:'flex',flexDirection:'column',
+                          alignItems:'center',gap:'1px',
+                          width:`${Math.round(btnW)}px`,minHeight:'56px',
+                          transition:'transform 0.12s,box-shadow 0.12s',
+                          justifyContent:'center',position:'relative',
+                          opacity:disabled?0.35:1,
+                          boxShadow:sh,
+                        }}
+                        onMouseEnter={e=>{if(!disabled){e.currentTarget.style.transform='scale(1.12) translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 22px rgba(0,0,0,0.16)';}}}
+                        onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)';e.currentTarget.style.boxShadow=disabled?'none':sh;}}
+                      >
+                        {willOver&&!disabled&&(
+                          <span style={{position:'absolute',top:-6,right:-6,
+                            background:'linear-gradient(135deg,#ef4444,#dc2626)',color:'white',
+                            borderRadius:'50%',width:'16px',height:'16px',fontSize:'0.58rem',
+                            display:'flex',alignItems:'center',justifyContent:'center',fontWeight:900,
+                            boxShadow:'0 2px 6px rgba(220,38,38,0.5)'}}>!</span>
+                        )}
+                        {disabled&&(
+                          <span style={{position:'absolute',top:-6,right:-6,
+                            background:'#9ca3af',color:'white',borderRadius:'50%',
+                            width:'16px',height:'16px',fontSize:'0.5rem',
+                            display:'flex',alignItems:'center',justifyContent:'center'}}>🚫</span>
+                        )}
+                        <ItemIcon item={item} sizePx={sz}/>
+                        <span style={{fontSize:'0.45rem',color:disabled?'#9ca3af':'#374151',fontWeight:800,whiteSpace:'nowrap'}}>{item.name}</span>
+                        <span style={{fontSize:'0.42rem',fontWeight:700,
+                          color:disabled?'#d1d5db':floats?'#0284c7':'#ea580c'}}>{item.volume}L</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{display:'flex',justifyContent:'center',gap:'12px',marginTop:'8px',flexWrap:'wrap'}}>
+                  {[
+                    {d:'🔵',l:'浮く',c:'#0284c7'},
+                    {d:'🟠',l:'沈む',c:'#ea580c'},
+                    {d:'🔴',l:'あふれる',c:'#dc2626'},
+                    {d:'⬜',l:'幅いっぱい',c:'#9ca3af'},
+                  ].map(({d,l,c})=>(
+                    <span key={l} style={{fontSize:'0.65rem',color:c,fontWeight:800}}>{d} {l}</span>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          <div style={{fontSize:'0.6rem',color:'#9ca3af',textAlign:'center',padding:'0 16px',marginTop:'4px'}}>
+            密度&lt;1→浮く / 密度≥1→沈む / ボール容量 {CAPACITY}L
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
