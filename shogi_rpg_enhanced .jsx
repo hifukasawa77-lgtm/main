@@ -564,6 +564,17 @@ const ShogiRPG = () => {
 
   // ステージ背景コンポーネント
   const StageBackground = ({ stage }) => {
+    if (stage >= 1 && stage <= 6) {
+      const src = `assets/art/bg/stage_0${stage}.svg`;
+      return (
+        <div className={`stage-bg stage-bg--${stage}`}>
+          <div className="stage-bg__base" style={{ backgroundImage: `url(${src})` }} />
+          <div className="stage-bg__fx" />
+          <div className="stage-bg__grain" />
+          <div className="stage-bg__vignette" />
+        </div>
+      );
+    }
     if (stage === 1) {
       // 座敷わらし - 古びた宿
       return (
@@ -3501,6 +3512,89 @@ const ShogiRPG = () => {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&display=swap');
         * { box-sizing: border-box; }
+
+        /* ===== Stage Background (local SVG + FX layers) ===== */
+        .stage-bg{ position:absolute; inset:0; overflow:hidden; }
+        .stage-bg__base{
+          position:absolute; inset:0;
+          background-size:cover; background-position:center; background-repeat:no-repeat;
+          transform: scale(1.03);
+          filter: saturate(1.12) contrast(1.06) brightness(0.78);
+        }
+        .stage-bg__fx{ position:absolute; inset:0; pointer-events:none; opacity:1; }
+        .stage-bg__grain{
+          position:absolute; inset:0; pointer-events:none;
+          background-image: url('assets/art/ui/noise.svg');
+          background-size: 220px 220px;
+          opacity: 0.10;
+          mix-blend-mode: overlay;
+        }
+        .stage-bg__vignette{
+          position:absolute; inset:-2px; pointer-events:none;
+          background: radial-gradient(ellipse at 50% 35%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.20) 55%, rgba(0,0,0,0.62) 100%);
+        }
+        @keyframes bgShimmer { 0%{background-position:0% 0%} 100%{background-position:200% 200%} }
+        @keyframes bgDriftX { 0%{transform:translateX(-6%);opacity:.75} 50%{opacity:.9} 100%{transform:translateX(6%);opacity:.75} }
+        @keyframes bgRise { 0%{background-position:0 0;opacity:0} 15%{opacity:.55} 100%{background-position:0 -1200px;opacity:0} }
+
+        .stage-bg--1 .stage-bg__fx{
+          background:
+            radial-gradient(ellipse at 72% 26%, rgba(255, 190, 120, 0.18) 0%, rgba(255, 190, 120, 0.06) 30%, rgba(255,190,120,0) 60%),
+            linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0) 40%, rgba(0,0,0,0.25));
+        }
+        .stage-bg--2 .stage-bg__fx{
+          background:
+            radial-gradient(circle at 30% 70%, rgba(114,231,255,0.14) 0%, rgba(114,231,255,0) 45%),
+            radial-gradient(circle at 70% 78%, rgba(167,139,250,0.10) 0%, rgba(167,139,250,0) 55%),
+            linear-gradient(90deg, rgba(255,255,255,0.02), rgba(114,231,255,0.05), rgba(255,255,255,0.02));
+          background-size: 100% 100%, 100% 100%, 220% 220%;
+          animation: bgShimmer 10s linear infinite;
+          opacity: 0.85;
+        }
+        .stage-bg--3 .stage-bg__fx::before{
+          content:""; position:absolute; inset: 18% -15% 20% -15%;
+          background:
+            radial-gradient(ellipse at 30% 45%, rgba(167,227,255,0.14) 0%, rgba(167,227,255,0) 60%),
+            radial-gradient(ellipse at 70% 55%, rgba(167,139,250,0.10) 0%, rgba(167,139,250,0) 62%),
+            linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));
+          filter: blur(6px);
+          animation: bgDriftX 10s ease-in-out infinite;
+          opacity: 0.75;
+        }
+        .stage-bg--4 .stage-bg__fx{
+          background:
+            radial-gradient(circle at 55% 80%, rgba(255, 80, 0, 0.16) 0%, rgba(255,80,0,0) 55%),
+            radial-gradient(circle at 18% 70%, rgba(255, 210, 160, 0.07) 0%, rgba(255,210,160,0) 60%);
+          opacity: 0.9;
+        }
+        .stage-bg--4 .stage-bg__fx::after{
+          content:""; position:absolute; inset:-10% 0 -10% 0;
+          background-image:
+            radial-gradient(circle, rgba(255,196,110,0.20) 0 2px, rgba(255,196,110,0) 3px),
+            radial-gradient(circle, rgba(255,64,0,0.18) 0 2px, rgba(255,64,0,0) 3px);
+          background-size: 120px 120px, 180px 180px;
+          background-position: 0 0, 60px 80px;
+          filter: blur(0.2px);
+          animation: bgRise 2.8s linear infinite;
+          opacity: 0;
+        }
+        .stage-bg--5 .stage-bg__fx{
+          background:
+            radial-gradient(circle at 22% 62%, rgba(140,244,255,0.16) 0%, rgba(140,244,255,0) 45%),
+            radial-gradient(circle at 80% 70%, rgba(167,139,250,0.14) 0%, rgba(167,139,250,0) 55%),
+            radial-gradient(circle at 86% 52%, rgba(140,244,255,0.12) 0%, rgba(140,244,255,0) 45%);
+          opacity: 0.9;
+        }
+        .stage-bg--6 .stage-bg__fx::after{
+          content:""; position:absolute; inset:-10% 0 -10% 0;
+          background-image:
+            radial-gradient(circle, rgba(215,245,255,0.25) 0 1.5px, rgba(215,245,255,0) 2.5px),
+            radial-gradient(circle, rgba(215,245,255,0.18) 0 1.2px, rgba(215,245,255,0) 2.2px);
+          background-size: 90px 90px, 140px 140px;
+          background-position: 0 0, 40px 50px;
+          animation: bgRise 3.2s linear infinite;
+          opacity: 0;
+        }
         
         @keyframes float {
           0%, 100% { transform: translateY(0px); }
