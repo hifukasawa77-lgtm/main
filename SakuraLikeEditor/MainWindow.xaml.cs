@@ -111,6 +111,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         CommandBindings.Add(new CommandBinding(MainWindowCommands.Find, (_, _) => ShowFindReplace(isReplace: false)));
         CommandBindings.Add(new CommandBinding(MainWindowCommands.Replace, (_, _) => ShowFindReplace(isReplace: true)));
         CommandBindings.Add(new CommandBinding(MainWindowCommands.GoToLine, (_, _) => GoToLine()));
+        CommandBindings.Add(new CommandBinding(MainWindowCommands.Grep, (_, _) => ShowGrep()));
+        CommandBindings.Add(new CommandBinding(MainWindowCommands.CsvTable, (_, _) => ShowCsvTable()));
 
         CommandBindings.Add(new CommandBinding(MainWindowCommands.ToggleWordWrap, ToggleWordWrap_Executed));
         CommandBindings.Add(new CommandBinding(MainWindowCommands.ToggleLineNumbers, ToggleLineNumbers_Executed));
@@ -682,6 +684,49 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         view.EditorTextBox.Select(charIndex, 0);
         view.EditorTextBox.ScrollToLine(lineIndex);
         UpdateStatusBar();
+    }
+
+    private void ShowGrep()
+    {
+        var dlg = new GrepWindow(OpenFileAtLine)
+        {
+            Owner = this,
+        };
+        dlg.Show();
+    }
+
+    private void OpenFileAtLine(string filePath, int lineNumber)
+    {
+        OpenDocumentPath(Path.GetFullPath(filePath));
+
+        var view = GetActiveEditorView();
+        if (view == null) return;
+
+        var maxLine = Math.Max(1, view.EditorTextBox.LineCount);
+        var target = Math.Clamp(lineNumber, 1, maxLine);
+        var lineIndex = target - 1;
+        var charIndex = view.EditorTextBox.GetCharacterIndexFromLineIndex(lineIndex);
+        var lineLength = view.EditorTextBox.GetLineLength(lineIndex);
+
+        view.EditorTextBox.Focus();
+        view.EditorTextBox.CaretIndex = charIndex;
+        view.EditorTextBox.Select(charIndex, Math.Min(lineLength, 512));
+        view.EditorTextBox.ScrollToLine(lineIndex);
+        UpdateStatusBar();
+    }
+
+    private void ShowCsvTable()
+    {
+        var view = GetActiveEditorView();
+        if (view == null) return;
+
+        var dlg = new CsvTableWindow(
+            getText: () => view.EditorTextBox.Text ?? "",
+            setText: t => view.EditorTextBox.Text = t)
+        {
+            Owner = this,
+        };
+        dlg.Show();
     }
 
     private void ShowFindReplace(bool isReplace)

@@ -39,6 +39,9 @@ public static class MainWindowCommands
         new("Grep", nameof(Grep), typeof(MainWindowCommands),
             new InputGestureCollection { new KeyGesture(Key.F, ModifierKeys.Control | ModifierKeys.Shift) });
 
+    public static readonly RoutedUICommand CsvTable =
+        new("CSV Table", nameof(CsvTable), typeof(MainWindowCommands));
+
     public static readonly RoutedUICommand ToggleWordWrap =
         new("Toggle Word Wrap", nameof(ToggleWordWrap), typeof(MainWindowCommands));
 
