@@ -3342,7 +3342,7 @@ const ShogiRPG = () => {
               navigator.share({ text });
             } else {
               const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
-              window.open(twitterUrl, '_blank');
+              window.open(twitterUrl, '_blank', 'noopener,noreferrer');
             }
           }} style={{
             width: '100%',
