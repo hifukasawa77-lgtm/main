@@ -36,7 +36,7 @@ export default function Gradius() {
     // BGM ENGINE (Web Audio API)
     // ═══════════════════════════════════════════════════
     let audioCtx=null, masterGain=null;
-    let bgmNodes=[], bgmTimer=null, bgmScheduled=[], bgmStage=0, bgmPlaying=false;
+    let bgmNodes=[], bgmTimer=null, bgmFadeTimer=null, bgmScheduled=[], bgmStage=0, bgmPlaying=false;
     const LOOK=0.15, TICK=0.05; // look-ahead & scheduler interval
 
     // ── 音符周波数テーブル ──
@@ -279,6 +279,7 @@ export default function Gradius() {
     function stopBGM(){
       bgmPlaying=false;
       if(bgmTimer){ clearTimeout(bgmTimer); bgmTimer=null; }
+      if(bgmFadeTimer){ clearTimeout(bgmFadeTimer); bgmFadeTimer=null; }
       for(const n of bgmNodes){ try{ n.stop(0); }catch(e){} }
       bgmNodes=[];
     }
@@ -288,7 +289,9 @@ export default function Gradius() {
       const now=audioCtx.currentTime;
       masterGain.gain.setValueAtTime(masterGain.gain.value, now);
       masterGain.gain.linearRampToValueAtTime(0, now+0.4);
-      setTimeout(()=>{
+      if(bgmFadeTimer){ clearTimeout(bgmFadeTimer); bgmFadeTimer=null; }
+      bgmFadeTimer=setTimeout(()=>{
+        bgmFadeTimer=null;
         stopBGM();
         masterGain.gain.setValueAtTime(0.55, audioCtx.currentTime);
         startBGM(toStage);
@@ -336,7 +339,6 @@ export default function Gradius() {
       waveCharge=0; waveCharging=false; waveCooldown=0;
       killCount=0; puCursor=-1;
       gameState='playing';
-      window._bossRush=bossOnly;
       buildTerrain();
       initAudio(); fadeBGM(stageNum);
     }

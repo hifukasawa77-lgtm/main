@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gradius - Boss Rush</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0e27;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: 'Arial', sans-serif;
+      color: #fff;
+    }
+    #gameContainer { position: relative; background: #000; }
+    canvas {
+      display: block;
+      border: 2px solid #00ffcc;
+      box-shadow: 0 0 20px rgba(0, 255, 204, 0.5);
+    }
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-size: 14px;
+      color: #00ff88;
+      z-index: 10;
+      text-shadow: 0 0 10px rgba(0, 255, 136, 0.7);
+    }
+    .hud-item { margin-bottom: 8px; }
+    #stageInfo {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 32px;
+      font-weight: bold;
+      color: #ff00ff;
+      z-index: 20;
+      text-shadow: 0 0 20px rgba(255, 0, 255, 0.8);
+      display: none;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameContainer">
+    <canvas id="gameCanvas" width="480" height="540"></canvas>
+    <div id="hud">
+      <div class="hud-item">STAGE: <span id="stageNum">1</span></div>
+      <div class="hud-item">SCORE: <span id="score">0</span></div>
+      <div class="hud-item">LIVES: <span id="lives">3</span></div>
+      <div class="hud-item">BOSS HP: <span id="bossHp">---</span></div>
+    </div>
+    <div id="stageInfo"></div>
+  </div>
+
+  <script>
+    const W = 480, H = 540;
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // ═══════════════════════════════════════════════════
+    // ゲーム状態管理
+    // ═══════════════════════════════════════════════════
+    let gameState = {
+      stage: 1,
+      score: 0,
+      lives: 3,
+      frame: 0,
+      shooting: false,
+    };
+
+    let player = {
+      x: 60,
+      y: H / 2,
+      w: 16,
+      h: 16,
+      invincible: 0,
+      speed: 3,
+    };
+
+    let game = {
+      bullets: [],
+      enemyBullets: [],
+      enemies: [],
+      particles: [],
+      scrollX: 0,
+      bossHp: 0,
+      bossMaxHp: 0,
+    };
+
+    // ═══════════════════════════════════════════════════
+    // ボス定義テーブル
+    // ═══════════════════════════════════════════════════
+    const BOSS_DATA = {
+      1: { name: 'ツイン火龍', hp: 300, type: 'twinDragon' },
+      2: { name: 'モアイ三体', hp: 250, type: 'moaiTriple' },
+      3: { name: 'ツタンカーメン', hp: 350, type: 'tutankhamun' },
+      4: { name: 'エイリアンボス', hp: 300, type: 'alienBoss' },
+      5: { name: '巨大アメーバ', hp: 280, type: 'amoeba' },
+      6: { name: 'コロナボス', hp: 320, type: 'coronaBoss' },
+      7: { name: '要塞ボス', hp: 400, type: 'fortress' },
+    };
+
+    // ═══════════════════════════════════════════════════
+    // ボス描画関数
+    // ═══════════════════════════════════════════════════
+
+    // ツイン火龍
+    function drawTwinDragon(x, y, frame) {
+      const bodyScale = 1 + Math.sin(frame * 0.05) * 0.1;
+      const flap1 = Math.sin(frame * 0.08) * 15;
+      const flap2 = Math.sin(frame * 0.08 + Math.PI) * 15;
+
+      // 胴体
+      ctx.fillStyle = '#ff4400';
+      ctx.shadowColor = '#ff0000';
+      ctx.shadowBlur = 15;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 45 * bodyScale, 30, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 左の頭
+      const head1X = x - 35;
+      const head1Y = y - 30 + flap1 * 0.5;
+      ctx.fillStyle = '#ff6600';
+      ctx.beginPath();
+      ctx.arc(head1X, head1Y, 18, 0, Math.PI * 2);
+      ctx.fill();
+      // 目
+      ctx.fillStyle = '#ffff00';
+      ctx.beginPath();
+      ctx.arc(head1X - 6, head1Y - 4, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 右の頭
+      const head2X = x - 35;
+      const head2Y = y + 30 + flap2 * 0.5;
+      ctx.fillStyle = '#ff6600';
+      ctx.beginPath();
+      ctx.arc(head2X, head2Y, 18, 0, Math.PI * 2);
+      ctx.fill();
+      // 目
+      ctx.fillStyle = '#ffff00';
+      ctx.beginPath();
+      ctx.arc(head2X - 6, head2Y + 4, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 翼（左右）
+      ctx.strokeStyle = '#ff2200';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x + 20, y - 15);
+      ctx.bezierCurveTo(x + 60 + flap1 * 0.3, y - 50, x + 70, y - 45, x + 50, y - 60);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x + 20, y + 15);
+      ctx.bezierCurveTo(x + 60 + flap2 * 0.3, y + 50, x + 70, y + 45, x + 50, y + 60);
+      ctx.stroke();
+
+      ctx.shadowBlur = 0;
+    }
+
+    // モアイ三体
+    function drawMoaiTriple(x, y, frame) {
+      const centers = [
+        { x: x - 60, y: y - 60 }, // 上
+        { x: x, y: y },           // 中央
+        { x: x - 60, y: y + 60 }, // 下
+      ];
+
+      centers.forEach((center, idx) => {
+        // モアイ本体
+        ctx.fillStyle = '#888888';
+        ctx.shadowColor = '#00ffff';
+        ctx.shadowBlur = 20;
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, 22, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 目
+        ctx.fillStyle = '#ffee00';
+        const eyeOffset = Math.sin(frame * 0.1 + idx) * 3;
+        ctx.beginPath();
+        ctx.arc(center.x - 8 + eyeOffset, center.y - 5, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(center.x + 8 + eyeOffset, center.y - 5, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 口
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(center.x, center.y + 8, 6, 0, Math.PI);
+        ctx.stroke();
+      });
+
+      ctx.shadowBlur = 0;
+    }
+
+    // ツタンカーメン
+    function drawTutankhamun(x, y, frame) {
+      // 王冠
+      ctx.fillStyle = '#ffdd00';
+      ctx.shadowColor = '#ff8800';
+      ctx.shadowBlur = 15;
+      ctx.beginPath();
+      ctx.moveTo(x - 20, y - 35);
+      ctx.lineTo(x - 15, y - 50);
+      ctx.lineTo(x, y - 55);
+      ctx.lineTo(x + 15, y - 50);
+      ctx.lineTo(x + 20, y - 35);
+      ctx.closePath();
+      ctx.fill();
+
+      // 顔
+      ctx.fillStyle = '#ffcc99';
+      ctx.beginPath();
+      ctx.ellipse(x, y - 15, 25, 30, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 目
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(x - 10, y - 20, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x + 10, y - 20, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 胴体
+      ctx.fillStyle = '#ff6600';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 20, 28, 35, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 懐中電灯（攻撃）
+      const staffAngle = Math.sin(frame * 0.05) * 0.3;
+      ctx.strokeStyle = '#ffee00';
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x + 20, y + 5);
+      ctx.lineTo(x + 60 + Math.cos(staffAngle) * 30, y + 20 + Math.sin(staffAngle) * 30);
+      ctx.stroke();
+
+      ctx.shadowBlur = 0;
+    }
+
+    // エイリアンボス
+    function drawAlienBoss(x, y, frame) {
+      // 胴体
+      ctx.fillStyle = '#00ff88';
+      ctx.shadowColor = '#00ffff';
+      ctx.shadowBlur = 20;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 35, 45, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 大きな目
+      ctx.fillStyle = '#000';
+      const eyeSize = 12 + Math.sin(frame * 0.05) * 2;
+      ctx.beginPath();
+      ctx.arc(x - 12, y - 10, eyeSize, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x + 12, y - 10, eyeSize, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 触手
+      for (let i = 0; i < 4; i++) {
+        const angle = (Math.PI * 2 / 4) * i;
+        const tentacleX = x + Math.cos(angle) * 40;
+        const tentacleY = y + Math.sin(angle) * 40;
+        const wiggle = Math.sin(frame * 0.1 + i) * 5;
+
+        ctx.strokeStyle = '#00ff88';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(x + Math.cos(angle) * 30, y + Math.sin(angle) * 30);
+        ctx.quadraticCurveTo(
+          x + Math.cos(angle) * 45 + wiggle,
+          y + Math.sin(angle) * 45 + wiggle,
+          tentacleX,
+          tentacleY
+        );
+        ctx.stroke();
+      }
+
+      ctx.shadowBlur = 0;
+    }
+
+    // 巨大アメーバ
+    function drawAmoeba(x, y, frame) {
+      ctx.fillStyle = '#ff00ff';
+      ctx.shadowColor = '#ff00ff';
+      ctx.shadowBlur = 25;
+      
+      // 変形する胴体
+      const wobble = Math.sin(frame * 0.03) * 5;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 40 + wobble, 35 + wobble * 0.7, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 擬足（偽足）
+      for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI * 2 / 6) * i + frame * 0.02;
+        const px = x + Math.cos(angle) * 50;
+        const py = y + Math.sin(angle) * 50;
+        const pulsate = Math.sin(frame * 0.05 + i) * 8;
+        
+        ctx.fillStyle = `rgba(255, 0, 255, ${0.4 + Math.sin(frame * 0.02 + i) * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(px, py, 12 + pulsate, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.shadowBlur = 0;
+    }
+
+    // コロナボス
+    function drawCoronaBoss(x, y, frame) {
+      ctx.fillStyle = '#ffaa00';
+      ctx.shadowColor = '#ffff00';
+      ctx.shadowBlur = 30;
+      
+      // 中心核
+      ctx.beginPath();
+      ctx.arc(x, y, 25, 0, Math.PI * 2);
+      ctx.fill();
+
+      // コロナ放射
+      for (let i = 0; i < 8; i++) {
+        const angle = (Math.PI * 2 / 8) * i + frame * 0.05;
+        const rayX = x + Math.cos(angle) * 35;
+        const rayY = y + Math.sin(angle) * 35;
+        const bloom = Math.sin(frame * 0.07 + i) * 8;
+        
+        ctx.fillStyle = `rgba(255, 200, 0, ${0.5 + Math.sin(frame * 0.03 + i) * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(rayX, rayY, 12 + bloom, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.shadowBlur = 0;
+    }
+
+    // 要塞ボス
+    function drawFortress(x, y, frame) {
+      ctx.fillStyle = '#666666';
+      ctx.shadowColor = '#ff4444';
+      ctx.shadowBlur = 20;
+      
+      // 四角い本体
+      ctx.fillRect(x - 30, y - 35, 60, 70);
+
+      // 窓
+      for (let i = 0; i < 3; i++) {
+        ctx.fillStyle = Math.sin(frame * 0.05 + i) > 0 ? '#ffff00' : '#0066ff';
+        ctx.fillRect(x - 20 + i * 20, y - 25, 10, 10);
+        ctx.fillRect(x - 20 + i * 20, y + 5, 10, 10);
+      }
+
+      // 砲塔
+      ctx.fillStyle = '#555555';
+      for (let i = 0; i < 2; i++) {
+        const turretY = y - 20 + i * 40;
+        const angle = Math.sin(frame * 0.04 + i) * 0.4;
+        
+        ctx.save();
+        ctx.translate(x + 35, turretY);
+        ctx.rotate(angle);
+        ctx.fillRect(0, -3, 20, 6);
+        ctx.restore();
+      }
+
+      ctx.shadowBlur = 0;
+    }
+
+    // ═══════════════════════════════════════════════════
+    // BGM エンジン (簡略版)
+    // ═══════════════════════════════════════════════════
+    let audioCtx = null;
+    let bgmOscillators = [];
+
+    function initAudio() {
+      if (audioCtx) return;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    function playBGMNote(freq, duration) {
+      if (!audioCtx) initAudio();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      osc.frequency.value = freq;
+      osc.type = 'square';
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + duration);
+
+      bgmOscillators.push(osc);
+    }
+
+    function startStageBGM(stageNum) {
+      const melodies = {
+        1: [440, 494, 523, 587, 523, 494, 440, 392, 349, 330, 392, 440], // ST1
+        2: [293, 330, 349, 392, 440, 392, 349, 330, 293, 262, 277, 293],  // ST2
+        3: [329, 349, 392, 440, 392, 349, 329, 293, 262, 293, 329, 392],  // ST3
+        4: [349, 392, 440, 493, 440, 392, 349, 330, 349, 392, 440, 349],  // ST4
+        5: [392, 440, 493, 587, 493, 440, 392, 349, 392, 440, 493, 392],  // ST5
+        6: [262, 294, 330, 392, 440, 494, 523, 587, 523, 494, 440, 392],  // ST6
+        7: [349, 392, 440, 494, 587, 523, 494, 440, 392, 349, 330, 349],  // ST7
+      };
+
+      const mel = melodies[stageNum] || melodies[1];
+      let time = audioCtx.currentTime;
+      
+      // メロディループ
+      const playMelody = () => {
+        if (!gameState.shooting) {
+          mel.forEach((freq, idx) => {
+            setTimeout(() => {
+              if (gameState.stage === stageNum) {
+                playBGMNote(freq, 0.1);
+              }
+            }, idx * 100);
+          });
+          setTimeout(playMelody, mel.length * 100 + 200);
+        }
+      };
+      playMelody();
+    }
+
+    // ═══════════════════════════════════════════════════
+    // ゲームロジック
+    // ═══════════════════════════════════════════════════
+
+    function handleInput() {
+      const keys = {};
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp') player.y = Math.max(10, player.y - player.speed);
+        if (e.key === 'ArrowDown') player.y = Math.min(H - 10, player.y + player.speed);
+        if (e.key === 'ArrowLeft') player.x = Math.max(10, player.x - player.speed);
+        if (e.key === 'ArrowRight') player.x = Math.min(W - 10, player.x + player.speed);
+        if (e.key === 'z' || e.key === 'Z' || e.key === ' ') gameState.shooting = true;
+        if (e.key === 'End') skipToNextStage();
+      });
+      window.addEventListener('keyup', (e) => {
+        if (e.key === 'z' || e.key === 'Z' || e.key === ' ') gameState.shooting = false;
+      });
+    }
+
+    function spawnBoss() {
+      const bossConfig = BOSS_DATA[gameState.stage];
+      if (!bossConfig) return;
+
+      game.bossHp = bossConfig.hp;
+      game.bossMaxHp = bossConfig.hp;
+
+      const boss = {
+        x: W * 0.7,
+        y: H / 2,
+        type: bossConfig.type,
+        hp: bossConfig.hp,
+        maxHp: bossConfig.hp,
+        frame: 0,
+        shootCooldown: 0,
+      };
+
+      game.enemies.push(boss);
+      showStageInfo(`STAGE ${gameState.stage}: ${bossConfig.name}`);
+      initAudio();
+      startStageBGM(gameState.stage);
+    }
+
+    function showStageInfo(text) {
+      const infoEl = document.getElementById('stageInfo');
+      infoEl.textContent = text;
+      infoEl.style.display = 'block';
+      setTimeout(() => {
+        infoEl.style.display = 'none';
+      }, 2000);
+    }
+
+    function update() {
+      gameState.frame++;
+
+      // プレイヤーの弾発射
+      if (gameState.shooting) {
+        game.bullets.push({
+          x: player.x + 15,
+          y: player.y,
+          vx: 6,
+          vy: 0,
+          w: 8,
+          h: 2,
+        });
+      }
+
+      // 敵の更新
+      game.enemies.forEach((boss, idx) => {
+        if (boss.shootCooldown) boss.shootCooldown--;
+        boss.frame++;
+
+        // ボスが画面外に行ったら削除
+        if (boss.x < -100) {
+          game.enemies.splice(idx, 1);
+          return;
+        }
+
+        // ボス攻撃
+        if (boss.shootCooldown === 0 && Math.random() < 0.02) {
+          for (let i = 0; i < 3; i++) {
+            game.enemyBullets.push({
+              x: boss.x,
+              y: boss.y + (i - 1) * 20,
+              vx: -3,
+              vy: (i - 1) * 0.5,
+              w: 6,
+              h: 6,
+            });
+          }
+          boss.shootCooldown = 60;
+        }
+
+        // ボス移動
+        boss.y += Math.sin(boss.frame * 0.02) * 0.5;
+        boss.y = Math.max(30, Math.min(H - 30, boss.y));
+      });
+
+      // 弾の更新
+      game.bullets = game.bullets.filter((b) => {
+        b.x += b.vx;
+        b.y += b.vy;
+        return b.x < W + 50;
+      });
+
+      game.enemyBullets = game.enemyBullets.filter((b) => {
+        b.x += b.vx;
+        b.y += b.vy;
+        return b.x > -50 && b.y > -50 && b.y < H + 50;
+      });
+
+      // 衝突判定：プレイヤーの弾 vs ボス
+      game.bullets.forEach((bullet, bIdx) => {
+        game.enemies.forEach((boss, eIdx) => {
+          const dx = bullet.x - boss.x;
+          const dy = bullet.y - boss.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 30) {
+            boss.hp -= 10;
+            game.bullets.splice(bIdx, 1);
+
+            if (boss.hp <= 0) {
+              gameState.score += 1000;
+              game.enemies.splice(eIdx, 1);
+              // 次のステージへ
+              if (gameState.stage < 7) {
+                gameState.stage++;
+                setTimeout(spawnBoss, 1000);
+              } else {
+                showStageInfo('ALL STAGES CLEARED!');
+              }
+            }
+            return;
+          }
+        });
+      });
+
+      // 衝突判定：敵の弾 vs プレイヤー
+      if (player.invincible === 0) {
+        game.enemyBullets.forEach((bullet, idx) => {
+          const dx = bullet.x - player.x;
+          const dy = bullet.y - player.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 12) {
+            gameState.lives--;
+            player.invincible = 120;
+            game.enemyBullets.splice(idx, 1);
+          }
+        });
+      }
+
+      if (player.invincible > 0) player.invincible--;
+
+      // HUD更新
+      document.getElementById('stageNum').textContent = gameState.stage;
+      document.getElementById('score').textContent = gameState.score;
+      document.getElementById('lives').textContent = gameState.lives;
+      if (game.enemies.length > 0) {
+        document.getElementById('bossHp').textContent = Math.max(0, game.enemies[0].hp);
+      }
+
+      if (gameState.lives <= 0) {
+        showStageInfo('GAME OVER');
+      }
+    }
+
+    function draw() {
+      // 背景
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+
+      // 星
+      for (let i = 0; i < 100; i++) {
+        const x = (gameState.frame / 2 + i * 15) % W;
+        const y = (i * 7) % H;
+        ctx.fillStyle = `rgba(255,255,255,${0.3 + Math.sin(gameState.frame * 0.02 + i) * 0.2})`;
+        ctx.fillRect(x, y, 1, 1);
+      }
+
+      // ボス描画
+      game.enemies.forEach((boss) => {
+        if (boss.type === 'twinDragon') {
+          drawTwinDragon(boss.x, boss.y, boss.frame);
+        } else if (boss.type === 'moaiTriple') {
+          drawMoaiTriple(boss.x, boss.y, boss.frame);
+        } else if (boss.type === 'tutankhamun') {
+          drawTutankhamun(boss.x, boss.y, boss.frame);
+        } else if (boss.type === 'alienBoss') {
+          drawAlienBoss(boss.x, boss.y, boss.frame);
+        } else if (boss.type === 'amoeba') {
+          drawAmoeba(boss.x, boss.y, boss.frame);
+        } else if (boss.type === 'coronaBoss') {
+          drawCoronaBoss(boss.x, boss.y, boss.frame);
+        } else if (boss.type === 'fortress') {
+          drawFortress(boss.x, boss.y, boss.frame);
+        } else {
+          // デフォルト
+          ctx.fillStyle = '#ff00ff';
+          ctx.fillRect(boss.x - 20, boss.y - 20, 40, 40);
+        }
+
+        // HP ゲージ
+        const hpBarW = 60;
+        ctx.fillStyle = '#333';
+        ctx.fillRect(boss.x - hpBarW / 2, boss.y - 40, hpBarW, 6);
+        ctx.fillStyle = '#00ff00';
+        ctx.fillRect(boss.x - hpBarW / 2, boss.y - 40, (boss.hp / boss.maxHp) * hpBarW, 6);
+      });
+
+      // プレイヤー描画
+      ctx.fillStyle = player.invincible > 0 && Math.floor(player.invincible / 10) % 2 === 0 ? 'rgba(0,255,0,0.3)' : '#00ff00';
+      ctx.fillRect(player.x - 8, player.y - 8, 16, 16);
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(player.x - 8, player.y - 8, 16, 16);
+
+      // 弾描画
+      ctx.fillStyle = '#ffff00';
+      game.bullets.forEach((b) => {
+        ctx.fillRect(b.x - 4, b.y - 1, 8, 2);
+      });
+
+      ctx.fillStyle = '#ff0000';
+      game.enemyBullets.forEach((b) => {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.w / 2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function gameLoop() {
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function skipToNextStage() {
+      gameState.stage = Math.min(7, gameState.stage + 1);
+      game.enemies = [];
+      game.bullets = [];
+      game.enemyBullets = [];
+      spawnBoss();
+    }
+
+    // 初期化
+    handleInput();
+    spawnBoss();
+    gameLoop();
+  </script>
+</body>
+</html>
