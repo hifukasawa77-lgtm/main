@@ -1607,6 +1607,7 @@
       const MEMO_KEY = 'dashboard-memo';
       const SCHEDULE_KEY = 'dashboard-schedules';
       const VISIT_KEY = 'home-dashboard-visit';
+      const GAS_SNAPSHOT_KEY = 'dashboard-gas-snapshot';
 
       const updateItems = [
         { date: '2026-04-16', text: '三郷市グルメまとめページを公開', link: 'misato-gourmet.html' },
@@ -1791,46 +1792,89 @@
       }
 
       function parseGasSnapshot(rawText) {
-        const compact = rawText
+        const text = String(rawText || '')
+          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&amp;/gi, '&')
+          .replace(/&lt;/gi, '<')
+          .replace(/&gt;/gi, '>')
           .replace(/\r/g, '\n')
           .replace(/[ \t\u3000]+/g, ' ')
           .replace(/\n+/g, '\n');
 
-        const avg = compact.match(/三郷市のガソリン価格\s*([0-9]{4}年[0-9]{1,2}月[0-9]{1,2}日[^ ]*時点の平均価格)\s*([0-9]+(?:\.[0-9]+)?)/);
-        const delta = compact.match(/時点の平均価格\s*[0-9]+(?:\.[0-9]+)?\s*([+\-]\s*[0-9]+(?:\.[0-9]+)?)/);
-        const coverage = compact.match(/三郷市の価格情報カバー率\s*([0-9]+(?:\.[0-9]+)?%)\s*([0-9]+\s*\/\s*[0-9]+)/);
+        const asOfRaw = text.match(/([0-9]{4}年[0-9]{1,2}月[0-9]{1,2}日[^ \n]*)\s*時点の平均価格/);
+        const priceRaw = text.match(/時点の平均価格\s*([0-9]+(?:\.[0-9]+)?)/);
+        const deltaRaw = text.match(/時点の平均価格\s*[0-9]+(?:\.[0-9]+)?\s*([+\-−]\s*[0-9]+(?:\.[0-9]+)?)/);
+        const coverageRaw = text.match(/価格情報カバー率\s*([0-9]+(?:\.[0-9]+)?%)\s*([0-9]+\s*\/\s*[0-9]+)/);
 
-        if (!avg) return null;
+        if (!asOfRaw || !priceRaw) return null;
+        const delta = deltaRaw ? deltaRaw[1].replace(/\s+/g, '').replace('−', '-') : null;
         return {
-          asOf: avg[1],
-          price: avg[2],
-          delta: delta ? delta[1].replace(/\s+/g, '') : null,
-          coverageRate: coverage ? coverage[1] : null,
-          coverageCount: coverage ? coverage[2].replace(/\s+/g, '') : null,
+          asOf: `${asOfRaw[1]}時点の平均価格`,
+          price: priceRaw[1],
+          delta,
+          coverageRate: coverageRaw ? coverageRaw[1] : null,
+          coverageCount: coverageRaw ? coverageRaw[2].replace(/\s+/g, '') : null,
         };
+      }
+
+      function renderGasSnapshot(snapshot, stale) {
+        const deltaNum = snapshot.delta ? Number(snapshot.delta) : 0;
+        const deltaCls = deltaNum > 0 ? 'dash-market-up' : deltaNum < 0 ? 'dash-market-down' : '';
+
+        gasList.innerHTML = `
+          <li class="dashboard-mini-item"><span>平均価格</span><strong>${escHtml(snapshot.price)} 円/L</strong></li>
+          <li class="dashboard-mini-item"><span>前回比</span><small class="${deltaCls}">${snapshot.delta ? escHtml(snapshot.delta) : '—'} 円</small></li>
+          <li class="dashboard-mini-item"><span>カバー率</span><small>${snapshot.coverageRate ? escHtml(snapshot.coverageRate) : '—'} ${snapshot.coverageCount ? `(${escHtml(snapshot.coverageCount)})` : ''}</small></li>
+        `;
+        gasTime.textContent = stale
+          ? `最新取得失敗 / 前回データ表示: ${snapshot.asOf}`
+          : `${snapshot.asOf} / 出典: gogo.gs`;
+      }
+
+      async function fetchGasHtml() {
+        const target = 'https://gogo.gs/11237?device=sp';
+        const endpoints = [
+          { mode: 'json', url: `https://api.allorigins.win/get?url=${encodeURIComponent(target)}` },
+          { mode: 'text', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}` },
+          { mode: 'text', url: `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(target)}` },
+        ];
+
+        for (const ep of endpoints) {
+          try {
+            const res = await fetchWithTimeout(ep.url, 9000);
+            if (!res.ok) continue;
+            const body = ep.mode === 'json'
+              ? String((await res.json()).contents || '')
+              : await res.text();
+            if (body && body.length > 300) return body;
+          } catch (e) {
+            // Try next endpoint
+          }
+        }
+        throw new Error('gas-fetch-failed');
       }
 
       async function initGasCard() {
         gasList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
         try {
-          const target = 'https://gogo.gs/11237?device=sp';
-          const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`;
-          const res = await fetchWithTimeout(proxy, 9000);
-          if (!res.ok) throw new Error('gas');
-          const outer = await res.json();
-          const snapshot = parseGasSnapshot(String(outer.contents || ''));
+          const html = await fetchGasHtml();
+          const snapshot = parseGasSnapshot(html);
           if (!snapshot) throw new Error('gas-parse');
-
-          const deltaNum = snapshot.delta ? Number(snapshot.delta) : 0;
-          const deltaCls = deltaNum > 0 ? 'dash-market-up' : deltaNum < 0 ? 'dash-market-down' : '';
-
-          gasList.innerHTML = `
-            <li class="dashboard-mini-item"><span>平均価格</span><strong>${escHtml(snapshot.price)} 円/L</strong></li>
-            <li class="dashboard-mini-item"><span>前回比</span><small class="${deltaCls}">${snapshot.delta ? escHtml(snapshot.delta) : '—'} 円</small></li>
-            <li class="dashboard-mini-item"><span>カバー率</span><small>${snapshot.coverageRate ? escHtml(snapshot.coverageRate) : '—'} ${snapshot.coverageCount ? `(${escHtml(snapshot.coverageCount)})` : ''}</small></li>
-          `;
-          gasTime.textContent = `${snapshot.asOf} / 出典: gogo.gs`;
+          localStorage.setItem(GAS_SNAPSHOT_KEY, JSON.stringify(snapshot));
+          renderGasSnapshot(snapshot, false);
         } catch (e) {
+          try {
+            const cached = JSON.parse(localStorage.getItem(GAS_SNAPSHOT_KEY) || 'null');
+            if (cached && cached.price) {
+              renderGasSnapshot(cached, true);
+              return;
+            }
+          } catch (ignore) {
+            // no-op
+          }
           gasList.innerHTML = '<li class="dashboard-mini-item"><span>相場の取得に失敗しました</span></li>';
           gasTime.textContent = '更新時刻: 取得失敗（リンク先で確認してください）';
         }
