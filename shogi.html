@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>将棋パズル | hide's works</title>
-  <meta name="description" content="日本の伝統ゲーム・将棋をブラウザで遊べる形に再構成した実験作。インストール不要、すぐ遊べます。">
+  <title>AI将棋 | hide's works</title>
+  <meta name="description" content="AI藤井颯太・AI羽生善治と対局できるブラウザ将棋。インストール不要、すぐ遊べます。">
   <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/hide_0001_hon/shogi.html">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://hifukasawa77-lgtm.github.io/hide_0001_hon/shogi.html">
@@ -33,6 +33,22 @@
     }
     button:hover{background:linear-gradient(180deg,#9a4020,#7a3010);}
     button.active{background:linear-gradient(180deg,#d4a040,#b08020);color:#1a0a00;}
+    #ai-select{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;margin-bottom:10px;}
+    #ai-select span{font-size:0.82rem;color:#a08060;}
+    .ai-btn{padding:7px 14px;font-size:0.82rem;}
+    .ai-btn.fuji.active{background:linear-gradient(180deg,#1a5fa0,#0d3d70);border-color:#5ab0ff;color:#e0f0ff;}
+    .ai-btn.habu.active{background:linear-gradient(180deg,#6a1a8a,#420d60);border-color:#cc80ff;color:#f0e0ff;}
+    #ai-profile{
+      background:rgba(0,0,0,0.35);border:1px solid #8b6030;border-radius:8px;
+      padding:10px 16px;margin-bottom:10px;max-width:580px;width:100%;
+      display:none;text-align:center;
+    }
+    #ai-profile .ai-name{font-size:1.1rem;font-weight:bold;margin-bottom:4px;}
+    #ai-profile .ai-desc{font-size:0.78rem;color:#c0a080;line-height:1.6;}
+    #ai-comment{
+      min-height:28px;font-size:0.85rem;color:#ffd080;font-style:italic;
+      text-align:center;margin-bottom:4px;transition:opacity 0.3s;
+    }
     #turn-display{
       font-size:1.05rem;background:rgba(0,0,0,0.4);
       padding:7px 16px;border-radius:6px;border:1px solid #8b6030;
@@ -165,11 +181,21 @@
   </style>
 </head>
 <body>
-<h1>将 棋</h1>
+<h1>AI 将 棋</h1>
+<div id="ai-select">
+  <span>対局相手：</span>
+  <button class="ai-btn active" id="btn-human" onclick="setAI('none')">👤 対人</button>
+  <button class="ai-btn fuji" id="btn-fuji" onclick="setAI('fuji')">⚡ AI藤井颯太</button>
+  <button class="ai-btn habu" id="btn-habu" onclick="setAI('habu')">🔮 AI羽生善治</button>
+</div>
+<div id="ai-profile">
+  <div class="ai-name" id="ai-profile-name"></div>
+  <div class="ai-desc" id="ai-profile-desc"></div>
+</div>
+<div id="ai-comment"></div>
 <div id="controls">
   <div id="turn-display">先手の番</div>
   <button onclick="newGame()">新規対局</button>
-  <button id="mode-btn" onclick="toggleMode()">対CPU</button>
   <button onclick="undoMove()">待った</button>
 </div>
 <div id="game-area">
@@ -210,9 +236,29 @@ const PVALS = {FU:1,KYO:3,KEI:3,GIN:4,KIN:5,KAKU:8,HI:9,OU:100,TO:6,NKYO:5,NKEI:
 const COL_LABELS = ['９','８','７','６','５','４','３','２','１'];
 const ROW_LABELS = ['一','二','三','四','五','六','七','八','九'];
 
+// ===== AI プロファイル =====
+const AI_PROFILES = {
+  fuji: {
+    name: '⚡ AI 藤井颯太',
+    desc: '攻め将棋の申し子。コンピュータ的精度で読み切る超攻撃型。竜・馬の生成を好み、王を直接狙う。序盤から一気に仕掛けるスタイル。',
+    comments_think: ['…読んでいます','深く読んでいます…','最善手を探索中…','詰みを探しています…'],
+    comments_move: ['攻めます！','この手が最善です','竜を作ります！','王手！','一気に仕掛けます','この局面は有利です','詰みが見えました'],
+    comments_cap: ['いただきます！','駒得しました','着実に優勢に'],
+  },
+  habu: {
+    name: '🔮 AI 羽生善治',
+    desc: '柔軟無双の全冠王者。「羽生マジック」と呼ばれる意表を突く一手が特徴。攻守のバランスを大切にし、相手の手を封じる指し回しが光る。',
+    comments_think: ['…考えています','局面を見極めています','ふむ…','どこかに一手があるはず'],
+    comments_move: ['この手はどうでしょう','バランスを重視します','ここが急所です','受けながら攻めます','ふふ、この手です','こういう将棋が好きです','少し手を変えましょう'],
+    comments_cap: ['いただきます','この駒が使えます','少し優勢ですね'],
+  }
+};
+
 // ===== 状態 =====
 let board=[], cap={1:[],2:[]}, curP=1, sel=null, vMoves=[], pendProm=null;
-let history=[], gameOver=false, vsMode=false, aiThink=false, chkCell=null;
+let history=[], gameOver=false, aiStyle='none', aiThink=false, chkCell=null;
+// vsMode は aiStyle !== 'none' と同義
+Object.defineProperty(window,'vsMode',{get:()=>aiStyle!=='none'});
 
 // アニメーション用スナップショット
 let prevBoardSnapshot = null;
@@ -340,13 +386,34 @@ function newGame(){
   render();
 }
 
-function toggleMode(){
-  vsMode=!vsMode;
-  const btn=document.getElementById('mode-btn');
-  btn.textContent=vsMode?'対人':'対CPU';
-  btn.classList.toggle('active',vsMode);
+function setAI(style){
+  aiStyle=style;
+  ['human','fuji','habu'].forEach(id=>{
+    const b=document.getElementById('btn-'+id);
+    if(b) b.classList.remove('active');
+  });
+  const activeId = style==='none'?'human':style;
+  const activeBtn=document.getElementById('btn-'+activeId);
+  if(activeBtn) activeBtn.classList.add('active');
+
+  const profile=document.getElementById('ai-profile');
+  if(style!=='none'&&AI_PROFILES[style]){
+    const p=AI_PROFILES[style];
+    document.getElementById('ai-profile-name').textContent=p.name;
+    document.getElementById('ai-profile-desc').textContent=p.desc;
+    profile.style.display='block';
+  } else {
+    profile.style.display='none';
+  }
+  setComment('');
   newGame();
 }
+
+function setComment(msg){
+  document.getElementById('ai-comment').textContent=msg;
+}
+
+function pickComment(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
 function undoMove(){
   if(history.length===0||aiThink)return;
@@ -417,7 +484,12 @@ function finishMove(){
     gameOver=true; render(); return;
   }
   render();
-  if(vsMode&&curP===2&&!gameOver){aiThink=true;setTimeout(aiMove,400);}
+  if(aiStyle!=='none'&&curP===2&&!gameOver){
+    aiThink=true;
+    const p=AI_PROFILES[aiStyle];
+    if(p) setComment(pickComment(p.comments_think));
+    setTimeout(aiMove, aiStyle==='fuji'?500:700);
+  }
 }
 
 // ===== クリック処理 =====
@@ -529,6 +601,86 @@ function renderTurnDisplay(){
 }
 
 // ===== AI =====
+function countMobility(b, p){
+  let cnt=0;
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++)
+    if(b[r][c]&&b[r][c].p===p) cnt+=rawMoves(b,r,c).length;
+  return cnt;
+}
+
+function scoreMove(m, style){
+  let s = Math.random() * (style==='habu' ? 0.8 : 0.4);
+  const nb = clone(board);
+  let pc, captured=false;
+
+  if(m.k==='mv'){
+    pc = board[m.fr][m.fc];
+    if(nb[m.tr][m.tc]){ s += (PVALS[nb[m.tr][m.tc].t]||1) * 1.2; captured=true; }
+    nb[m.tr][m.tc] = pc; nb[m.fr][m.fc] = null;
+  } else {
+    pc = {t:m.t, p:2};
+    nb[m.tr][m.tc] = pc;
+  }
+
+  const givesCheck = inCheck(nb, 1);
+  const promotable = m.k==='mv' && CAN_PROM[pc.t] && (inPromZone(m.tr,2)||inPromZone(m.fr,2));
+  const enemyKing = findKing(nb, 1) || [0, 4];
+  const distToKing = Math.abs(m.tr - enemyKing[0]) + Math.abs((m.tc!==undefined?m.tc:m.tc) - enemyKing[1]);
+
+  if(style === 'fuji'){
+    // ── 藤井スタイル：超攻撃型 ──
+    // 王手には最高評価
+    if(givesCheck) s += 7;
+    // 成りを強く好む
+    if(promotable) s += 3.0;
+    // 竜・馬への成りは特別ボーナス
+    if(promotable && (pc.t==='HI'||pc.t==='KAKU')) s += 4.0;
+    // 王に近いほど高評価（攻め駒を王の周辺に集める）
+    s += (7 - Math.min(distToKing, 7)) * 0.5;
+    // 飛車・角を前進させる
+    if(m.k==='mv' && (pc.t==='HI'||pc.t==='KAKU')) s += 0.8;
+    // 敵陣（row 0-2）への侵入ボーナス
+    if(m.tr <= 2) s += (3 - m.tr) * 0.6;
+    // 歩の積極的前進
+    if(pc.t==='FU' && m.k==='mv') s += (6 - m.tr) * 0.1;
+    // 相手玉の守り駒を取る大きなボーナス
+    if(captured){
+      const capturedDist = Math.abs(m.tr - enemyKing[0]) + Math.abs(m.tc - enemyKing[1]);
+      if(capturedDist <= 2) s += 2.5;
+    }
+  } else if(style === 'habu'){
+    // ── 羽生スタイル：バランス型・羽生マジック ──
+    // 王手は中程度
+    if(givesCheck) s += 3.5;
+    // 成りは標準
+    if(promotable) s += 1.8;
+    // 自軍の機動力（選択肢の多さ）を重視
+    const myMobility = countMobility(nb, 2);
+    s += myMobility * 0.04;
+    // 相手の機動力を削る（封じる）
+    const oppMobility = countMobility(nb, 1);
+    s += (40 - Math.min(oppMobility, 40)) * 0.04;
+    // 王への距離も考慮（攻守バランス）
+    s += (6 - Math.min(distToKing, 6)) * 0.25;
+    // 自陣の守り（自玉周辺の自駒密度）
+    const myKing = findKing(nb, 2) || [8, 4];
+    if(m.k==='mv'){
+      const defDist = Math.abs(m.tr - myKing[0]) + Math.abs(m.tc - myKing[1]);
+      if(defDist <= 2) s += 0.4; // 守り駒の近傍は評価
+    }
+    // 「羽生マジック」：低確率で意表を突く一手（高評価スパイク）
+    if(Math.random() < 0.07) s += 4.5;
+    // 持ち駒を有効活用（打ちを好む）
+    if(m.k==='dr') s += 0.5;
+  } else {
+    // 標準CPU
+    if(givesCheck) s += 4;
+    if(promotable) s += 1.5;
+  }
+
+  return s;
+}
+
 function aiMove(){
   if(!aiThink||curP!==2||gameOver){aiThink=false;return;}
   const all=[];
@@ -540,27 +692,17 @@ function aiMove(){
     validMoves_drop(board,t,2,cap).forEach(([tr,tc])=>all.push({k:'dr',t,tr,tc}));
   if(!all.length){aiThink=false;return;}
 
-  // スコアで評価
-  function score(m){
-    let s=Math.random()*0.6;
-    const nb=clone(board);
-    let pc;
-    if(m.k==='mv'){
-      pc=board[m.fr][m.fc];
-      if(nb[m.tr][m.tc])s+=PVALS[nb[m.tr][m.tc].t]||1;
-      nb[m.tr][m.tc]=pc; nb[m.fr][m.fc]=null;
-    } else {
-      pc={t:m.t,p:2};
-      nb[m.tr][m.tc]=pc;
-    }
-    // 成れる場合にボーナス
-    if(m.k==='mv'&&CAN_PROM[pc.t]&&(inPromZone(m.tr,2)||inPromZone(m.fr,2)))s+=1.5;
-    // 王手ボーナス
-    if(inCheck(nb,1))s+=4;
-    return s;
-  }
-  all.sort((a,b)=>score(b)-score(a));
+  all.sort((a,b)=>scoreMove(b,aiStyle)-scoreMove(a,aiStyle));
   const best=all[0];
+
+  // AIコメント表示
+  const p=AI_PROFILES[aiStyle];
+  if(p){
+    const captured = best.k==='mv' && board[best.tr]&&board[best.tr][best.tc];
+    const comments = captured ? p.comments_cap : p.comments_move;
+    setComment(pickComment(comments));
+  }
+
   if(best.k==='mv'){
     execMove(best.fr,best.fc,best.tr,best.tc,true);
   } else {
