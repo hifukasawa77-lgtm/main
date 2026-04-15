@@ -1298,7 +1298,7 @@
         <div class="sec-header reveal">
           <div class="sec-label">Dashboard</div>
           <h2 class="sec-title">📊 ホームダッシュボード</h2>
-          <p class="sec-desc">アクセス数・更新履歴・TODO/メモ・予定カレンダー・天気・円相場・株価をまとめて確認できます。</p>
+          <p class="sec-desc">アクセス数・更新履歴・TODO/メモ・予定カレンダー・天気・円相場・株価・三郷市ガソリン相場をまとめて確認できます。</p>
         </div>
         <div class="dashboard-grid">
           <article class="card dashboard-card reveal">
@@ -1329,6 +1329,15 @@
               <li class="dashboard-mini-item"><span>読み込み中…</span></li>
             </ul>
             <div class="dash-mini-note" id="home-stock-time">更新時刻を取得中…</div>
+          </article>
+
+          <article class="card dashboard-card reveal">
+            <h3>⛽ 三郷市ガソリン相場</h3>
+            <ul class="dashboard-mini-list" id="home-gas-list">
+              <li class="dashboard-mini-item"><span>読み込み中…</span></li>
+            </ul>
+            <div class="dash-mini-note" id="home-gas-time">更新時刻を取得中…</div>
+            <a class="dash-open-link" href="https://gogo.gs/11237?device=sp" target="_blank" rel="noreferrer">価格詳細を見る →</a>
           </article>
 
           <article class="card dashboard-card reveal">
@@ -1579,6 +1588,8 @@
       const fxTime = document.getElementById('home-fx-time');
       const stockList = document.getElementById('home-stock-list');
       const stockTime = document.getElementById('home-stock-time');
+      const gasList = document.getElementById('home-gas-list');
+      const gasTime = document.getElementById('home-gas-time');
       const updatesList = document.getElementById('home-updates-list');
       const todoForm = document.getElementById('home-todo-form');
       const todoInput = document.getElementById('home-todo-input');
@@ -1779,6 +1790,52 @@
         stockTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
       }
 
+      function parseGasSnapshot(rawText) {
+        const compact = rawText
+          .replace(/\r/g, '\n')
+          .replace(/[ \t\u3000]+/g, ' ')
+          .replace(/\n+/g, '\n');
+
+        const avg = compact.match(/三郷市のガソリン価格\s*([0-9]{4}年[0-9]{1,2}月[0-9]{1,2}日[^ ]*時点の平均価格)\s*([0-9]+(?:\.[0-9]+)?)/);
+        const delta = compact.match(/時点の平均価格\s*[0-9]+(?:\.[0-9]+)?\s*([+\-]\s*[0-9]+(?:\.[0-9]+)?)/);
+        const coverage = compact.match(/三郷市の価格情報カバー率\s*([0-9]+(?:\.[0-9]+)?%)\s*([0-9]+\s*\/\s*[0-9]+)/);
+
+        if (!avg) return null;
+        return {
+          asOf: avg[1],
+          price: avg[2],
+          delta: delta ? delta[1].replace(/\s+/g, '') : null,
+          coverageRate: coverage ? coverage[1] : null,
+          coverageCount: coverage ? coverage[2].replace(/\s+/g, '') : null,
+        };
+      }
+
+      async function initGasCard() {
+        gasList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
+        try {
+          const target = 'https://gogo.gs/11237?device=sp';
+          const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`;
+          const res = await fetchWithTimeout(proxy, 9000);
+          if (!res.ok) throw new Error('gas');
+          const outer = await res.json();
+          const snapshot = parseGasSnapshot(String(outer.contents || ''));
+          if (!snapshot) throw new Error('gas-parse');
+
+          const deltaNum = snapshot.delta ? Number(snapshot.delta) : 0;
+          const deltaCls = deltaNum > 0 ? 'dash-market-up' : deltaNum < 0 ? 'dash-market-down' : '';
+
+          gasList.innerHTML = `
+            <li class="dashboard-mini-item"><span>平均価格</span><strong>${escHtml(snapshot.price)} 円/L</strong></li>
+            <li class="dashboard-mini-item"><span>前回比</span><small class="${deltaCls}">${snapshot.delta ? escHtml(snapshot.delta) : '—'} 円</small></li>
+            <li class="dashboard-mini-item"><span>カバー率</span><small>${snapshot.coverageRate ? escHtml(snapshot.coverageRate) : '—'} ${snapshot.coverageCount ? `(${escHtml(snapshot.coverageCount)})` : ''}</small></li>
+          `;
+          gasTime.textContent = `${snapshot.asOf} / 出典: gogo.gs`;
+        } catch (e) {
+          gasList.innerHTML = '<li class="dashboard-mini-item"><span>相場の取得に失敗しました</span></li>';
+          gasTime.textContent = '更新時刻: 取得失敗（リンク先で確認してください）';
+        }
+      }
+
       let todos = [];
       function loadTodos() {
         try {
@@ -1939,6 +1996,7 @@
         initWeatherCard(),
         initFxCard(),
         initStockCard(),
+        initGasCard(),
       ]).catch(() => {
         // Ignore: each widget handles its own fallback.
       });
