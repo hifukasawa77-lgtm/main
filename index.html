@@ -1312,6 +1312,9 @@
             <h3>🌤 三郷市の天気</h3>
             <div class="dashboard-kpi" id="home-weather-kpi">読み込み中…</div>
             <p class="dashboard-sub" id="home-weather-sub">現在の気象データを取得しています。</p>
+            <ul class="dashboard-mini-list" id="home-weather-detail">
+              <li class="dashboard-mini-item"><span>読み込み中…</span></li>
+            </ul>
             <div class="dash-mini-note" id="home-weather-time">更新時刻を取得中…</div>
           </article>
 
@@ -1583,6 +1586,7 @@
       const visitSub = document.getElementById('home-visit-sub');
       const weatherKpi = document.getElementById('home-weather-kpi');
       const weatherSub = document.getElementById('home-weather-sub');
+      const weatherDetail = document.getElementById('home-weather-detail');
       const weatherTime = document.getElementById('home-weather-time');
       const fxList = document.getElementById('home-fx-list');
       const fxTime = document.getElementById('home-fx-time');
@@ -1703,8 +1707,9 @@
 
       async function initWeatherCard() {
         const url = 'https://api.open-meteo.com/v1/forecast?latitude=35.83&longitude=139.87'
-          + '&current=temperature_2m,weather_code,relative_humidity_2m'
-          + '&timezone=Asia%2FTokyo';
+          + '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m'
+          + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
+          + '&timezone=Asia%2FTokyo&forecast_days=3';
         try {
           const res = await fetchWithTimeout(url, 8000);
           if (!res.ok) throw new Error('weather');
@@ -1714,12 +1719,112 @@
           const humidity = Math.round(data.current.relative_humidity_2m);
           const pair = weatherMap[code] || ['🌡', '不明'];
           weatherKpi.textContent = `${pair[0]} ${temp}°C`;
-          weatherSub.textContent = `${pair[1]} / 湿度 ${humidity}%`;
+          weatherSub.textContent = `${pair[1]} / 湿度 ${humidity}% / 風速 ${fmtNum(data.current.wind_speed_10m, 1)}m/s`;
+
+          const tomorrowCode = data.daily?.weather_code?.[1];
+          const tomorrowMax = data.daily?.temperature_2m_max?.[1];
+          const tomorrowMin = data.daily?.temperature_2m_min?.[1];
+          const tomorrowRainProb = data.daily?.precipitation_probability_max?.[1];
+          const tomorrowPair = weatherMap[tomorrowCode] || ['🌡', '不明'];
+          const tomorrowMaxNum = Number.isFinite(Number(tomorrowMax)) ? Number(tomorrowMax) : temp;
+          const tomorrowMinNum = Number.isFinite(Number(tomorrowMin)) ? Number(tomorrowMin) : temp - 3;
+
+          const pollen = await getPollenForecast({
+            humidity,
+            wind: Number(data.current.wind_speed_10m || 0),
+            tomorrowMax: tomorrowMaxNum,
+            tomorrowWeatherCode: Number(tomorrowCode || code),
+            tomorrowRainProb: Number(tomorrowRainProb || 0),
+          });
+
+          weatherDetail.innerHTML = `
+            <li class="dashboard-mini-item"><span>明日の天気</span><small>${tomorrowPair[0]} ${Math.round(tomorrowMaxNum)}° / ${Math.round(tomorrowMinNum)}° (${tomorrowPair[1]})</small></li>
+            <li class="dashboard-mini-item"><span>花粉予報</span><small>${escHtml(pollen.label)}</small></li>
+            <li class="dashboard-mini-item"><span>判定ソース</span><small>${escHtml(pollen.source)}</small></li>
+          `;
           weatherTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
         } catch (e) {
           weatherKpi.textContent = '取得失敗';
           weatherSub.textContent = '時間をおいて再読み込みしてください。';
+          weatherDetail.innerHTML = '<li class="dashboard-mini-item"><span>天気詳細の取得に失敗しました</span></li>';
           weatherTime.textContent = '更新時刻: 取得失敗';
+        }
+      }
+
+      function estimatePollenFromWeather(params) {
+        const month = new Date().getMonth() + 1;
+        const seasonalBase = ({
+          1: 0, 2: 2, 3: 4, 4: 3, 5: 1, 6: 0,
+          7: 0, 8: 0, 9: 1, 10: 1, 11: 0, 12: 0,
+        })[month] || 0;
+
+        let score = seasonalBase;
+        if (params.wind >= 6) score += 2;
+        else if (params.wind >= 3) score += 1;
+
+        if (params.humidity <= 45) score += 2;
+        else if (params.humidity <= 60) score += 1;
+        else if (params.humidity >= 80) score -= 1;
+
+        if (params.tomorrowMax >= 20) score += 2;
+        else if (params.tomorrowMax >= 14) score += 1;
+
+        if (params.tomorrowRainProb >= 60) score -= 2;
+        else if (params.tomorrowRainProb >= 30) score -= 1;
+
+        const clearCodes = [0, 1, 2];
+        const rainCodes = [51, 53, 55, 61, 63, 65, 66, 67, 80, 81, 82];
+        if (clearCodes.includes(params.tomorrowWeatherCode)) score += 1;
+        if (rainCodes.includes(params.tomorrowWeatherCode)) score -= 2;
+
+        if (score < 0) score = 0;
+        if (score > 7) score = 7;
+
+        if (score <= 1) return '少ない';
+        if (score === 2) return 'やや少ない';
+        if (score <= 4) return 'やや多い';
+        if (score <= 6) return '多い';
+        return '非常に多い';
+      }
+
+      async function getPollenForecast(params) {
+        try {
+          const api = 'https://air-quality-api.open-meteo.com/v1/air-quality'
+            + '?latitude=35.83&longitude=139.87'
+            + '&hourly=alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen'
+            + '&timezone=Asia%2FTokyo&forecast_days=2';
+          const res = await fetchWithTimeout(api, 8000);
+          if (!res.ok) throw new Error('pollen');
+          const data = await res.json();
+
+          const keys = ['alder_pollen', 'birch_pollen', 'grass_pollen', 'mugwort_pollen', 'olive_pollen', 'ragweed_pollen'];
+          const values = [];
+          keys.forEach((k) => {
+            const arr = data?.hourly?.[k];
+            if (!Array.isArray(arr)) return;
+            arr.slice(0, 24).forEach((v) => {
+              if (typeof v === 'number' && Number.isFinite(v)) values.push(v);
+            });
+          });
+
+          if (!values.length) throw new Error('no-pollen-data');
+          const peak = Math.max(...values);
+          let label = '少ない';
+          if (peak >= 80) label = '非常に多い';
+          else if (peak >= 30) label = '多い';
+          else if (peak >= 10) label = 'やや多い';
+          else if (peak >= 3) label = 'やや少ない';
+
+          return {
+            label: `${label}（予測ピーク ${fmtNum(peak, 1)}）`,
+            source: 'Open-Meteo 花粉データ',
+          };
+        } catch (e) {
+          const estimated = estimatePollenFromWeather(params);
+          return {
+            label: `${estimated}（簡易推定）`,
+            source: '気象条件から推定',
+          };
         }
       }
 
