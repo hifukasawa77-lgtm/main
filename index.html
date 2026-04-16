@@ -710,6 +710,57 @@
       color: var(--muted);
       margin-top: 4px;
     }
+    /* ── Weather visuals ── */
+    #home-weather-visuals { margin-top: 10px; }
+    .weather-vis-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    #home-weather-compass {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .weather-uvpress {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .weather-uvpress-item {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 7px 10px;
+      font-size: 0.82rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .weather-uvpress-item small {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .weather-tempchart-wrap {
+      position: relative;
+    }
+    .weather-tempchart-label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    #home-weather-tempchart {
+      display: block;
+      width: 100%;
+      height: 90px;
+      border-radius: 10px;
+      background: rgba(0,229,255,0.03);
+      border: 1px solid var(--line);
+    }
     .dash-note-box {
       width: 100%;
       border: 1.5px solid var(--line);
@@ -1339,6 +1390,16 @@
             <ul class="dashboard-mini-list" id="home-weather-detail">
               <li class="dashboard-mini-item"><span>読み込み中…</span></li>
             </ul>
+            <div id="home-weather-visuals" style="display:none">
+              <div class="weather-vis-row">
+                <div id="home-weather-compass"></div>
+                <div class="weather-uvpress" id="home-weather-uvpress"></div>
+              </div>
+              <div class="weather-tempchart-wrap">
+                <div class="weather-tempchart-label">🌡 今日の時間別気温</div>
+                <canvas id="home-weather-tempchart"></canvas>
+              </div>
+            </div>
             <div class="dash-mini-note" id="home-weather-time">更新時刻を取得中…</div>
           </article>
 
@@ -1746,10 +1807,152 @@
           </li>`).join('');
       }
 
+      function getWindDirLabel(deg) {
+        const dirs = ['北','北北東','北東','東北東','東','東南東','南東','南南東','南','南南西','南西','西南西','西','西北西','北西','北北西'];
+        return dirs[Math.round(deg / 22.5) % 16];
+      }
+
+      function drawWindCompass(containerId, direction, speed) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        const size = 96;
+        const cx = size / 2, cy = size / 2, r = size / 2 - 5;
+        // 気象学的風向（どこから吹いてくるか）→ 矢印は吹いてくる方向を指す
+        const rad = (direction - 90) * Math.PI / 180;
+        const arrowLen = r * 0.58;
+        const tx = cx + Math.cos(rad) * arrowLen;
+        const ty = cy + Math.sin(rad) * arrowLen;
+        const bx = cx - Math.cos(rad) * arrowLen * 0.45;
+        const by = cy - Math.sin(rad) * arrowLen * 0.45;
+        const perpX = -Math.sin(rad) * 5;
+        const perpY = Math.cos(rad) * 5;
+
+        const cardinals = [
+          { label: 'N', a: -90 }, { label: 'E', a: 0 },
+          { label: 'S', a: 90 }, { label: 'W', a: 180 },
+        ];
+        const ticksHtml = cardinals.map(({ label, a }) => {
+          const tr = a * Math.PI / 180;
+          const lx = cx + Math.cos(tr) * (r - 3);
+          const ly = cy + Math.sin(tr) * (r - 3);
+          return `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" fill="#00e5ff" font-size="8" font-weight="700" font-family="sans-serif">${label}</text>`;
+        }).join('');
+
+        // 目盛り（8方位の短い線）
+        const tickLines = Array.from({ length: 8 }, (_, i) => {
+          const a = (i * 45 - 90) * Math.PI / 180;
+          const x1 = cx + Math.cos(a) * (r - 1);
+          const y1 = cy + Math.sin(a) * (r - 1);
+          const x2 = cx + Math.cos(a) * (r - 6);
+          const y2 = cy + Math.sin(a) * (r - 6);
+          return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="rgba(0,229,255,0.3)" stroke-width="1"/>`;
+        }).join('');
+
+        container.innerHTML = `
+          <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+            <circle cx="${cx}" cy="${cy}" r="${r}" fill="rgba(0,229,255,0.04)" stroke="rgba(0,229,255,0.2)" stroke-width="1.5"/>
+            <circle cx="${cx}" cy="${cy}" r="${r * 0.55}" fill="none" stroke="rgba(0,229,255,0.1)" stroke-width="1"/>
+            ${tickLines}
+            ${ticksHtml}
+            <line x1="${bx}" y1="${by}" x2="${tx}" y2="${ty}" stroke="#00e5ff" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+            <polygon points="${tx},${ty} ${bx + perpX},${by + perpY} ${bx - perpX},${by - perpY}" fill="#00e5ff" opacity="0.9"/>
+            <circle cx="${cx}" cy="${cy}" r="3" fill="#00e5ff" opacity="0.6"/>
+          </svg>
+          <div style="font-size:0.68rem;color:var(--muted);text-align:center;margin-top:2px;line-height:1.4">
+            ${getWindDirLabel(direction)}から<br>${fmtNum(speed, 1)}m/s
+          </div>`;
+      }
+
+      function drawTempChart(canvasId, hours, temps, nowHour) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || temps.length < 2) return;
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.offsetWidth || 260;
+        const H = canvas.offsetHeight || 90;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        const pad = { top: 18, bottom: 22, left: 30, right: 10 };
+        const cW = W - pad.left - pad.right;
+        const cH = H - pad.top - pad.bottom;
+        const n = temps.length;
+        const minT = Math.min(...temps) - 1;
+        const maxT = Math.max(...temps) + 1;
+        const xOf = i => pad.left + (i / (n - 1)) * cW;
+        const yOf = t => pad.top + (1 - (t - minT) / (maxT - minT)) * cH;
+
+        ctx.clearRect(0, 0, W, H);
+
+        // 現在時刻ライン
+        const nowIdx = hours.indexOf(nowHour);
+        if (nowIdx >= 0) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(255,100,200,0.5)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(xOf(nowIdx), pad.top);
+          ctx.lineTo(xOf(nowIdx), pad.top + cH);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // グラデーション塗りつぶし
+        const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
+        grad.addColorStop(0, 'rgba(0,229,255,0.25)');
+        grad.addColorStop(1, 'rgba(0,229,255,0)');
+        ctx.beginPath();
+        ctx.moveTo(xOf(0), yOf(temps[0]));
+        for (let i = 1; i < n; i++) {
+          const cpx = (xOf(i - 1) + xOf(i)) / 2;
+          ctx.bezierCurveTo(cpx, yOf(temps[i - 1]), cpx, yOf(temps[i]), xOf(i), yOf(temps[i]));
+        }
+        ctx.lineTo(xOf(n - 1), pad.top + cH);
+        ctx.lineTo(xOf(0), pad.top + cH);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // 折れ線
+        ctx.beginPath();
+        ctx.moveTo(xOf(0), yOf(temps[0]));
+        for (let i = 1; i < n; i++) {
+          const cpx = (xOf(i - 1) + xOf(i)) / 2;
+          ctx.bezierCurveTo(cpx, yOf(temps[i - 1]), cpx, yOf(temps[i]), xOf(i), yOf(temps[i]));
+        }
+        ctx.strokeStyle = '#00e5ff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // ラベル（3時間ごと）
+        ctx.font = `${8 * 1}px sans-serif`;
+        ctx.textAlign = 'center';
+        for (let i = 0; i < n; i++) {
+          if (hours[i] % 3 !== 0) continue;
+          const x = xOf(i);
+          const y = yOf(temps[i]);
+          // 気温値
+          ctx.fillStyle = '#00e5ff';
+          ctx.fillText(`${Math.round(temps[i])}°`, x, y - 5);
+          // 時刻
+          ctx.fillStyle = 'rgba(120,140,160,0.85)';
+          ctx.fillText(`${hours[i]}時`, x, pad.top + cH + 14);
+        }
+
+        // Y軸最高最低
+        ctx.textAlign = 'right';
+        ctx.fillStyle = 'rgba(120,140,160,0.7)';
+        ctx.fillText(`${Math.round(maxT)}°`, pad.left - 2, pad.top + 6);
+        ctx.fillText(`${Math.round(minT)}°`, pad.left - 2, pad.top + cH);
+      }
+
       async function initWeatherCard() {
         const url = 'https://api.open-meteo.com/v1/forecast?latitude=35.83&longitude=139.87'
-          + '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m'
+          + '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,wind_direction_10m,uv_index,surface_pressure'
           + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
+          + '&hourly=temperature_2m'
           + '&timezone=Asia%2FTokyo&forecast_days=3';
         try {
           const res = await fetchWithTimeout(url, 8000);
@@ -1758,9 +1961,13 @@
           const code = data.current.weather_code;
           const temp = Math.round(data.current.temperature_2m);
           const humidity = Math.round(data.current.relative_humidity_2m);
+          const windSpeed = Number(data.current.wind_speed_10m || 0);
+          const windDir = Number(data.current.wind_direction_10m ?? 0);
+          const uvIndex = Number(data.current.uv_index ?? 0);
+          const pressure = Math.round(data.current.surface_pressure ?? 0);
           const pair = weatherMap[code] || ['🌡', '不明'];
           weatherKpi.textContent = `${pair[0]} ${temp}°C`;
-          weatherSub.textContent = `${pair[1]} / 湿度 ${humidity}% / 風速 ${fmtNum(data.current.wind_speed_10m, 1)}m/s`;
+          weatherSub.textContent = `${pair[1]} / 湿度 ${humidity}% / 風速 ${fmtNum(windSpeed, 1)}m/s`;
 
           const tomorrowCode = data.daily?.weather_code?.[1];
           const tomorrowMax = data.daily?.temperature_2m_max?.[1];
@@ -1772,7 +1979,7 @@
 
           const pollen = await getPollenForecast({
             humidity,
-            wind: Number(data.current.wind_speed_10m || 0),
+            wind: windSpeed,
             tomorrowMax: tomorrowMaxNum,
             tomorrowWeatherCode: Number(tomorrowCode || code),
             tomorrowRainProb: Number(tomorrowRainProb || 0),
@@ -1783,6 +1990,29 @@
             <li class="dashboard-mini-item"><span>花粉予報</span><small>${escHtml(pollen.label)}</small></li>
             <li class="dashboard-mini-item"><span>判定ソース</span><small>${escHtml(pollen.source)}</small></li>
           `;
+
+          // 風向コンパス描画
+          drawWindCompass('home-weather-compass', windDir, windSpeed);
+
+          // 紫外線・気圧表示
+          const uvLabel = uvIndex <= 2 ? '低い' : uvIndex <= 5 ? 'やや強い' : uvIndex <= 7 ? '強い' : uvIndex <= 10 ? '非常に強い' : '危険';
+          document.getElementById('home-weather-uvpress').innerHTML = `
+            <div class="weather-uvpress-item"><span>🌞 紫外線</span><small>${fmtNum(uvIndex, 1)} <strong>(${uvLabel})</strong></small></div>
+            <div class="weather-uvpress-item"><span>🌬 気圧</span><small>${pressure} <strong>hPa</strong></small></div>
+          `;
+
+          // 時間別気温グラフ描画
+          if (data.hourly?.time && data.hourly?.temperature_2m) {
+            const nowHour = new Date().getHours();
+            const todayPrefix = data.hourly.time[0].slice(0, 10); // "YYYY-MM-DD"
+            const startIdx = data.hourly.time.findIndex(t => t.startsWith(todayPrefix) && parseInt(t.slice(11, 13)) === 0);
+            const idx = startIdx >= 0 ? startIdx : 0;
+            const hourTemps = data.hourly.temperature_2m.slice(idx, idx + 24);
+            const hourLabels = data.hourly.time.slice(idx, idx + 24).map(t => parseInt(t.slice(11, 13)));
+            drawTempChart('home-weather-tempchart', hourLabels, hourTemps, nowHour);
+          }
+
+          document.getElementById('home-weather-visuals').style.display = '';
           weatherTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
         } catch (e) {
           weatherKpi.textContent = '取得失敗';
