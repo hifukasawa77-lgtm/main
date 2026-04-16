@@ -761,6 +761,34 @@
       background: rgba(0,229,255,0.03);
       border: 1px solid var(--line);
     }
+    /* ── FX chart ── */
+    #home-fx-chart {
+      display: block;
+      width: 100%;
+      height: 100px;
+      border-radius: 10px;
+      background: rgba(0,229,255,0.03);
+      border: 1px solid var(--line);
+    }
+    .fx-chart-legend {
+      display: flex;
+      gap: 14px;
+      margin-top: 6px;
+      justify-content: flex-end;
+    }
+    .fx-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .fx-legend-dot {
+      width: 18px;
+      height: 3px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
     .dash-note-box {
       width: 100%;
       border: 1.5px solid var(--line);
@@ -1409,6 +1437,11 @@
             <ul class="dashboard-mini-list" id="home-fx-list">
               <li class="dashboard-mini-item"><span>読み込み中…</span></li>
             </ul>
+            <div id="home-fx-chart-wrap" style="display:none;margin-top:10px">
+              <div class="weather-tempchart-label">📉 過去30日間の対円レート推移（前月比%）</div>
+              <canvas id="home-fx-chart"></canvas>
+              <div class="fx-chart-legend" id="home-fx-legend"></div>
+            </div>
             <div class="dash-mini-note" id="home-fx-time">更新時刻を取得中…</div>
           </article>
 
@@ -2121,6 +2154,95 @@
         }
       }
 
+      function drawFxChart(canvasId, dates, usdData, eurData, gbpData) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas || dates.length < 2) return;
+
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.offsetWidth || 260;
+        const H = 100;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        const pad = { top: 14, bottom: 22, left: 36, right: 10 };
+        const cW = W - pad.left - pad.right;
+        const cH = H - pad.top - pad.bottom;
+        const n = dates.length;
+
+        // 初日を基準に%変化で正規化
+        const norm = arr => {
+          const base = arr[0];
+          return arr.map(v => ((v - base) / base) * 100);
+        };
+        const usdN = norm(usdData);
+        const eurN = norm(eurData);
+        const gbpN = norm(gbpData);
+
+        const allVals = [...usdN, ...eurN, ...gbpN];
+        const minV = Math.min(...allVals) - 0.3;
+        const maxV = Math.max(...allVals) + 0.3;
+        const range = maxV - minV || 1;
+
+        const xOf = i => pad.left + (i / (n - 1)) * cW;
+        const yOf = v => pad.top + (1 - (v - minV) / range) * cH;
+
+        ctx.clearRect(0, 0, W, H);
+
+        // ゼロライン
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(pad.left, yOf(0));
+        ctx.lineTo(pad.left + cW, yOf(0));
+        ctx.stroke();
+        ctx.restore();
+
+        // 各通貨ライン描画
+        const series = [
+          { data: usdN, color: '#00e5ff' },
+          { data: eurN, color: '#ff2d78' },
+          { data: gbpN, color: '#9b59ff' },
+        ];
+        series.forEach(({ data, color }) => {
+          ctx.beginPath();
+          data.forEach((v, i) => {
+            if (i === 0) ctx.moveTo(xOf(i), yOf(v));
+            else {
+              const cpx = (xOf(i - 1) + xOf(i)) / 2;
+              ctx.bezierCurveTo(cpx, yOf(data[i - 1]), cpx, yOf(v), xOf(i), yOf(v));
+            }
+          });
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.8;
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 5;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+        });
+
+        // Y軸ラベル
+        ctx.fillStyle = 'rgba(120,140,160,0.8)';
+        ctx.font = '8px sans-serif';
+        ctx.textAlign = 'right';
+        const signMax = maxV >= 0 ? '+' : '';
+        const signMin = minV >= 0 ? '+' : '';
+        ctx.fillText(`${signMax}${maxV.toFixed(1)}%`, pad.left - 3, pad.top + 7);
+        ctx.fillText(`${signMin}${minV.toFixed(1)}%`, pad.left - 3, pad.top + cH + 4);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fillText('0%', pad.left - 3, yOf(0) + 4);
+
+        // X軸ラベル（最初と最後の日付）
+        ctx.textAlign = 'left';
+        ctx.fillStyle = 'rgba(120,140,160,0.7)';
+        ctx.fillText(dates[0].slice(5).replace('-', '/'), pad.left, H - 5);
+        ctx.textAlign = 'right';
+        ctx.fillText(dates[n - 1].slice(5).replace('-', '/'), pad.left + cW, H - 5);
+      }
+
       async function initFxCard() {
         try {
           const res = await fetchWithTimeout('https://open.er-api.com/v6/latest/JPY', 8000);
@@ -2138,6 +2260,48 @@
             <li class="dashboard-mini-item"><span>EUR / JPY</span><strong>${fmtNum(eurJpy, 2)}</strong></li>
             <li class="dashboard-mini-item"><span>GBP / JPY</span><strong>${fmtNum(gbpJpy, 2)}</strong></li>`;
           fxTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+
+          // 過去30日の履歴グラフ
+          try {
+            const end = new Date();
+            const start = new Date();
+            start.setDate(start.getDate() - 30);
+            const fmt = d => d.toISOString().slice(0, 10);
+            const histRes = await fetchWithTimeout(
+              `https://api.frankfurter.app/${fmt(start)}..${fmt(end)}?from=JPY&to=USD,EUR,GBP`, 8000
+            );
+            if (histRes.ok) {
+              const hist = await histRes.json();
+              const sortedDates = Object.keys(hist.rates).sort();
+              if (sortedDates.length >= 2) {
+                const usdArr = sortedDates.map(d => 1 / hist.rates[d].USD);
+                const eurArr = sortedDates.map(d => 1 / hist.rates[d].EUR);
+                const gbpArr = sortedDates.map(d => 1 / hist.rates[d].GBP);
+
+                document.getElementById('home-fx-chart-wrap').style.display = '';
+                drawFxChart('home-fx-chart', sortedDates, usdArr, eurArr, gbpArr);
+
+                // 最終日の変化率をlegendに表示
+                const pct = (arr) => {
+                  const v = ((arr[arr.length - 1] - arr[0]) / arr[0]) * 100;
+                  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+                };
+                const legend = [
+                  { label: 'USD', color: '#00e5ff', val: pct(usdArr) },
+                  { label: 'EUR', color: '#ff2d78', val: pct(eurArr) },
+                  { label: 'GBP', color: '#9b59ff', val: pct(gbpArr) },
+                ];
+                document.getElementById('home-fx-legend').innerHTML = legend.map(l =>
+                  `<div class="fx-legend-item">
+                    <div class="fx-legend-dot" style="background:${l.color}"></div>
+                    <span>${l.label} <strong style="color:${l.color}">${l.val}</strong></span>
+                  </div>`
+                ).join('');
+              }
+            }
+          } catch (he) {
+            // グラフ取得失敗は無視（レート表示は成功している）
+          }
         } catch (e) {
           fxList.innerHTML = '<li class="dashboard-mini-item"><span>円相場の取得に失敗しました</span></li>';
           fxTime.textContent = '更新時刻: 取得失敗';
