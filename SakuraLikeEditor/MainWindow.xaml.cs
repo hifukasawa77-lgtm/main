@@ -442,7 +442,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (doc == null || view == null)
         {
-            StatusCaretText.Text = "Ln 1, Col 1";
+            StatusCaretText.Text = "行 1, 列 1";
             StatusEncodingText.Text = "UTF-8";
             StatusNewlineText.Text = "CRLF";
             StatusZoomText.Text = $"{(int)Math.Round(_zoomFactor * 100)}%";
@@ -457,7 +457,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var col = caretIndex - lineStart + 1;
         var line = lineIndex + 1;
 
-        StatusCaretText.Text = $"Ln {line}, Col {col}";
+        StatusCaretText.Text = $"行 {line}, 列 {col}";
         StatusEncodingText.Text = FormatEncoding(doc.Encoding, doc.WriteBom);
         StatusNewlineText.Text = doc.NewlineKind switch
         {
@@ -529,7 +529,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
         }
 
-        StatusAutosaveText.Text = savedAny ? $"Autosaved {DateTime.Now:HH:mm:ss}" : "";
+        StatusAutosaveText.Text = savedAny ? $"自動保存済 {DateTime.Now:HH:mm:ss}" : "";
     }
 
     private void AddRecentFile(string fullPath)
