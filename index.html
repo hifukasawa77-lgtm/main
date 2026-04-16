@@ -1038,6 +1038,8 @@
       .reveal { opacity: 1; transform: none; }
     }
   </style>
+  <!-- Google Identity Services (Google Calendar 同期用) -->
+  <script src="https://accounts.google.com/gsi/client" async></script>
 </head>
 <body>
 
@@ -1491,7 +1493,11 @@
           </article>
 
           <article class="card dashboard-card reveal">
-            <h3>📅 予定カレンダー</h3>
+            <h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              📅 予定カレンダー
+              <button id="gcal-sync-btn" class="dash-todo-btn" type="button" style="font-size:0.72rem;padding:3px 10px;margin-left:auto">Googleから同期</button>
+            </h3>
+            <div id="gcal-sync-status" style="font-size:0.72rem;color:var(--muted);margin-bottom:2px;min-height:1.1em"></div>
             <div class="dash-calendar-head">
               <strong id="home-calendar-label">今月</strong>
               <span id="home-calendar-today">今日</span>
@@ -1762,11 +1768,16 @@
       const scheduleDateInput = document.getElementById('home-schedule-date');
       const scheduleTextInput = document.getElementById('home-schedule-text');
       const scheduleList = document.getElementById('home-schedule-list');
+      const gcalSyncBtn = document.getElementById('gcal-sync-btn');
+      const gcalSyncStatus = document.getElementById('gcal-sync-status');
 
       const TODO_KEY = 'dashboard-todos';
       const MEMO_KEY = 'dashboard-memo';
       const SCHEDULE_KEY = 'dashboard-schedules';
       const VISIT_KEY = 'home-dashboard-visit';
+      // Google Cloud Console で発行した OAuth 2.0 クライアントID に差し替えてください
+      // 許可オリジン: https://hifukasawa77-lgtm.github.io
+      const GCAL_CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
       const STOCK_SNAPSHOT_KEY = 'dashboard-stock-snapshot';
       const CUSTOM_STOCKS_KEY = 'dashboard-custom-stocks';
       const GAS_SNAPSHOT_KEY = 'dashboard-gas-snapshot-v2';
@@ -2973,6 +2984,83 @@
         return `https://calendar.google.com/calendar/r/eventedit?text=${encodeURIComponent(title)}&dates=${startDt}/${endDt}`;
       }
 
+      function initGCalSync() {
+        function tryInit() {
+          if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+            setTimeout(tryInit, 500);
+            return;
+          }
+          const tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: GCAL_CLIENT_ID,
+            scope: 'https://www.googleapis.com/auth/calendar.readonly',
+            callback: (resp) => {
+              if (resp.error) {
+                gcalSyncStatus.textContent = '認証失敗: ' + resp.error;
+                return;
+              }
+              syncFromGCal(resp.access_token);
+            },
+          });
+          gcalSyncBtn.addEventListener('click', () => {
+            if (GCAL_CLIENT_ID.startsWith('YOUR_CLIENT_ID')) {
+              gcalSyncStatus.textContent = '⚠️ Google Client IDを設定してください';
+              return;
+            }
+            gcalSyncStatus.textContent = '認証中…';
+            tokenClient.requestAccessToken({ prompt: '' });
+          });
+        }
+        tryInit();
+      }
+
+      async function syncFromGCal(accessToken) {
+        gcalSyncStatus.textContent = '取得中…';
+        const now = new Date();
+        const timeMin = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        const timeMax = new Date(now.getFullYear(), now.getMonth() + 3, 1).toISOString();
+        const params = new URLSearchParams({
+          timeMin,
+          timeMax,
+          singleEvents: 'true',
+          orderBy: 'startTime',
+          maxResults: '250',
+        });
+        try {
+          const res = await fetch(
+            `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          const items = (data.items || []).filter((e) => e.status !== 'cancelled');
+
+          schedules = schedules.filter((s) => !s.gcal_id);
+
+          let count = 0;
+          items.forEach((item, idx) => {
+            const startDate = item.start.date || (item.start.dateTime || '').slice(0, 10);
+            if (!startDate) return;
+            let text = item.summary || '(無題)';
+            if (item.start.dateTime) {
+              const toHHMM = (dt) => dt.slice(11, 16);
+              const st = toHHMM(item.start.dateTime);
+              const et = item.end && item.end.dateTime ? toHHMM(item.end.dateTime) : null;
+              text = et ? `${text} ${st}～${et}` : `${text} ${st}`;
+            }
+            schedules.push({ id: Date.now() + idx, gcal_id: item.id, date: startDate, text });
+            count++;
+          });
+
+          saveSchedules();
+          renderCalendar();
+          renderSchedules();
+          gcalSyncStatus.textContent = `✅ ${count}件を同期しました`;
+          setTimeout(() => { gcalSyncStatus.textContent = ''; }, 5000);
+        } catch (e) {
+          gcalSyncStatus.textContent = `同期失敗: ${e.message}`;
+        }
+      }
+
       scheduleForm.addEventListener('submit', (event) => {
         event.preventDefault();
         const date = scheduleDateInput.value;
@@ -3007,6 +3095,7 @@
       loadSchedules();
       renderCalendar();
       renderSchedules();
+      initGCalSync();
 
       Promise.allSettled([
         initVisitCard(),
