@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIと僕の仕事場 | hide の部屋</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #050510;
+      --cyan: #00f5ff;
+      --magenta: #ff2d78;
+      --purple: #9b59ff;
+      --white: #e8f0fe;
+      --glass: rgba(255,255,255,0.04);
+      --border: rgba(0,245,255,0.2);
+      --font-head: 'Orbitron', monospace;
+      --font-body: 'Noto Sans JP', 'Hiragino Sans', sans-serif;
+    }
+
+    /* body: 黒背景、overflow:hidden */
+    body { margin:0; background: var(--bg); overflow:hidden; font-family: var(--font-body); color: var(--white); }
+
+    /* canvas: fixed, 全画面, z-index:0 */
+    #slide-bg { position:fixed; top:0; left:0; width:100%; height:100%; z-index:0; }
+
+    /* プログレスバー: 上部固定, height:3px, グラデーション(cyan→magenta) */
+    .progress-bar { position:fixed; top:0; left:0; width:100%; height:3px; background:rgba(255,255,255,0.1); z-index:100; }
+    .progress-fill { height:100%; background:linear-gradient(90deg,var(--cyan),var(--magenta)); transition:width 0.4s ease; }
+
+    /* スライドラッパー: fixed, 全画面, flex center */
+    .slide-wrapper { position:fixed; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center; z-index:10; }
+
+    /* スライド1枚: 1280×720, scale変換, 非表示デフォルト */
+    .slide {
+      position:absolute;
+      width:1280px; height:720px;
+      transform: scale(var(--slide-scale, 1));
+      transform-origin: center center;
+      opacity:0; pointer-events:none;
+      transition: opacity 0.5s ease;
+      background: var(--bg);
+      border:1px solid var(--border);
+      padding: 50px 70px;
+      box-sizing: border-box;
+      overflow:hidden;
+    }
+    .slide.active { opacity:1; pointer-events:auto; }
+
+    /* グラスカード */
+    .glass-card { background:var(--glass); border:1px solid var(--border); border-radius:16px; backdrop-filter:blur(12px); padding:20px 26px; }
+
+    /* ネオン */
+    .neon-cyan  { color:var(--cyan);    text-shadow: 0 0 8px var(--cyan),    0 0 24px var(--cyan); }
+    .neon-magenta { color:var(--magenta); text-shadow: 0 0 8px var(--magenta), 0 0 24px var(--magenta); }
+    .neon-purple  { color:var(--purple);  text-shadow: 0 0 8px var(--purple),  0 0 24px var(--purple); }
+
+    /* コントロール: 下部中央固定 */
+    .slide-controls { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:20px; z-index:100; }
+    .ctrl-btn { width:42px; height:42px; border:1px solid var(--cyan); border-radius:50%; background:rgba(0,245,255,0.08); color:var(--cyan); font-size:1.1rem; cursor:pointer; transition:background 0.2s, transform 0.2s; }
+    .ctrl-btn:hover { background:rgba(0,245,255,0.2); transform:scale(1.1); }
+    .slide-counter { font-family:var(--font-head); font-size:0.85rem; color:var(--cyan); min-width:60px; text-align:center; }
+
+    /* ドット: 下部中央固定 */
+    .slide-dots { position:fixed; bottom:68px; left:50%; transform:translateX(-50%); display:flex; gap:8px; z-index:100; }
+    .dot { width:8px; height:8px; border-radius:50%; background:rgba(255,255,255,0.25); cursor:pointer; transition:background 0.3s, transform 0.3s; }
+    .dot.active { background:var(--cyan); transform:scale(1.4); }
+
+    /* 戻るリンク (左上) */
+    .back-link { position:fixed; top:16px; left:20px; font-size:0.8rem; color:var(--cyan); text-decoration:none; z-index:100; opacity:0.7; font-family:var(--font-head); }
+    .back-link:hover { opacity:1; }
+
+    /* レイアウトヘルパー */
+    .content-layout { display:flex; flex-direction:column; height:100%; }
+    .cover-layout { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; text-align:center; gap:16px; }
+    .two-col { display:grid; grid-template-columns:1fr 1fr; gap:20px; flex:1; align-items:start; margin-top:20px; }
+    .three-col { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; flex:1; align-items:start; margin-top:20px; }
+
+    /* スライドラベル（章番号） */
+    .slide-label { font-family:var(--font-head); font-size:0.75rem; letter-spacing:0.15em; margin-bottom:8px; }
+    .slide-title { font-family:var(--font-head); font-size:1.9rem; font-weight:700; margin:0 0 16px; color:var(--white); }
+
+    /* アナロジーボックス */
+    .analogy-box { margin:16px 0; text-align:center; }
+    .analogy-text { font-size:1.1rem; line-height:1.7; margin:0; }
+
+    /* タグ */
+    .tag { display:inline-block; padding:3px 10px; border:1px solid var(--border); border-radius:20px; font-size:0.72rem; color:var(--cyan); margin:3px 2px; }
+    .tag-row { margin-top:10px; }
+
+    /* ターミナルモック */
+    .terminal-mock { font-family:monospace; max-width:600px; margin:16px auto 0; }
+    .terminal-bar { display:flex; align-items:center; gap:6px; margin-bottom:12px; }
+    .t-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+    .t-label { font-size:0.78rem; color:rgba(255,255,255,0.4); margin-left:8px; }
+    .terminal-body { font-size:0.88rem; line-height:1.9; color:rgba(255,255,255,0.7); }
+    .t-prompt { color:var(--magenta); margin-right:8px; font-weight:700; }
+    .t-output { display:block; padding-left:18px; }
+
+    /* ファイルツリー */
+    .file-tree { font-family:monospace; font-size:0.85rem; line-height:1.8; }
+
+    /* フロー図 */
+    .flow-diagram { display:flex; align-items:center; justify-content:center; gap:12px; flex:1; margin-top:20px; }
+    .flow-agent { text-align:center; padding:16px 20px !important; min-width:130px; }
+    .agent-icon { font-size:2rem; margin-bottom:6px; }
+    .agent-name { font-family:var(--font-head); font-size:0.9rem; font-weight:700; margin-bottom:6px; }
+    .agent-role { font-size:0.75rem; color:rgba(255,255,255,0.6); line-height:1.5; }
+    .flow-arrow { font-size:1.5rem; flex-shrink:0; }
+
+    /* ハーネスレイヤー */
+    .harness-layers { display:flex; flex-direction:column; gap:10px; margin-top:16px; flex:1; justify-content:center; }
+    .layer { display:flex; align-items:center; gap:14px; font-size:0.9rem; }
+    .layer-num { font-family:var(--font-head); font-size:1.2rem; font-weight:900; min-width:28px; }
+
+    /* ショーケース */
+    .showcase-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; flex:1; margin-top:16px; align-items:start; }
+    .showcase-card { text-align:center; }
+    .showcase-icon { font-size:2.4rem; margin-bottom:8px; }
+    .showcase-name { font-family:var(--font-head); font-size:0.95rem; margin-bottom:6px; }
+    .showcase-desc { font-size:0.78rem; color:rgba(255,255,255,0.6); line-height:1.5; }
+    .showcase-tag { margin-top:8px; font-size:0.72rem; color:rgba(255,255,255,0.4); }
+
+    /* まとめスライド */
+    .summary-points { display:flex; flex-direction:column; gap:8px; margin:20px 0; }
+    .summary-points p { font-size:0.92rem; color:rgba(255,255,255,0.7); margin:0; }
+    .summary-points p::before { content:"✓ "; color:var(--cyan); }
+    .cta-btn { display:inline-block; padding:12px 30px; border:1.5px solid var(--cyan); border-radius:30px; color:var(--cyan); text-decoration:none; font-family:var(--font-head); font-size:0.85rem; transition:background 0.2s; margin-top:8px; }
+    .cta-btn:hover { background:rgba(0,245,255,0.12); }
+
+    /* タイトルスライド装飾 */
+    .cover-badge { font-family:var(--font-head); font-size:0.72rem; letter-spacing:0.2em; border:1px solid var(--border); padding:4px 14px; border-radius:20px; margin-bottom:4px; }
+    .cover-title { font-family:var(--font-head); font-size:3.2rem; font-weight:900; margin:8px 0; }
+    .cover-sub { font-size:1rem; color:rgba(255,255,255,0.65); margin:0; }
+    .cover-meta { font-size:0.8rem; color:rgba(255,255,255,0.35); margin-top:8px; font-family:var(--font-head); }
+
+    /* カードアイコン */
+    .icon-large { font-size:2.2rem; margin-bottom:10px; }
+    .card-icon { font-family:var(--font-head); font-size:1.1rem; font-weight:900; margin-bottom:8px; }
+
+    .slide-desc { font-size:0.88rem; color:rgba(255,255,255,0.65); line-height:1.7; margin:12px 0 0; }
+
+    /* コードインライン */
+    .code-inline { font-family:monospace; background:rgba(0,245,255,0.1); border:1px solid rgba(0,245,255,0.2); border-radius:6px; padding:2px 8px; font-size:0.9em; color:var(--cyan); }
+
+    /* アニメーション */
+    @keyframes glitch {
+      0%,95%,100% { text-shadow: 0 0 8px var(--cyan), 0 0 24px var(--cyan); transform:none; }
+      96% { text-shadow: -3px 0 var(--magenta), 3px 0 var(--purple); transform:skewX(-3deg); }
+      98% { text-shadow: 3px 0 var(--magenta), -3px 0 var(--purple); transform:skewX(2deg); }
+    }
+    .glitch-anim { animation: glitch 4s infinite; }
+
+    @keyframes slideInUp {
+      from { opacity:0; transform:translateY(24px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+    .slide-in-up { animation: slideInUp 0.5s ease both; }
+  </style>
+</head>
+<body>
+
+  <canvas id="slide-bg" aria-hidden="true"></canvas>
+  <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+
+  <a class="back-link" href="index.html">&#8592; ポートフォリオに戻る</a>
+
+  <div class="slide-wrapper" id="slide-wrapper">
+
+    <!-- スライド1: タイトル -->
+    <div class="slide" data-index="0">
+      <div class="cover-layout">
+        <div class="cover-badge neon-cyan">PRESENTATION</div>
+        <h1 class="cover-title neon-cyan glitch-anim">AIと僕の仕事場</h1>
+        <p class="cover-sub">Claude Code × ハーネス設計でつくるポートフォリオ</p>
+        <div class="cover-meta">hide / 2026</div>
+      </div>
+    </div>
+
+    <!-- スライド2: そもそもAIって何？ -->
+    <div class="slide" data-index="1">
+      <div class="content-layout">
+        <div class="slide-label neon-magenta">CHAPTER 01</div>
+        <h2 class="slide-title">そもそもAIって何？</h2>
+        <div class="two-col">
+          <div class="glass-card">
+            <div class="icon-large">🤖</div>
+            <h3 class="neon-cyan" style="font-size:1rem;margin:0 0 8px">AI（人工知能）</h3>
+            <p style="font-size:0.85rem;color:rgba(255,255,255,0.65);margin:0;line-height:1.7">人間の「考える」をコンピューターで再現したもの。大量の文章を学習して、質問に答えたりコードを書いたりできる。</p>
+          </div>
+          <div class="glass-card">
+            <div class="icon-large">💬</div>
+            <h3 class="neon-magenta" style="font-size:1rem;margin:0 0 8px">Claude（クロード）</h3>
+            <p style="font-size:0.85rem;color:rgba(255,255,255,0.65);margin:0;line-height:1.7">Anthropicが作ったAI。ただ会話するだけでなく、ファイルを読んだり、コードを実行したりもできる「行動するAI」。</p>
+          </div>
+        </div>
+        <div class="glass-card" style="margin-top:16px;text-align:center">
+          <p style="margin:0;font-size:0.9rem">🎯 このスライドでは <span class="neon-cyan">Claude Code</span> という特別なツールを紹介します</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- スライド3: Claude Codeとは（ターミナルモック） -->
+    <div class="slide" data-index="2">
+      <div class="content-layout">
+        <div class="slide-label neon-cyan">CHAPTER 02</div>
+        <h2 class="slide-title">Claude Code とは</h2>
+        <div class="two-col" style="align-items:center">
+          <div>
+            <p class="slide-desc">ターミナル（黒い画面）から呼び出すだけで、AIが自分でファイルを読んで・修正して・テストまで全部やってくれるツール。</p>
+            <ul style="margin:16px 0 0;padding:0 0 0 18px;color:rgba(255,255,255,0.65);font-size:0.85rem;line-height:2">
+              <li>コードを<span class="neon-cyan">自律的に</span>書く・直す</li>
+              <li>ファイルを<span class="neon-magenta">自分で</span>読み込む</li>
+              <li>テスト実行・コミットまで<span class="neon-purple">自動化</span></li>
+            </ul>
+          </div>
+          <div class="terminal-mock glass-card">
+            <div class="terminal-bar">
+              <span class="t-dot" style="background:#ff5f57"></span>
+              <span class="t-dot" style="background:#ffbd2e"></span>
+              <span class="t-dot" style="background:#28c840"></span>
+              <span class="t-label">terminal</span>
+            </div>
+            <div class="terminal-body">
+              <span class="t-prompt">$</span> claude "バグを直して"<br>
+              <span class="t-output">✓ ファイルを読み込み中...</span><br>
+              <span class="t-output">✓ バグを発見: line 247</span><br>
+              <span class="t-output">✓ 修正を適用しました</span><br>
+              <span class="t-output neon-cyan">✓ テスト完了 — 全件パス</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- スライド4: CLAUDE.mdって何？ -->
+    <div class="slide" data-index="3">
+      <div class="content-layout">
+        <div class="slide-label neon-purple">CHAPTER 03</div>
+        <h2 class="slide-title">CLAUDE.md って何？</h2>
+        <div class="analogy-box glass-card">
+          <p class="analogy-text">「毎回同じことを説明しなくていい <span class="neon-cyan">AIへの取扱説明書</span>」</p>
+        </div>
+        <div class="three-col">
+          <div class="glass-card" style="text-align:center">
+            <div class="card-icon neon-cyan">WHAT</div>
+            <p style="font-size:0.83rem;margin:0;color:rgba(255,255,255,0.65)">何を作っているか<br><span style="font-size:0.75rem">（プロジェクトの目的）</span></p>
+          </div>
+          <div class="glass-card" style="text-align:center">
+            <div class="card-icon neon-magenta">WHY</div>
+            <p style="font-size:0.83rem;margin:0;color:rgba(255,255,255,0.65)">なぜそのルールか<br><span style="font-size:0.75rem">（設計の理由）</span></p>
+          </div>
+          <div class="glass-card" style="text-align:center">
+            <div class="card-icon neon-purple">HOW</div>
+            <p style="font-size:0.83rem;margin:0;color:rgba(255,255,255,0.65)">どうやって作るか<br><span style="font-size:0.75rem">（手順・禁止事項）</span></p>
+          </div>
+        </div>
+        <p class="slide-desc" style="margin-top:16px;text-align:center">一度書けば毎回の説明が不要 → AIがプロジェクトの「文脈」を理解した状態で動く</p>
+      </div>
+    </div>
+
+    <!-- スライド5: Skillsとは -->
+    <div class="slide" data-index="4">
+      <div class="content-layout">
+        <div class="slide-label neon-cyan">CHAPTER 04</div>
+        <h2 class="slide-title">Skills（スキル）とは</h2>
+        <div class="two-col" style="align-items:start">
+          <div>
+            <p class="slide-desc">「よく使う手順書をAIに覚えさせたもの」<br>
+            <code class="code-inline">/スキル名</code> と入力するだけで<br>AIがその手順を丸ごと実行してくれる。</p>
+            <div class="glass-card" style="margin-top:20px">
+              <p style="margin:0 0 6px;font-family:monospace;color:var(--magenta);font-size:0.9rem">/commit</p>
+              <p style="margin:0;color:rgba(255,255,255,0.55);font-size:0.8rem;line-height:1.6">→ テスト実行 → コード整形<br>→ コミットメッセージ作成 → プッシュ<br>を全自動実行</p>
+            </div>
+          </div>
+          <div class="glass-card">
+            <div class="file-tree">
+              <p style="margin:0;color:var(--cyan)">.claude/</p>
+              <p style="margin:0;color:rgba(255,255,255,0.5)">　skills/</p>
+              <p style="margin:0;color:rgba(255,255,255,0.5)">　　commit/</p>
+              <p style="margin:0">　　　　<span class="neon-cyan">SKILL.md</span> ← 手順書</p>
+              <p style="margin:0;color:rgba(255,255,255,0.5)">　　review/</p>
+              <p style="margin:0">　　　　<span class="neon-magenta">SKILL.md</span> ← 手順書</p>
+              <p style="margin:0;color:rgba(255,255,255,0.5)">　　security/</p>
+              <p style="margin:0">　　　　<span class="neon-purple">SKILL.md</span> ← 手順書</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- スライド6: スキルの種類 -->
+    <div class="slide" data-index="5">
+      <div class="content-layout">
+        <div class="slide-label neon-magenta">CHAPTER 04 続き</div>
+        <h2 class="slide-title">スキルの3種類</h2>
+        <div class="three-col">
+          <div class="glass-card" style="border-color:rgba(0,245,255,0.3)">
+            <div style="font-size:2rem;margin-bottom:8px">🔧</div>
+            <h3 class="neon-cyan" style="font-size:0.95rem;margin:0 0 8px">標準スキル</h3>
+            <p style="font-size:0.8rem;color:rgba(255,255,255,0.6);margin:0 0 10px;line-height:1.6">Claude Codeに最初から入っている。インストール不要。</p>
+            <div class="tag-row">
+              <span class="tag">/debug</span>
+              <span class="tag">/simplify</span>
+              <span class="tag">/loop</span>
+            </div>
+          </div>
+          <div class="glass-card" style="border-color:rgba(255,45,120,0.3)">
+            <div style="font-size:2rem;margin-bottom:8px">👤</div>
+            <h3 class="neon-magenta" style="font-size:0.95rem;margin:0 0 8px">個人スキル</h3>
+            <p style="font-size:0.8rem;color:rgba(255,255,255,0.6);margin:0 0 10px;line-height:1.6">自分のすべてのプロジェクトで使えるもの。一度作れば使い回せる。</p>
+            <div class="tag-row">
+              <span class="tag" style="border-color:rgba(255,45,120,0.3);color:var(--magenta)">~/.claude/skills/</span>
+            </div>
+          </div>
+          <div class="glass-card" style="border-color:rgba(155,89,255,0.3)">
+            <div style="font-size:2rem;margin-bottom:8px">📁</div>
+            <h3 class="neon-purple" style="font-size:0.95rem;margin:0 0 8px">プロジェクトスキル</h3>
+            <p style="font-size:0.8rem;color:rgba(255,255,255,0.6);margin:0 0 10px;line-height:1.6">このプロジェクトだけで使えるもの。チームで共有できる。</p>
+            <div class="tag-row">
+              <span class="tag" style="border-color:rgba(155,89,255,0.3);color:var(--purple)">.claude/skills/</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- スライド7: エージェントハーネスとは -->
+    <div class="slide" data-index="6">
+      <div class="content-layout">
+        <div class="slide-label neon-purple">CHAPTER 05</div>
+        <h2 class="slide-title">エージェントハーネスとは</h2>
+        <div class="analogy-box glass-card">
+          <p class="analogy-text">「<span class="neon-purple">工場のライン</span>みたいにAIを並べて、<br>順番に仕事を渡していく仕組み」</p>
+        </div>
+        <div class="harness-layers">
+          <div class="layer glass-card"><span class="layer-num neon-cyan">1</span> 制御レイヤー — タスクを分けて、どのAIに渡すか決める</div>
+          <div class="layer glass-card"><span class="layer-num neon-magenta">2</span> 実行レイヤー — 実際に作業（コード・画像・文書）を行う</div>
+          <div class="layer glass-card"><span class="layer-num neon-purple">3</span> 検証レイヤー — できたものをチェックして合格・不合格を出す</div>
+          <div class="layer glass-card"><span class="layer-num" style="color:#ffd700;text-shadow:0 0 8px #ffd700">4</span> 記憶レイヤー — 情報を整理して次のAIに引き継ぐ</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- スライド8: 僕の4エージェント構成 -->
+    <div class="slide" data-index="7">
+      <div class="content-layout">
+        <div class="slide-label neon-cyan">CHAPTER 05 続き</div>
+        <h2 class="slide-title">僕の4エージェント構成</h2>
+        <div class="flow-diagram" id="flow-diagram">
+          <div class="flow-agent glass-card" style="animation-delay:0.1s">
+            <div class="agent-icon">📋</div>
+            <div class="agent-name neon-cyan">Planner</div>
+            <div class="agent-role">要件をヒアリング<br>仕様書を書く</div>
+          </div>
+          <div class="flow-arrow neon-cyan">→</div>
+          <div class="flow-agent glass-card" style="animation-delay:0.3s">
+            <div class="agent-icon">🎨</div>
+            <div class="agent-name neon-magenta">Designer</div>
+            <div class="agent-role">画像・アイコンを<br>制作する</div>
+          </div>
+          <div class="flow-arrow neon-magenta">→</div>
+          <div class="flow-agent glass-card" style="animation-delay:0.5s">
+            <div class="agent-icon">⚙️</div>
+            <div class="agent-name neon-purple">Generator</div>
+            <div class="agent-role">仕様書通りに<br>コードを書く</div>
+          </div>
+          <div class="flow-arrow neon-purple">→</div>
+          <div class="flow-agent glass-card" style="animation-delay:0.7s">
+            <div class="agent-icon">✅</div>
+            <div class="agent-name" style="color:#ffd700;text-shadow:0 0 8px #ffd700;font-family:var(--font-head);font-size:0.9rem;font-weight:700;margin-bottom:6px">Evaluator</div>
+            <div class="agent-role">100点満点で<br>採点する</div>
+          </div>
+        </div>
+        <p class="slide-desc" style="text-align:center;margin-top:20px">
+          <span class="neon-cyan">80点以上</span>で合格 → GitHubへ自動コミット。不合格なら Generator に差し戻し。
+        </p>
+      </div>
+    </div>
+
+    <!-- スライド9: 実際に作ったもの -->
+    <div class="slide" data-index="8">
+      <div class="content-layout">
+        <div class="slide-label neon-magenta">SHOWCASE</div>
+        <h2 class="slide-title">実際に作ったもの</h2>
+        <div class="showcase-grid">
+          <a href="game.html" class="showcase-card glass-card" style="text-decoration:none;display:block;transition:border-color 0.2s" onmouseover="this.style.borderColor='var(--cyan)'" onmouseout="this.style.borderColor=''">
+            <div class="showcase-icon">🗡️</div>
+            <div class="showcase-name neon-cyan">ZELDA QUEST</div>
+            <div class="showcase-desc">Canvas APIだけで作ったトップビューRPG。Claudeと一緒に設計・実装した。</div>
+            <div class="showcase-tag">game.html →</div>
+          </a>
+          <a href="shogi.html" class="showcase-card glass-card" style="text-decoration:none;display:block;transition:border-color 0.2s" onmouseover="this.style.borderColor='var(--magenta)'" onmouseout="this.style.borderColor=''">
+            <div class="showcase-icon">♟️</div>
+            <div class="showcase-name neon-magenta">将棋パズル</div>
+            <div class="showcase-desc">ブラウザで動く詰将棋パズルゲーム。将棋好きが高じて作った作品。</div>
+            <div class="showcase-tag">shogi.html →</div>
+          </a>
+          <a href="index.html#dashboard" class="showcase-card glass-card" style="text-decoration:none;display:block;transition:border-color 0.2s" onmouseover="this.style.borderColor='var(--purple)'" onmouseout="this.style.borderColor=''">
+            <div class="showcase-icon">📊</div>
+            <div class="showcase-name neon-purple">ダッシュボード</div>
+            <div class="showcase-desc">天気・株価・ガソリン相場・カレンダーをまとめて確認できるウィジェット。</div>
+            <div class="showcase-tag">index.html#dashboard →</div>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- スライド10: まとめ -->
+    <div class="slide" data-index="9">
+      <div class="cover-layout">
+        <div class="cover-badge neon-purple">SUMMARY</div>
+        <h2 style="font-family:var(--font-head);font-size:2rem;font-weight:700;text-align:center;margin:8px 0;line-height:1.5">
+          AIは<span class="neon-cyan">道具</span>じゃなく<br>
+          <span class="neon-magenta">チームメンバー</span>になった
+        </h2>
+        <div class="summary-points" style="text-align:left;max-width:500px;width:100%">
+          <p>Claude Code — AIがコードを自律的に書く</p>
+          <p>CLAUDE.md — AIへの「取扱説明書」</p>
+          <p>Skills — 繰り返し作業を手順書で自動化</p>
+          <p>ハーネス — 複数AIを工場ラインで連携</p>
+        </div>
+        <a href="https://github.com/hifukasawa77-lgtm" class="cta-btn" target="_blank" rel="noreferrer">
+          GitHub でコードを見る →
+        </a>
+        <a href="index.html" style="font-size:0.8rem;color:var(--cyan);text-decoration:none;margin-top:8px;font-family:var(--font-head);opacity:0.7" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">← ポートフォリオに戻る</a>
+      </div>
+    </div>
+
+  </div><!-- /slide-wrapper -->
+
+  <div class="slide-controls">
+    <button class="ctrl-btn" id="btn-prev" aria-label="前のスライド">&#8592;</button>
+    <span class="slide-counter" id="slide-counter">1 / 10</span>
+    <button class="ctrl-btn" id="btn-next" aria-label="次のスライド">&#8594;</button>
+  </div>
+  <div class="slide-dots" id="slide-dots" role="tablist" aria-label="スライド選択"></div>
+
+  <script>
+    const TOTAL = 10;
+    const SLIDE_W = 1280;
+    const SLIDE_H = 720;
+    let current = 0;
+    const slides = document.querySelectorAll('.slide');
+    const counter = document.getElementById('slide-counter');
+    const progressFill = document.getElementById('progress-fill');
+    const dotsEl = document.getElementById('slide-dots');
+
+    function goTo(n) {
+      n = Math.max(0, Math.min(TOTAL - 1, n));
+      slides[current].classList.remove('active');
+      // スライド8のフローアニメーションリセット
+      if (n === 7) {
+        document.querySelectorAll('#flow-diagram .flow-agent').forEach(function(el) {
+          el.classList.remove('slide-in-up');
+          void el.offsetWidth; // reflow強制
+          el.classList.add('slide-in-up');
+        });
+      }
+      current = n;
+      slides[current].classList.add('active');
+      counter.textContent = (current + 1) + ' / ' + TOTAL;
+      progressFill.style.width = ((current + 1) / TOTAL * 100) + '%';
+      document.querySelectorAll('.dot').forEach(function(d, i) {
+        d.classList.toggle('active', i === current);
+      });
+    }
+
+    function initDots() {
+      for (var i = 0; i < TOTAL; i++) {
+        var d = document.createElement('span');
+        d.className = 'dot' + (i === 0 ? ' active' : '');
+        d.setAttribute('role', 'tab');
+        d.setAttribute('aria-label', (i + 1) + '枚目のスライド');
+        (function(idx) {
+          d.addEventListener('click', function() { goTo(idx); });
+        })(i);
+        dotsEl.appendChild(d);
+      }
+    }
+
+    function scaleSlides() {
+      var scale = Math.min(window.innerWidth / SLIDE_W, window.innerHeight / SLIDE_H);
+      document.documentElement.style.setProperty('--slide-scale', scale);
+    }
+
+    function initCanvas() {
+      var canvas = document.getElementById('slide-bg');
+      var ctx = canvas.getContext('2d');
+      function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+      resize();
+      window.addEventListener('resize', resize);
+      var COLORS = ['#00f5ff', '#ff2d78', '#9b59ff'];
+      var particles = [];
+      for (var i = 0; i < 80; i++) {
+        particles.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          vx: (Math.random() - 0.5) * 0.4,
+          vy: (Math.random() - 0.5) * 0.4,
+          r: Math.random() * 1.5 + 0.5,
+          color: COLORS[Math.floor(Math.random() * 3)],
+          alpha: Math.random() * 0.5 + 0.2
+        });
+      }
+      function draw() {
+        ctx.fillStyle = '#050510';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        particles.forEach(function(p) {
+          p.x = (p.x + p.vx + canvas.width) % canvas.width;
+          p.y = (p.y + p.vy + canvas.height) % canvas.height;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          var alphaHex = Math.floor(p.alpha * 255).toString(16).padStart(2, '0');
+          ctx.fillStyle = p.color + alphaHex;
+          ctx.shadowColor = p.color;
+          ctx.shadowBlur = 8;
+          ctx.fill();
+        });
+        requestAnimationFrame(draw);
+      }
+      draw();
+    }
+
+    function initTouch() {
+      var startX = 0;
+      document.addEventListener('touchstart', function(e) {
+        startX = e.touches[0].clientX;
+      }, { passive: true });
+      document.addEventListener('touchend', function(e) {
+        var diff = startX - e.changedTouches[0].clientX;
+        if (Math.abs(diff) > 50) goTo(current + (diff > 0 ? 1 : -1));
+      });
+    }
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') goTo(current + 1);
+      if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   goTo(current - 1);
+    });
+    document.getElementById('btn-next').addEventListener('click', function() { goTo(current + 1); });
+    document.getElementById('btn-prev').addEventListener('click', function() { goTo(current - 1); });
+    window.addEventListener('resize', scaleSlides);
+
+    initDots();
+    scaleSlides();
+    initCanvas();
+    initTouch();
+    goTo(0);
+  </script>
+
+</body>
+</html>
