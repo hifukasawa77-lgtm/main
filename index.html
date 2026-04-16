@@ -1331,6 +1331,13 @@
             <ul class="dashboard-mini-list" id="home-stock-list">
               <li class="dashboard-mini-item"><span>読み込み中…</span></li>
             </ul>
+            <form class="dash-row" id="home-stock-form">
+              <input class="dash-input grow" id="home-stock-input" type="text" maxlength="48" placeholder="会社名 or ティッカー（例: トヨタ / AAPL / 7203.T）">
+              <button class="dash-todo-btn" type="submit">追加</button>
+            </form>
+            <ul class="dashboard-mini-list" id="home-stock-custom-list">
+              <li class="dashboard-mini-item"><span>追加銘柄なし</span></li>
+            </ul>
             <div class="dash-mini-note" id="home-stock-time">更新時刻を取得中…</div>
           </article>
 
@@ -1591,6 +1598,9 @@
       const fxList = document.getElementById('home-fx-list');
       const fxTime = document.getElementById('home-fx-time');
       const stockList = document.getElementById('home-stock-list');
+      const stockForm = document.getElementById('home-stock-form');
+      const stockInput = document.getElementById('home-stock-input');
+      const stockCustomList = document.getElementById('home-stock-custom-list');
       const stockTime = document.getElementById('home-stock-time');
       const gasList = document.getElementById('home-gas-list');
       const gasTime = document.getElementById('home-gas-time');
@@ -1612,6 +1622,7 @@
       const SCHEDULE_KEY = 'dashboard-schedules';
       const VISIT_KEY = 'home-dashboard-visit';
       const STOCK_SNAPSHOT_KEY = 'dashboard-stock-snapshot';
+      const CUSTOM_STOCKS_KEY = 'dashboard-custom-stocks';
       const GAS_SNAPSHOT_KEY = 'dashboard-gas-snapshot';
 
       const updateItems = [
@@ -1852,10 +1863,10 @@
         }
       }
 
-      function parseStockPayload(payloadText) {
+      function parseStockPayload(payload) {
         let data;
         try {
-          data = typeof payloadText === 'string' ? JSON.parse(payloadText) : payloadText;
+          data = typeof payload === 'string' ? JSON.parse(payload) : payload;
         } catch (e) {
           return null;
         }
@@ -1878,11 +1889,15 @@
         return null;
       }
 
-      async function fetchStock(symbol) {
-        const quoteUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`;
-        const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
-        const targets = [quoteUrl, chartUrl];
+      function parseJsonText(text) {
+        try {
+          return JSON.parse(String(text || ''));
+        } catch (e) {
+          return null;
+        }
+      }
 
+      async function fetchJsonWithProxies(target) {
         const proxyDefs = [
           { mode: 'direct' },
           { mode: 'json', wrap: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}` },
@@ -1890,32 +1905,52 @@
           { mode: 'text', wrap: (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}` },
         ];
 
-        for (const target of targets) {
-          for (const proxy of proxyDefs) {
-            try {
-              const requestUrl = proxy.mode === 'direct' ? target : proxy.wrap(target);
-              const res = await fetchWithTimeout(requestUrl, 9000);
-              if (!res.ok) continue;
+        for (const proxy of proxyDefs) {
+          try {
+            const requestUrl = proxy.mode === 'direct' ? target : proxy.wrap(target);
+            const res = await fetchWithTimeout(requestUrl, 9000);
+            if (!res.ok) continue;
 
-              let parsed = null;
-              if (proxy.mode === 'json') {
-                const outer = await res.json();
-                parsed = parseStockPayload(outer?.contents || '');
-              } else {
-                const text = await res.text();
-                parsed = parseStockPayload(text);
-              }
+            if (proxy.mode === 'direct') {
+              const text = await res.text();
+              const parsed = parseJsonText(text);
               if (parsed) return parsed;
-            } catch (e) {
-              // Try next proxy/target
+            } else if (proxy.mode === 'json') {
+              const outer = await res.json();
+              const parsed = parseJsonText(outer?.contents || '');
+              if (parsed) return parsed;
+            } else {
+              const text = await res.text();
+              const parsed = parseJsonText(text);
+              if (parsed) return parsed;
             }
+          } catch (e) {
+            // try next proxy
+          }
+        }
+        throw new Error('json-fetch-failed');
+      }
+
+      async function fetchStock(symbol) {
+        const quoteUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`;
+        const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
+        const targets = [quoteUrl, chartUrl];
+
+        for (const target of targets) {
+          try {
+            const payload = await fetchJsonWithProxies(target);
+            const parsed = parseStockPayload(payload);
+            if (parsed) return parsed;
+          } catch (e) {
+            // try next endpoint
           }
         }
         throw new Error('stock-fetch-failed');
       }
 
-      function renderStockRows(rows) {
-        stockList.innerHTML = rows.map((row) => {
+      function renderStockRows(rows, targetEl) {
+        const el = targetEl || stockList;
+        el.innerHTML = rows.map((row) => {
           const current = Number(row.price);
           const prev = Number(row.prev);
           const change = current - prev;
@@ -1929,11 +1964,95 @@
         }).join('');
       }
 
+      let customStocks = [];
+      let customRenderSeq = 0;
+
+      function loadCustomStocks() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(CUSTOM_STOCKS_KEY) || '[]');
+          customStocks = Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+          customStocks = [];
+        }
+      }
+
+      function saveCustomStocks() {
+        localStorage.setItem(CUSTOM_STOCKS_KEY, JSON.stringify(customStocks));
+      }
+
+      async function resolveStockInput(query) {
+        const raw = String(query || '').trim();
+        if (!raw) throw new Error('empty-query');
+
+        const maybeSymbol = raw.toUpperCase();
+        const symbolLike = /^[\^A-Z0-9.\-]{1,12}$/.test(maybeSymbol);
+        if (symbolLike) {
+          try {
+            await fetchStock(maybeSymbol);
+            return { symbol: maybeSymbol, name: raw };
+          } catch (e) {
+            // fall through to search
+          }
+        }
+
+        const searchUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(raw)}&quotesCount=10&newsCount=0`;
+        const payload = await fetchJsonWithProxies(searchUrl);
+        const quotes = Array.isArray(payload?.quotes) ? payload.quotes : [];
+        const preferred = quotes.find((q) => q && q.symbol && q.quoteType === 'EQUITY') || quotes.find((q) => q && q.symbol);
+        if (!preferred) throw new Error('stock-search-not-found');
+
+        return {
+          symbol: String(preferred.symbol),
+          name: String(preferred.shortname || preferred.longname || preferred.symbol),
+        };
+      }
+
+      async function renderCustomStocks() {
+        const seq = ++customRenderSeq;
+        if (!customStocks.length) {
+          stockCustomList.innerHTML = '<li class="dashboard-mini-item"><span>追加銘柄なし</span></li>';
+          return;
+        }
+
+        stockCustomList.innerHTML = '<li class="dashboard-mini-item"><span>追加銘柄を取得中…</span></li>';
+        const results = await Promise.allSettled(
+          customStocks.map(async (item) => {
+            const quote = await fetchStock(item.symbol);
+            return { item, quote };
+          })
+        );
+        if (seq !== customRenderSeq) return;
+
+        stockCustomList.innerHTML = results.map((r, i) => {
+          const item = customStocks[i];
+          if (r.status === 'fulfilled') {
+            const current = Number(r.value.quote.price);
+            const prev = Number(r.value.quote.prev);
+            const change = current - prev;
+            const pct = prev ? (change / prev) * 100 : 0;
+            const cls = change >= 0 ? 'dash-market-up' : 'dash-market-down';
+            const sign = change >= 0 ? '+' : '';
+            return `<li class="dashboard-mini-item">
+              <span>${escHtml(item.name)} <small>(${escHtml(item.symbol)})</small></span>
+              <span>
+                <strong>${fmtNum(current, 2)}</strong>
+                <small class="${cls}">${sign}${fmtNum(change, 2)} (${sign}${pct.toFixed(2)}%)</small>
+                <button class="dash-todo-btn" type="button" data-remove-stock="${escHtml(String(item.id))}">削除</button>
+              </span>
+            </li>`;
+          }
+          return `<li class="dashboard-mini-item">
+            <span>${escHtml(item.name)} <small>(${escHtml(item.symbol)})</small></span>
+            <span><small>取得失敗</small> <button class="dash-todo-btn" type="button" data-remove-stock="${escHtml(String(item.id))}">削除</button></span>
+          </li>`;
+        }).join('');
+      }
+
       async function initStockCard() {
         const indices = [
-          { symbol: '^N225', name: '日経225' },
+          { symbol: '^TOPX', name: 'TOPIX' },
+          { symbol: '^DJI', name: 'NYダウ' },
           { symbol: '^GSPC', name: 'S&P500' },
-          { symbol: '^IXIC', name: 'NASDAQ' },
         ];
         stockList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
 
@@ -1951,7 +2070,7 @@
         });
 
         if (rows.length > 0) {
-          renderStockRows(rows);
+          renderStockRows(rows, stockList);
           localStorage.setItem(STOCK_SNAPSHOT_KEY, JSON.stringify({
             updatedAt: new Date().toISOString(),
             rows,
@@ -1963,7 +2082,7 @@
         try {
           const cached = JSON.parse(localStorage.getItem(STOCK_SNAPSHOT_KEY) || 'null');
           if (cached && Array.isArray(cached.rows) && cached.rows.length) {
-            renderStockRows(cached.rows);
+            renderStockRows(cached.rows, stockList);
             const updated = cached.updatedAt ? new Date(cached.updatedAt).toLocaleString('ja-JP') : '不明';
             stockTime.textContent = `最新取得失敗 / 前回データ: ${updated}`;
             return;
@@ -1975,6 +2094,47 @@
         stockList.innerHTML = '<li class="dashboard-mini-item"><span>株価指数の取得に失敗しました</span></li>';
         stockTime.textContent = '更新時刻: 取得失敗';
       }
+
+      stockForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const query = stockInput.value.trim();
+        if (!query) return;
+        const prevLabel = stockTime.textContent;
+        stockTime.textContent = '銘柄を検索中…';
+        stockInput.disabled = true;
+        try {
+          const resolved = await resolveStockInput(query);
+          const exists = customStocks.some((s) => String(s.symbol).toUpperCase() === String(resolved.symbol).toUpperCase());
+          if (!exists) {
+            customStocks.push({
+              id: Date.now() + Math.floor(Math.random() * 1000),
+              name: resolved.name,
+              symbol: resolved.symbol,
+            });
+            saveCustomStocks();
+          }
+          stockInput.value = '';
+          await renderCustomStocks();
+          stockTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+        } catch (e) {
+          stockTime.textContent = '銘柄が見つかりませんでした（会社名またはティッカーを確認）';
+          setTimeout(() => {
+            stockTime.textContent = prevLabel;
+          }, 3000);
+        } finally {
+          stockInput.disabled = false;
+        }
+      });
+
+      stockCustomList.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLButtonElement)) return;
+        const id = Number(target.dataset.removeStock);
+        if (!id) return;
+        customStocks = customStocks.filter((s) => Number(s.id) !== id);
+        saveCustomStocks();
+        await renderCustomStocks();
+      });
 
       function parseGasSnapshot(rawText) {
         const text = String(rawText || '')
@@ -2215,6 +2375,7 @@
 
       loadTodos();
       renderTodos();
+      loadCustomStocks();
       renderUpdates();
       loadSchedules();
       renderCalendar();
@@ -2225,6 +2386,7 @@
         initWeatherCard(),
         initFxCard(),
         initStockCard(),
+        renderCustomStocks(),
         initGasCard(),
       ]).catch(() => {
         // Ignore: each widget handles its own fallback.
