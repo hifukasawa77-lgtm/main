@@ -2193,14 +2193,13 @@
         const seen = new Set();
         const src = String(rawHtml || '');
 
-        // Strategy 1: HTML class-based extraction (most reliable)
-        const classPattern = /class="[^"]*\bprice\b[^"]*"[^>]*>\s*(\d{2,3})\s*<\/div>[\s\S]{0,600}?class="[^"]*\bshop-name\b[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+        // Strategy 1a: price → shop-name (距離 1500 chars)
+        const classPattern = /class="[^"]*\bprice\b[^"]*"[^>]*>\s*(\d{2,3})\s*<\/div>[\s\S]{0,1500}?class="[^"]*\bshop-name\b[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
         let m;
         while ((m = classPattern.exec(src)) !== null) {
           const price = Number(m[1]);
           if (price < 100 || price > 220) continue;
           const rawName = m[2].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, '').trim();
-          // "セルフ三郷前川SS / (有)浜島商店" → take only store name before "/"
           const name = rawName.split(/\s*[/／]\s*/)[0].trim();
           if (name.length >= 2 && !seen.has(name)) {
             seen.add(name);
@@ -2208,7 +2207,24 @@
           }
         }
 
-        // Strategy 2: text-based fallback — price comes BEFORE the name in gogo.gs
+        // Strategy 1b: shop-name → price（逆順パターン）
+        if (stations.length < 3) {
+          stations.length = 0;
+          seen.clear();
+          const revPattern = /class="[^"]*\bshop-name\b[^"]*"[^>]*>([\s\S]*?)<\/a>[\s\S]{0,1500}?class="[^"]*\bprice\b[^"]*"[^>]*>\s*(\d{2,3})\s*<\/div>/gi;
+          while ((m = revPattern.exec(src)) !== null) {
+            const price = Number(m[2]);
+            if (price < 100 || price > 220) continue;
+            const rawName = m[1].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, '').trim();
+            const name = rawName.split(/\s*[/／]\s*/)[0].trim();
+            if (name.length >= 2 && !seen.has(name)) {
+              seen.add(name);
+              stations.push({ name, price });
+            }
+          }
+        }
+
+        // Strategy 2: text-based fallback
         if (stations.length < 3) {
           stations.length = 0;
           seen.clear();
@@ -2226,29 +2242,49 @@
             .replace(/\n{3,}/g, '\n\n');
 
           const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+          const isName = c =>
+            c.length >= 3 && c.length <= 60 &&
+            /[ァ-ヶーぁ-ん一-龯a-zA-Zａ-ｚ]/.test(c) &&
+            !/^\d+$/.test(c) &&
+            !c.includes('更新') && !c.includes('時点') &&
+            !c.includes('平均') && !c.includes('http');
 
           for (let i = 0; i < lines.length - 1; i++) {
-            // Standalone 2–3 digit number in gas-price range
             if (!/^\d{2,3}$/.test(lines[i])) continue;
             const price = Number(lines[i]);
             if (price < 100 || price > 220) continue;
 
-            // Station name is in a following line (price appears before name)
-            for (let j = i + 1; j <= Math.min(lines.length - 1, i + 6); j++) {
-              const c = lines[j];
-              if (
-                c.length >= 3 && c.length <= 60 &&
-                /[ァ-ヶーぁ-ん一-龯a-zA-Zａ-ｚ]/.test(c) &&
-                !/^\d+$/.test(c) &&
-                !c.includes('更新') && !c.includes('時点') &&
-                !c.includes('平均') && !c.includes('http')
-              ) {
-                const name = c.split(/\s*[/／]\s*/)[0].trim();
+            // 価格の後ろ12行以内で店舗名を探す
+            for (let j = i + 1; j <= Math.min(lines.length - 1, i + 12); j++) {
+              if (isName(lines[j])) {
+                const name = lines[j].split(/\s*[/／]\s*/)[0].trim();
                 if (name.length >= 2 && !seen.has(name)) {
                   seen.add(name);
                   stations.push({ name, price });
                 }
                 break;
+              }
+            }
+          }
+
+          // Strategy 2b: 店舗名が価格より前に来るパターン
+          if (stations.length < 3) {
+            stations.length = 0;
+            seen.clear();
+            for (let i = 0; i < lines.length - 1; i++) {
+              if (!isName(lines[i])) continue;
+              // 名前の後ろ12行以内で価格を探す
+              for (let j = i + 1; j <= Math.min(lines.length - 1, i + 12); j++) {
+                if (/^\d{2,3}$/.test(lines[j])) {
+                  const price = Number(lines[j]);
+                  if (price < 100 || price > 220) continue;
+                  const name = lines[i].split(/\s*[/／]\s*/)[0].trim();
+                  if (name.length >= 2 && !seen.has(name)) {
+                    seen.add(name);
+                    stations.push({ name, price });
+                  }
+                  break;
+                }
               }
             }
           }
