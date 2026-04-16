@@ -1499,9 +1499,10 @@
             <div class="dash-calendar-grid" id="home-calendar-grid"></div>
             <form class="dash-row" id="home-schedule-form">
               <input class="dash-input" id="home-schedule-date" type="date">
-              <input class="dash-input grow" id="home-schedule-text" type="text" maxlength="60" placeholder="予定を追加…">
+              <input class="dash-input grow" id="home-schedule-text" type="text" maxlength="60" placeholder="課会 16:00～17:30">
               <button class="dash-todo-btn" type="submit">登録</button>
             </form>
+            <div class="dash-mini-note" style="margin-top:4px">📅 時間を含めると <strong style="color:var(--blue)">Google カレンダー</strong> に自動連携します</div>
             <ul class="dashboard-mini-list" id="home-schedule-list"></ul>
           </article>
         </div>
@@ -2929,12 +2930,47 @@
           .slice(0, 5);
         const rows = shown.length ? shown : schedules.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).slice(0, 5);
 
-        scheduleList.innerHTML = rows.map((s) => `
+        scheduleList.innerHTML = rows.map((s) => {
+          const gcalUrl = buildGCalUrl(String(s.date), s.text || '');
+          return `
           <li class="dashboard-mini-item">
             <span>${escHtml(String(s.date).replace(/-/g, '/'))} ${escHtml(s.text || '')}</span>
-            <button class="dash-todo-btn" type="button" data-delete-schedule="${s.id}">削除</button>
-          </li>
-        `).join('');
+            <span style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+              <a href="${gcalUrl}" target="_blank" rel="noreferrer" title="Googleカレンダーで開く" style="font-size:0.72rem;color:var(--blue);text-decoration:none;border:1px solid var(--blue);border-radius:8px;padding:2px 7px;opacity:0.85">G📅</a>
+              <button class="dash-todo-btn" type="button" data-delete-schedule="${s.id}">削除</button>
+            </span>
+          </li>`;
+        }).join('');
+      }
+
+      function buildGCalUrl(date, text) {
+        // 時間パターン: "16:00～17:30" / "16:00~17:30" / "16:00-17:30"
+        const timeRe = /(\d{1,2}):(\d{2})(?:[～〜~\-](\d{1,2}):(\d{2}))?/;
+        const m = text.match(timeRe);
+        const d = date.replace(/-/g, ''); // YYYYMMDD
+        const title = text.replace(timeRe, '').replace(/\s+/g, ' ').trim() || text;
+
+        let startDt, endDt;
+        if (m) {
+          const sh = String(m[1]).padStart(2, '0');
+          const sm = String(m[2]).padStart(2, '0');
+          startDt = `${d}T${sh}${sm}00`;
+          if (m[3] && m[4]) {
+            endDt = `${d}T${String(m[3]).padStart(2, '0')}${String(m[4]).padStart(2, '0')}00`;
+          } else {
+            // 終了時刻がなければ1時間後
+            const eh = (parseInt(m[1], 10) + 1) % 24;
+            endDt = `${d}T${String(eh).padStart(2, '0')}${sm}00`;
+          }
+        } else {
+          // 時間なし → 終日イベント
+          const next = new Date(date);
+          next.setDate(next.getDate() + 1);
+          startDt = d;
+          endDt = next.toISOString().slice(0, 10).replace(/-/g, '');
+        }
+
+        return `https://calendar.google.com/calendar/r/eventedit?text=${encodeURIComponent(title)}&dates=${startDt}/${endDt}`;
       }
 
       scheduleForm.addEventListener('submit', (event) => {
@@ -2947,6 +2983,8 @@
         saveSchedules();
         renderCalendar();
         renderSchedules();
+        // Google カレンダーへ連携
+        window.open(buildGCalUrl(date, text), '_blank', 'noreferrer');
       });
 
       scheduleList.addEventListener('click', (event) => {
