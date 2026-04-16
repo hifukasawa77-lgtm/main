@@ -1611,6 +1611,7 @@
       const MEMO_KEY = 'dashboard-memo';
       const SCHEDULE_KEY = 'dashboard-schedules';
       const VISIT_KEY = 'home-dashboard-visit';
+      const STOCK_SNAPSHOT_KEY = 'dashboard-stock-snapshot';
       const GAS_SNAPSHOT_KEY = 'dashboard-gas-snapshot';
 
       const updateItems = [
@@ -1851,18 +1852,81 @@
         }
       }
 
+      function parseStockPayload(payloadText) {
+        let data;
+        try {
+          data = typeof payloadText === 'string' ? JSON.parse(payloadText) : payloadText;
+        } catch (e) {
+          return null;
+        }
+
+        const quote = data?.quoteResponse?.result?.[0];
+        if (quote && Number.isFinite(Number(quote.regularMarketPrice))) {
+          return {
+            price: Number(quote.regularMarketPrice),
+            prev: Number(quote.regularMarketPreviousClose || quote.regularMarketPrice),
+          };
+        }
+
+        const meta = data?.chart?.result?.[0]?.meta;
+        if (meta && Number.isFinite(Number(meta.regularMarketPrice))) {
+          return {
+            price: Number(meta.regularMarketPrice),
+            prev: Number(meta.previousClose || meta.chartPreviousClose || meta.regularMarketPrice),
+          };
+        }
+        return null;
+      }
+
       async function fetchStock(symbol) {
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
-        const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-        const res = await fetchWithTimeout(proxy, 9000);
-        if (!res.ok) throw new Error('stock');
-        const outer = await res.json();
-        const data = JSON.parse(outer.contents);
-        const meta = data.chart.result[0].meta;
-        return {
-          price: Number(meta.regularMarketPrice),
-          prev: Number(meta.previousClose || meta.chartPreviousClose),
-        };
+        const quoteUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`;
+        const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
+        const targets = [quoteUrl, chartUrl];
+
+        const proxyDefs = [
+          { mode: 'direct' },
+          { mode: 'json', wrap: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}` },
+          { mode: 'text', wrap: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
+          { mode: 'text', wrap: (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}` },
+        ];
+
+        for (const target of targets) {
+          for (const proxy of proxyDefs) {
+            try {
+              const requestUrl = proxy.mode === 'direct' ? target : proxy.wrap(target);
+              const res = await fetchWithTimeout(requestUrl, 9000);
+              if (!res.ok) continue;
+
+              let parsed = null;
+              if (proxy.mode === 'json') {
+                const outer = await res.json();
+                parsed = parseStockPayload(outer?.contents || '');
+              } else {
+                const text = await res.text();
+                parsed = parseStockPayload(text);
+              }
+              if (parsed) return parsed;
+            } catch (e) {
+              // Try next proxy/target
+            }
+          }
+        }
+        throw new Error('stock-fetch-failed');
+      }
+
+      function renderStockRows(rows) {
+        stockList.innerHTML = rows.map((row) => {
+          const current = Number(row.price);
+          const prev = Number(row.prev);
+          const change = current - prev;
+          const pct = prev ? (change / prev) * 100 : 0;
+          const cls = change >= 0 ? 'dash-market-up' : 'dash-market-down';
+          const sign = change >= 0 ? '+' : '';
+          return `<li class="dashboard-mini-item">
+            <span>${escHtml(row.name)}</span>
+            <span><strong>${fmtNum(current, 2)}</strong> <small class="${cls}">${sign}${fmtNum(change, 2)} (${sign}${pct.toFixed(2)}%)</small></span>
+          </li>`;
+        }).join('');
       }
 
       async function initStockCard() {
@@ -1874,26 +1938,42 @@
         stockList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
 
         const results = await Promise.allSettled(indices.map((item) => fetchStock(item.symbol)));
-        let html = '';
-        results.forEach((r, i) => {
-          const item = indices[i];
-          if (r.status === 'fulfilled') {
-            const current = r.value.price;
-            const prev = r.value.prev;
-            const change = current - prev;
-            const pct = prev ? (change / prev) * 100 : 0;
-            const cls = change >= 0 ? 'dash-market-up' : 'dash-market-down';
-            const sign = change >= 0 ? '+' : '';
-            html += `<li class="dashboard-mini-item">
-              <span>${item.name}</span>
-              <span><strong>${fmtNum(current, 2)}</strong> <small class="${cls}">${sign}${fmtNum(change, 2)} (${sign}${pct.toFixed(2)}%)</small></span>
-            </li>`;
-          } else {
-            html += `<li class="dashboard-mini-item"><span>${item.name}</span><small>取得失敗</small></li>`;
+        const rows = [];
+
+        results.forEach((result, i) => {
+          if (result.status === 'fulfilled') {
+            rows.push({
+              name: indices[i].name,
+              price: result.value.price,
+              prev: result.value.prev,
+            });
           }
         });
-        stockList.innerHTML = html;
-        stockTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+
+        if (rows.length > 0) {
+          renderStockRows(rows);
+          localStorage.setItem(STOCK_SNAPSHOT_KEY, JSON.stringify({
+            updatedAt: new Date().toISOString(),
+            rows,
+          }));
+          stockTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+          return;
+        }
+
+        try {
+          const cached = JSON.parse(localStorage.getItem(STOCK_SNAPSHOT_KEY) || 'null');
+          if (cached && Array.isArray(cached.rows) && cached.rows.length) {
+            renderStockRows(cached.rows);
+            const updated = cached.updatedAt ? new Date(cached.updatedAt).toLocaleString('ja-JP') : '不明';
+            stockTime.textContent = `最新取得失敗 / 前回データ: ${updated}`;
+            return;
+          }
+        } catch (e) {
+          // no-op
+        }
+
+        stockList.innerHTML = '<li class="dashboard-mini-item"><span>株価指数の取得に失敗しました</span></li>';
+        stockTime.textContent = '更新時刻: 取得失敗';
       }
 
       function parseGasSnapshot(rawText) {
