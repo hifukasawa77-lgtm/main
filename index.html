@@ -2255,6 +2255,62 @@
         ctx.fillText(dates[n - 1].slice(5).replace('-', '/'), pad.left + cW, H - 5);
       }
 
+      async function fetchFxHistory() {
+        const fmtDate = d => d.toISOString().slice(0, 10);
+
+        // Primary: frankfurter.app（ECBデータ、一括取得）
+        try {
+          const end = new Date();
+          const start = new Date();
+          start.setDate(start.getDate() - 30);
+          const res = await fetchWithTimeout(
+            `https://api.frankfurter.app/${fmtDate(start)}..${fmtDate(end)}?from=JPY&to=USD,EUR,GBP`, 6000
+          );
+          if (res.ok) {
+            const hist = await res.json();
+            const sortedDates = Object.keys(hist.rates || {}).sort();
+            if (sortedDates.length >= 2) {
+              return {
+                dates: sortedDates,
+                usd: sortedDates.map(d => 1 / hist.rates[d].USD),
+                eur: sortedDates.map(d => 1 / hist.rates[d].EUR),
+                gbp: sortedDates.map(d => 1 / hist.rates[d].GBP),
+              };
+            }
+          }
+        } catch (_) {}
+
+        // Fallback: @fawazahmed0/currency-api（jsDelivr CDN、日別リクエスト）
+        const dates = [];
+        for (let i = 28; i >= 0; i -= 4) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          dates.push(fmtDate(d));
+        }
+        const results = await Promise.allSettled(
+          dates.map(date =>
+            fetchWithTimeout(
+              `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${date}/v1/currencies/jpy.json`, 5000
+            ).then(r => r.ok ? r.json() : null)
+          )
+        );
+        const valid = [];
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled' && r.value?.jpy?.usd) {
+            valid.push({ date: dates[i], j: r.value.jpy });
+          }
+        });
+        if (valid.length >= 2) {
+          return {
+            dates: valid.map(v => v.date),
+            usd: valid.map(v => 1 / v.j.usd),
+            eur: valid.map(v => 1 / v.j.eur),
+            gbp: valid.map(v => 1 / v.j.gbp),
+          };
+        }
+        return null;
+      }
+
       async function initFxCard() {
         try {
           const res = await fetchWithTimeout('https://open.er-api.com/v6/latest/JPY', 8000);
@@ -2273,46 +2329,27 @@
             <li class="dashboard-mini-item"><span>GBP / JPY</span><strong>${fmtNum(gbpJpy, 2)}</strong></li>`;
           fxTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
 
-          // 過去30日の履歴グラフ
-          try {
-            const end = new Date();
-            const start = new Date();
-            start.setDate(start.getDate() - 30);
-            const fmt = d => d.toISOString().slice(0, 10);
-            const histRes = await fetchWithTimeout(
-              `https://api.frankfurter.app/${fmt(start)}..${fmt(end)}?from=JPY&to=USD,EUR,GBP`, 8000
-            );
-            if (histRes.ok) {
-              const hist = await histRes.json();
-              const sortedDates = Object.keys(hist.rates).sort();
-              if (sortedDates.length >= 2) {
-                const usdArr = sortedDates.map(d => 1 / hist.rates[d].USD);
-                const eurArr = sortedDates.map(d => 1 / hist.rates[d].EUR);
-                const gbpArr = sortedDates.map(d => 1 / hist.rates[d].GBP);
+          // 過去30日の履歴グラフ（フォールバック付き）
+          const hist = await fetchFxHistory();
+          if (hist && hist.dates.length >= 2) {
+            document.getElementById('home-fx-chart-wrap').style.display = '';
+            drawFxChart('home-fx-chart', hist.dates, hist.usd, hist.eur, hist.gbp);
 
-                document.getElementById('home-fx-chart-wrap').style.display = '';
-                drawFxChart('home-fx-chart', sortedDates, usdArr, eurArr, gbpArr);
-
-                // 最終日の変化率をlegendに表示
-                const pct = (arr) => {
-                  const v = ((arr[arr.length - 1] - arr[0]) / arr[0]) * 100;
-                  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
-                };
-                const legend = [
-                  { label: 'USD', color: '#00e5ff', val: pct(usdArr) },
-                  { label: 'EUR', color: '#ff2d78', val: pct(eurArr) },
-                  { label: 'GBP', color: '#9b59ff', val: pct(gbpArr) },
-                ];
-                document.getElementById('home-fx-legend').innerHTML = legend.map(l =>
-                  `<div class="fx-legend-item">
-                    <div class="fx-legend-dot" style="background:${l.color}"></div>
-                    <span>${l.label} <strong style="color:${l.color}">${l.val}</strong></span>
-                  </div>`
-                ).join('');
-              }
-            }
-          } catch (he) {
-            // グラフ取得失敗は無視（レート表示は成功している）
+            const pct = (arr) => {
+              const v = ((arr[arr.length - 1] - arr[0]) / arr[0]) * 100;
+              return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+            };
+            const legend = [
+              { label: 'USD', color: '#00e5ff', val: pct(hist.usd) },
+              { label: 'EUR', color: '#ff2d78', val: pct(hist.eur) },
+              { label: 'GBP', color: '#9b59ff', val: pct(hist.gbp) },
+            ];
+            document.getElementById('home-fx-legend').innerHTML = legend.map(l =>
+              `<div class="fx-legend-item">
+                <div class="fx-legend-dot" style="background:${l.color}"></div>
+                <span>${l.label} <strong style="color:${l.color}">${l.val}</strong></span>
+              </div>`
+            ).join('');
           }
         } catch (e) {
           fxList.innerHTML = '<li class="dashboard-mini-item"><span>円相場の取得に失敗しました</span></li>';
