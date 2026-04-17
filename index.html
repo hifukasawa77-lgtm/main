@@ -914,6 +914,42 @@
       color: var(--muted);
       min-width: 18px;
     }
+    /* ── Gas chart ── */
+    .gas-chart-tabs {
+      display: flex;
+      gap: 4px;
+      margin: 10px 0 6px;
+    }
+    .gas-tab-btn {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 3px 11px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      background: transparent;
+      color: var(--muted);
+      transition: background 0.15s, color 0.15s;
+    }
+    .gas-tab-btn.active {
+      background: var(--orange);
+      color: #fff;
+      border-color: var(--orange);
+    }
+    #home-gas-chart {
+      display: block;
+      width: 100%;
+      height: 100px;
+      border-radius: 10px;
+      background: rgba(249,115,22,0.03);
+      border: 1px solid var(--line);
+    }
+    #home-gas-chart-msg {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-align: center;
+      padding: 12px 0;
+    }
     .dashboard-mini-item.col {
       align-items: flex-start;
       flex-direction: column;
@@ -1532,6 +1568,13 @@
               <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:70%"></div><div class="skeleton-bar" style="width:15%"></div></li>
               <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:70%"></div><div class="skeleton-bar" style="width:15%"></div></li>
             </ul>
+            <div class="gas-chart-tabs">
+              <button class="gas-tab-btn active" data-gas-period="daily">日毎</button>
+              <button class="gas-tab-btn" data-gas-period="monthly">月毎</button>
+              <button class="gas-tab-btn" data-gas-period="6month">6ヶ月</button>
+            </div>
+            <canvas id="home-gas-chart" style="display:none"></canvas>
+            <div id="home-gas-chart-msg">データ蓄積中… 数日後にグラフが表示されます</div>
             <div class="dash-mini-note" id="home-gas-time">更新時刻を取得中…</div>
             <a class="dash-open-link" href="https://gogo.gs/11237?device=sp" target="_blank" rel="noreferrer">価格詳細を見る →</a>
           </article>
@@ -2898,6 +2941,176 @@
         throw new Error('gas-fetch-failed');
       }
 
+      const GAS_HISTORY_KEY = 'gas-price-history-v1';
+
+      function getGasPriceHistory() {
+        try { return JSON.parse(localStorage.getItem(GAS_HISTORY_KEY) || '{}'); }
+        catch (e) { return {}; }
+      }
+
+      function saveGasPriceToHistory(priceStr) {
+        const price = parseFloat(String(priceStr).replace(/[^\d.]/g, ''));
+        if (!price) return;
+        const today = toDateKey(new Date());
+        const hist = getGasPriceHistory();
+        hist[today] = price;
+        // 最大180日分保持
+        const keys = Object.keys(hist).sort();
+        if (keys.length > 180) keys.slice(0, keys.length - 180).forEach(k => delete hist[k]);
+        localStorage.setItem(GAS_HISTORY_KEY, JSON.stringify(hist));
+      }
+
+      function buildGasChartData(period) {
+        const hist = getGasPriceHistory();
+        const allDates = Object.keys(hist).sort();
+
+        if (period === 'daily') {
+          const slice = allDates.slice(-30);
+          return {
+            labels: slice.map(d => d.slice(5).replace('-', '/')),
+            values: slice.map(d => hist[d]),
+          };
+        }
+
+        // 月集計
+        const byMonth = {};
+        allDates.forEach(d => {
+          const m = d.slice(0, 7);
+          if (!byMonth[m]) byMonth[m] = [];
+          byMonth[m].push(hist[d]);
+        });
+        const limit = period === '6month' ? 6 : 12;
+        const months = Object.keys(byMonth).sort().slice(-limit);
+        return {
+          labels: months.map(m => m.slice(5) + '月'),
+          values: months.map(m => {
+            const arr = byMonth[m];
+            return arr.reduce((a, b) => a + b, 0) / arr.length;
+          }),
+        };
+      }
+
+      function renderGasChart(period) {
+        const canvas = document.getElementById('home-gas-chart');
+        const msg = document.getElementById('home-gas-chart-msg');
+        if (!canvas || !msg) return;
+
+        const { labels, values } = buildGasChartData(period);
+
+        if (values.length < 2) {
+          canvas.style.display = 'none';
+          msg.style.display = '';
+          return;
+        }
+        canvas.style.display = '';
+        msg.style.display = 'none';
+
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.offsetWidth || 280;
+        const H = 100;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        const pad = { top: 16, bottom: 22, left: 44, right: 10 };
+        const cW = W - pad.left - pad.right;
+        const cH = H - pad.top - pad.bottom;
+        const n = values.length;
+
+        const minV = Math.min(...values);
+        const maxV = Math.max(...values);
+        const margin = (maxV - minV) * 0.15 || 1;
+        const lo = minV - margin;
+        const hi = maxV + margin;
+
+        const xOf = i => pad.left + (n === 1 ? cW / 2 : (i / (n - 1)) * cW);
+        const yOf = v => pad.top + (1 - (v - lo) / (hi - lo)) * cH;
+
+        ctx.clearRect(0, 0, W, H);
+
+        // グリッド
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+        [0.33, 0.66].forEach(t => {
+          const y = pad.top + t * cH;
+          ctx.beginPath();
+          ctx.moveTo(pad.left, y);
+          ctx.lineTo(pad.left + cW, y);
+          ctx.stroke();
+        });
+        ctx.restore();
+
+        // グラデーション塗り
+        const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
+        grad.addColorStop(0, 'rgba(249,115,22,0.22)');
+        grad.addColorStop(1, 'rgba(249,115,22,0)');
+        ctx.beginPath();
+        values.forEach((v, i) => {
+          if (i === 0) ctx.moveTo(xOf(i), yOf(v));
+          else {
+            const cpx = (xOf(i - 1) + xOf(i)) / 2;
+            ctx.bezierCurveTo(cpx, yOf(values[i - 1]), cpx, yOf(v), xOf(i), yOf(v));
+          }
+        });
+        ctx.lineTo(xOf(n - 1), pad.top + cH);
+        ctx.lineTo(xOf(0), pad.top + cH);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // ライン
+        ctx.beginPath();
+        values.forEach((v, i) => {
+          if (i === 0) ctx.moveTo(xOf(i), yOf(v));
+          else {
+            const cpx = (xOf(i - 1) + xOf(i)) / 2;
+            ctx.bezierCurveTo(cpx, yOf(values[i - 1]), cpx, yOf(v), xOf(i), yOf(v));
+          }
+        });
+        ctx.strokeStyle = '#f97316';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#f97316';
+        ctx.shadowBlur = 6;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // 最新点
+        ctx.beginPath();
+        ctx.arc(xOf(n - 1), yOf(values[n - 1]), 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#f97316';
+        ctx.fill();
+
+        // Y軸ラベル
+        ctx.fillStyle = 'rgba(120,140,160,0.85)';
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${maxV.toFixed(1)}`, pad.left - 3, pad.top + 8);
+        ctx.fillText(`${minV.toFixed(1)}`, pad.left - 3, pad.top + cH);
+        ctx.fillStyle = 'rgba(120,140,160,0.55)';
+        ctx.font = '8px sans-serif';
+        ctx.fillText('円/L', pad.left - 3, pad.top + cH / 2 + 4);
+
+        // X軸ラベル（最初・最後）
+        ctx.fillStyle = 'rgba(120,140,160,0.7)';
+        ctx.font = '8px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(labels[0], pad.left, H - 5);
+        ctx.textAlign = 'right';
+        ctx.fillText(labels[n - 1], pad.left + cW, H - 5);
+      }
+
+      // タブ切り替え
+      document.querySelectorAll('.gas-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.gas-tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          renderGasChart(btn.dataset.gasPeriod);
+        });
+      });
+
       async function initGasCard() {
         gasList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
         gasRankList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
@@ -2907,12 +3120,15 @@
           if (!snapshot) throw new Error('gas-parse');
           snapshot.stations = parseGasStations(html);
           localStorage.setItem(GAS_SNAPSHOT_KEY, JSON.stringify(snapshot));
+          saveGasPriceToHistory(snapshot.price);
           renderGasSnapshot(snapshot, false);
+          renderGasChart('daily');
         } catch (e) {
           try {
             const cached = JSON.parse(localStorage.getItem(GAS_SNAPSHOT_KEY) || 'null');
             if (cached && cached.price) {
               renderGasSnapshot(cached, true);
+              renderGasChart('daily');
               return;
             }
           } catch (ignore) {
