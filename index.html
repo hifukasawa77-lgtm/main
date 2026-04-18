@@ -1870,7 +1870,7 @@
           <!-- 電車遅延情報 -->
           <article class="card dashboard-card reveal" id="dash-card-train">
             <h3 style="display:flex;align-items:center;gap:8px;">
-              🚃 電車遅延情報
+              🚃 電車遅延情報（関東）
               <button onclick="initTrainCard()" class="dash-todo-btn" style="font-size:0.72rem;padding:3px 10px;margin-left:auto">更新</button>
             </h3>
             <ul class="dashboard-mini-list" id="home-train-list">
@@ -3853,11 +3853,6 @@
       })();
 
       // ─── 電車遅延情報 ─────────────────────────────────────────
-      const TRAIN_LINES = [
-        { key: 'つくばエクスプレス', aliases: ['TX'], label: 'TX（つくばエクスプレス）' },
-        { key: '武蔵野線', aliases: ['武蔵野'], label: 'JR 武蔵野線' },
-        { key: '常磐線', aliases: ['常磐'], label: 'JR 常磐線' },
-      ];
       const TRAIN_TARGET = 'https://transit.yahoo.co.jp/traininfo/area/4/';
       const TRAIN_PROXIES = [
         u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
@@ -3868,6 +3863,7 @@
         const list = document.getElementById('home-train-list');
         const timeEl = document.getElementById('home-train-time');
         if (!list) return;
+        list.innerHTML = '<li class="dashboard-mini-item"><span style="color:var(--muted)">取得中…</span></li>';
 
         let html = null;
         for (const makeProxy of TRAIN_PROXIES) {
@@ -3890,36 +3886,55 @@
           return;
         }
 
-        // Yahoo路線情報ページをパースして遅延路線を抽出
-        // 「主要鉄道」セクション以降を除外し、遅延情報セクションのみを対象にする
-        const TARGET_TERMS = ['つくばエクスプレス', 'TX', '武蔵野線', '常磐線'];
-        const delayedNames = new Set();
-
-        // 「主要鉄道」「利用者が多い」のいずれかで HTML を切り捨てて遅延セクションのみ残す
-        const cutMarkers = ['主要鉄道', '利用者が多い路線', 'elmMajorLine', 'major'];
-        let disruptionHtml = html;
-        for (const marker of cutMarkers) {
+        // 「主要鉄道」セクション以降を切り捨てて遅延情報セクションのみ残す
+        for (const marker of ['主要鉄道', '利用者が多い路線', 'elmMajorLine']) {
           const idx = html.indexOf(marker);
-          if (idx > 500) { disruptionHtml = html.slice(0, idx); break; }
+          if (idx > 500) { html = html.slice(0, idx); break; }
         }
 
-        const doc2 = new DOMParser().parseFromString(disruptionHtml, 'text/html');
+        const doc2 = new DOMParser().parseFromString(html, 'text/html');
+        const DISRUPTION_RE = /遅延|見合わせ|運休|乱れ|障害/;
+        const disruptions = [];
 
-        // 遅延セクション内に対象路線名が含まれるか確認
-        const sectionText = doc2.body ? doc2.body.textContent : disruptionHtml;
-        TARGET_TERMS.forEach(term => { if (sectionText.includes(term)) delayedNames.add(term); });
+        // テーブル行（路線名セル＋状況セル）を抽出
+        doc2.querySelectorAll('tr').forEach(row => {
+          const cells = [...row.querySelectorAll('td')];
+          if (cells.length < 2) return;
+          const name   = cells[0].textContent.trim();
+          const status = cells[1].textContent.trim();
+          if (name && DISRUPTION_RE.test(status) && name.length < 25 && !/路線|状況|詳細/.test(name)) {
+            disruptions.push({ name, status: status.replace(/\s+/g, '') });
+          }
+        });
 
-        list.innerHTML = TRAIN_LINES.map(line => {
-          const isDelayed = [...delayedNames].some(n => n.includes(line.key) || (line.aliases || []).some(a => n.includes(a)));
-          return `<li class="dashboard-mini-item" style="display:flex;align-items:center;gap:8px;">
-            <span>${isDelayed ? '🔴' : '🟢'}</span>
-            <span style="flex:1">${line.label}</span>
-            <strong style="font-size:0.78rem;color:${isDelayed ? '#ef4444' : '#22c55e'}">${isDelayed ? '遅延あり' : '平常運行'}</strong>
-          </li>`;
-        }).join('') + `<li class="dashboard-mini-item" style="margin-top:2px;">
+        // フォールバック: <a>タグの親要素が遅延ワードを含む場合
+        if (!disruptions.length) {
+          doc2.querySelectorAll('a').forEach(a => {
+            const parent = a.closest('tr, li');
+            if (!parent || !DISRUPTION_RE.test(parent.textContent)) return;
+            const name = a.textContent.trim();
+            if (name.length >= 2 && name.length < 25) {
+              const m = parent.textContent.match(/遅延|見合わせ|運休|乱れ/);
+              disruptions.push({ name, status: m ? m[0] : '遅延' });
+            }
+          });
+        }
+
+        if (!disruptions.length) {
+          list.innerHTML = '<li class="dashboard-mini-item"><span style="color:#22c55e;font-weight:600">🟢 現在、遅延情報はありません</span></li>';
+        } else {
+          list.innerHTML = disruptions.map(d =>
+            `<li class="dashboard-mini-item" style="display:flex;align-items:center;gap:8px;">
+              <span>⚠️</span>
+              <span style="flex:1;font-size:0.85rem">${escHtml(d.name)}</span>
+              <strong style="font-size:0.75rem;color:#f97316;white-space:nowrap">${escHtml(d.status)}</strong>
+            </li>`
+          ).join('');
+        }
+        list.innerHTML += `<li class="dashboard-mini-item" style="margin-top:4px;">
           <a href="${TRAIN_TARGET}" target="_blank" rel="noreferrer" style="font-size:0.72rem;color:var(--blue,#0ea5e9)">Yahoo路線情報で詳細確認 →</a>
         </li>`;
-        if (timeEl) timeEl.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+        if (timeEl) timeEl.textContent = '関東 更新: ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
       }
       setInterval(initTrainCard, 5 * 60 * 1000);
 
