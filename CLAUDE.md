@@ -1,70 +1,82 @@
-# CLAUDE.md — hide_0001 Portfolio
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## プロジェクト概要
-hideの個人ポートフォリオサイト。GitHub Pages でホスティング。ダークサイバーパンク系のビジュアルデザイン。
 
-## ファイル構成
-- `index.html` — メインポートフォリオページ（シングルページ）
-- `game.html` — ZELDA QUEST（Canvas APIのみで作ったトップビューRPG）
-- `shogi.html` — 将棋パズル
-- `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
+hideの個人ポートフォリオサイト。GitHub Pages でホスティング（静的フロントエンド）。ダークサイバーパンク系のビジュアルデザイン。
+
+管理機能（ブログ・ダッシュボード）はローカル専用の Node.js バックエンド（`backend/`）で動作し、GitHub Pages には含まれない。
+
+## コンポーネント別の起動方法
+
+### 静的フロントエンド
+ビルド不要。HTML ファイルをブラウザで直接開く。
+```
+index.html, game.html, shogi.html, shogi_rpg.html, gradius/gradius.html 等
+```
+
+### バックエンド（管理機能）
+```bash
+cd backend
+npm install
+npm run dev   # node --watch server.js、ポート 3001
+```
+初回起動時に `admin.db.json` が自動生成され、`admin` / `password` で初期ログイン可能。
+
+### SakuraLikeEditor（WPF テキストエディター）
+```bash
+dotnet run --project SakuraLikeEditor/SakuraLikeEditor.csproj
+# リリースビルド
+./SakuraLikeEditor/publish.ps1
+```
+.NET 8 + WPF（Windows のみ）。
+
+## アーキテクチャ概要
+
+### フロントエンド構成
+- **GitHub Pages 静的サイト**: 素の HTML / CSS / JavaScript のみ。フレームワーク・ビルドツール不使用。
+- **ゲーム系ページ**（`game.html`, `shogi.html`, `gradius/`）: Canvas API で完結。外部ライブラリ不使用。
+- **将棋 RPG**（`shogi_rpg.html`, `shogi_rpg_local.html`）: React + Babel を CDN 経由で読み込む単一 HTML ファイル構成。3000 行超の大型ファイル。`shogi_rpg_enhanced.jsx` はビルド環境なし（参照用・ローカル確認用）。
+- **学習ページ**（`learn*.html`）: 各言語（COBOL / SQL / REGEX 等）のインタラクティブ練習。独立ファイル。
+- **管理画面**（`admin.html`, `admin-login.html`, `dashboard.html`）: バックエンド API（`http://localhost:3001`）と連携。JWT 認証。
+
+### バックエンド構成（`backend/`）
+- `server.js` — Express サーバー。REST API のみ提供。
+- `database.js` — sql.js ベースだが、実際の永続化は `admin.db.json`（JSON ファイル）に書き出し。
+- 主要 API エンドポイント: 認証 (`/api/auth/*`)、ブログ CRUD (`/api/blogs`)、画像アップロード (`/api/upload`)、ダッシュボード設定 (`/api/settings/*`)、ネットワーク ARP スキャン (`/api/network/arp`)。
+- 全 API は JWT 認証必須（`/api/health`, `GET /api/settings/dashboard` を除く）。
+
+### SakuraLikeEditor（`SakuraLikeEditor/`）
+- WPF MVVM ライク構成。`MainWindow.xaml.cs` + `MainWindowCommands.cs` でコマンド定義。
+- `Models/` — ドキュメント・設定のデータクラス。
+- `Services/` — ファイル読み書き (`TextFileService`)、バックアップ (`BackupService`)、Grep 検索 (`GrepService`)、CSV (`CsvService`)、設定永続化 (`SettingsService`)。
+- `Views/` — サブウィンドウ（検索置換、行移動、CSV、Grep）。
+
+### エージェントパイプライン（`.claude/agents/`）
+新機能開発は以下の 4 エージェントを順に使う:
+```
+Planner → Designer → Generator → Evaluator
+```
+- **Planner**: 要件定義・基本設計・詳細設計書を作成し、深澤の承認後に Generator へ引き渡す。
+- **Designer**: グラフィック素材の制作・取得（フリー素材利用）。
+- **Generator**: 仕様書通りに実装。不合格時は修正して再提出。同じ理由で 2 回不合格になったら深澤に報告。
+- **Evaluator**: 100 点満点で採点。合格基準は 80 点以上かつ仕様適合性 16 点以上。XSS 発見時は即不合格。合格時は `kai_001` ブランチへコミット＆プッシュ。
 
 ## デザイン・スタイルのルール
 - カラースキーム: 黒背景 + ネオンシアン / マゼンタ / パープル
 - スタイル: Glassmorphism カード、アニメーションパーティクル背景（Canvas API）
-- UIは日英バイリンガル表記
-- 既存のビジュアルスタイルを壊さないこと
-
-## コーディング方針
-- フレームワーク不使用。素のHTML / CSS / JavaScript（Canvas API）を優先
-- ライブラリを追加する場合はCDN経由、ビルドツール不使用
-- ゲーム系はCanvas APIのみで完結させる方針
+- UI は日英バイリンガル表記
+- ライブラリを追加する場合は CDN 経由のみ。ビルドツール不使用
 
 ## Git
 - メインブランチ: `main`
 - 作業ブランチ: `kai_001`
-- コミット前に `.edge-test-profile/` が含まれていないか確認すること（.gitignore 推奨）
-- コミットメッセージは日本語でもOK
-
-## エージェントハーネス設計
-
-成果物作成は以下の4エージェントのパイプラインで行う（`.claude/agents/` に定義）。
-
-### Plannerエージェント (`planner`)
-- 深澤から要件をヒアリングする
-- 要件定義書 → 基本設計書 → 詳細設計書の順で仕様書を作成
-- 必要に応じて市場調査・改善提案を行う
-- 深澤の承認後、Designer/Generatorへ仕様書を引き渡す
-
-### Designerエージェント (`designer`)
-- 主にグラフィックを担当する
-- Plannerの要件をもとに、外部ツール連携またはフリー素材の取得/加工で画像を制作する
-- 生成した画像をリポジトリへ追加し、Generatorが実装できる形で引き渡す
-
-### Generatorエージェント (`generator`)
-- Plannerの仕様書をもとにプログラム・ドキュメント等を実装する
-- 実装完了後はEvaluatorへ成果物を提出する
-- Evaluatorから不合格を受けた場合は修正して再提出する
-- 2回以上同じ理由で不合格になった場合は深澤へ報告・判断を仰ぐ
-
-### Evaluatorエージェント (`evaluator`)
-- Generatorの成果物を仕様書と照らし合わせ100点満点で採点する
-- 合格基準: 80点以上 かつ 仕様適合性16点以上（XSS等は即不合格）
-- 不合格時: 具体的なフィードバックをGeneratorへ返す
-- 合格時: 深澤へ結果報告 → `kai_001` ブランチへコミット＆プッシュ
-
-### フロー概要
-```
-深澤 → [Planner] 要件定義・設計書作成
-     → [Designer] グラフィック制作
-     → [Generator] 実装
-     → [Evaluator] 検証・採点
-          ↓ 不合格
-       [Generator] 修正・再提出 → [Evaluator] 再検証
-          ↓ 合格
-       深澤へ報告 → GitHub push (kai_001)
-```
+- コミット前に `.edge-test-profile/` が含まれていないか確認すること（.gitignore に未記載のため注意）
+- コミットメッセージは日本語でも可
 
 ## 注意事項
-- `.edge-test-profile/` はMicrosoft Edgeのブラウザデータ。gitignoreすること
-- `shogi_rpg_enhanced.jsx` はJSX形式だがビルド環境なし。取り扱い注意
+- `.edge-test-profile/` は Microsoft Edge のブラウザデータ。絶対にコミットしないこと。
+- `shogi_rpg_enhanced.jsx` / `shogi_rpg_enhanced .jsx`（スペース入りファイルも存在）は JSX 形式だがビルド環境なし。直接ブラウザでは動かない。
+- `backend/admin.db.json` と `backend/*.db` は .gitignore 対象。コミット不要。
+- `assets/art/` 以下の画像素材は `manifest.json` で管理。
