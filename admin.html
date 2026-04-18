@@ -237,6 +237,7 @@
   <button class="tab-btn" onclick="switchTab('smarthome',this)">🏠 スマートホーム</button>
   <button class="tab-btn" onclick="switchTab('announcement',this)">📢 お知らせバナー</button>
   <button class="tab-btn" onclick="switchTab('memo',this)">📓 プライベートメモ</button>
+  <button class="tab-btn" onclick="switchTab('iot',this)">🌐 IoT機器管理</button>
   <button class="tab-btn" onclick="switchTab('logs',this)">📋 ログイン履歴</button>
 </nav>
 
@@ -412,6 +413,58 @@
   </div>
 </div>
 
+<!-- ─── Tab: IoT機器管理 ─── -->
+<div class="tab-panel" id="tab-iot">
+  <div class="panel-wrap" style="max-width:900px;">
+    <div class="panel-title">🌐 IoT機器管理</div>
+    <div class="panel-card">
+      <h3>ネットワーク機器一覧</h3>
+      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;">
+        バックエンド起動中は「ARPスキャン」でネットワーク上の機器を自動取得できます。機器名は手動で設定・保存できます。
+      </p>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+        <button class="btn-primary btn-sm" onclick="scanArp()">🔍 ARPスキャン（自動取得）</button>
+        <button class="btn-ghost btn-sm" onclick="showIotAddForm()">＋ 手動追加</button>
+        <span id="iotScanMsg" style="font-size:0.78rem;color:var(--muted);"></span>
+      </div>
+
+      <!-- 手動追加フォーム -->
+      <div id="iotAddForm" style="display:none;background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;max-width:560px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div class="form-row"><label>IPアドレス</label><input type="text" id="addIp" placeholder="192.168.1.xx" /></div>
+          <div class="form-row"><label>MACアドレス</label><input type="text" id="addMac" placeholder="AA:BB:CC:DD:EE:FF" /></div>
+          <div class="form-row"><label>機器名</label><input type="text" id="addName" placeholder="例: COCORO AIR エアコン" /></div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-primary btn-sm" onclick="addIotDevice()">追加</button>
+          <button class="btn-ghost btn-sm" onclick="document.getElementById('iotAddForm').style.display='none'">キャンセル</button>
+        </div>
+      </div>
+
+      <!-- 機器テーブル -->
+      <div id="iotEmpty" style="display:none;color:var(--muted);font-size:0.85rem;padding:12px 0;">機器が登録されていません</div>
+      <div style="overflow-x:auto;">
+        <table class="log-table" id="iotTable" style="display:none">
+          <thead>
+            <tr>
+              <th>IPアドレス</th>
+              <th>MACアドレス（物理アドレス）</th>
+              <th>機器名</th>
+              <th>種別</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="iotTableBody"></tbody>
+        </table>
+      </div>
+      <div class="form-footer" style="margin-top:16px;">
+        <button class="btn-primary btn-sm" onclick="saveIotDevices()">一覧を保存</button>
+        <span class="form-msg ok" id="iotSaveMsg"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ─── Tab: ログイン履歴 ─── -->
 <div class="tab-panel" id="tab-logs">
   <div class="panel-wrap">
@@ -454,18 +507,6 @@ async function sha256(str) {
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
-// ─── タブ切り替え ─────────────────────────────────────────
-function switchTab(name, btn) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById(`tab-${name}`).classList.add('active');
-  if (name === 'dashboard') loadDashboardSettings();
-  if (name === 'smarthome') loadSmarthome();
-  if (name === 'announcement') loadAnnouncement();
-  if (name === 'memo') loadPrivateMemo();
-  if (name === 'logs') loadLoginHistory();
-}
 
 // ─── トースト ─────────────────────────────────────────────
 let toastTimer;
@@ -785,6 +826,93 @@ function savePrivateMemo() {
   localStorage.setItem('admin_private_memo',document.getElementById('privateMemo').value);
   const msg=document.getElementById('memoMsg');
   msg.textContent='✅ 保存しました'; setTimeout(()=>msg.textContent='',3000);
+}
+
+// ─── IoT機器管理 ──────────────────────────────────────────
+let iotDevices = JSON.parse(localStorage.getItem('admin_iot_devices') || '[]');
+
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById(`tab-${name}`).classList.add('active');
+  if (name === 'dashboard') loadDashboardSettings();
+  if (name === 'smarthome') loadSmarthome();
+  if (name === 'announcement') loadAnnouncement();
+  if (name === 'memo') loadPrivateMemo();
+  if (name === 'iot') renderIotTable();
+  if (name === 'logs') loadLoginHistory();
+}
+
+async function scanArp() {
+  const msg = document.getElementById('iotScanMsg');
+  msg.textContent = 'スキャン中…';
+  try {
+    const res = await fetch('http://localhost:3001/api/network/arp', {
+      headers: { Authorization: `Bearer ${sessionStorage.getItem('admin_arp_token') || ''}` }
+    });
+    if (!res.ok) throw new Error('バックエンドに接続できません。npm start で起動してください。');
+    const scanned = await res.json();
+    let added = 0;
+    scanned.forEach(d => {
+      const exists = iotDevices.find(x => x.mac === d.mac);
+      if (!exists) { iotDevices.push({ ip: d.ip, mac: d.mac, name: '', type: d.type }); added++; }
+      else { exists.ip = d.ip; } // IPが変わっていれば更新
+    });
+    renderIotTable();
+    msg.textContent = `✅ ${scanned.length}台検出（${added}台新規追加）`;
+    setTimeout(() => msg.textContent = '', 4000);
+  } catch (e) {
+    msg.style.color = 'var(--danger)';
+    msg.textContent = '⚠️ ' + e.message;
+    setTimeout(() => { msg.textContent = ''; msg.style.color = 'var(--muted)'; }, 5000);
+  }
+}
+
+function showIotAddForm() {
+  document.getElementById('iotAddForm').style.display = '';
+  document.getElementById('addIp').value = '';
+  document.getElementById('addMac').value = '';
+  document.getElementById('addName').value = '';
+  document.getElementById('addIp').focus();
+}
+
+function addIotDevice() {
+  const ip = document.getElementById('addIp').value.trim();
+  const mac = document.getElementById('addMac').value.trim().toUpperCase();
+  const name = document.getElementById('addName').value.trim();
+  if (!ip && !mac) { showToast('IPアドレスまたはMACアドレスを入力してください', 'err'); return; }
+  iotDevices.push({ ip, mac, name, type: '手動' });
+  document.getElementById('iotAddForm').style.display = 'none';
+  renderIotTable();
+}
+
+function renderIotTable() {
+  const empty = document.getElementById('iotEmpty');
+  const table = document.getElementById('iotTable');
+  const tbody = document.getElementById('iotTableBody');
+  if (!iotDevices.length) { empty.style.display = ''; table.style.display = 'none'; return; }
+  empty.style.display = 'none'; table.style.display = '';
+  tbody.innerHTML = iotDevices.map((d, i) => `
+    <tr>
+      <td style="font-family:monospace;font-size:0.82rem;">${escHtml(d.ip || '—')}</td>
+      <td style="font-family:monospace;font-size:0.8rem;color:var(--muted);">${escHtml(d.mac || '—')}</td>
+      <td><input type="text" value="${escHtml(d.name)}" placeholder="機器名を入力…" onchange="iotDevices[${i}].name=this.value"
+          style="border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:0.82rem;width:100%;max-width:200px;outline:none;background:#f8fafc;" /></td>
+      <td><span style="font-size:0.72rem;background:#f1f5f9;padding:2px 8px;border-radius:4px;color:var(--muted);">${escHtml(d.type || '—')}</span></td>
+      <td><button class="btn-danger btn-sm" onclick="removeIotDevice(${i})">削除</button></td>
+    </tr>`).join('');
+}
+
+function removeIotDevice(i) {
+  iotDevices.splice(i, 1);
+  renderIotTable();
+}
+
+function saveIotDevices() {
+  localStorage.setItem('admin_iot_devices', JSON.stringify(iotDevices));
+  const msg = document.getElementById('iotSaveMsg');
+  msg.textContent = '✅ 保存しました'; setTimeout(() => msg.textContent = '', 3000);
 }
 
 // ─── ログイン履歴 ─────────────────────────────────────────

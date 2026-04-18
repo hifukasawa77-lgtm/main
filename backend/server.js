@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
 
 const db = require('./database');
 
@@ -177,6 +178,20 @@ app.put('/api/settings/smarthome', authMiddleware, (req, res) => {
 
 // ─── ヘルスチェック ───────────────────────────────────────
 
+// ─── ネットワーク ARP スキャン ────────────────────────────
+app.get('/api/network/arp', authMiddleware, (req, res) => {
+  exec('arp -a', { encoding: 'utf8' }, (err, stdout) => {
+    if (err) return res.status(500).json({ error: 'スキャン失敗: ' + err.message });
+    const devices = [];
+    stdout.split('\n').forEach(line => {
+      const m = line.match(/(\d+\.\d+\.\d+\.\d+)\s+([0-9a-f]{2}[-:][0-9a-f]{2}[-:][0-9a-f]{2}[-:][0-9a-f]{2}[-:][0-9a-f]{2}[-:][0-9a-f]{2})\s+(\S+)/i);
+      if (m) devices.push({ ip: m[1], mac: m[2].toUpperCase().replace(/-/g,':'), type: m[3] });
+    });
+    res.json(devices);
+  });
+});
+
+// ─── ヘルスチェック ───────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 app.listen(PORT, () => {
