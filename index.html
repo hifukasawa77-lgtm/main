@@ -3854,31 +3854,69 @@
 
       // ─── 電車遅延情報 ─────────────────────────────────────────
       const TRAIN_LINES = [
-        { key: 'つくばエクスプレス', label: 'TX（つくばエクスプレス）' },
-        { key: '武蔵野線', label: 'JR 武蔵野線' },
-        { key: '常磐線', label: 'JR 常磐線' },
+        { key: 'つくばエクスプレス', aliases: ['TX'], label: 'TX（つくばエクスプレス）' },
+        { key: '武蔵野線', aliases: ['武蔵野'], label: 'JR 武蔵野線' },
+        { key: '常磐線', aliases: ['常磐'], label: 'JR 常磐線' },
+      ];
+      const TRAIN_TARGET = 'https://transit.yahoo.co.jp/traininfo/area/4/';
+      const TRAIN_PROXIES = [
+        u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+        u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
       ];
       async function initTrainCard() {
         const list = document.getElementById('home-train-list');
         const timeEl = document.getElementById('home-train-time');
         if (!list) return;
-        try {
-          const res = await fetchWithTimeout('https://rti-giken.jp/fhc/api/train_tetsudo/list.json', 8000);
-          if (!res.ok) throw new Error();
-          const delayed = await res.json();
-          const delayedNames = delayed.map(d => d.name || '');
-          list.innerHTML = TRAIN_LINES.map(line => {
-            const isDelayed = delayedNames.some(n => n.includes(line.key) || line.key.includes(n));
-            return `<li class="dashboard-mini-item" style="display:flex;align-items:center;gap:8px;">
-              <span>${isDelayed ? '🔴' : '🟢'}</span>
-              <span style="flex:1">${line.label}</span>
-              <strong style="font-size:0.78rem;color:${isDelayed ? '#ef4444' : '#22c55e'}">${isDelayed ? '遅延あり' : '平常運行'}</strong>
-            </li>`;
-          }).join('');
-          if (timeEl) timeEl.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
-        } catch {
-          list.innerHTML = '<li class="dashboard-mini-item"><span style="color:var(--muted)">取得失敗 — 更新ボタンで再試行</span></li>';
+
+        let html = null;
+        for (const makeProxy of TRAIN_PROXIES) {
+          try {
+            const res = await fetchWithTimeout(makeProxy(TRAIN_TARGET), 9000);
+            if (!res.ok) continue;
+            const ct = res.headers.get('content-type') || '';
+            const body = ct.includes('json') ? (await res.json()) : { contents: await res.text() };
+            const candidate = body.contents || body;
+            if (typeof candidate === 'string' && candidate.length > 200) { html = candidate; break; }
+          } catch { continue; }
         }
+
+        if (!html) {
+          list.innerHTML = `<li class="dashboard-mini-item" style="flex-direction:column;gap:6px;">
+            <span style="color:var(--muted);font-size:0.8rem;">自動取得できませんでした</span>
+            <a href="${TRAIN_TARGET}" target="_blank" rel="noreferrer" style="font-size:0.78rem;color:var(--blue,#0ea5e9)">Yahoo路線情報で確認する →</a>
+          </li>`;
+          if (timeEl) timeEl.textContent = '';
+          return;
+        }
+
+        // Yahoo路線情報ページをパースして遅延路線を抽出
+        const doc2 = new DOMParser().parseFromString(html, 'text/html');
+        const delayedNames = new Set();
+        ['[class*="trouble"] a','[class*="TroubleHead"]','.trainInfoItem a','dt a'].forEach(sel => {
+          doc2.querySelectorAll(sel).forEach(el => delayedNames.add(el.textContent.trim()));
+        });
+        // テキストベースのフォールバック
+        const bodyText = doc2.body ? doc2.body.textContent : html;
+        ['つくばエクスプレス','TX','武蔵野線','常磐線'].forEach(term => {
+          const idx = bodyText.indexOf(term);
+          if (idx >= 0) {
+            const ctx = bodyText.slice(Math.max(0, idx - 60), idx + 60);
+            if (/遅延|見合わせ|運休|乱れ|障害/.test(ctx)) delayedNames.add(term);
+          }
+        });
+
+        list.innerHTML = TRAIN_LINES.map(line => {
+          const isDelayed = [...delayedNames].some(n => n.includes(line.key) || (line.aliases || []).some(a => n.includes(a)));
+          return `<li class="dashboard-mini-item" style="display:flex;align-items:center;gap:8px;">
+            <span>${isDelayed ? '🔴' : '🟢'}</span>
+            <span style="flex:1">${line.label}</span>
+            <strong style="font-size:0.78rem;color:${isDelayed ? '#ef4444' : '#22c55e'}">${isDelayed ? '遅延あり' : '平常運行'}</strong>
+          </li>`;
+        }).join('') + `<li class="dashboard-mini-item" style="margin-top:2px;">
+          <a href="${TRAIN_TARGET}" target="_blank" rel="noreferrer" style="font-size:0.72rem;color:var(--blue,#0ea5e9)">Yahoo路線情報で詳細確認 →</a>
+        </li>`;
+        if (timeEl) timeEl.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
       }
       setInterval(initTrainCard, 5 * 60 * 1000);
 
