@@ -3891,25 +3891,23 @@
         }
 
         // Yahoo路線情報ページをパースして遅延路線を抽出
-        const doc2 = new DOMParser().parseFromString(html, 'text/html');
-        const delayedNames = new Set();
-        const DISRUPTION_RE = /遅延|見合わせ|運休|乱れ|障害/;
+        // 「主要鉄道」セクション以降を除外し、遅延情報セクションのみを対象にする
         const TARGET_TERMS = ['つくばエクスプレス', 'TX', '武蔵野線', '常磐線'];
+        const delayedNames = new Set();
 
-        // 方法1: CSSセレクタで遅延リンクを直接取得
-        ['[class*="trouble"] a','[class*="Trouble"] a','.trouble_link a','.trainInfoItem a'].forEach(sel => {
-          doc2.querySelectorAll(sel).forEach(el => {
-            const t = el.textContent.trim();
-            TARGET_TERMS.forEach(term => { if (t.includes(term)) delayedNames.add(term); });
-          });
-        });
+        // 「主要鉄道」「利用者が多い」のいずれかで HTML を切り捨てて遅延セクションのみ残す
+        const cutMarkers = ['主要鉄道', '利用者が多い路線', 'elmMajorLine', 'major'];
+        let disruptionHtml = html;
+        for (const marker of cutMarkers) {
+          const idx = html.indexOf(marker);
+          if (idx > 500) { disruptionHtml = html.slice(0, idx); break; }
+        }
 
-        // 方法2: テーブル行単位で「行の中に路線名と遅延ワードが両方ある」場合のみ判定
-        // （"主要鉄道"セクションの路線名と誤マッチしないよう行単位に限定）
-        doc2.querySelectorAll('tr, li').forEach(row => {
-          if (!DISRUPTION_RE.test(row.textContent)) return;
-          TARGET_TERMS.forEach(term => { if (row.textContent.includes(term)) delayedNames.add(term); });
-        });
+        const doc2 = new DOMParser().parseFromString(disruptionHtml, 'text/html');
+
+        // 遅延セクション内に対象路線名が含まれるか確認
+        const sectionText = doc2.body ? doc2.body.textContent : disruptionHtml;
+        TARGET_TERMS.forEach(term => { if (sectionText.includes(term)) delayedNames.add(term); });
 
         list.innerHTML = TRAIN_LINES.map(line => {
           const isDelayed = [...delayedNames].some(n => n.includes(line.key) || (line.aliases || []).some(a => n.includes(a)));
