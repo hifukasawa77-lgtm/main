@@ -178,6 +178,40 @@
       .col-nums span{width:41px;}
       .row-nums span{height:41px;}
     }
+
+    /* ─── 武将駒モード ─────────────────────── */
+    .piece.warlord{font-size:0.62rem;line-height:1.15;text-align:center;letter-spacing:0;}
+    .cap-piece.warlord{font-size:0.62rem;line-height:1;}
+    @media(max-width:680px){
+      .piece.warlord{font-size:0.42rem;}
+      .cap-piece.warlord{font-size:0.5rem;}
+    }
+
+    /* ─── 棋譜パネル ───────────────────────── */
+    #kifu-panel{
+      margin-top:16px;width:100%;max-width:620px;
+      background:rgba(0,0,0,0.3);border:1px solid #7a5030;
+      border-radius:8px;padding:10px 14px;
+    }
+    .kifu-title{
+      display:flex;justify-content:space-between;align-items:center;
+      margin-bottom:8px;color:#d4a040;font-size:0.88rem;font-weight:bold;
+      border-bottom:1px solid #7a5030;padding-bottom:6px;
+    }
+    .kifu-title-actions{display:flex;gap:6px;}
+    #kifu-list{
+      max-height:150px;overflow-y:auto;
+      display:flex;flex-wrap:wrap;gap:3px;align-content:flex-start;
+    }
+    .kifu-entry{
+      font-size:0.74rem;padding:2px 5px;border-radius:3px;
+      background:rgba(255,255,255,0.04);white-space:nowrap;
+      font-family:'Hiragino Mincho ProN','Yu Mincho','MS Mincho',serif;
+    }
+    .kifu-entry.k1{color:#f0d090;}
+    .kifu-entry.k2{color:#90c8f0;}
+    .kifu-entry.klast{outline:1px solid rgba(212,160,64,0.5);}
+    #kifu-empty{font-size:0.78rem;color:#7a5030;padding:4px;}
   </style>
 </head>
 <body>
@@ -197,6 +231,7 @@
   <div id="turn-display">先手の番</div>
   <button onclick="newGame()">新規対局</button>
   <button onclick="undoMove()">待った</button>
+  <button id="btn-warlords" onclick="toggleWarlords()" title="天童武将駒モード">⚔️ 武将駒</button>
 </div>
 <div id="game-area">
   <div id="cap2" class="captured-area">
@@ -214,6 +249,15 @@
   </div>
 </div>
 <div id="message"></div>
+<div id="kifu-panel">
+  <div class="kifu-title">
+    <span>棋譜記録</span>
+    <div class="kifu-title-actions">
+      <button onclick="copyKifu()" id="copy-kifu-btn" style="padding:4px 10px;font-size:0.78rem;">コピー</button>
+    </div>
+  </div>
+  <div id="kifu-list"><span id="kifu-empty">まだ指し手がありません</span></div>
+</div>
 <div id="promo-dlg">
   <h3>成りますか？</h3>
   <div class="btn-row">
@@ -228,6 +272,15 @@ const NAMES = {
   FU:'歩',KYO:'香',KEI:'桂',GIN:'銀',KIN:'金',KAKU:'角',HI:'飛',OU:'王',
   TO:'と',NKYO:'杏',NKEI:'圭',NGIN:'全',RYUMA:'馬',RYUO:'竜'
 };
+
+// ===== 武将駒マッピング（天童将棋風） =====
+const WARLORD_NAMES = {
+  FU:'足軽', KYO:'清正', KEI:'義弘', GIN:'政宗', KIN:'幸村',
+  KAKU:'謙信', HI:'信玄',
+  TO:'足侍', NKYO:'清将', NKEI:'義将', NGIN:'政将',
+  RYUMA:'鬼謙', RYUO:'龍玄'
+};
+const WARLORD_OU = {1:'信長', 2:'家康'};
 const PROM_SET = new Set(['TO','NKYO','NKEI','NGIN','RYUMA','RYUO']);
 const CAN_PROM = {FU:1,KYO:1,KEI:1,GIN:1,KAKU:1,HI:1};
 const TO_PROM = {FU:'TO',KYO:'NKYO',KEI:'NKEI',GIN:'NGIN',KAKU:'RYUMA',HI:'RYUO'};
@@ -257,6 +310,7 @@ const AI_PROFILES = {
 // ===== 状態 =====
 let board=[], cap={1:[],2:[]}, curP=1, sel=null, vMoves=[], pendProm=null;
 let history=[], gameOver=false, aiStyle='none', aiThink=false, chkCell=null;
+let warlordsMode=false, kifu=[];
 // vsMode は aiStyle !== 'none' と同義
 Object.defineProperty(window,'vsMode',{get:()=>aiStyle!=='none'});
 
@@ -378,7 +432,7 @@ function newGame(){
   board=initBoard(); cap={1:[],2:[]}; curP=1;
   sel=null; vMoves=[]; pendProm=null;
   history=[]; gameOver=false; aiThink=false; chkCell=null;
-  // アニメーション用スナップショットをリセット
+  kifu=[];
   prevBoardSnapshot=null;
   prevCapCount={1:{},2:{}};
   document.getElementById('message').textContent='';
@@ -421,6 +475,7 @@ function undoMove(){
   for(let i=0;i<n&&history.length>0;i++){
     const h=history.pop();
     board=h.b; cap=h.c; curP=h.p;
+    if(kifu.length>0)kifu.pop();
   }
   sel=null; vMoves=[]; gameOver=false;
   updCheckCell(); render();
@@ -443,6 +498,7 @@ function execMove(fr,fc,tr,tc,auto=false){
   if(canP&&inZ){
     if(must||auto){
       board[tr][tc]={t:TO_PROM[pc.t],p:curP}; board[fr][fc]=null;
+      addKifu(curP,pc.t,tr,tc,true,false);
       finishMove();
     } else {
       board[tr][tc]=pc; board[fr][fc]=null;
@@ -452,6 +508,7 @@ function execMove(fr,fc,tr,tc,auto=false){
     }
   } else {
     board[tr][tc]=pc; board[fr][fc]=null;
+    addKifu(curP,pc.t,tr,tc,false,false);
     finishMove();
   }
 }
@@ -461,6 +518,7 @@ function confirmProm(doIt){
   if(!pendProm)return;
   const {tr,tc,pc}=pendProm;
   if(doIt)board[tr][tc]={t:TO_PROM[pc.t],p:curP};
+  addKifu(curP,pc.t,tr,tc,doIt,false);
   pendProm=null;
   finishMove();
 }
@@ -469,6 +527,7 @@ function execDrop(t,p,r,c){
   history.push({b:clone(board),c:{1:[...cap[1]],2:[...cap[2]]},p:curP});
   board[r][c]={t,p};
   const i=cap[p].indexOf(t); cap[p].splice(i,1);
+  addKifu(p,t,r,c,false,true);
   finishMove();
 }
 
@@ -543,8 +602,8 @@ function renderBoard(){
       const pc=board[r][c];
       if(pc){
         const p=document.createElement('div');
-        p.className='piece'+(pc.p===2?' p2':'')+(PROM_SET.has(pc.t)?' prom':'');
-        p.textContent=NAMES[pc.t];
+        p.className='piece'+(pc.p===2?' p2':'')+(PROM_SET.has(pc.t)?' prom':'')+(warlordsMode?' warlord':'');
+        p.textContent=getPieceName(pc.t,pc.p);
         // 前回スナップショットと比較して位置が変わったコマにアニメーション付与
         if(prevBoardSnapshot){
           const prev=prevBoardSnapshot[r][c];
@@ -573,10 +632,10 @@ function renderCap(){
     for(const t of cap[p])counts[t]=(counts[t]||0)+1;
     for(const[t,cnt]of Object.entries(counts)){
       const div=document.createElement('div');
-      div.className='cap-piece'+(p===2?' p2-piece':'');
+      div.className='cap-piece'+(p===2?' p2-piece':'')+(warlordsMode?' warlord':'');
       const isSel=sel&&sel.kind==='drop'&&sel.t===t&&sel.p===p;
       if(isSel)div.classList.add('sel-drop');
-      div.textContent=NAMES[t];
+      div.textContent=getPieceName(t,p);
       // 前回より数が増えた（新たに獲得した）コマにアニメーション付与
       const prevCnt=(prevCapCount[p]&&prevCapCount[p][t])||0;
       if(cnt>prevCnt){
@@ -598,6 +657,63 @@ function renderCap(){
 function renderTurnDisplay(){
   if(gameOver)return;
   document.getElementById('turn-display').textContent=(curP===1?'先手':'後手')+'の番';
+}
+
+// ===== 武将駒 =====
+function getPieceName(t,p){
+  if(!warlordsMode)return NAMES[t];
+  if(t==='OU')return WARLORD_OU[p]||'信長';
+  return WARLORD_NAMES[t]||NAMES[t];
+}
+
+function toggleWarlords(){
+  warlordsMode=!warlordsMode;
+  const btn=document.getElementById('btn-warlords');
+  if(btn)btn.classList.toggle('active',warlordsMode);
+  render();
+}
+
+// ===== 棋譜 =====
+function addKifu(player,pieceType,tr,tc,promoted,isDrop){
+  const mark=player===1?'▲':'△';
+  const col=9-tc;
+  const row=ROW_LABELS[tr];
+  const name=NAMES[pieceType];
+  let text=`${kifu.length+1}.${mark}${col}${row}${name}`;
+  if(promoted)text+='成';
+  if(isDrop)text+='打';
+  kifu.push({text,player});
+  renderKifu();
+}
+
+function renderKifu(){
+  const el=document.getElementById('kifu-list');
+  if(!el)return;
+  el.innerHTML='';
+  if(kifu.length===0){
+    const e=document.createElement('span');
+    e.id='kifu-empty';e.textContent='まだ指し手がありません';
+    el.appendChild(e);return;
+  }
+  kifu.forEach((entry,i)=>{
+    const div=document.createElement('div');
+    div.className=`kifu-entry k${entry.player}${i===kifu.length-1?' klast':''}`;
+    div.textContent=entry.text;
+    el.appendChild(div);
+  });
+  el.scrollTop=el.scrollHeight;
+}
+
+function copyKifu(){
+  if(kifu.length===0)return;
+  const text=kifu.map(e=>e.text).join('\n');
+  navigator.clipboard.writeText(text).then(()=>{
+    const btn=document.getElementById('copy-kifu-btn');
+    if(btn){btn.textContent='コピー済';setTimeout(()=>btn.textContent='コピー',1500);}
+  }).catch(()=>{
+    const btn=document.getElementById('copy-kifu-btn');
+    if(btn){btn.textContent='失敗';setTimeout(()=>btn.textContent='コピー',1500);}
+  });
 }
 
 // ===== AI =====
