@@ -6,6 +6,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
+const dns = require('dns').promises;
 
 const db = require('./database');
 
@@ -180,7 +181,7 @@ app.put('/api/settings/smarthome', authMiddleware, (req, res) => {
 
 // ─── ネットワーク ARP スキャン ────────────────────────────
 app.get('/api/network/arp', (req, res) => {
-  exec('chcp 65001 > nul && arp -a', { encoding: 'utf8', shell: 'cmd.exe' }, (err, stdout) => {
+  exec('chcp 65001 > nul && arp -a', { encoding: 'utf8', shell: 'cmd.exe' }, async (err, stdout) => {
     if (err) return res.status(500).json({ error: 'スキャン失敗: ' + err.message });
     const devices = [];
     stdout.split('\n').forEach(line => {
@@ -188,9 +189,44 @@ app.get('/api/network/arp', (req, res) => {
       if (m) {
         const rawType = m[3];
         const type = rawType === '動的' ? '動的' : rawType === '静的' ? '静的' : rawType;
-        devices.push({ ip: m[1], mac: m[2].toUpperCase().replace(/-/g,':'), type });
+        devices.push({ ip: m[1], mac: m[2].toUpperCase().replace(/-/g,':'), type, name: '' });
       }
     });
+
+    // DNS逆引き + NetBIOSによる機器名自動取得
+    await Promise.all(devices.map(async d => {
+      // 1) DNSリバースルックアップ
+      try {
+        const hostnames = await dns.reverse(d.ip);
+        if (hostnames && hostnames.length > 0) {
+          d.name = hostnames[0].replace(/\.local$/, '').replace(/\.$/, '');
+          return;
+        }
+      } catch {}
+
+      // 2) NetBIOS名取得（Windowsデバイス向け）
+      try {
+        const nbName = await new Promise((resolve, reject) => {
+          exec(`nbtstat -A ${d.ip}`, { encoding: 'utf8', timeout: 3000, shell: 'cmd.exe' }, (e, out) => {
+            if (e) return reject(e);
+            const nm = out.match(/<00>\s+UNIQUE/m);
+            if (nm) {
+              // nbtstatの出力からホスト名行を取得
+              const lines = out.split('\n');
+              for (const line of lines) {
+                if (line.includes('<00>') && line.includes('UNIQUE')) {
+                  const name = line.trim().split(/\s+/)[0];
+                  if (name && name !== 'Name') return resolve(name);
+                }
+              }
+            }
+            reject(new Error('no name'));
+          });
+        });
+        if (nbName) d.name = nbName;
+      } catch {}
+    }));
+
     res.json(devices);
   });
 });
