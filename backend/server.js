@@ -193,39 +193,22 @@ app.get('/api/network/arp', (req, res) => {
       }
     });
 
-    // DNS逆引き + NetBIOSによる機器名自動取得
-    await Promise.all(devices.map(async d => {
-      // 1) DNSリバースルックアップ
-      try {
-        const hostnames = await dns.reverse(d.ip);
-        if (hostnames && hostnames.length > 0) {
-          d.name = hostnames[0].replace(/\.local$/, '').replace(/\.$/, '');
-          return;
-        }
-      } catch {}
-
-      // 2) NetBIOS名取得（Windowsデバイス向け）
-      try {
-        const nbName = await new Promise((resolve, reject) => {
-          exec(`nbtstat -A ${d.ip}`, { encoding: 'utf8', timeout: 3000, shell: 'cmd.exe' }, (e, out) => {
-            if (e) return reject(e);
-            const nm = out.match(/<00>\s+UNIQUE/m);
-            if (nm) {
-              // nbtstatの出力からホスト名行を取得
-              const lines = out.split('\n');
-              for (const line of lines) {
-                if (line.includes('<00>') && line.includes('UNIQUE')) {
-                  const name = line.trim().split(/\s+/)[0];
-                  if (name && name !== 'Name') return resolve(name);
-                }
-              }
-            }
-            reject(new Error('no name'));
-          });
-        });
-        if (nbName) d.name = nbName;
-      } catch {}
-    }));
+    // DNS逆引きによる機器名自動取得（並列・タイムアウト付き）
+    const CONCURRENCY = 5;
+    for (let i = 0; i < devices.length; i += CONCURRENCY) {
+      await Promise.all(devices.slice(i, i + CONCURRENCY).map(async d => {
+        // DNSリバースルックアップ（タイムアウト2秒）
+        try {
+          const hostnames = await Promise.race([
+            dns.reverse(d.ip),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000))
+          ]);
+          if (hostnames && hostnames.length > 0) {
+            d.name = hostnames[0].replace(/\.local$/, '').replace(/\.$/, '');
+          }
+        } catch {}
+      }));
+    }
 
     res.json(devices);
   });
