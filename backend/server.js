@@ -179,7 +179,7 @@ app.put('/api/settings/smarthome', authMiddleware, (req, res) => {
 // ─── ヘルスチェック ───────────────────────────────────────
 
 // ─── ネットワーク ARP スキャン ────────────────────────────
-app.get('/api/network/arp', authMiddleware, (req, res) => {
+app.get('/api/network/arp', (req, res) => {
   exec('arp -a', { encoding: 'utf8' }, (err, stdout) => {
     if (err) return res.status(500).json({ error: 'スキャン失敗: ' + err.message });
     const devices = [];
