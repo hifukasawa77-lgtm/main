@@ -180,12 +180,16 @@ app.put('/api/settings/smarthome', authMiddleware, (req, res) => {
 
 // ─── ネットワーク ARP スキャン ────────────────────────────
 app.get('/api/network/arp', (req, res) => {
-  exec('arp -a', { encoding: 'utf8' }, (err, stdout) => {
+  exec('chcp 65001 > nul && arp -a', { encoding: 'utf8', shell: 'cmd.exe' }, (err, stdout) => {
     if (err) return res.status(500).json({ error: 'スキャン失敗: ' + err.message });
     const devices = [];
     stdout.split('\n').forEach(line => {
       const m = line.match(/(\d+\.\d+\.\d+\.\d+)\s+([0-9a-f]{2}[-:][0-9a-f]{2}[-:][0-9a-f]{2}[-:][0-9a-f]{2}[-:][0-9a-f]{2}[-:][0-9a-f]{2})\s+(\S+)/i);
-      if (m) devices.push({ ip: m[1], mac: m[2].toUpperCase().replace(/-/g,':'), type: m[3] });
+      if (m) {
+        const rawType = m[3];
+        const type = rawType === '動的' ? '動的' : rawType === '静的' ? '静的' : rawType;
+        devices.push({ ip: m[1], mac: m[2].toUpperCase().replace(/-/g,':'), type });
+      }
     });
     res.json(devices);
   });
