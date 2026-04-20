@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ブログ記事 — hide</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --orange: #f97316; --bg: #fffbf5; --surface: #fff;
+    --text: #1c1917; --muted: #78716c; --line: #e7e5e4;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 50;
+    padding: 0 clamp(16px, 5vw, 48px); height: 60px;
+    display: flex; align-items: center; justify-content: space-between;
+    box-shadow: 0 1px 8px rgba(0,0,0,0.05);
+  }
+  .logo { font-size: 1.15rem; font-weight: 900; color: var(--orange); text-decoration: none; }
+  .nav-links { display: flex; gap: 12px; align-items: center; }
+  .nav-links a { font-size: 0.82rem; color: var(--muted); text-decoration: none; border: 1px solid var(--line); border-radius: 20px; padding: 5px 14px; transition: background 0.15s; }
+  .nav-links a:hover { background: var(--line); }
+
+  .post-wrap { max-width: 980px; margin: 0 auto; padding: 36px clamp(16px, 5vw, 40px) 72px; }
+
+  .post-header { margin-bottom: 32px; border-bottom: 1px solid var(--line); padding-bottom: 20px; }
+  .post-header .post-date { font-size: 0.72rem; color: var(--muted); margin-bottom: 8px; }
+  .post-header h1 { font-size: clamp(1.4rem, 4vw, 2rem); font-weight: 900; line-height: 1.4; color: var(--text); }
+
+  /* ─ キャンバスコンテナ ─ */
+  .post-canvas-wrap {
+    overflow-x: auto;
+    background: #e8edf3;
+    border-radius: 10px;
+    padding: 24px;
+    display: flex; justify-content: center;
+  }
+  #postCanvas {
+    position: relative;
+    flex-shrink: 0;
+    border-radius: 6px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+    min-height: 200px;
+  }
+
+  /* ─ 要素スタイル（編集ハンドルなし版） ─ */
+  .pe-image { position: absolute; overflow: hidden; }
+  .pe-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .pe-text   { position: absolute; word-break: break-word; white-space: pre-wrap; padding: 4px 6px; }
+  .pe-box    { position: absolute; }
+  .pe-code   { position: absolute; background: #1e293b; border-radius: 8px; padding: 14px 16px; }
+  .pe-code pre { font-family: 'Consolas','Fira Code',monospace; white-space: pre-wrap; word-break: break-all; line-height: 1.6; }
+  .pe-separator { position: absolute; }
+  .pe-separator hr { border: none; margin: 0; }
+  .pe-stamp { position: absolute; user-select: none; }
+  .pe-stamp svg { display: block; width: 100%; height: 100%; }
+
+  /* ─ ローディング ─ */
+  #loading { padding: 60px; text-align: center; color: var(--muted); font-size: 0.9rem; }
+  #notFound { display: none; padding: 60px; text-align: center; }
+  #notFound .icon { font-size: 3rem; margin-bottom: 12px; }
+  #notFound p { color: var(--muted); margin-bottom: 20px; }
+
+  footer { border-top: 1px solid var(--line); padding: 24px; text-align: center; font-size: 0.78rem; color: var(--muted); margin-top: 40px; }
+</style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="index.html">hide.</a>
+  <div class="nav-links">
+    <a href="blog.html">← ブログ一覧</a>
+    <a href="index.html">ポートフォリオ</a>
+  </div>
+</header>
+
+<div class="post-wrap">
+  <div id="loading">読み込み中…</div>
+  <div id="notFound">
+    <div class="icon">📭</div>
+    <p>記事が見つかりませんでした。</p>
+    <a href="blog.html" style="color:var(--orange);font-weight:700;">ブログ一覧へ戻る</a>
+  </div>
+  <div id="postContent" style="display:none">
+    <div class="post-header">
+      <div class="post-date" id="postDate"></div>
+      <h1 id="postTitle"></h1>
+    </div>
+    <div class="post-canvas-wrap">
+      <div id="postCanvas"></div>
+    </div>
+  </div>
+</div>
+
+<footer>© 2025 hide — All rights reserved.</footer>
+
+<script>
+const CLIP_SHAPES = {
+  none: 'none',
+  circle:   'circle(50% at 50% 50%)',
+  triangle: 'polygon(50% 0%, 0% 100%, 100% 100%)',
+  star:     'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)',
+  diamond:  'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
+  pentagon: 'polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)',
+  hexagon:  'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)',
+  parallelogram: 'polygon(20% 0%, 100% 0%, 80% 100%, 0% 100%)',
+};
+
+function getParam(name) {
+  return new URLSearchParams(location.search).get(name);
+}
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
+}
+
+function renderPost(blog) {
+  document.title = blog.title + ' — hide';
+  document.getElementById('postTitle').textContent = blog.title;
+  document.getElementById('postDate').textContent = formatDate(blog.updated_at || blog.created_at);
+
+  const canvas = document.getElementById('postCanvas');
+  canvas.style.background = blog.bg_color || '#ffffff';
+
+  const elements = blog.content || [];
+
+  // キャンバス幅を設定
+  const canvasWidth = blog.canvas_width || 900;
+  canvas.style.width = canvasWidth + 'px';
+
+  // 最大Y+高さ でキャンバス高さを決定
+  let maxBottom = 400;
+  elements.forEach(el => {
+    const bottom = (el.y || 0) + (el.h || el.fontSize || 50) + 40;
+    if (bottom > maxBottom) maxBottom = bottom;
+  });
+  canvas.style.minHeight = maxBottom + 'px';
+
+  // zIndex 順に描画
+  const sorted = [...elements].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
+  sorted.forEach(el => {
+    const node = createElementNode(el);
+    if (node) canvas.appendChild(node);
+  });
+}
+
+function createElementNode(el) {
+  if (el.type === 'image') {
+    const div = document.createElement('div');
+    div.className = 'pe-image';
+    div.style.cssText = `left:${el.x}px;top:${el.y}px;width:${el.w||200}px;height:${el.h||150}px;z-index:${el.zIndex||0}`;
+    const img = document.createElement('img');
+    img.src = el.src || '';
+    img.alt = '';
+    img.loading = 'lazy';
+    const clip = CLIP_SHAPES[el.clipShape || 'none'] || 'none';
+    if (clip !== 'none') img.style.clipPath = clip;
+    div.appendChild(img);
+    return div;
+  }
+  if (el.type === 'text') {
+    const div = document.createElement('div');
+    div.className = 'pe-text';
+    div.style.cssText = `left:${el.x}px;top:${el.y}px;color:${el.color||'#1e293b'};font-size:${el.fontSize||16}px;font-weight:${el.fontWeight||'normal'};font-style:${el.fontStyle||'normal'};text-decoration:${el.textDecoration||'none'};background:${el.bgHighlight||'transparent'};z-index:${el.zIndex||0}`;
+    div.textContent = el.content || '';
+    return div;
+  }
+  if (el.type === 'box') {
+    const div = document.createElement('div');
+    div.className = 'pe-box';
+    div.style.cssText = `left:${el.x}px;top:${el.y}px;width:${el.w||200}px;height:${el.h||150}px;background:${el.bgColor||'transparent'};border:${el.borderWidth||2}px ${el.borderStyle||'solid'} ${el.borderColor||'#6366f1'};border-radius:${el.borderRadius||8}px;z-index:${el.zIndex||0}`;
+    return div;
+  }
+  if (el.type === 'code') {
+    const div = document.createElement('div');
+    div.className = 'pe-code';
+    div.style.cssText = `left:${el.x}px;top:${el.y}px;width:${el.w||400}px;z-index:${el.zIndex||0}`;
+    const pre = document.createElement('pre');
+    pre.style.cssText = `color:${el.color||'#e2e8f0'};font-size:${el.fontSize||13}px`;
+    pre.textContent = el.content || '';
+    div.appendChild(pre);
+    return div;
+  }
+  if (el.type === 'separator') {
+    const div = document.createElement('div');
+    div.className = 'pe-separator';
+    div.style.cssText = `left:${el.x}px;top:${el.y}px;width:${el.w||820}px;padding:6px 0;z-index:${el.zIndex||0}`;
+    const hr = document.createElement('hr');
+    hr.style.cssText = `border:none;border-top:2px ${el.borderStyle||'solid'} ${el.color||'#e2e8f0'}`;
+    div.appendChild(hr);
+    return div;
+  }
+  if (el.type === 'stamp') {
+    const div = document.createElement('div');
+    div.className = 'pe-stamp';
+    div.style.cssText = `left:${el.x}px;top:${el.y}px;width:${el.size||80}px;height:${el.size||80}px;z-index:${el.zIndex||0}`;
+    div.innerHTML = el.svg || '';
+    return div;
+  }
+  return null;
+}
+
+// ─ メイン ─
+(function init() {
+  const id = getParam('id');
+  if (!id) { showNotFound(); return; }
+
+  const blogs = JSON.parse(localStorage.getItem('admin_blogs') || '[]');
+  const blog = blogs.find(b => String(b.id) === String(id));
+
+  document.getElementById('loading').style.display = 'none';
+  if (!blog) { showNotFound(); return; }
+
+  document.getElementById('postContent').style.display = '';
+  renderPost(blog);
+})();
+
+function showNotFound() {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('notFound').style.display = '';
+}
+</script>
+</body>
+</html>
