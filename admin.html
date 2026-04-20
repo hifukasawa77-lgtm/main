@@ -1220,18 +1220,73 @@ function triggerLocalImage() { document.getElementById('localImageInput').click(
 
 function addLocalImage(input) {
   const file = input.files[0]; if (!file) return;
-  if (file.size > 2 * 1024 * 1024) {
-    showToast('画像は2MB以下にしてください', 'err'); input.value = ''; return;
-  }
+  input.value = '';
   const reader = new FileReader();
   reader.onload = (e) => {
-    saveHistory();
-    const el = { id: genId(), type: 'image', x: 40, y: 40, w: 300, h: 200,
-      src: e.target.result, zIndex: getNextZ() };
-    elements.push(el); addElementNode(el); selectElement(el.id);
+    const originalDataUrl = e.target.result;
+    const LIMIT = 2 * 1024 * 1024;
+    if (file.size <= LIMIT) {
+      placeImage(originalDataUrl);
+    } else {
+      showToast('画像を圧縮中…', 'ok');
+      compressImage(originalDataUrl, LIMIT, (compressed) => {
+        if (!compressed) { showToast('圧縮に失敗しました', 'err'); return; }
+        const kb = Math.round(compressed.length * 0.75 / 1024);
+        showToast(`圧縮完了（約 ${kb} KB）`);
+        placeImage(compressed);
+      });
+    }
   };
   reader.readAsDataURL(file);
-  input.value = '';
+}
+
+function placeImage(src) {
+  saveHistory();
+  const el = { id: genId(), type: 'image', x: 40, y: 40, w: 300, h: 200,
+    src, zIndex: getNextZ() };
+  elements.push(el); addElementNode(el); selectElement(el.id);
+}
+
+function compressImage(dataUrl, limitBytes, callback) {
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    let w = img.naturalWidth, h = img.naturalHeight;
+    let quality = 0.85;
+    const MAX_SIDE = 2400;
+
+    // 長辺が大きすぎる場合は縮小
+    if (w > MAX_SIDE || h > MAX_SIDE) {
+      const ratio = MAX_SIDE / Math.max(w, h);
+      w = Math.round(w * ratio); h = Math.round(h * ratio);
+    }
+
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+
+    const tryCompress = () => {
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      const result = canvas.toDataURL('image/jpeg', quality);
+      // base64 → バイト数換算（base64長 × 0.75）
+      const bytes = result.length * 0.75;
+      if (bytes <= limitBytes || quality <= 0.1) {
+        callback(result);
+      } else if (quality > 0.3) {
+        quality -= 0.1;
+        tryCompress();
+      } else {
+        // quality下限に達したら解像度を下げて再試行
+        w = Math.round(w * 0.8); h = Math.round(h * 0.8);
+        canvas.width = w; canvas.height = h;
+        quality = 0.7;
+        tryCompress();
+      }
+    };
+    tryCompress();
+  };
+  img.onerror = () => callback(null);
+  img.src = dataUrl;
 }
 
 function getNextZ() {
