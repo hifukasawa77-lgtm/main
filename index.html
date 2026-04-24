@@ -2360,6 +2360,7 @@
       const CUSTOM_STOCKS_KEY = 'dashboard-custom-stocks';
       const STOCK_CHART_CACHE_PREFIX = 'dashboard-stock-chart-';
       const STOCK_CHART_CACHE_TTL = 30 * 60 * 1000;
+      const STOCK_QUOTE_CACHE_TTL = 15 * 60 * 1000;
       let activeChartSymbol = null;
       let activeChartName = '';
       let activeChartRange = '1mo';
@@ -2975,54 +2976,50 @@
       }
 
       async function fetchJsonWithProxies(target) {
-        const proxyDefs = [
-          { mode: 'direct' },
-          { mode: 'json', wrap: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}` },
-          { mode: 'text', wrap: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
-          { mode: 'text', wrap: (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}` },
-        ];
+        const tryProxy = async (proxy) => {
+          const url = proxy.mode === 'json'
+            ? `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`
+            : proxy.mode === 'raw'
+            ? `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`
+            : `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(target)}`;
+          const res = await fetchWithTimeout(url, 5000);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const text = proxy.mode === 'json'
+            ? String((await res.json())?.contents || '')
+            : await res.text();
+          const parsed = parseJsonText(text);
+          if (!parsed) throw new Error('parse-failed');
+          return parsed;
+        };
 
-        for (const proxy of proxyDefs) {
-          try {
-            const requestUrl = proxy.mode === 'direct' ? target : proxy.wrap(target);
-            const res = await fetchWithTimeout(requestUrl, 9000);
-            if (!res.ok) continue;
-
-            if (proxy.mode === 'direct') {
-              const text = await res.text();
-              const parsed = parseJsonText(text);
-              if (parsed) return parsed;
-            } else if (proxy.mode === 'json') {
-              const outer = await res.json();
-              const parsed = parseJsonText(outer?.contents || '');
-              if (parsed) return parsed;
-            } else {
-              const text = await res.text();
-              const parsed = parseJsonText(text);
-              if (parsed) return parsed;
-            }
-          } catch (e) {
-            // try next proxy
-          }
-        }
-        throw new Error('json-fetch-failed');
+        return Promise.any([
+          tryProxy({ mode: 'json' }),
+          tryProxy({ mode: 'raw' }),
+          tryProxy({ mode: 'text' }),
+        ]);
       }
 
       async function fetchStock(symbol) {
+        const cacheKey = 'dashboard-stock-quote-' + symbol;
+        try {
+          const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+          if (cached && Date.now() - cached.ts < STOCK_QUOTE_CACHE_TTL) return cached.data;
+        } catch (e) { /* ignore */ }
+
         const quoteUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`;
         const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
-        const targets = [quoteUrl, chartUrl];
 
-        for (const target of targets) {
+        let parsed = null;
+        for (const target of [quoteUrl, chartUrl]) {
           try {
             const payload = await fetchJsonWithProxies(target);
-            const parsed = parseStockPayload(payload);
-            if (parsed) return parsed;
-          } catch (e) {
-            // try next endpoint
-          }
+            parsed = parseStockPayload(payload);
+            if (parsed) break;
+          } catch (e) { /* try next */ }
         }
-        throw new Error('stock-fetch-failed');
+        if (!parsed) throw new Error('stock-fetch-failed');
+        try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: parsed })); } catch (e) { /* ignore */ }
+        return parsed;
       }
 
       async function fetchStockHistory(symbol, range) {
@@ -3308,11 +3305,24 @@
 
       async function initStockCard() {
         const indices = [
-          { symbol: '^TOPX', name: 'TOPIX' },
-          { symbol: '^DJI', name: 'NYダウ' },
-          { symbol: '^GSPC', name: 'S&P500' },
+          { symbol: '^N225', name: '日経225' },
+          { symbol: '^DJI',  name: 'NYダウ' },
+          { symbol: '^IXIC', name: 'NASDAQ' },
         ];
-        stockList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
+
+        // キャッシュを即時表示
+        try {
+          const cached = JSON.parse(localStorage.getItem(STOCK_SNAPSHOT_KEY) || 'null');
+          if (cached && Array.isArray(cached.rows) && cached.rows.length) {
+            renderStockRows(cached.rows, stockList);
+            const updated = cached.updatedAt ? new Date(cached.updatedAt).toLocaleString('ja-JP') : '不明';
+            stockTime.textContent = `前回: ${updated} / 更新中…`;
+          } else {
+            stockList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
+          }
+        } catch (e) {
+          stockList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
+        }
 
         const results = await Promise.allSettled(indices.map((item) => fetchStock(item.symbol)));
         const rows = [];
@@ -3345,9 +3355,7 @@
             stockTime.textContent = `最新取得失敗 / 前回データ: ${updated}`;
             return;
           }
-        } catch (e) {
-          // no-op
-        }
+        } catch (e) { /* no-op */ }
 
         stockList.innerHTML = '<li class="dashboard-mini-item"><span>株価指数の取得に失敗しました</span></li>';
         stockTime.textContent = '更新時刻: 取得失敗';
