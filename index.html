@@ -934,6 +934,58 @@
       text-align: center;
       padding: 12px 0;
     }
+    /* ── Stock chart ── */
+    .stock-chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 10px 0 4px;
+      gap: 6px;
+    }
+    #home-stock-chart-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--blue);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .stock-chart-tabs {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .stock-tab-btn {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 3px 9px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      background: transparent;
+      color: var(--muted);
+      transition: background 0.15s, color 0.15s;
+    }
+    .stock-tab-btn.active {
+      background: var(--blue);
+      color: #fff;
+      border-color: var(--blue);
+    }
+    #home-stock-chart {
+      display: block;
+      width: 100%;
+      height: 100px;
+      border-radius: 10px;
+      background: rgba(14,165,233,0.03);
+      border: 1px solid var(--line);
+    }
+    #home-stock-chart-msg {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-align: center;
+      padding: 4px 0;
+    }
     .dashboard-mini-item.col {
       align-items: flex-start;
       flex-direction: column;
@@ -1783,6 +1835,19 @@
             <ul class="dashboard-mini-list" id="home-stock-custom-list">
               <li class="dashboard-mini-item"><span>追加銘柄なし</span></li>
             </ul>
+            <div id="home-stock-chart-area" style="display:none">
+              <div class="stock-chart-header">
+                <span id="home-stock-chart-label"></span>
+                <div class="stock-chart-tabs">
+                  <button class="stock-tab-btn active" data-range="1mo">1M</button>
+                  <button class="stock-tab-btn" data-range="3mo">3M</button>
+                  <button class="stock-tab-btn" data-range="6mo">6M</button>
+                  <button class="stock-tab-btn" data-range="1y">1Y</button>
+                </div>
+              </div>
+              <canvas id="home-stock-chart"></canvas>
+              <div id="home-stock-chart-msg"></div>
+            </div>
             <div class="dash-mini-note" id="home-stock-time">更新時刻を取得中…</div>
           </article>
 
@@ -2293,6 +2358,11 @@
       const GCAL_CLIENT_ID = '601000685632-fdusp854qdtm2hlkjagq7t75q32f52t1.apps.googleusercontent.com';
       const STOCK_SNAPSHOT_KEY = 'dashboard-stock-snapshot';
       const CUSTOM_STOCKS_KEY = 'dashboard-custom-stocks';
+      const STOCK_CHART_CACHE_PREFIX = 'dashboard-stock-chart-';
+      const STOCK_CHART_CACHE_TTL = 30 * 60 * 1000;
+      let activeChartSymbol = null;
+      let activeChartName = '';
+      let activeChartRange = '1mo';
       const GAS_SNAPSHOT_KEY = 'dashboard-gas-snapshot-v2';
 
       const updateItems = [
@@ -2955,6 +3025,166 @@
         throw new Error('stock-fetch-failed');
       }
 
+      async function fetchStockHistory(symbol, range) {
+        const cacheKey = STOCK_CHART_CACHE_PREFIX + symbol + '-' + range;
+        try {
+          const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+          if (cached && Date.now() - cached.ts < STOCK_CHART_CACHE_TTL) {
+            return cached.data;
+          }
+        } catch (e) { /* ignore */ }
+
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=${range}`;
+        const payload = await fetchJsonWithProxies(url);
+        const result = payload?.chart?.result?.[0];
+        if (!result) throw new Error('chart-no-result');
+
+        const timestamps = result.timestamp || [];
+        const closes = result.indicators?.quote?.[0]?.close || [];
+        const points = [];
+        for (let i = 0; i < timestamps.length; i++) {
+          if (closes[i] != null) {
+            points.push({ t: timestamps[i] * 1000, v: closes[i] });
+          }
+        }
+        if (!points.length) throw new Error('chart-no-data');
+
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: points }));
+        } catch (e) { /* ignore */ }
+        return points;
+      }
+
+      function renderStockChart(symbol, name, range) {
+        const chartArea = document.getElementById('home-stock-chart-area');
+        const canvas = document.getElementById('home-stock-chart');
+        const msg = document.getElementById('home-stock-chart-msg');
+        const label = document.getElementById('home-stock-chart-label');
+        if (!chartArea || !canvas || !msg || !label) return;
+
+        activeChartSymbol = symbol;
+        activeChartName = name;
+        activeChartRange = range;
+
+        chartArea.style.display = '';
+        label.textContent = name;
+        msg.textContent = 'チャートを読み込み中…';
+        canvas.style.display = 'none';
+
+        document.querySelectorAll('.stock-tab-btn').forEach((btn) => {
+          btn.classList.toggle('active', btn.dataset.range === range);
+        });
+
+        fetchStockHistory(symbol, range).then((points) => {
+          if (activeChartSymbol !== symbol || activeChartRange !== range) return;
+          msg.textContent = '';
+          canvas.style.display = '';
+          drawStockCanvas(canvas, points);
+        }).catch(() => {
+          if (activeChartSymbol !== symbol) return;
+          msg.textContent = 'チャートデータの取得に失敗しました';
+        });
+      }
+
+      function drawStockCanvas(canvas, points) {
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.offsetWidth || 280;
+        const H = 100;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        const pad = { top: 16, bottom: 22, left: 44, right: 10 };
+        const cW = W - pad.left - pad.right;
+        const cH = H - pad.top - pad.bottom;
+        const values = points.map((p) => p.v);
+        const n = values.length;
+
+        const minV = Math.min(...values);
+        const maxV = Math.max(...values);
+        const margin = (maxV - minV) * 0.15 || 1;
+        const lo = minV - margin;
+        const hi = maxV + margin;
+
+        const xOf = (i) => pad.left + (n === 1 ? cW / 2 : (i / (n - 1)) * cW);
+        const yOf = (v) => pad.top + (1 - (v - lo) / (hi - lo)) * cH;
+
+        ctx.clearRect(0, 0, W, H);
+
+        // グリッド
+        ctx.save();
+        ctx.strokeStyle = 'rgba(0,0,0,0.05)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+        [0.33, 0.66].forEach((t) => {
+          const y = pad.top + t * cH;
+          ctx.beginPath();
+          ctx.moveTo(pad.left, y);
+          ctx.lineTo(pad.left + cW, y);
+          ctx.stroke();
+        });
+        ctx.restore();
+
+        // グラデーション塗り
+        const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
+        grad.addColorStop(0, 'rgba(14,165,233,0.18)');
+        grad.addColorStop(1, 'rgba(14,165,233,0)');
+        ctx.beginPath();
+        values.forEach((v, i) => {
+          if (i === 0) ctx.moveTo(xOf(i), yOf(v));
+          else {
+            const cpx = (xOf(i - 1) + xOf(i)) / 2;
+            ctx.bezierCurveTo(cpx, yOf(values[i - 1]), cpx, yOf(v), xOf(i), yOf(v));
+          }
+        });
+        ctx.lineTo(xOf(n - 1), pad.top + cH);
+        ctx.lineTo(xOf(0), pad.top + cH);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // ライン
+        ctx.beginPath();
+        values.forEach((v, i) => {
+          if (i === 0) ctx.moveTo(xOf(i), yOf(v));
+          else {
+            const cpx = (xOf(i - 1) + xOf(i)) / 2;
+            ctx.bezierCurveTo(cpx, yOf(values[i - 1]), cpx, yOf(v), xOf(i), yOf(v));
+          }
+        });
+        ctx.strokeStyle = '#0ea5e9';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#0ea5e9';
+        ctx.shadowBlur = 6;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // 最新点
+        ctx.beginPath();
+        ctx.arc(xOf(n - 1), yOf(values[n - 1]), 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#0ea5e9';
+        ctx.fill();
+
+        // Y軸ラベル
+        ctx.fillStyle = 'rgba(100,120,140,0.85)';
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'right';
+        [lo + (hi - lo) * 0.1, lo + (hi - lo) * 0.9].forEach((v) => {
+          ctx.fillText(v >= 1000 ? Math.round(v).toLocaleString() : v.toFixed(1), pad.left - 3, yOf(v) + 3);
+        });
+
+        // X軸ラベル（最大4点）
+        ctx.textAlign = 'center';
+        const labelCount = Math.min(4, n);
+        for (let k = 0; k < labelCount; k++) {
+          const idx = Math.round((k / (labelCount - 1 || 1)) * (n - 1));
+          const d = new Date(points[idx].t);
+          const label = `${d.getMonth() + 1}/${String(d.getDate()).padStart(2, '0')}`;
+          ctx.fillText(label, xOf(idx), H - 6);
+        }
+      }
+
       function renderStockRows(rows, targetEl) {
         const el = targetEl || stockList;
         el.innerHTML = rows.map((row) => {
@@ -3064,6 +3294,7 @@
               <span>
                 <strong>${fmtNum(current, 2)}</strong>
                 <small class="${cls}">${sign}${fmtNum(change, 2)} (${sign}${pct.toFixed(2)}%)</small>
+                <button class="dash-todo-btn" type="button" data-chart-stock="${escHtml(item.symbol)}" data-chart-name="${escHtml(item.name)}">📊</button>
                 <button class="dash-todo-btn" type="button" data-remove-stock="${escHtml(String(item.id))}">削除</button>
               </span>
             </li>`;
@@ -3156,11 +3387,40 @@
       stockCustomList.addEventListener('click', async (event) => {
         const target = event.target;
         if (!(target instanceof HTMLButtonElement)) return;
+
+        if (target.dataset.chartStock) {
+          const sym = target.dataset.chartStock;
+          const nm = target.dataset.chartName || sym;
+          if (activeChartSymbol === sym) {
+            const chartArea = document.getElementById('home-stock-chart-area');
+            if (chartArea) chartArea.style.display = 'none';
+            activeChartSymbol = null;
+          } else {
+            renderStockChart(sym, nm, activeChartRange);
+          }
+          return;
+        }
+
         const id = Number(target.dataset.removeStock);
         if (!id) return;
         customStocks = customStocks.filter((s) => Number(s.id) !== id);
         saveCustomStocks();
+        if (activeChartSymbol) {
+          const removed = !customStocks.some((s) => s.symbol === activeChartSymbol);
+          if (removed) {
+            const chartArea = document.getElementById('home-stock-chart-area');
+            if (chartArea) chartArea.style.display = 'none';
+            activeChartSymbol = null;
+          }
+        }
         await renderCustomStocks();
+      });
+
+      document.getElementById('home-stock-chart-area')?.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLButtonElement) || !target.dataset.range) return;
+        activeChartRange = target.dataset.range;
+        if (activeChartSymbol) renderStockChart(activeChartSymbol, activeChartName, activeChartRange);
       });
 
       function parseGasStations(rawHtml) {
