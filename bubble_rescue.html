@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+  <title>バブル・レスキュー・クライマー</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #06061e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      touch-action: none;
+      user-select: none;
+      overflow: hidden;
+    }
+    #wrapper {
+      position: relative;
+      width: 480px;
+      max-width: 100vw;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      image-rendering: pixelated;
+      border: 2px solid #223;
+      cursor: crosshair;
+    }
+    #hud-dom {
+      position: absolute;
+      top: 6px;
+      left: 10px;
+      right: 10px;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+      font-size: 13px;
+      font-family: 'Courier New', monospace;
+      color: #fff;
+      text-shadow: 0 1px 4px #000;
+    }
+    #score-disp  { color: #ffd700; font-weight: bold; }
+    #stage-disp  { color: #aaeeff; }
+    #target-disp { color: #88ffaa; }
+    #hint {
+      color: #556677;
+      font-size: 11px;
+      text-align: center;
+      padding: 4px 0;
+      font-family: 'Courier New', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div id="wrapper">
+    <div id="hud-dom">
+      <span id="score-disp">SCORE: 0</span>
+      <span id="stage-disp">STAGE 1</span>
+      <span id="target-disp">0 / 15</span>
+    </div>
+    <canvas id="c" width="480" height="640"></canvas>
+  </div>
+  <div id="hint">クリック/タップ: 泡を割る | 小人をドラッグ: 経路を引く | 落下梯子をクリック: 設置</div>
+  <script>
+'use strict';
+// === 定数 ===
+const W = 480, H = 640;
+const GROUND_Y = 590;
+const GNOME_H = 28;
+
+const STAGE_CFG = [
+  { gnomes:2, bubbleRate:150, bubbleSpeed:0.5, target:15, maxBubbles:5,
+    contents:['coin','coin','ladder','coin','coin'] },
+  { gnomes:3, bubbleRate:110, bubbleSpeed:0.8, target:25, maxBubbles:7,
+    contents:['coin','ladder','chest','coin','tool','coin'] },
+  { gnomes:3, bubbleRate:80,  bubbleSpeed:1.1, target:40, maxBubbles:10,
+    contents:['coin','chest','tool','chest','coin','ladder','coin'] },
+];
+const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20 };
+
+// === キャンバス ===
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// === 状態変数 ===
+let state = 'title'; // 'title'|'play'|'gameover'|'clear'
+let keys = {};
+let frameCount = 0;
+let stage = 0;
+let score = 0;
+let itemsCollected = 0;
+let bubbles = [];
+let gnomes  = [];
+let items   = [];
+let ladders = [];
+let particles = [];
+let bubbleTimer = 0;
+let isDrawing = false;
+let drawnPath = [];
+let activeGnomeIdx = -1;
+let mouseDownPos = null;
+let hasDragged = false;
+const DRAG_THRESHOLD = 6;
+let draggingLadder = null;
+
+// === エンティティ生成 ===
+function makeBubble() {
+  const cfg = STAGE_CFG[stage];
+  const r = 22 + Math.random() * 18;
+  return {
+    x: r + Math.random() * (W - 2 * r),
+    y: H + r + 10,
+    vx: (Math.random() - 0.5) * 0.4,
+    vy: -(cfg.bubbleSpeed + Math.random() * 0.3),
+    radius: r,
+    wobbleOffset: Math.random() * Math.PI * 2,
+    wobbleAmp: 0.5 + Math.random() * 0.8,
+    contents: cfg.contents[Math.floor(Math.random() * cfg.contents.length)],
+    popped: false,
+    popTimer: 0,
+    alpha: 1,
+  };
+}
+
+function makeGnome(x) {
+  return {
+    x, y: GROUND_Y - GNOME_H,
+    vx: 0, vy: 0,
+    onGround: true,
+    onLadder: false,
+    state: 'idle',
+    waypoints: [],
+    jumpBoost: 1.0,
+    jumpCooldown: 0,
+    hatColor: ['#cc3333','#33aa33','#5555dd'][gnomes.length % 3],
+    bodyColor: ['#3344cc','#884422','#338866'][gnomes.length % 3],
+  };
+}
+
+function makeItem(x, y, type) {
+  return {
+    x, y,
+    vx: (Math.random() - 0.5) * 1.5,
+    vy: -0.5,
+    type,
+    collected: false,
+    landed: false,
+  };
+}
+
+function makeLadder(x) {
+  return { x, bottomY: GROUND_Y, height: 80, active: true };
+}
+
+function makeParticle(x, y, color) {
+  const angle = Math.random() * Math.PI * 2;
+  const speed = 1.5 + Math.random() * 3;
+  return {
+    x, y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed - 1,
+    life: 25 + Math.floor(Math.random() * 20),
+    maxLife: 45,
+    color,
+    r: 2 + Math.random() * 3,
+  };
+}
+
+// === 物理ヘルパー ===
+const GRAVITY = 0.35;
+
+function dist2(ax, ay, bx, by) {
+  return (ax - bx) ** 2 + (ay - by) ** 2;
+}
+
+function updateBubble(b) {
+  if (b.popped) {
+    b.popTimer++;
+    b.alpha = Math.max(0, 1 - b.popTimer / 16);
+    return;
+  }
+  b.y += b.vy;
+  b.x += b.vx + Math.sin(frameCount * 0.025 + b.wobbleOffset) * b.wobbleAmp * 0.15;
+  if (b.x < b.radius)     { b.x = b.radius;     b.vx = Math.abs(b.vx); }
+  if (b.x > W - b.radius) { b.x = W - b.radius; b.vx = -Math.abs(b.vx); }
+}
+
+function updateItem(it) {
+  if (it.collected || it.landed) return;
+  it.vy += GRAVITY;
+  it.y  += it.vy;
+  it.x  += it.vx;
+  it.vx *= 0.97;
+  if (it.y >= GROUND_Y - 10) {
+    it.y = GROUND_Y - 10;
+    it.vy *= -0.2;
+    it.vx *= 0.6;
+    if (Math.abs(it.vy) < 0.6) { it.vy = 0; it.vx = 0; it.landed = true; }
+  }
+  if (it.x < 10)     { it.x = 10;     it.vx = Math.abs(it.vx); }
+  if (it.x > W - 10) { it.x = W - 10; it.vx = -Math.abs(it.vx); }
+}
+
+// === 泡POP・アイテム収集 ===
+function popBubble(b) {
+  if (b.popped) return;
+  b.popped = true;
+  items.push(makeItem(b.x, b.y, b.contents));
+  const pColors = { coin:'#ffd700', chest:'#c8843a', tool:'#aaaacc', ladder:'#c8a06a' };
+  for (let i = 0; i < 10; i++) particles.push(makeParticle(b.x, b.y, pColors[b.contents] || '#fff'));
+}
+
+function collectItem(it, gnome) {
+  it.collected = true;
+  score += ITEM_SCORE[it.type] || 0;
+  itemsCollected++;
+  if (it.type === 'tool') gnome.jumpBoost = Math.min(2.0, gnome.jumpBoost + 0.3);
+  updateHUD();
+  if (itemsCollected >= STAGE_CFG[stage].target) {
+    if (stage < STAGE_CFG.length - 1) {
+      stage++;
+      itemsCollected = 0;
+      initStage();
+    } else {
+      state = 'clear';
+    }
+  }
+}
+
+function placeLadder(x) {
+  ladders.push(makeLadder(x));
+  score += ITEM_SCORE['ladder'];
+  itemsCollected++;
+  updateHUD();
+  if (itemsCollected >= STAGE_CFG[stage].target) {
+    if (stage < STAGE_CFG.length - 1) {
+      stage++;
+      itemsCollected = 0;
+      initStage();
+    } else {
+      state = 'clear';
+    }
+  }
+}
+
+// === 小人AI ===
+function updateGnomeAI(g, idx) {
+  // 1. ウェイポイント追跡（線引き）
+  if (g.waypoints.length > 0) {
+    const wp = g.waypoints[0];
+    const dx = wp.x - g.x;
+    const dy = wp.y - g.y;
+    const d  = Math.sqrt(dx * dx + dy * dy);
+    if (d < 10) { g.waypoints.shift(); return; }
+    g.vx = Math.sign(dx) * Math.min(2.0, d * 0.1) * 1.5;
+    if (dy < -30 && g.onGround && g.jumpCooldown === 0) {
+      g.vy = -7.5 * g.jumpBoost;
+      g.onGround = false;
+      g.jumpCooldown = 55;
+    }
+    g.state = 'walk';
+    return;
+  }
+
+  // 2. 最寄りの泡を自動ターゲット
+  let best = null, bestScore = Infinity;
+  for (const b of bubbles) {
+    if (b.popped) continue;
+    const dx = Math.abs(b.x - g.x);
+    const dy = g.y - b.y;
+    if (dx > 180) continue;
+    const sc = dx + dy * 0.4;
+    if (sc < bestScore) { bestScore = sc; best = b; }
+  }
+
+  if (best) {
+    const dx = best.x - g.x;
+    const absDx = Math.abs(dx);
+    g.vx = absDx > 5 ? Math.sign(dx) * 1.4 : 0;
+    g.state = absDx > 5 ? 'walk' : 'idle';
+    const dy = g.y - best.y;
+    // 梯子があれば届く範囲を拡大
+    const ladderBonus = ladders.some(l => Math.abs(g.x - l.x) < 40) ? 70 : 0;
+    if (absDx < best.radius + 15 && dy > 10 && dy < (140 + ladderBonus) * g.jumpBoost
+        && g.onGround && g.jumpCooldown === 0) {
+      g.vy = -Math.min(10, Math.sqrt(dy * 0.16) + 3) * g.jumpBoost;
+      g.onGround = false;
+      g.jumpCooldown = 50;
+      g.state = 'jump';
+    }
+    return;
+  }
+
+  // 3. 落下アイテムを拾いに行く
+  let nearItem = null, nearDist = Infinity;
+  for (const it of items) {
+    if (it.collected || !it.landed) continue;
+    if (it.type === 'ladder') continue;
+    const d = Math.abs(it.x - g.x);
+    if (d < nearDist) { nearDist = d; nearItem = it; }
+  }
+  if (nearItem && nearDist < 220) {
+    g.vx = Math.sign(nearItem.x - g.x) * 1.2;
+    g.state = 'walk';
+    return;
+  }
+
+  // 4. アイドル（ランダム徘徊）
+  if (frameCount % 110 === idx * 37 % 110) g.vx = (Math.random() - 0.5) * 1.4;
+  g.state = Math.abs(g.vx) > 0.1 ? 'walk' : 'idle';
+}
+
+function updateGnomePhysics(g) {
+  if (g.jumpCooldown > 0) g.jumpCooldown--;
+  if (!g.onLadder) g.vy += GRAVITY;
+
+  g.x += g.vx;
+  g.y += g.vy;
+
+  // 地面
+  if (g.y >= GROUND_Y - GNOME_H) {
+    g.y = GROUND_Y - GNOME_H;
+    g.vy = 0;
+    g.onGround = true;
+    if (g.state === 'jump') g.state = 'idle';
+  } else {
+    g.onGround = false;
+  }
+
+  // 壁
+  if (g.x < 10) { g.x = 10; g.vx = 0; }
+  if (g.x > W - 10) { g.x = W - 10; g.vx = 0; }
+
+  // 梯子
+  g.onLadder = false;
+  for (const lad of ladders) {
+    if (!lad.active) continue;
+    const topY = lad.bottomY - lad.height;
+    if (Math.abs(g.x - lad.x) < 14 && g.y > topY - 5 && g.y < lad.bottomY + 5) {
+      g.onLadder = true;
+      g.x = lad.x;
+      if (g.vy > 0) g.vy = 0;
+      break;
+    }
+  }
+
+  // 泡に触れたらPOP
+  for (const b of bubbles) {
+    if (b.popped) continue;
+    const dy = (g.y - GNOME_H * 0.5) - b.y;
+    const dx = g.x - b.x;
+    if (dx * dx + dy * dy < (b.radius + 8) ** 2) popBubble(b);
+  }
+
+  // アイテム収集
+  const COLLECT_R2 = 28 * 28;
+  for (const it of items) {
+    if (it.collected || !it.landed) continue;
+    if (it.type === 'ladder') continue;
+    if (dist2(g.x, g.y, it.x, it.y) < COLLECT_R2) collectItem(it, g);
+  }
+}
+// === HUD更新 ===
+function updateHUD() {
+  document.getElementById('score-disp').textContent  = 'SCORE: ' + score;
+  document.getElementById('stage-disp').textContent  = 'STAGE ' + (stage + 1);
+  document.getElementById('target-disp').textContent = itemsCollected + ' / ' + STAGE_CFG[stage].target;
+}
+
+// === 描画ヘルパー ===
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#06061e');
+  grad.addColorStop(0.75, '#0a1a3e');
+  grad.addColorStop(1, '#0a2a0a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+  // 星
+  for (let i = 0; i < 45; i++) {
+    const sx = (i * 137 + 29) % W;
+    const sy = (i * 97 + 11) % (H - 120);
+    ctx.fillStyle = `rgba(255,255,255,${0.3 + 0.4 * ((Math.sin(frameCount * 0.04 + i) + 1) / 2)})`;
+    ctx.fillRect(sx, sy, 1 + (i % 2), 1 + (i % 2));
+  }
+}
+
+function drawGround() {
+  ctx.fillStyle = '#1a4a1a';
+  ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+  ctx.fillStyle = '#2d6a2d';
+  ctx.fillRect(0, GROUND_Y, W, 10);
+  ctx.fillStyle = '#3d8a3d';
+  for (let x = 8; x < W; x += 22) {
+    ctx.fillRect(x,     GROUND_Y - 5, 3, 5);
+    ctx.fillRect(x + 6, GROUND_Y - 7, 3, 7);
+    ctx.fillRect(x + 12,GROUND_Y - 4, 3, 4);
+  }
+}
+
+function drawBubble(b) {
+  if (b.popped && b.alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = b.alpha;
+  const r = b.popped ? b.radius * (1 + b.popTimer * 0.1) : b.radius;
+  const grad = ctx.createRadialGradient(b.x - r * 0.3, b.y - r * 0.35, r * 0.05, b.x, b.y, r);
+  grad.addColorStop(0,   'rgba(200,240,255,0.55)');
+  grad.addColorStop(0.6, 'rgba(80,180,255,0.18)');
+  grad.addColorStop(1,   'rgba(60,140,220,0.38)');
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(180,240,255,0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // ハイライト
+  ctx.beginPath();
+  ctx.arc(b.x - r * 0.28, b.y - r * 0.32, r * 0.2, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fill();
+  // 中身アイコン
+  if (!b.popped) drawItemIcon(b.x, b.y, b.contents, Math.floor(r * 0.55));
+  ctx.restore();
+}
+
+function drawItemIcon(x, y, type, size) {
+  ctx.save();
+  if (type === 'coin') {
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffd700';
+    ctx.fill();
+    ctx.strokeStyle = '#c8a000';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#a07800';
+    ctx.font = `bold ${Math.max(8, size * 0.75)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('G', x, y + 1);
+  } else if (type === 'chest') {
+    const s = size * 0.7;
+    ctx.fillStyle = '#8b4513';
+    ctx.fillRect(x - s, y - s * 0.5, s * 2, s * 1.1);
+    ctx.fillStyle = '#c8841a';
+    ctx.fillRect(x - s, y - s * 0.5, s * 2, s * 0.45);
+    ctx.fillStyle = '#ffd700';
+    ctx.fillRect(x - s * 0.22, y - s * 0.15, s * 0.44, s * 0.38);
+    ctx.strokeStyle = '#5a2a00';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x - s, y - s * 0.5, s * 2, s * 1.1);
+  } else if (type === 'ladder') {
+    ctx.strokeStyle = '#c8a06a';
+    ctx.lineWidth = 2;
+    const h = size * 1.1, w = size * 0.65;
+    ctx.beginPath(); ctx.moveTo(x - w, y - h); ctx.lineTo(x - w, y + h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + w, y - h); ctx.lineTo(x + w, y + h); ctx.stroke();
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(x - w, y + i * h * 0.45);
+      ctx.lineTo(x + w, y + i * h * 0.45);
+      ctx.stroke();
+    }
+  } else if (type === 'tool') {
+    ctx.fillStyle = '#999';
+    ctx.fillRect(x - size * 0.22, y - size * 0.8, size * 0.44, size * 1.3);
+    ctx.fillStyle = '#bbb';
+    ctx.fillRect(x - size * 0.5, y - size * 0.8, size, size * 0.35);
+    ctx.fillRect(x - size * 0.5, y - size * 0.55, size, size * 0.2);
+  }
+  ctx.restore();
+}
+
+function drawLadder(lad) {
+  const x = lad.x, top = lad.bottomY - lad.height, bot = lad.bottomY;
+  ctx.strokeStyle = '#c8a06a';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(x - 8, top); ctx.lineTo(x - 8, bot); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x + 8, top); ctx.lineTo(x + 8, bot); ctx.stroke();
+  ctx.lineWidth = 2;
+  const steps = Math.floor(lad.height / 13);
+  for (let i = 0; i <= steps; i++) {
+    const ry = top + (i / steps) * lad.height;
+    ctx.beginPath(); ctx.moveTo(x - 8, ry); ctx.lineTo(x + 8, ry); ctx.stroke();
+  }
+}
+
+function drawGnome(g) {
+  const x = Math.round(g.x), y = Math.round(g.y);
+  const bob = g.state === 'walk' ? Math.sin(frameCount * 0.28) * 1.5 : 0;
+  const ay = y + bob; // animation y offset applied to body
+
+  // 帽子（三角）
+  ctx.fillStyle = g.hatColor;
+  ctx.beginPath();
+  ctx.moveTo(x, ay - GNOME_H - 8);
+  ctx.lineTo(x - 8, ay - GNOME_H + 3);
+  ctx.lineTo(x + 8, ay - GNOME_H + 3);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = g.bodyColor;
+  ctx.fillRect(x - 9, ay - GNOME_H + 3, 18, 3);
+
+  // 顔
+  ctx.fillStyle = '#f5c07a';
+  ctx.fillRect(x - 6, ay - GNOME_H + 6, 12, 10);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x - 4, ay - GNOME_H + 8,  2, 2); // 左目
+  ctx.fillRect(x + 2, ay - GNOME_H + 8,  2, 2); // 右目
+  ctx.fillStyle = '#d08060';
+  ctx.fillRect(x - 1, ay - GNOME_H + 11, 2, 2); // 鼻
+
+  // ボディ
+  ctx.fillStyle = g.bodyColor;
+  ctx.fillRect(x - 7, ay - GNOME_H + 16, 14, 10);
+
+  // 足（歩行アニメ）
+  const legSwing = g.state === 'walk' ? Math.sin(frameCount * 0.3) * 3 : 0;
+  ctx.fillStyle = '#3a2008';
+  ctx.fillRect(x - 5, ay - GNOME_H + 26, 5, 7);
+  ctx.fillRect(x,     ay - GNOME_H + 26 - legSwing, 5, 7);
+}
+
+function drawItem(it) {
+  if (it.collected) return;
+  ctx.save();
+  if (!it.landed && it.type === 'ladder') {
+    // 梯子アイテムはドラッグ可能なのでグロー表示
+    ctx.shadowColor = '#c8a06a';
+    ctx.shadowBlur = 8 + Math.sin(frameCount * 0.1) * 4;
+  }
+  drawItemIcon(it.x, it.y, it.type, 14);
+  ctx.restore();
+}
+
+function drawParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPath() {
+  if (!isDrawing || drawnPath.length < 2) return;
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle = 'rgba(100,220,255,0.75)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(drawnPath[0].x, drawnPath[0].y);
+  for (let i = 1; i < drawnPath.length; i++) ctx.lineTo(drawnPath[i].x, drawnPath[i].y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// === スクリーン描画 ===
+function drawHUDBar() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,20,0.72)';
+  ctx.fillRect(0, 0, W, 42);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('SCORE ' + score, 10, 27);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaeeff';
+  ctx.fillText('STAGE ' + (stage + 1), W / 2, 27);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#88ffaa';
+  ctx.fillText(itemsCollected + ' / ' + STAGE_CFG[stage].target, W - 10, 27);
+  // プログレスバー
+  const prog = Math.min(1, itemsCollected / STAGE_CFG[stage].target);
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(10, 33, W - 20, 5);
+  ctx.fillStyle = '#44ff88';
+  ctx.fillRect(10, 33, (W - 20) * prog, 5);
+  ctx.restore();
+}
+
+function drawTitle() {
+  drawBackground();
+  // アニメーション泡
+  for (let i = 0; i < 6; i++) {
+    const bx = ((i * 83 + frameCount * 0.4) % W + W) % W;
+    const by = ((H * 0.8 - frameCount * 0.6 + i * 110) % H + H) % H;
+    ctx.save();
+    ctx.globalAlpha = 0.35 + 0.15 * Math.sin(frameCount * 0.03 + i);
+    ctx.beginPath();
+    ctx.arc(bx, by, 18 + i * 5, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(150,220,255,0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaddff';
+  ctx.font = 'bold 15px monospace';
+  ctx.fillText('🫧  BUBBLE', W / 2, H * 0.25);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 26px monospace';
+  ctx.fillText('RESCUE CLIMBER', W / 2, H * 0.33);
+  ctx.fillStyle = '#88bbdd';
+  ctx.font = '13px monospace';
+  ctx.fillText('バブル・レスキュー・クライマー', W / 2, H * 0.41);
+
+  // デモ小人
+  const demoG = {
+    x: W / 2, y: H * 0.62,
+    state:'idle', hatColor:'#cc3333', bodyColor:'#3344cc'
+  };
+  drawGnome(demoG);
+
+  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#ffffff' : '#66aaff';
+  ctx.font = '16px monospace';
+  ctx.fillText('クリック / タップ でスタート', W / 2, H * 0.78);
+  ctx.fillStyle = '#557799';
+  ctx.font = '11px monospace';
+  ctx.fillText('クリック:泡を割る  ドラッグ:小人の経路を引く', W / 2, H * 0.86);
+  ctx.textAlign = 'left';
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ff5566';
+  ctx.font = 'bold 36px monospace';
+  ctx.fillText('GAME OVER', W / 2, H * 0.38);
+  ctx.fillStyle = '#ffd700';
+  ctx.font = '22px monospace';
+  ctx.fillText('SCORE: ' + score, W / 2, H * 0.50);
+  ctx.fillStyle = '#aaaaff';
+  ctx.font = '14px monospace';
+  ctx.fillText('STAGE ' + (stage + 1) + ' まで到達', W / 2, H * 0.59);
+  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#fff' : '#66aaff';
+  ctx.font = '15px monospace';
+  ctx.fillText('クリック / タップ でリトライ', W / 2, H * 0.72);
+  ctx.textAlign = 'left';
+}
+
+function drawClear() {
+  ctx.fillStyle = 'rgba(0,10,0,0.85)';
+  ctx.fillRect(0, 0, W, H);
+  // 紙吹雪
+  for (let i = 0; i < 30; i++) {
+    ctx.fillStyle = ['#ffd700','#ff88aa','#88ffcc','#88aaff','#ffaa44'][i % 5];
+    ctx.fillRect(
+      ((i * 137 + frameCount * 3) % W + W) % W,
+      ((i * 79  + frameCount * 2) % H + H) % H,
+      4, 6
+    );
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 30px monospace';
+  ctx.fillText('ALL CLEAR!', W / 2, H * 0.32);
+  ctx.fillStyle = '#88ffcc';
+  ctx.font = '20px monospace';
+  ctx.fillText('全ステージクリア！', W / 2, H * 0.44);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '18px monospace';
+  ctx.fillText('最終スコア: ' + score, W / 2, H * 0.55);
+  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#fff' : '#ffd700';
+  ctx.font = '15px monospace';
+  ctx.fillText('クリック / タップ でタイトルへ', W / 2, H * 0.68);
+  ctx.textAlign = 'left';
+}
+
+// === 入力処理 ===
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (W / rect.width),
+    y: (e.clientY - rect.top)  * (H / rect.height),
+  };
+}
+
+function handleStateClick(pos) {
+  if (state === 'title')    { initGame(); state = 'play'; return true; }
+  if (state === 'gameover') { initGame(); state = 'play'; return true; }
+  if (state === 'clear')    { state = 'title';             return true; }
+  return false;
+}
+
+function handlePlayClick(pos) {
+  // 泡をPOP
+  for (const b of bubbles) {
+    if (b.popped) continue;
+    if (dist2(b.x, b.y, pos.x, pos.y) < (b.radius + 8) ** 2) { popBubble(b); return; }
+  }
+  // 梯子アイテムを設置（地面付近でクリック）
+  for (const it of items) {
+    if (it.collected || it.type !== 'ladder' || !it.landed) continue;
+    if (dist2(it.x, it.y, pos.x, pos.y) < 30 * 30) {
+      it.collected = true;
+      placeLadder(it.x);
+      return;
+    }
+  }
+}
+
+canvas.addEventListener('mousedown', e => {
+  const pos = getCanvasPos(e);
+  mouseDownPos = { ...pos };
+  hasDragged = false;
+  if (state !== 'play') return;
+  // 小人の近くなら線引きモード
+  activeGnomeIdx = -1;
+  for (let i = 0; i < gnomes.length; i++) {
+    if (dist2(gnomes[i].x, gnomes[i].y, pos.x, pos.y) < 45 * 45) {
+      activeGnomeIdx = i;
+      isDrawing = true;
+      drawnPath = [pos];
+      break;
+    }
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  const pos = getCanvasPos(e);
+  if (mouseDownPos) {
+    if (dist2(pos.x, pos.y, mouseDownPos.x, mouseDownPos.y) > DRAG_THRESHOLD * DRAG_THRESHOLD)
+      hasDragged = true;
+  }
+  if (isDrawing && activeGnomeIdx >= 0) {
+    const last = drawnPath[drawnPath.length - 1];
+    if (dist2(pos.x, pos.y, last.x, last.y) > 64) drawnPath.push(pos);
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  const pos = getCanvasPos(e);
+  if (isDrawing && activeGnomeIdx >= 0 && drawnPath.length > 2) {
+    gnomes[activeGnomeIdx].waypoints = [...drawnPath];
+  }
+  isDrawing = false;
+  drawnPath = [];
+  activeGnomeIdx = -1;
+  if (!hasDragged) {
+    if (!handleStateClick(pos) && state === 'play') handlePlayClick(pos);
+  } else {
+    if (state !== 'play') handleStateClick(pos);
+  }
+  mouseDownPos = null;
+});
+
+// タッチイベントをマウスイベントへ変換
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  canvas.dispatchEvent(new MouseEvent('mousedown', { clientX: t.clientX, clientY: t.clientY }));
+}, { passive: false });
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  canvas.dispatchEvent(new MouseEvent('mousemove', { clientX: t.clientX, clientY: t.clientY }));
+}, { passive: false });
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  canvas.dispatchEvent(new MouseEvent('mouseup', { clientX: t.clientX, clientY: t.clientY }));
+}, { passive: false });
+
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === 'Enter') {
+    if (state === 'title')    { initGame(); state = 'play'; }
+    else if (state === 'gameover') { initGame(); state = 'play'; }
+    else if (state === 'clear')    { state = 'title'; }
+  }
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// === ゲーム管理 ===
+function initStage() {
+  const cfg = STAGE_CFG[stage];
+  bubbles = []; items = []; ladders = [];
+  particles = []; drawnPath = [];
+  bubbleTimer = 0;
+  gnomes = [];
+  for (let i = 0; i < cfg.gnomes; i++) {
+    gnomes.push(makeGnome(80 + i * Math.floor((W - 160) / Math.max(1, cfg.gnomes - 1))));
+  }
+  // 初期泡を2個スポーン
+  bubbles.push(makeBubble());
+  bubbles.push(makeBubble());
+  bubbles[0].y = H * 0.6;
+  bubbles[1].y = H * 0.45;
+  updateHUD();
+}
+
+function initGame() {
+  stage = 0; score = 0; itemsCollected = 0;
+  initStage();
+}
+
+// === メインループ ===
+function update() {
+  frameCount++;
+  if (state !== 'play') return;
+  const cfg = STAGE_CFG[stage];
+
+  // 泡スポーン
+  bubbleTimer++;
+  if (bubbleTimer >= cfg.bubbleRate && bubbles.filter(b => !b.popped).length < cfg.maxBubbles) {
+    bubbles.push(makeBubble());
+    bubbleTimer = 0;
+  }
+
+  // 泡更新・削除
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    updateBubble(bubbles[i]);
+    const b = bubbles[i];
+    if (b.y < -60 && !b.popped) bubbles.splice(i, 1);
+    else if (b.popped && b.alpha <= 0) bubbles.splice(i, 1);
+  }
+
+  // アイテム更新
+  for (const it of items) updateItem(it);
+
+  // 小人更新
+  for (let i = 0; i < gnomes.length; i++) {
+    updateGnomeAI(gnomes[i], i);
+    updateGnomePhysics(gnomes[i]);
+  }
+}
+
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  if (state === 'title')    { drawTitle();    return; }
+  if (state === 'gameover') { drawGameOver(); return; }
+  if (state === 'clear')    { drawClear();    return; }
+
+  drawBackground();
+  drawGround();
+  ladders.forEach(drawLadder);
+  bubbles.forEach(drawBubble);
+  items.forEach(drawItem);
+  gnomes.forEach(drawGnome);
+  drawParticles();
+  drawPath();
+  drawHUDBar();
+}
+
+function loop() {
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+
+loop();
+  </script>
+</body>
+</html>
