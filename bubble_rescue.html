@@ -71,13 +71,16 @@
 const W = 480, H = 640;
 const GROUND_Y = 590;
 const GNOME_H = 28;
+const BUBBLE_FLOW_Y = 250;
+const CLIMB_SPEED = 1.5;
+const LADDER_HEIGHT = 90;
 
 const STAGE_CFG = [
-  { gnomes:2, bubbleRate:150, bubbleSpeed:0.5, target:15, maxBubbles:5,
-    contents:['coin','coin','ladder','coin','coin'] },
-  { gnomes:3, bubbleRate:110, bubbleSpeed:0.8, target:25, maxBubbles:7,
+  { gnomes:2, bubbleRate:160, bubbleSpeed:0.8, target:10, maxBubbles:4,
+    contents:['coin','coin','ladder','ladder','coin'] },
+  { gnomes:3, bubbleRate:120, bubbleSpeed:1.2, target:20, maxBubbles:6,
     contents:['coin','ladder','chest','coin','tool','coin'] },
-  { gnomes:3, bubbleRate:80,  bubbleSpeed:1.1, target:40, maxBubbles:10,
+  { gnomes:3, bubbleRate:90,  bubbleSpeed:1.6, target:35, maxBubbles:8,
     contents:['coin','chest','tool','chest','coin','ladder','coin'] },
 ];
 const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20 };
@@ -111,14 +114,16 @@ let draggingLadder = null;
 function makeBubble() {
   const cfg = STAGE_CFG[stage];
   const r = 22 + Math.random() * 18;
+  const baseY = BUBBLE_FLOW_Y + (Math.random() - 0.5) * 60;
   return {
-    x: r + Math.random() * (W - 2 * r),
-    y: H + r + 10,
-    vx: (Math.random() - 0.5) * 0.4,
-    vy: -(cfg.bubbleSpeed + Math.random() * 0.3),
+    x: W + r + Math.random() * 80,
+    y: baseY,
+    baseY,
+    vx: -(cfg.bubbleSpeed + Math.random() * 0.4),
+    vy: 0,
     radius: r,
     wobbleOffset: Math.random() * Math.PI * 2,
-    wobbleAmp: 0.5 + Math.random() * 0.8,
+    wobbleAmp: 30 + Math.random() * 15,
     contents: cfg.contents[Math.floor(Math.random() * cfg.contents.length)],
     popped: false,
     popTimer: 0,
@@ -132,6 +137,7 @@ function makeGnome(x) {
     vx: 0, vy: 0,
     onGround: true,
     onLadder: false,
+    climbing: false,
     state: 'idle',
     waypoints: [],
     jumpBoost: 1.0,
@@ -153,7 +159,7 @@ function makeItem(x, y, type) {
 }
 
 function makeLadder(x) {
-  return { x, bottomY: GROUND_Y, height: 80, active: true };
+  return { x, bottomY: GROUND_Y, height: LADDER_HEIGHT, active: true };
 }
 
 function makeParticle(x, y, color) {
@@ -183,10 +189,8 @@ function updateBubble(b) {
     b.alpha = Math.max(0, 1 - b.popTimer / 16);
     return;
   }
-  b.y += b.vy;
-  b.x += b.vx + Math.sin(frameCount * 0.025 + b.wobbleOffset) * b.wobbleAmp * 0.15;
-  if (b.x < b.radius)     { b.x = b.radius;     b.vx = Math.abs(b.vx); }
-  if (b.x > W - b.radius) { b.x = W - b.radius; b.vx = -Math.abs(b.vx); }
+  b.x += b.vx;
+  b.y = b.baseY + Math.sin(frameCount * 0.025 + b.wobbleOffset) * b.wobbleAmp;
 }
 
 function updateItem(it) {
@@ -232,7 +236,12 @@ function collectItem(it, gnome) {
 }
 
 function placeLadder(x) {
-  ladders.push(makeLadder(x));
+  const existing = ladders.find(l => l.active && Math.abs(l.x - x) < 25);
+  if (existing) {
+    existing.height += LADDER_HEIGHT;
+  } else {
+    ladders.push(makeLadder(x));
+  }
   score += ITEM_SCORE['ladder'];
   itemsCollected++;
   updateHUD();
@@ -266,31 +275,69 @@ function updateGnomeAI(g, idx) {
     return;
   }
 
-  // 2. 最寄りの泡を自動ターゲット
-  let best = null, bestScore = Infinity;
+  // 2. 最寄りの泡を自動ターゲット（梯子経由含む）
+  let bestTarget = null, bestScore = Infinity;
   for (const b of bubbles) {
     if (b.popped) continue;
-    const dx = Math.abs(b.x - g.x);
-    const dy = g.y - b.y;
-    if (dx > 180) continue;
-    const sc = dx + dy * 0.4;
-    if (sc < bestScore) { bestScore = sc; best = b; }
+    const dxB = Math.abs(b.x - g.x);
+    if (dxB > 280) continue;
+    const dyDirect = g.y - b.y;
+    // 直接ジャンプで届くか
+    if (dyDirect > 0 && dyDirect < 140 * g.jumpBoost) {
+      const sc = dxB + dyDirect * 0.3;
+      if (sc < bestScore) { bestScore = sc; bestTarget = { bubble: b, ladder: null }; }
+    }
+    // 梯子経由で届くか
+    for (const lad of ladders) {
+      if (!lad.active) continue;
+      const dxBL = Math.abs(b.x - lad.x);
+      if (dxBL > 80) continue;
+      const ladTopY = lad.bottomY - lad.height;
+      const dyFromTop = ladTopY - b.y;
+      if (dyFromTop >= 0 && dyFromTop < 140 * g.jumpBoost) {
+        const dxToLad = Math.abs(lad.x - g.x);
+        const sc = dxToLad + dyFromTop * 0.3;
+        if (sc < bestScore) { bestScore = sc; bestTarget = { bubble: b, ladder: lad }; }
+      }
+    }
   }
 
-  if (best) {
-    const dx = best.x - g.x;
-    const absDx = Math.abs(dx);
-    g.vx = absDx > 5 ? Math.sign(dx) * 1.4 : 0;
-    g.state = absDx > 5 ? 'walk' : 'idle';
-    const dy = g.y - best.y;
-    // 梯子があれば届く範囲を拡大
-    const ladderBonus = ladders.some(l => Math.abs(g.x - l.x) < 40) ? 70 : 0;
-    if (absDx < best.radius + 15 && dy > 10 && dy < (140 + ladderBonus) * g.jumpBoost
-        && g.onGround && g.jumpCooldown === 0) {
-      g.vy = -Math.min(10, Math.sqrt(dy * 0.16) + 3) * g.jumpBoost;
-      g.onGround = false;
-      g.jumpCooldown = 50;
-      g.state = 'jump';
+  if (bestTarget) {
+    const { bubble: best, ladder: targetLad } = bestTarget;
+    if (!targetLad) {
+      // 直接ジャンプ
+      g.climbing = false;
+      const dx = best.x - g.x, absDx = Math.abs(dx);
+      g.vx = absDx > 5 ? Math.sign(dx) * 1.4 : 0;
+      g.state = absDx > 5 ? 'walk' : 'idle';
+      const dy = g.y - best.y;
+      if (absDx < best.radius + 15 && dy > 10 && dy < 140 * g.jumpBoost
+          && g.onGround && g.jumpCooldown === 0) {
+        g.vy = -Math.min(10, Math.sqrt(dy * 0.16) + 3) * g.jumpBoost;
+        g.onGround = false; g.jumpCooldown = 50; g.state = 'jump';
+      }
+    } else {
+      // 梯子経由
+      const dxToLad = targetLad.x - g.x;
+      const ladTopY = targetLad.bottomY - targetLad.height;
+      if (Math.abs(dxToLad) > 8 && (g.onGround || !g.onLadder)) {
+        g.vx = Math.sign(dxToLad) * 1.4; g.state = 'walk'; g.climbing = false;
+      } else {
+        g.vx = 0;
+        if (g.y > ladTopY + 4) {
+          g.climbing = true; g.state = 'climb';
+        } else {
+          // 梯子の先端に到達 → 泡に向かってジャンプ
+          g.climbing = false;
+          const dx = best.x - g.x, absDx = Math.abs(dx);
+          g.vx = absDx > 5 ? Math.sign(dx) * 1.4 : 0;
+          const dy = g.y - best.y;
+          if (absDx < best.radius + 20 && dy > 0 && g.jumpCooldown === 0) {
+            g.vy = -Math.min(10, Math.sqrt(dy * 0.16) + 3) * g.jumpBoost;
+            g.onGround = false; g.jumpCooldown = 50; g.state = 'jump';
+          }
+        }
+      }
     }
     return;
   }
@@ -343,10 +390,15 @@ function updateGnomePhysics(g) {
     if (Math.abs(g.x - lad.x) < 14 && g.y > topY - 5 && g.y < lad.bottomY + 5) {
       g.onLadder = true;
       g.x = lad.x;
-      if (g.vy > 0) g.vy = 0;
+      if (g.climbing) {
+        g.vy = -CLIMB_SPEED;
+      } else if (g.vy > 0) {
+        g.vy = 0;
+      }
       break;
     }
   }
+  if (!g.onLadder) g.climbing = false;
 
   // 泡に触れたらPOP
   for (const b of bubbles) {
@@ -823,8 +875,11 @@ function update() {
   for (let i = bubbles.length - 1; i >= 0; i--) {
     updateBubble(bubbles[i]);
     const b = bubbles[i];
-    if (b.y < -60 && !b.popped) bubbles.splice(i, 1);
-    else if (b.popped && b.alpha <= 0) bubbles.splice(i, 1);
+    if (b.x < -b.radius - 20 && !b.popped) {
+      score = Math.max(0, score - 5);
+      updateHUD();
+      bubbles.splice(i, 1);
+    } else if (b.popped && b.alpha <= 0) bubbles.splice(i, 1);
   }
 
   // アイテム更新
