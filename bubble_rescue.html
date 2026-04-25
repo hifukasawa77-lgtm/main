@@ -264,9 +264,11 @@ function updateGnomeAI(g, idx) {
     const dx = wp.x - g.x;
     const dy = wp.y - g.y;
     const d  = Math.sqrt(dx * dx + dy * dy);
-    if (d < 10) { g.waypoints.shift(); return; }
+    if (d < 14) { g.waypoints.shift(); return; }
     g.vx = Math.sign(dx) * Math.min(2.0, d * 0.1) * 1.5;
-    if (dy < -30 && g.onGround && g.jumpCooldown === 0) {
+    if (dy < -20 && g.onLadder) {
+      g.climbing = true; // 梯子上で上へ登る
+    } else if (dy < -30 && g.onGround && g.jumpCooldown === 0) {
       g.vy = -7.5 * g.jumpBoost;
       g.onGround = false;
       g.jumpCooldown = 55;
@@ -342,11 +344,10 @@ function updateGnomeAI(g, idx) {
     return;
   }
 
-  // 3. 落下アイテムを拾いに行く
+  // 3. 落下アイテムを拾いに行く（梯子含む）
   let nearItem = null, nearDist = Infinity;
   for (const it of items) {
     if (it.collected || !it.landed) continue;
-    if (it.type === 'ladder') continue;
     const d = Math.abs(it.x - g.x);
     if (d < nearDist) { nearDist = d; nearItem = it; }
   }
@@ -412,8 +413,14 @@ function updateGnomePhysics(g) {
   const COLLECT_R2 = 28 * 28;
   for (const it of items) {
     if (it.collected || !it.landed) continue;
-    if (it.type === 'ladder') continue;
-    if (dist2(g.x, g.y, it.x, it.y) < COLLECT_R2) collectItem(it, g);
+    if (dist2(g.x, g.y, it.x, it.y) < COLLECT_R2) {
+      if (it.type === 'ladder') {
+        it.collected = true;
+        placeLadder(it.x);
+      } else {
+        collectItem(it, g);
+      }
+    }
   }
 }
 // === HUD更新 ===
@@ -604,15 +611,29 @@ function drawParticles() {
 }
 
 function drawPath() {
-  if (!isDrawing || drawnPath.length < 2) return;
   ctx.save();
   ctx.setLineDash([5, 5]);
-  ctx.strokeStyle = 'rgba(100,220,255,0.75)';
   ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(drawnPath[0].x, drawnPath[0].y);
-  for (let i = 1; i < drawnPath.length; i++) ctx.lineTo(drawnPath[i].x, drawnPath[i].y);
-  ctx.stroke();
+
+  // 引き中のパス（水色）
+  if (isDrawing && drawnPath.length >= 2) {
+    ctx.strokeStyle = 'rgba(100,220,255,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(drawnPath[0].x, drawnPath[0].y);
+    for (let i = 1; i < drawnPath.length; i++) ctx.lineTo(drawnPath[i].x, drawnPath[i].y);
+    ctx.stroke();
+  }
+
+  // 各小人のウェイポイント（小人位置→終点の点線）
+  for (const g of gnomes) {
+    if (g.waypoints.length < 1) continue;
+    ctx.strokeStyle = 'rgba(160,255,180,0.7)';
+    ctx.beginPath();
+    ctx.moveTo(g.x, g.y);
+    for (const wp of g.waypoints) ctx.lineTo(wp.x, wp.y);
+    ctx.stroke();
+  }
+
   ctx.setLineDash([]);
   ctx.restore();
 }
