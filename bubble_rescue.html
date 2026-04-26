@@ -700,7 +700,14 @@ function updateGnomePhysics(g) {
   const COLLECT_R2 = 28 * 28;
   for (const it of items) {
     if (it.collected || !it.landed) continue;
-    if (dist2(g.x, g.y, it.x, it.y) < COLLECT_R2) {
+    if (HAZARD_TYPES.has(it.type)) {
+      // Phase 8-3: 危険アイテムは小人に当たると小人消滅
+      if (dist2(g.x, g.y, it.x, it.y) < 30 * 30) {
+        it.collected = true;
+        killGnome(g);
+        return; // この小人のループを抜ける
+      }
+    } else if (dist2(g.x, g.y, it.x, it.y) < COLLECT_R2) {
       if (it.type === 'ladder') {
         it.collected = true;
         placeLadder(it.x);
@@ -762,8 +769,14 @@ function drawBubble(b) {
   ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
   ctx.fillStyle = grad;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(180,240,255,0.85)';
-  ctx.lineWidth = 1.5;
+  // Phase 8-7: 危険アイテムの泡は赤縁で点滅表示
+  if (HAZARD_TYPES.has(b.contents)) {
+    ctx.strokeStyle = `rgba(255,80,80,${0.6 + 0.3 * Math.sin(frameCount * 0.15)})`;
+    ctx.lineWidth = 2.5;
+  } else {
+    ctx.strokeStyle = 'rgba(180,240,255,0.85)';
+    ctx.lineWidth = 1.5;
+  }
   ctx.stroke();
   // ハイライト
   ctx.beginPath();
@@ -819,6 +832,26 @@ function drawItemIcon(x, y, type, size) {
     ctx.fillStyle = '#bbb';
     ctx.fillRect(x - size * 0.5, y - size * 0.8, size, size * 0.35);
     ctx.fillRect(x - size * 0.5, y - size * 0.55, size, size * 0.2);
+  } else if (type === 'bomb') {
+    // Phase 8-2: 爆弾 — 黒い円 + 導火線 + 点滅火花
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(x, y, size * 0.8, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#ff8800'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x + size * 0.5, y - size * 0.5);
+    ctx.quadraticCurveTo(x + size, y - size, x + size * 0.8, y - size * 1.2);
+    ctx.stroke();
+    // 火花（点滅）
+    if (Math.floor(frameCount / 4) % 2 === 0) {
+      ctx.fillStyle = '#ffdd00';
+      ctx.beginPath(); ctx.arc(x + size * 0.8, y - size * 1.2, size * 0.25, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (type === 'hammer') {
+    // Phase 8-2: ハンマー — 矩形ヘッド + 柄
+    ctx.fillStyle = '#888';
+    ctx.fillRect(x - size * 0.9, y - size * 0.9, size * 1.8, size * 0.7); // ヘッド
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(x - size * 0.15, y - size * 0.2, size * 0.3, size * 1.2); // 柄
   }
   ctx.restore();
 }
@@ -896,6 +929,27 @@ function drawParticles() {
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
     ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ボーナスポップアップ表示（スコア加算時のフローティングテキスト）
+function drawBonusPopups() {
+  if (bonusPopups.length === 0) return;
+  ctx.save();
+  for (let i = bonusPopups.length - 1; i >= 0; i--) {
+    const p = bonusPopups[i];
+    p.y -= 0.6;
+    p.life--;
+    if (p.life <= 0) { bonusPopups.splice(i, 1); continue; }
+    const alpha = Math.min(1, p.life / (p.maxLife * 0.35));
+    ctx.globalAlpha = alpha;
+    ctx.font = p.large ? 'bold 18px monospace' : 'bold 13px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillText(p.text, p.x + 1, p.y + 1);
+    ctx.fillStyle = p.color;
+    ctx.fillText(p.text, p.x, p.y);
   }
   ctx.restore();
 }
@@ -1022,12 +1076,29 @@ function drawTitle() {
   };
   drawGnome(demoG);
 
+  // Phase 5: ハイスコア表示
+  if (hiScore > 0) {
+    ctx.fillStyle = '#ffd700';
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText('★ BEST: ' + hiScore, W / 2, H * 0.52);
+  }
+
   ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#ffffff' : '#66aaff';
   ctx.font = '16px monospace';
-  ctx.fillText('クリック / タップ でスタート', W / 2, H * 0.78);
-  ctx.fillStyle = '#557799';
+  ctx.fillText('クリック / タップ でスタート', W / 2, H * 0.62);
+
+  // Phase 7: チュートリアル操作ヒント
+  const tips = [
+    '泡をクリックで割る → アイテムが落下',
+    '小人がアイテムを拾う → スコア加算',
+    '泡を見逃すとライフ(♥)が減少',
+    '小人をドラッグ → 経路を指示できる',
+  ];
+  ctx.fillStyle = '#8899bb';
   ctx.font = '11px monospace';
-  ctx.fillText('クリック:泡を割る  ドラッグ:小人の経路を引く', W / 2, H * 0.86);
+  tips.forEach((t, i) => {
+    ctx.fillText(t, W / 2, H * 0.72 + i * 16);
+  });
   ctx.textAlign = 'left';
 }
 
@@ -1037,16 +1108,26 @@ function drawGameOver() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ff5566';
   ctx.font = 'bold 36px monospace';
-  ctx.fillText('GAME OVER', W / 2, H * 0.38);
+  ctx.fillText('GAME OVER', W / 2, H * 0.35);
   ctx.fillStyle = '#ffd700';
   ctx.font = '22px monospace';
-  ctx.fillText('SCORE: ' + score, W / 2, H * 0.50);
+  ctx.fillText('SCORE: ' + score, W / 2, H * 0.46);
   ctx.fillStyle = '#aaaaff';
   ctx.font = '14px monospace';
-  ctx.fillText('STAGE ' + (stage + 1) + ' まで到達', W / 2, H * 0.59);
+  ctx.fillText('STAGE ' + (stage + 1) + ' まで到達', W / 2, H * 0.54);
+  // Phase 5: ハイスコア・NEWレコード表示
+  if (score >= hiScore && score > 0) {
+    ctx.fillStyle = (Math.floor(frameCount / 18) % 2 === 0) ? '#ffd700' : '#ff88aa';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('★ NEW HI-SCORE! ★', W / 2, H * 0.63);
+  } else if (hiScore > 0) {
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = '13px monospace';
+    ctx.fillText('BEST: ' + hiScore, W / 2, H * 0.63);
+  }
   ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#fff' : '#66aaff';
   ctx.font = '15px monospace';
-  ctx.fillText('クリック / タップ でリトライ', W / 2, H * 0.72);
+  ctx.fillText('クリック / タップ でリトライ', W / 2, H * 0.75);
   ctx.textAlign = 'left';
 }
 
@@ -1286,6 +1367,7 @@ function render() {
   items.forEach(drawItem);
   gnomes.forEach(drawGnome);
   drawParticles();
+  drawBonusPopups(); // Phase 6: ボーナスポップアップ
   drawPath();
   drawHUDBar();
 }
