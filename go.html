@@ -316,6 +316,26 @@
       .card { flex: 1 1 140px; }
       .btn-primary, .btn-secondary { flex: 1 1 140px; }
     }
+
+    .game-mode-select { display: flex; gap: 10px; }
+    .game-mode-btn {
+      padding: 8px 22px;
+      background: transparent;
+      border: 1px solid var(--surface-border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .game-mode-btn:hover { border-color: var(--neon-magenta); color: var(--neon-magenta); }
+    .game-mode-btn.active {
+      background: rgba(255,0,170,0.1);
+      border-color: var(--neon-magenta);
+      color: var(--neon-magenta);
+      box-shadow: 0 0 8px var(--neon-magenta-glow);
+    }
   </style>
 </head>
 <body>
@@ -365,9 +385,16 @@
 
   <!-- タイトル/設定オーバーレイ -->
   <div id="overlay">
-    <h1 class="overlay-title">AI GO</h1>
-    <p class="overlay-sub">囲碁 / IGO</p>
+    <h1 class="overlay-title" id="overlay-title">AI GO</h1>
+    <p class="overlay-sub" id="overlay-sub">囲碁 / IGO</p>
     <div class="overlay-section">
+      <div class="section-label">ゲーム / GAME</div>
+      <div class="game-mode-select">
+        <button class="game-mode-btn active" data-mode="go">囲碁 GO</button>
+        <button class="game-mode-btn" data-mode="gomoku">五目並べ</button>
+      </div>
+    </div>
+    <div class="overlay-section" id="size-section">
       <div class="section-label">盤面サイズ</div>
       <div class="size-choice">
         <button class="size-btn active" data-size="9">9路盤</button>
@@ -1151,7 +1178,421 @@ const GC = {
   }
 };
 
+// ===== GOMOKU =====
+let currentMode = 'go';
+
+const GOMOKU_SIZE = 15;
+const GOMOKU_CELL = 36;
+const GOMOKU_PAD = 32;
+const GOMOKU_CV_SIZE = GOMOKU_CELL * (GOMOKU_SIZE - 1) + GOMOKU_PAD * 2;
+
+class GomokuBoard {
+  constructor() {
+    this.grid = Array.from({length: GOMOKU_SIZE}, () => new Int8Array(GOMOKU_SIZE));
+    this.lastMove = null;
+  }
+  isValid(r, c) { return r >= 0 && r < GOMOKU_SIZE && c >= 0 && c < GOMOKU_SIZE; }
+  isEmpty(r, c) { return this.isValid(r, c) && this.grid[r][c] === 0; }
+  place(r, c, color) { this.grid[r][c] = color; this.lastMove = {r, c}; }
+  undo(r, c) { this.grid[r][c] = 0; }
+
+  checkWin(r, c, color) {
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (const [dr, dc] of dirs) {
+      let n = 1;
+      for (let i = 1; i < 5; i++) { if (this.isValid(r+dr*i, c+dc*i) && this.grid[r+dr*i][c+dc*i] === color) n++; else break; }
+      for (let i = 1; i < 5; i++) { if (this.isValid(r-dr*i, c-dc*i) && this.grid[r-dr*i][c-dc*i] === color) n++; else break; }
+      if (n >= 5) return true;
+    }
+    return false;
+  }
+
+  findWinLine(color) {
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (let r = 0; r < GOMOKU_SIZE; r++) {
+      for (let c = 0; c < GOMOKU_SIZE; c++) {
+        if (this.grid[r][c] !== color) continue;
+        for (const [dr, dc] of dirs) {
+          let n = 1;
+          while (this.isValid(r+dr*n, c+dc*n) && this.grid[r+dr*n][c+dc*n] === color) n++;
+          if (n >= 5) return {r1:r,c1:c,r2:r+dr*(n-1),c2:c+dc*(n-1)};
+        }
+      }
+    }
+    return null;
+  }
+
+  getCandidates() {
+    const seen = new Set();
+    const result = [];
+    for (let r = 0; r < GOMOKU_SIZE; r++) {
+      for (let c = 0; c < GOMOKU_SIZE; c++) {
+        if (!this.grid[r][c]) continue;
+        for (let dr = -2; dr <= 2; dr++) {
+          for (let dc = -2; dc <= 2; dc++) {
+            const nr = r+dr, nc = c+dc;
+            const key = nr*GOMOKU_SIZE+nc;
+            if (this.isValid(nr, nc) && !this.grid[nr][nc] && !seen.has(key)) {
+              seen.add(key); result.push({r:nr, c:nc});
+            }
+          }
+        }
+      }
+    }
+    if (!result.length) { const mid = Math.floor(GOMOKU_SIZE/2); result.push({r:mid,c:mid}); }
+    return result;
+  }
+}
+
+class GomokuAI {
+  constructor(difficulty) { this.difficulty = difficulty; }
+
+  get depth() { return this.difficulty === 'easy' ? 2 : this.difficulty === 'hard' ? 5 : 3; }
+
+  scoreSeq(vals, color) {
+    const opp = color === BLACK ? WHITE : BLACK;
+    let mine = 0, them = 0;
+    for (const v of vals) { if (v === color) mine++; else if (v === opp) them++; }
+    if (mine && them) return 0;
+    if (them) return them === 4 ? -80000 : them === 3 ? -900 : them === 2 ? -80 : -8;
+    if (mine === 5) return 100000;
+    return mine === 4 ? 900 : mine === 3 ? 80 : mine === 2 ? 8 : 1;
+  }
+
+  evaluate(board, color) {
+    let score = 0;
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (let r = 0; r < GOMOKU_SIZE; r++) {
+      for (let c = 0; c < GOMOKU_SIZE; c++) {
+        for (const [dr, dc] of dirs) {
+          const w = [];
+          for (let i = 0; i < 5; i++) {
+            const nr = r+dr*i, nc = c+dc*i;
+            if (!board.isValid(nr, nc)) break;
+            w.push(board.grid[nr][nc]);
+          }
+          if (w.length === 5) score += this.scoreSeq(w, color);
+        }
+      }
+    }
+    return score;
+  }
+
+  minimax(board, depth, alpha, beta, isMax, aiColor, plColor) {
+    if (board.lastMove) {
+      const {r,c} = board.lastMove;
+      const col = board.grid[r][c];
+      if (col && board.checkWin(r, c, col)) return col === aiColor ? 1000000+depth : -(1000000+depth);
+    }
+    if (depth === 0) return this.evaluate(board, aiColor);
+    const cands = board.getCandidates();
+    if (isMax) {
+      let best = -Infinity;
+      for (const {r,c} of cands) {
+        board.place(r, c, aiColor);
+        if (board.checkWin(r, c, aiColor)) { board.undo(r,c); return 1000000+depth; }
+        const val = this.minimax(board, depth-1, alpha, beta, false, aiColor, plColor);
+        board.undo(r, c);
+        if (val > best) best = val;
+        if (best > alpha) alpha = best;
+        if (beta <= alpha) break;
+      }
+      return best;
+    } else {
+      let best = Infinity;
+      for (const {r,c} of cands) {
+        board.place(r, c, plColor);
+        if (board.checkWin(r, c, plColor)) { board.undo(r,c); return -(1000000+depth); }
+        const val = this.minimax(board, depth-1, alpha, beta, true, aiColor, plColor);
+        board.undo(r, c);
+        if (val < best) best = val;
+        if (best < beta) beta = best;
+        if (beta <= alpha) break;
+      }
+      return best;
+    }
+  }
+
+  getBestMove(board, aiColor, plColor) {
+    const cands = board.getCandidates();
+    // immediate win
+    for (const {r,c} of cands) {
+      board.place(r, c, aiColor);
+      if (board.checkWin(r, c, aiColor)) { board.undo(r,c); return {r,c}; }
+      board.undo(r, c);
+    }
+    // block opponent win
+    for (const {r,c} of cands) {
+      board.place(r, c, plColor);
+      if (board.checkWin(r, c, plColor)) { board.undo(r,c); return {r,c}; }
+      board.undo(r, c);
+    }
+    let bestScore = -Infinity, bestMove = cands[0];
+    for (const {r,c} of cands) {
+      board.place(r, c, aiColor);
+      const score = this.minimax(board, this.depth-1, -Infinity, Infinity, false, aiColor, plColor);
+      board.undo(r, c);
+      if (score > bestScore) { bestScore = score; bestMove = {r,c}; }
+    }
+    return bestMove;
+  }
+}
+
+const GomokuRenderer = {
+  render(canvas, board, hover, winLine) {
+    const ctx = canvas.getContext('2d');
+    const S = GOMOKU_CELL, P = GOMOKU_PAD, N = GOMOKU_SIZE;
+    // wood background
+    ctx.fillStyle = '#c8922a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const grad = ctx.createRadialGradient(canvas.width/2, canvas.height/2, 0, canvas.width/2, canvas.height/2, canvas.width*0.7);
+    grad.addColorStop(0, 'rgba(220,170,80,0.25)');
+    grad.addColorStop(1, 'rgba(80,40,5,0.4)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // grid
+    ctx.strokeStyle = 'rgba(70,35,0,0.75)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < N; i++) {
+      ctx.beginPath(); ctx.moveTo(P+i*S, P); ctx.lineTo(P+i*S, P+(N-1)*S); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(P, P+i*S); ctx.lineTo(P+(N-1)*S, P+i*S); ctx.stroke();
+    }
+    // star points
+    const stars = [[2,2],[2,7],[2,12],[7,2],[7,7],[7,12],[12,2],[12,7],[12,12]];
+    ctx.fillStyle = 'rgba(60,30,0,0.85)';
+    for (const [sr,sc] of stars) { ctx.beginPath(); ctx.arc(P+sc*S, P+sr*S, 3.5, 0, Math.PI*2); ctx.fill(); }
+    // hover ghost
+    if (hover && board.isEmpty(hover.r, hover.c)) {
+      const x = P+hover.c*S, y = P+hover.r*S;
+      ctx.globalAlpha = 0.38;
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.arc(x, y, S*0.44, 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    // stones
+    for (let r = 0; r < N; r++) {
+      for (let c = 0; c < N; c++) {
+        const v = board.grid[r][c]; if (!v) continue;
+        const x = P+c*S, y = P+r*S, rad = S*0.44;
+        const isLast = board.lastMove && board.lastMove.r===r && board.lastMove.c===c;
+        const g = ctx.createRadialGradient(x-rad*0.3, y-rad*0.3, 0, x, y, rad);
+        if (v === BLACK) { g.addColorStop(0,'#555'); g.addColorStop(1,'#111'); }
+        else { g.addColorStop(0,'#fff'); g.addColorStop(1,'#ccc'); }
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI*2); ctx.fill();
+        if (isLast) {
+          ctx.strokeStyle = v===BLACK ? 'rgba(0,245,255,0.8)' : 'rgba(255,0,170,0.8)';
+          ctx.lineWidth = 2; ctx.stroke(); ctx.lineWidth = 1;
+        }
+      }
+    }
+    // win line
+    if (winLine) {
+      const {r1,c1,r2,c2} = winLine;
+      ctx.strokeStyle = 'rgba(255,220,0,0.92)';
+      ctx.lineWidth = 4;
+      ctx.shadowColor = 'rgba(255,220,0,0.7)';
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.moveTo(P+c1*S, P+r1*S); ctx.lineTo(P+c2*S, P+r2*S); ctx.stroke();
+      ctx.shadowBlur = 0; ctx.lineWidth = 1;
+    }
+  }
+};
+
+const GomokuGame = {
+  board: null,
+  playerColor: BLACK,
+  aiColor: WHITE,
+  currentTurn: BLACK,
+  gameActive: false,
+  aiThinking: false,
+  hover: null,
+  ai: null,
+  winLine: null,
+
+  get canvas() { return document.getElementById('c'); },
+  setStatus(msg) { document.getElementById('statusText').textContent = msg; },
+
+  startGame(playerColor, difficulty) {
+    this.playerColor = playerColor;
+    this.aiColor = playerColor === BLACK ? WHITE : BLACK;
+    this.board = new GomokuBoard();
+    this.ai = new GomokuAI(difficulty);
+    this.currentTurn = BLACK;
+    this.gameActive = true;
+    this.aiThinking = false;
+    this.hover = null;
+    this.winLine = null;
+    const cv = this.canvas;
+    cv.width = GOMOKU_CV_SIZE; cv.height = GOMOKU_CV_SIZE;
+    document.getElementById('overlay').style.display = 'none';
+    document.getElementById('result-overlay').style.display = 'none';
+    document.getElementById('btn-pass').style.display = 'none';
+    document.getElementById('score-box').style.display = 'none';
+    this.render();
+    this.updateTurnStatus();
+    if (this.currentTurn === this.aiColor) this.scheduleAI();
+  },
+
+  updateTurnStatus() {
+    if (!this.gameActive) return;
+    const isMyTurn = this.currentTurn === this.playerColor;
+    const cn = this.currentTurn === BLACK ? '黒' : '白';
+    this.setStatus(isMyTurn ? `あなたの番 (${cn})` : `AI の番 (${cn})`);
+  },
+
+  render() {
+    GomokuRenderer.render(this.canvas, this.board, this.gameActive && !this.aiThinking ? this.hover : null, this.winLine);
+  },
+
+  handleMove(r, c) {
+    if (!this.gameActive || this.aiThinking) return;
+    if (this.currentTurn !== this.playerColor) return;
+    if (!this.board.isEmpty(r, c)) return;
+    this.board.place(r, c, this.playerColor);
+    this.render();
+    if (this.board.checkWin(r, c, this.playerColor)) { this.endGame(this.playerColor); return; }
+    this.currentTurn = this.aiColor;
+    this.scheduleAI();
+  },
+
+  scheduleAI() {
+    this.aiThinking = true;
+    this.setStatus('AI の思考中...');
+    this.render();
+    setTimeout(() => this.doAI(), 30);
+  },
+
+  doAI() {
+    const move = this.ai.getBestMove(this.board, this.aiColor, this.playerColor);
+    this.board.place(move.r, move.c, this.aiColor);
+    this.aiThinking = false;
+    this.render();
+    if (this.board.checkWin(move.r, move.c, this.aiColor)) { this.endGame(this.aiColor); return; }
+    this.currentTurn = this.playerColor;
+    this.updateTurnStatus();
+  },
+
+  endGame(winner) {
+    this.gameActive = false;
+    this.winLine = this.board.findWinLine(winner);
+    this.render();
+    const playerWon = winner === this.playerColor;
+    const cn = winner === BLACK ? '黒' : '白';
+    document.getElementById('resultTitle').textContent = playerWon ? 'あなたの勝ち！' : 'AIの勝ち';
+    document.getElementById('resultScores').innerHTML = `<span class="${playerWon ? 'winner' : ''}">${cn}が5目並べました</span>`;
+    setTimeout(() => { document.getElementById('result-overlay').style.display = 'flex'; }, 700);
+  },
+
+  handleHover(e) {
+    if (!this.gameActive || this.aiThinking || this.currentTurn !== this.playerColor) {
+      this.hover = null; this.render(); return;
+    }
+    const cv = this.canvas;
+    const rect = cv.getBoundingClientRect();
+    const sx = (e.clientX - rect.left) * cv.width / rect.width;
+    const sy = (e.clientY - rect.top) * cv.height / rect.height;
+    const c = Math.round((sx - GOMOKU_PAD) / GOMOKU_CELL);
+    const r = Math.round((sy - GOMOKU_PAD) / GOMOKU_CELL);
+    this.hover = (r >= 0 && r < GOMOKU_SIZE && c >= 0 && c < GOMOKU_SIZE) ? {r, c} : null;
+    this.render();
+  },
+
+  handleClick(e) {
+    if (!this.gameActive || this.aiThinking || this.currentTurn !== this.playerColor) return;
+    const cv = this.canvas;
+    const rect = cv.getBoundingClientRect();
+    const sx = (e.clientX - rect.left) * cv.width / rect.width;
+    const sy = (e.clientY - rect.top) * cv.height / rect.height;
+    const c = Math.round((sx - GOMOKU_PAD) / GOMOKU_CELL);
+    const r = Math.round((sy - GOMOKU_PAD) / GOMOKU_CELL);
+    if (r >= 0 && r < GOMOKU_SIZE && c >= 0 && c < GOMOKU_SIZE) this.handleMove(r, c);
+  }
+};
+
 GC.init();
+
+// ===== モード切替 =====
+let selectedModeDiff = 'normal';
+
+document.querySelectorAll('.game-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.game-mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentMode = btn.dataset.mode;
+    const isGo = currentMode === 'go';
+    document.getElementById('size-section').style.display = isGo ? '' : 'none';
+    document.getElementById('btn-show-rules').style.display = isGo ? '' : 'none';
+    document.getElementById('overlay-title').textContent = isGo ? 'AI GO' : '五目並べ';
+    document.getElementById('overlay-sub').textContent = isGo ? '囲碁 / IGO' : 'GOMOKU / FIVE IN A ROW';
+  });
+});
+
+// chooseBlack / chooseWhite を共通化 (GC.init内の既存リスナーは置き換え)
+{
+  const pickColor = (playerColor) => {
+    GC.gameActive = false;
+    GomokuGame.gameActive = false;
+    const diffBtn = document.querySelector('.diff-select-btn.sel');
+    const diff = diffBtn ? diffBtn.dataset.d : 'normal';
+    if (currentMode === 'gomoku') {
+      GomokuGame.startGame(playerColor, diff);
+    } else {
+      const sizeBtn = document.querySelector('.size-btn.active');
+      const sz = sizeBtn ? parseInt(sizeBtn.dataset.size) : 9;
+      document.getElementById('btn-pass').style.display = '';
+      document.getElementById('score-box').style.display = '';
+      GC.startGame(playerColor, sz, diff);
+    }
+  };
+
+  const btnB = document.getElementById('chooseBlack');
+  const btnW = document.getElementById('chooseWhite');
+  const newB = btnB.cloneNode(true);
+  const newW = btnW.cloneNode(true);
+  btnB.parentNode.replaceChild(newB, btnB);
+  btnW.parentNode.replaceChild(newW, btnW);
+  newB.addEventListener('click', () => pickColor(BLACK));
+  newW.addEventListener('click', () => pickColor(WHITE));
+}
+
+// btn-play-again: 五目並べのリセット後にUI復元
+{
+  const orig = document.getElementById('btn-play-again');
+  const fresh = orig.cloneNode(true);
+  orig.parentNode.replaceChild(fresh, orig);
+  fresh.addEventListener('click', () => {
+    document.getElementById('result-overlay').style.display = 'none';
+    document.getElementById('btn-pass').style.display = '';
+    document.getElementById('score-box').style.display = '';
+    document.getElementById('overlay').style.display = 'flex';
+  });
+}
+
+// リセット時に両ゲームを停止してUIを復元
+document.getElementById('btn-reset').addEventListener('click', () => {
+  GomokuGame.gameActive = false;
+  document.getElementById('btn-pass').style.display = '';
+  document.getElementById('score-box').style.display = '';
+});
+
+// Canvas イベントをモードに応じてルーティング
+{
+  const cv = document.getElementById('c');
+  cv.addEventListener('mousemove', e => {
+    if (currentMode === 'gomoku') GomokuGame.handleHover(e);
+  });
+  cv.addEventListener('click', e => {
+    if (currentMode === 'gomoku') GomokuGame.handleClick(e);
+  });
+  cv.addEventListener('touchend', e => {
+    if (currentMode === 'gomoku') {
+      e.preventDefault();
+      GomokuGame.handleClick(e.changedTouches[0]);
+    }
+  }, {passive: false});
+}
 </script>
 </body>
 </html>
