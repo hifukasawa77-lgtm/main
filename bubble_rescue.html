@@ -75,19 +75,227 @@ const BUBBLE_FLOW_Y = 250;
 const CLIMB_SPEED = 1.5;
 const LADDER_HEIGHT = 90;
 
+// Phase 4: 10ステージ化。Stage 4以降は危険アイテム(bomb/hammer)混入
 const STAGE_CFG = [
-  { gnomes:2, bubbleRate:160, bubbleSpeed:0.8, target:10, maxBubbles:4,
+  { gnomes:2, bubbleRate:160, bubbleSpeed:0.8, target:10, maxBubbles:4, lives:3,
+    bgColor:['#06061e','#0a1a3e'],
     contents:['coin','coin','ladder','ladder','coin'] },
-  { gnomes:3, bubbleRate:120, bubbleSpeed:1.2, target:20, maxBubbles:6,
+  { gnomes:2, bubbleRate:130, bubbleSpeed:1.0, target:15, maxBubbles:5, lives:3,
+    bgColor:['#06061e','#0a1a3e'],
     contents:['coin','ladder','chest','coin','tool','coin'] },
-  { gnomes:3, bubbleRate:90,  bubbleSpeed:1.6, target:35, maxBubbles:8,
+  { gnomes:3, bubbleRate:110, bubbleSpeed:1.2, target:20, maxBubbles:6, lives:3,
+    bgColor:['#06061e','#0a1a3e'],
     contents:['coin','chest','tool','chest','coin','ladder','coin'] },
+  { gnomes:3, bubbleRate:95,  bubbleSpeed:1.4, target:28, maxBubbles:6, lives:3,
+    bgColor:['#08062a','#120a3e'],
+    contents:['coin','chest','tool','coin','bomb','ladder','coin'] },
+  { gnomes:3, bubbleRate:80,  bubbleSpeed:1.6, target:35, maxBubbles:7, lives:3,
+    bgColor:['#08062a','#120a3e'],
+    contents:['coin','chest','tool','coin','bomb','ladder','hammer'] },
+  { gnomes:4, bubbleRate:70,  bubbleSpeed:1.8, target:45, maxBubbles:7, lives:3,
+    bgColor:['#0a0630','#1a0a3e'],
+    contents:['coin','chest','tool','coin','bomb','ladder','hammer'] },
+  { gnomes:4, bubbleRate:60,  bubbleSpeed:2.0, target:55, maxBubbles:8, lives:3,
+    bgColor:['#0a0630','#1a0a3e'],
+    contents:['coin','chest','bomb','coin','tool','ladder','hammer','bomb','coin'] },
+  { gnomes:4, bubbleRate:55,  bubbleSpeed:2.1, target:65, maxBubbles:8, lives:2,
+    bgColor:['#100430','#200636'],
+    contents:['coin','bomb','tool','coin','bomb','ladder','hammer','chest','coin'] },
+  { gnomes:4, bubbleRate:50,  bubbleSpeed:2.3, target:75, maxBubbles:8, lives:2,
+    bgColor:['#100430','#200636'],
+    contents:['coin','bomb','tool','hammer','bomb','ladder','hammer','chest','coin'] },
+  { gnomes:5, bubbleRate:42,  bubbleSpeed:2.5, target:80, maxBubbles:9, lives:2,
+    bgColor:['#1e0010','#2a0010'],
+    contents:['coin','bomb','hammer','coin','bomb','ladder','hammer','bomb','coin','chest'] },
 ];
-const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20 };
+const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20, bomb:0, hammer:0 };
+// Phase 8-1: 危険アイテム種別
+const HAZARD_TYPES = new Set(['bomb', 'hammer']);
+const MAX_LIVES = 3;
 
 // === キャンバス ===
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+
+// === Audio System (Phase 3) ===
+const AudioSystem = {
+  ctx: null, masterGain: null, bgmNodes: [], muted: false,
+  init() {
+    if (this.ctx) return;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.masterGain = this.ctx.createGain();
+    this.masterGain.gain.value = 0.4;
+    this.masterGain.connect(this.ctx.destination);
+  },
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.masterGain) this.masterGain.gain.value = this.muted ? 0 : 0.4;
+  },
+  startBGM() {
+    if (!this.ctx) return;
+    this.stopBGM();
+    // 8bit風メロディ: square波ループ
+    const notes = [523, 587, 659, 784, 659, 587, 523, 440];
+    const noteDur = 0.22;
+    const loopDur = notes.length * noteDur;
+    const ac = this.ctx;
+    const now = ac.currentTime;
+    const loopRepeat = 16;
+    for (let rep = 0; rep < loopRepeat; rep++) {
+      notes.forEach((freq, i) => {
+        const t = now + (rep * loopDur) + i * noteDur;
+        const osc = ac.createOscillator();
+        const g = ac.createGain();
+        osc.type = 'square';
+        osc.frequency.value = freq;
+        g.gain.setValueAtTime(0.0, t);
+        g.gain.linearRampToValueAtTime(0.12, t + 0.02);
+        g.gain.setValueAtTime(0.12, t + noteDur * 0.7);
+        g.gain.linearRampToValueAtTime(0.0, t + noteDur * 0.9);
+        osc.connect(g); g.connect(this.masterGain);
+        osc.start(t); osc.stop(t + noteDur);
+        this.bgmNodes.push(osc);
+      });
+    }
+  },
+  stopBGM() {
+    this.bgmNodes.forEach(n => { try { n.stop(); n.disconnect(); } catch(e){} });
+    this.bgmNodes = [];
+  },
+  playSE(type) {
+    if (!this.ctx) return;
+    const ac = this.ctx;
+    const now = ac.currentTime;
+    const g = ac.createGain();
+    g.connect(this.masterGain);
+    switch(type) {
+      case 'pop': {
+        const osc = ac.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(800, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.12);
+        g.gain.setValueAtTime(0.3, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.connect(g); osc.start(now); osc.stop(now + 0.12);
+        break;
+      }
+      case 'collect': {
+        [440, 660, 880].forEach((f, i) => {
+          const o = ac.createOscillator();
+          const og = ac.createGain();
+          o.type = 'square'; o.frequency.value = f;
+          const t = now + i * 0.06;
+          og.gain.setValueAtTime(0.15, t);
+          og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+          o.connect(og); og.connect(this.masterGain);
+          o.start(t); o.stop(t + 0.09);
+        });
+        break;
+      }
+      case 'combo': {
+        [523, 784, 1047, 1568].forEach((f, i) => {
+          const o = ac.createOscillator();
+          const og = ac.createGain();
+          o.type = 'square'; o.frequency.value = f;
+          const t = now + i * 0.04;
+          og.gain.setValueAtTime(0.18, t);
+          og.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+          o.connect(og); og.connect(this.masterGain);
+          o.start(t); o.stop(t + 0.07);
+        });
+        break;
+      }
+      case 'miss': {
+        const osc = ac.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.exponentialRampToValueAtTime(100, now + 0.25);
+        g.gain.setValueAtTime(0.3, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+        osc.connect(g); osc.start(now); osc.stop(now + 0.25);
+        break;
+      }
+      case 'gameover': {
+        [400, 300, 200, 150].forEach((f, i) => {
+          const o = ac.createOscillator();
+          const og = ac.createGain();
+          o.type = 'square'; o.frequency.value = f;
+          const t = now + i * 0.18;
+          og.gain.setValueAtTime(0.2, t);
+          og.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          o.connect(og); og.connect(this.masterGain);
+          o.start(t); o.stop(t + 0.15);
+        });
+        break;
+      }
+      case 'clear': {
+        [523, 659, 784, 1047].forEach((f, i) => {
+          const o = ac.createOscillator();
+          const og = ac.createGain();
+          o.type = 'square'; o.frequency.value = f;
+          const t = now + i * 0.12;
+          og.gain.setValueAtTime(0.2, t);
+          og.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+          o.connect(og); og.connect(this.masterGain);
+          o.start(t); o.stop(t + 0.10);
+        });
+        break;
+      }
+      case 'ladder': {
+        const osc = ac.createOscillator();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(220, now);
+        osc.frequency.exponentialRampToValueAtTime(440, now + 0.08);
+        g.gain.setValueAtTime(0.2, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+        osc.connect(g); osc.start(now); osc.stop(now + 0.08);
+        break;
+      }
+      case 'bomb': {
+        // 爆発音: ノイズバースト
+        const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.3), ac.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = (Math.random()*2-1) * (1 - i/data.length);
+        const src = ac.createBufferSource();
+        src.buffer = buf;
+        const biquad = ac.createBiquadFilter();
+        biquad.type = 'lowpass'; biquad.frequency.value = 400;
+        src.connect(biquad); biquad.connect(g);
+        g.gain.setValueAtTime(0.6, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        src.start(now);
+        break;
+      }
+      case 'hammer': {
+        // 衝撃音: 低い打撃音
+        const osc = ac.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(120, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.15);
+        g.gain.setValueAtTime(0.5, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        osc.connect(g); osc.start(now); osc.stop(now + 0.15);
+        break;
+      }
+    }
+  }
+};
+function playSE(type) { AudioSystem.playSE(type); }
+
+// === ハイスコア (Phase 5) ===
+const HiScore = {
+  load() {
+    hiScore = parseInt(localStorage.getItem('bubble_rescue_hi') || '0');
+  },
+  save() {
+    if (score > hiScore) {
+      hiScore = score;
+      localStorage.setItem('bubble_rescue_hi', String(hiScore));
+      return true; // NEW RECORD
+    }
+    return false;
+  }
+};
 
 // === 状態変数 ===
 let state = 'title'; // 'title'|'play'|'gameover'|'clear'
@@ -109,6 +317,14 @@ let mouseDownPos = null;
 let hasDragged = false;
 const DRAG_THRESHOLD = 6;
 let draggingLadder = null;
+
+// Phase 1: ライフ・ハイスコア・コンボ状態変数
+let lives = 3;
+let hiScore = 0;
+let stageStartTime = 0;
+let comboCount = 0, comboTimer = 0;
+const COMBO_WINDOW = 90;
+let bonusPopups = [];
 
 // === エンティティ生成 ===
 function makeBubble() {
@@ -215,22 +431,38 @@ function popBubble(b) {
   if (b.popped) return;
   b.popped = true;
   items.push(makeItem(b.x, b.y, b.contents));
-  const pColors = { coin:'#ffd700', chest:'#c8843a', tool:'#aaaacc', ladder:'#c8a06a' };
+  const pColors = { coin:'#ffd700', chest:'#c8843a', tool:'#aaaacc', ladder:'#c8a06a', bomb:'#ff4400', hammer:'#888888' };
   for (let i = 0; i < 10; i++) particles.push(makeParticle(b.x, b.y, pColors[b.contents] || '#fff'));
+  playSE('pop'); // Phase 3: pop SE
 }
 
 function collectItem(it, gnome) {
   it.collected = true;
-  score += ITEM_SCORE[it.type] || 0;
+  // Phase 6: コンボシステム
+  comboCount++;
+  comboTimer = COMBO_WINDOW;
+  const comboMult = Math.min(4, 1 + (comboCount - 1) * 0.5);
+  const baseScore = ITEM_SCORE[it.type] || 0;
+  const earned = Math.round(baseScore * comboMult);
+  score += earned;
   itemsCollected++;
   if (it.type === 'tool') gnome.jumpBoost = Math.min(2.0, gnome.jumpBoost + 0.3);
+  // ポップアップ表示
+  if (comboCount >= 3) {
+    bonusPopups.push({ x: it.x, y: it.y - 20, text: 'x' + comboMult.toFixed(1) + ' COMBO! +' + earned, alpha: 1, vy: -1.2, life: 80 });
+    playSE('combo'); // Phase 3: combo SE
+  } else {
+    if (earned > 0) bonusPopups.push({ x: it.x, y: it.y - 20, text: '+' + earned, alpha: 1, vy: -1.0, life: 60 });
+    playSE('collect'); // Phase 3: collect SE
+  }
   updateHUD();
   if (itemsCollected >= STAGE_CFG[stage].target) {
     if (stage < STAGE_CFG.length - 1) {
-      stage++;
-      itemsCollected = 0;
-      initStage();
+      playSE('clear'); // Phase 3: clear SE
+      showStageBonus();
     } else {
+      playSE('clear');
+      HiScore.save(); // Phase 5: ハイスコア保存
       state = 'clear';
     }
   }
@@ -245,16 +477,51 @@ function placeLadder(x) {
   }
   score += ITEM_SCORE['ladder'];
   itemsCollected++;
+  playSE('ladder'); // Phase 3: ladder SE
   updateHUD();
   if (itemsCollected >= STAGE_CFG[stage].target) {
     if (stage < STAGE_CFG.length - 1) {
-      stage++;
-      itemsCollected = 0;
-      initStage();
+      playSE('clear');
+      showStageBonus();
     } else {
+      playSE('clear');
+      HiScore.save();
       state = 'clear';
     }
   }
+}
+
+// Phase 8-4: 小人消滅関数
+function killGnome(g) {
+  for (let i = 0; i < 16; i++) {
+    particles.push(makeParticle(g.x, g.y, '#ff3333'));
+  }
+  const idx = gnomes.indexOf(g);
+  if (idx >= 0) gnomes.splice(idx, 1);
+  if (gnomes.length === 0) {
+    playSE('gameover');
+    HiScore.save();
+    state = 'gameover';
+  }
+}
+
+// Phase 6: ステージクリアボーナス
+function showStageBonus() {
+  const elapsed = (Date.now() - stageStartTime) / 1000;
+  const timeBonus = Math.max(0, Math.round(500 - elapsed * 5));
+  const comboBonus = comboCount * 20;
+  score += timeBonus + comboBonus;
+  for (let i = 0; i < 40; i++) particles.push(makeParticle(W/2, H/2, ['#ffd700','#ff88aa','#88ffcc','#88aaff'][i%4]));
+  if (timeBonus > 0) bonusPopups.push({ x: W/2, y: H*0.4, text: 'TIME BONUS +' + timeBonus, alpha: 1, vy: -0.8, life: 100 });
+  if (comboBonus > 0) bonusPopups.push({ x: W/2, y: H*0.5, text: 'COMBO BONUS +' + comboBonus, alpha: 1, vy: -0.8, life: 100 });
+  const nextStage = stage + 1;
+  setTimeout(() => {
+    if (state === 'play') {
+      stage = nextStage;
+      itemsCollected = 0;
+      initStage();
+    }
+  }, 1800);
 }
 
 // === 小人AI ===
@@ -452,9 +719,11 @@ function updateHUD() {
 
 // === 描画ヘルパー ===
 function drawBackground() {
+  // Phase 4: ステージ背景色をSTAGE_CFGから参照
+  const bgColor = STAGE_CFG[stage] ? STAGE_CFG[stage].bgColor : ['#06061e','#0a1a3e'];
   const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, '#06061e');
-  grad.addColorStop(0.75, '#0a1a3e');
+  grad.addColorStop(0, bgColor[0]);
+  grad.addColorStop(0.75, bgColor[1]);
   grad.addColorStop(1, '#0a2a0a');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
@@ -659,6 +928,22 @@ function drawPath() {
   ctx.restore();
 }
 
+// Phase 2: ハート描画関数（ベジェ曲線でハート形）
+function drawHeart(cx, cy, size, filled) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + size * 0.3);
+  ctx.bezierCurveTo(cx - size, cy - size * 0.6, cx - size * 1.6, cy + size * 0.5, cx, cy + size * 1.2);
+  ctx.bezierCurveTo(cx + size * 1.6, cy + size * 0.5, cx + size, cy - size * 0.6, cx, cy + size * 0.3);
+  ctx.closePath();
+  ctx.fillStyle = filled ? '#ff4466' : 'rgba(255,80,120,0.25)';
+  ctx.fill();
+  ctx.strokeStyle = filled ? '#ff88aa' : 'rgba(255,80,120,0.4)';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+  ctx.restore();
+}
+
 // === スクリーン描画 ===
 function drawHUDBar() {
   ctx.save();
@@ -671,10 +956,31 @@ function drawHUDBar() {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#aaeeff';
   ctx.fillText('STAGE ' + (stage + 1), W / 2, 27);
+
+  // Phase 6: コンボ表示
+  if (comboCount >= 2) {
+    ctx.fillStyle = '#ffdd44';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('COMBO x' + comboCount, W / 2, 40);
+  }
+
+  // Phase 2: ハートでライフ表示（右上端）
+  const maxLives = STAGE_CFG[stage].lives || MAX_LIVES;
+  for (let h = 0; h < maxLives; h++) {
+    drawHeart(W - 18 - h * 22, 14, 7, h < lives);
+  }
+
+  // Phase 3: ミュートボタン（左上）
+  ctx.textAlign = 'center';
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText(AudioSystem.muted ? '🔇' : '🔊', W - 18 - maxLives * 22 - 22, 18);
+
+  // プログレスバー
   ctx.textAlign = 'right';
   ctx.fillStyle = '#88ffaa';
-  ctx.fillText(itemsCollected + ' / ' + STAGE_CFG[stage].target, W - 10, 27);
-  // プログレスバー
+  ctx.font = '12px monospace';
+  ctx.fillText(itemsCollected + ' / ' + STAGE_CFG[stage].target, W - 18 - maxLives * 22 - 42, 27);
   const prog = Math.min(1, itemsCollected / STAGE_CFG[stage].target);
   ctx.fillStyle = 'rgba(255,255,255,0.1)';
   ctx.fillRect(10, 33, W - 20, 5);
@@ -782,13 +1088,22 @@ function getCanvasPos(e) {
 }
 
 function handleStateClick(pos) {
-  if (state === 'title')    { initGame(); state = 'play'; return true; }
-  if (state === 'gameover') { initGame(); state = 'play'; return true; }
-  if (state === 'clear')    { state = 'title';             return true; }
+  // Phase 3: AudioContext はユーザー操作で初期化（autoplay policy対策）
+  AudioSystem.init();
+  if (state === 'title')    { initGame(); state = 'play'; AudioSystem.startBGM(); return true; }
+  if (state === 'gameover') { initGame(); state = 'play'; AudioSystem.startBGM(); return true; }
+  if (state === 'clear')    { state = 'title';            AudioSystem.stopBGM();  return true; }
   return false;
 }
 
 function handlePlayClick(pos) {
+  // Phase 3: ミュートボタン判定（HUDバー右上）
+  const maxLives = STAGE_CFG[stage].lives || MAX_LIVES;
+  const muteX = W - 18 - maxLives * 22 - 22;
+  if (pos.y < 42 && Math.abs(pos.x - muteX) < 18) {
+    AudioSystem.toggleMute();
+    return;
+  }
   // 泡をPOP
   for (const b of bubbles) {
     if (b.popped) continue;
@@ -885,6 +1200,12 @@ function initStage() {
   particles = []; drawnPath = [];
   bubbleTimer = 0;
   gnomes = [];
+  // Phase 2: ステージ開始時にlivesをリセット（Stage 8〜10はlives:2）
+  lives = cfg.lives || MAX_LIVES;
+  // Phase 6: コンボ・タイム計測リセット
+  comboCount = 0; comboTimer = 0;
+  stageStartTime = Date.now();
+  bonusPopups = [];
   for (let i = 0; i < cfg.gnomes; i++) {
     gnomes.push(makeGnome(80 + i * Math.floor((W - 160) / Math.max(1, cfg.gnomes - 1))));
   }
@@ -898,6 +1219,9 @@ function initStage() {
 
 function initGame() {
   stage = 0; score = 0; itemsCollected = 0;
+  lives = MAX_LIVES; // Phase 2: 全変数リセット
+  comboCount = 0; comboTimer = 0;
+  bonusPopups = [];
   initStage();
 }
 
@@ -919,14 +1243,28 @@ function update() {
     updateBubble(bubbles[i]);
     const b = bubbles[i];
     if (b.x < -b.radius - 20 && !b.popped) {
-      score = Math.max(0, score - 5);
-      updateHUD();
+      // Phase 2: スコア減算→ライフ減少に変更（ただし危険アイテムは見逃しOK）
+      if (!HAZARD_TYPES.has(b.contents)) {
+        lives--;
+        playSE('miss'); // Phase 3: miss SE
+        if (lives <= 0) {
+          playSE('gameover');
+          HiScore.save();
+          state = 'gameover';
+        }
+      }
       bubbles.splice(i, 1);
     } else if (b.popped && b.alpha <= 0) bubbles.splice(i, 1);
   }
 
   // アイテム更新
   for (const it of items) updateItem(it);
+
+  // Phase 6: コンボタイマー更新
+  if (comboTimer > 0) {
+    comboTimer--;
+    if (comboTimer === 0) comboCount = 0;
+  }
 
   // 小人更新
   for (let i = 0; i < gnomes.length; i++) {
@@ -958,6 +1296,7 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
+HiScore.load(); // Phase 5: ページロード時にハイスコアを読み込む
 loop();
   </script>
 </body>
