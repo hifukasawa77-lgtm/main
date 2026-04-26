@@ -142,6 +142,7 @@ function makeGnome(x) {
     waypoints: [],
     jumpBoost: 1.0,
     jumpCooldown: 0,
+    waypointTimer: 0,
     hatColor: ['#cc3333','#33aa33','#5555dd'][gnomes.length % 3],
     bodyColor: ['#3344cc','#884422','#338866'][gnomes.length % 3],
   };
@@ -260,20 +261,39 @@ function placeLadder(x) {
 function updateGnomeAI(g, idx) {
   // 1. ウェイポイント追跡（線引き）
   if (g.waypoints.length > 0) {
+    // 300フレーム到達できなければ経路リセット
+    g.waypointTimer++;
+    if (g.waypointTimer > 300) { g.waypoints = []; g.waypointTimer = 0; return; }
+
+    // 到達済み・通過済みウェイポイントを除去
+    while (g.waypoints.length > 0) {
+      const w0 = g.waypoints[0];
+      const d0 = Math.sqrt((w0.x - g.x) ** 2 + (w0.y - g.y) ** 2);
+      if (d0 < 16 || (g.y <= w0.y + 4 && Math.abs(w0.x - g.x) < 32)) {
+        g.waypoints.shift(); g.waypointTimer = 0;
+      } else break;
+    }
+    if (g.waypoints.length === 0) return;
+
     const wp = g.waypoints[0];
     const dx = wp.x - g.x;
     const dy = wp.y - g.y;
     const d  = Math.sqrt(dx * dx + dy * dy);
-    if (d < 14) { g.waypoints.shift(); return; }
+
     g.vx = Math.sign(dx) * Math.min(2.0, d * 0.1) * 1.5;
     if (dy < -20 && g.onLadder) {
-      g.climbing = true; // 梯子上で上へ登る
-    } else if (dy < -30 && g.onGround && g.jumpCooldown === 0) {
-      g.vy = -7.5 * g.jumpBoost;
-      g.onGround = false;
-      g.jumpCooldown = 55;
+      g.climbing = true;
+    } else if (dy < -8 && g.onGround && g.jumpCooldown === 0) {
+      // 先読みで最高地点を探し、届く速度でジャンプ
+      let minY = wp.y;
+      for (let i = 1; i < Math.min(g.waypoints.length, 20); i++) {
+        if (g.waypoints[i].y < minY) minY = g.waypoints[i].y;
+      }
+      const rise = g.y - minY;
+      g.vy = -Math.min(10, Math.sqrt(rise * 0.18) + 2.5) * g.jumpBoost;
+      g.onGround = false; g.jumpCooldown = 55; g.state = 'jump';
     }
-    g.state = 'walk';
+    if (g.state !== 'jump') g.state = 'walk';
     return;
   }
 
