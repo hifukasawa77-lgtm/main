@@ -349,7 +349,7 @@ function makeBubble() {
 
 function makeGnome(x) {
   return {
-    x, y: GROUND_Y - GNOME_H,
+    x, y: GROUND_Y - 5,
     vx: 0, vy: 0,
     onGround: true,
     onLadder: false,
@@ -527,6 +527,15 @@ function showStageBonus() {
   }, 1800);
 }
 
+// 最も高い（長い）アクティブな梯子を返す
+function getBestLadder() {
+  let best = null;
+  for (const l of ladders) {
+    if (l.active && (!best || l.height > best.height)) best = l;
+  }
+  return best;
+}
+
 // === 小人AI ===
 function updateGnomeAI(g, idx) {
   // 1. ウェイポイント追跡（線引き）
@@ -565,6 +574,22 @@ function updateGnomeAI(g, idx) {
     }
     if (g.state !== 'jump') g.state = 'walk';
     return;
+  }
+
+  // 1.5 落下梯子を最優先で拾いに行く（既存梯子に連結するため）
+  if (ladders.some(l => l.active)) {
+    let nearestFallen = null, nearestFallenDist = Infinity;
+    for (const it of items) {
+      if (it.collected || !it.landed || it.type !== 'ladder') continue;
+      const d = Math.abs(it.x - g.x);
+      if (d < nearestFallenDist) { nearestFallenDist = d; nearestFallen = it; }
+    }
+    if (nearestFallen && nearestFallenDist < 320) {
+      g.climbing = false;
+      g.vx = Math.sign(nearestFallen.x - g.x) * 1.4;
+      g.state = 'walk';
+      return;
+    }
   }
 
   // 2. 最寄りの泡を自動ターゲット（梯子経由含む）
@@ -659,9 +684,9 @@ function updateGnomePhysics(g) {
   g.x += g.vx;
   g.y += g.vy;
 
-  // 地面
-  if (g.y >= GROUND_Y - GNOME_H) {
-    g.y = GROUND_Y - GNOME_H;
+  // 地面（足底が g.y+5 になる描画オフセットを考慮して -5）
+  if (g.y >= GROUND_Y - 5) {
+    g.y = GROUND_Y - 5;
     g.vy = 0;
     g.onGround = true;
     if (g.state === 'jump') g.state = 'idle';
@@ -713,7 +738,21 @@ function updateGnomePhysics(g) {
     } else if (dist2(g.x, g.y, it.x, it.y) < COLLECT_R2) {
       if (it.type === 'ladder') {
         it.collected = true;
-        placeLadder(it.x);
+        const bestLad = getBestLadder();
+        if (bestLad) {
+          // 一番長い梯子に連結して伸ばす
+          bestLad.height = Math.min(GROUND_Y - 30, bestLad.height + LADDER_HEIGHT);
+          score += ITEM_SCORE['ladder'];
+          itemsCollected++;
+          playSE('ladder');
+          updateHUD();
+          if (itemsCollected >= STAGE_CFG[stage].target) {
+            if (stage < STAGE_CFG.length - 1) { playSE('clear'); showStageBonus(); }
+            else { playSE('clear'); HiScore.save(); state = 'clear'; }
+          }
+        } else {
+          placeLadder(it.x);
+        }
       } else {
         collectItem(it, g);
       }
