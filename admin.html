@@ -349,7 +349,54 @@
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  /* ─── サマリー統計バー ─── */
+  #stats-bar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+  }
+  .stats-bar-inner {
+    display: flex;
+    gap: 0;
+    overflow-x: auto;
+  }
+  .stat-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px 10px 0;
+    min-width: 0;
+    border-right: 1px solid var(--border);
+    margin-right: 24px;
+    flex-shrink: 0;
+    cursor: default;
+  }
+  .stat-card:last-child { border-right: none; margin-right: 0; }
+  .stat-card.clickable { cursor: pointer; }
+  .stat-card.clickable:hover .stat-value { color: var(--primary); }
+  .stat-icon { font-size: 1.25rem; flex-shrink: 0; }
+  .stat-label {
+    font-size: 0.65rem; font-weight: 700;
+    letter-spacing: 0.8px; color: var(--muted);
+    text-transform: uppercase; white-space: nowrap;
+  }
+  .stat-value {
+    font-size: 1.25rem; font-weight: 800;
+    color: var(--text); line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-value--sm { font-size: 0.82rem; font-weight: 600; }
+  .stat-alert-badge {
+    display: inline-block;
+    background: var(--danger); color: #fff;
+    font-size: 0.6rem; font-weight: 700;
+    padding: 1px 5px; border-radius: 8px;
+    vertical-align: middle; margin-left: 4px;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
   </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <script src="stamps.js"></script>
 <body>
@@ -374,6 +421,34 @@
   <button class="tab-btn" onclick="switchTab('iot',this)">🌐 IoT機器管理</button>
   <button class="tab-btn" onclick="switchTab('logs',this)">📋 ログイン履歴</button>
 </nav>
+
+<!-- ─── サマリー統計バー ─── -->
+<div id="stats-bar" style="display:none">
+  <div class="stats-bar-inner">
+    <div class="stat-card" id="stat-total">
+      <div class="stat-icon">👁</div>
+      <div class="stat-body">
+        <div class="stat-label">累計アクセス数</div>
+        <div class="stat-value" id="statTotalVal">—</div>
+      </div>
+    </div>
+    <div class="stat-card" id="stat-today">
+      <div class="stat-icon">📅</div>
+      <div class="stat-body">
+        <div class="stat-label">本日のアクセス数</div>
+        <div class="stat-value" id="statTodayVal">—</div>
+      </div>
+    </div>
+    <div class="stat-card clickable" id="stat-login"
+         onclick="switchTab('logs', document.querySelector('[onclick*=logs]'))">
+      <div class="stat-icon">🔑</div>
+      <div class="stat-body">
+        <div class="stat-label">直近ログイン</div>
+        <div class="stat-value stat-value--sm" id="statLoginVal">—</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ─── Tab: ブログ管理 ─── -->
 <div class="tab-panel active" id="tab-blog">
@@ -738,7 +813,14 @@
 <!-- ─── Tab: ログイン履歴 ─── -->
 <div class="tab-panel" id="tab-logs">
   <div class="panel-wrap">
-    <div class="panel-title">📋 ログイン履歴</div>
+    <div class="panel-title">📋 ログイン履歴 &amp; アクセス統計</div>
+    <div class="panel-card" id="access-graph-card" style="margin-bottom:16px">
+      <div style="font-weight:700;margin-bottom:12px;color:var(--text)">📈 週次アクセス推移</div>
+      <canvas id="accessChart" height="80"></canvas>
+      <div id="accessChartErr" style="display:none;color:var(--muted);font-size:0.8rem;padding:8px 0">
+        バックエンドサーバーを起動してください
+      </div>
+    </div>
     <div class="panel-card">
       <h3>直近50件のログイン記録</h3>
       <div id="logEmpty" style="display:none;color:var(--muted);font-size:0.85rem;padding:12px 0;">ログイン履歴がありません</div>
@@ -767,19 +849,22 @@
 
 <script>
 // ─── 認証チェック ─────────────────────────────────────────
-if (sessionStorage.getItem('admin_session') !== '1') location.href = 'admin-login.html';
+const API_BASE = 'http://localhost:3001';
 
-const DEFAULT_HASH = '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8';
+if (!sessionStorage.getItem('admin_token')) location.href = 'admin-login.html';
+
+function getToken() { return sessionStorage.getItem('admin_token') || ''; }
+function authHeaders() { return { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' }; }
+
 const DEFAULT_USERNAME = 'admin';
-
-function getUsername() { return localStorage.getItem('admin_username') || DEFAULT_USERNAME; }
-function getPasswordHash() { return localStorage.getItem('admin_password_hash') || DEFAULT_HASH; }
+function getUsername() { return sessionStorage.getItem('admin_username') || DEFAULT_USERNAME; }
 
 document.getElementById('userBadge').textContent = `@${getUsername()}`;
 document.getElementById('currentUsernameBadge').value = getUsername();
 
 function logout() {
-  sessionStorage.removeItem('admin_session');
+  sessionStorage.removeItem('admin_token');
+  sessionStorage.removeItem('admin_username');
   location.href = 'admin-login.html';
 }
 
@@ -1672,7 +1757,7 @@ function switchTab(name, btn) {
   if (name === 'announcement') loadAnnouncement();
   if (name === 'memo') loadPrivateMemo();
   if (name === 'iot') renderIotTable();
-  if (name === 'logs') loadLoginHistory();
+  if (name === 'logs') { loadLoginHistory(); loadAccessChart(); }
 }
 
 async function scanArp() {
@@ -1745,20 +1830,118 @@ function saveIotDevices() {
 }
 
 // ─── ログイン履歴 ─────────────────────────────────────────
-function loadLoginHistory() {
-  const logs = JSON.parse(localStorage.getItem('admin_login_history') || '[]');
+async function loadLoginHistory() {
   const empty = document.getElementById('logEmpty');
   const table = document.getElementById('logTable');
   const tbody = document.getElementById('logTableBody');
-  if (!logs.length) { empty.style.display = ''; table.style.display = 'none'; return; }
-  empty.style.display = 'none'; table.style.display = '';
-  tbody.innerHTML = logs.map(l => `
-    <tr>
-      <td>${l.logged_at.replace('T',' ').slice(0,19)}</td>
-      <td>${escHtml(l.username)}</td>
-      <td><span class="${l.success ? 'badge-ok' : 'badge-err'}">${l.success ? '✅ 成功' : '❌ 失敗'}</span></td>
-    </tr>`).join('');
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/login-history`, { headers: authHeaders() });
+    if (!res.ok) throw new Error('取得失敗');
+    const logs = await res.json();
+    if (!logs.length) { empty.style.display = ''; table.style.display = 'none'; return; }
+    empty.style.display = 'none'; table.style.display = '';
+    tbody.innerHTML = logs.map(l => `
+      <tr>
+        <td>${l.logged_at.replace('T',' ').slice(0,19)}</td>
+        <td>${escHtml(l.username)}</td>
+        <td><span class="${l.success ? 'badge-ok' : 'badge-err'}">${l.success ? '✅ 成功' : '❌ 失敗'}</span></td>
+      </tr>`).join('');
+  } catch {
+    empty.style.display = '';
+    empty.textContent = 'ログイン履歴の取得に失敗しました。バックエンドサーバーを起動してください。';
+    table.style.display = 'none';
+  }
 }
+
+// ─── サマリー統計バー ─────────────────────────────────────
+async function loadStatsBar() {
+  const bar = document.getElementById('stats-bar');
+  let anySuccess = false;
+
+  // アクセス数（認証不要）
+  try {
+    const res = await fetch(`${API_BASE}/api/access/count`);
+    if (!res.ok) throw new Error();
+    const d = await res.json();
+    document.getElementById('statTotalVal').textContent =
+      Number(d.total).toLocaleString('ja-JP');
+    document.getElementById('statTodayVal').textContent =
+      Number(d.today).toLocaleString('ja-JP');
+    anySuccess = true;
+  } catch {
+    document.getElementById('stat-total').style.display = 'none';
+    document.getElementById('stat-today').style.display = 'none';
+  }
+
+  // 直近ログイン + ログイン失敗アラート（直近10分に3件以上でバッジ）
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/login-history`, {
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error();
+    const logs = await res.json();
+    const latest = logs[0];
+    if (latest) {
+      const dt = latest.logged_at.replace('T', ' ').slice(0, 16);
+      const badge = latest.success
+        ? `<span class="badge-ok">成功</span>`
+        : `<span class="badge-err">失敗</span>`;
+      const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const recentFails = logs.filter(l => !l.success && l.logged_at > tenMinAgo).length;
+      const alertBadge = recentFails >= 3
+        ? `<span class="stat-alert-badge">⚠ 失敗${recentFails}件</span>` : '';
+      document.getElementById('statLoginVal').innerHTML =
+        `${badge} ${escHtml(dt)}${alertBadge}`;
+    } else {
+      document.getElementById('statLoginVal').textContent = 'なし';
+    }
+    anySuccess = true;
+  } catch {
+    document.getElementById('stat-login').style.display = 'none';
+  }
+
+  if (anySuccess) bar.style.display = '';
+}
+
+// ─── 週次アクセスグラフ (Chart.js) ──────────────────────
+let accessChartInstance = null;
+async function loadAccessChart() {
+  const canvas = document.getElementById('accessChart');
+  const errDiv = document.getElementById('accessChartErr');
+  if (!canvas) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/access/daily?days=7`);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    const labels = data.map(d => d.date.slice(5));
+    const counts = data.map(d => d.count);
+    if (accessChartInstance) accessChartInstance.destroy();
+    accessChartInstance = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'アクセス数',
+          data: counts,
+          backgroundColor: 'rgba(99,102,241,0.5)',
+          borderColor: '#6366f1',
+          borderWidth: 1,
+          borderRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    });
+  } catch {
+    canvas.style.display = 'none';
+    errDiv.style.display = '';
+  }
+}
+
+loadStatsBar();
 </script>
 </body>
 </html>

@@ -214,6 +214,27 @@ app.get('/api/network/arp', (req, res) => {
   });
 });
 
+// ─── アクセスカウント API ─────────────────────────────────
+
+// POST /api/access/hit  (認証不要 — ページ表示時に呼ぶ)
+app.post('/api/access/hit', (req, res) => {
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+  const ua = req.headers['user-agent'] || '';
+  const counts = db.hitAccess(ip, ua);
+  res.json(counts);
+});
+
+// GET /api/access/count  (認証不要)
+app.get('/api/access/count', (req, res) => {
+  res.json(db.getAccessCount());
+});
+
+// GET /api/access/daily?days=7  (認証不要)
+app.get('/api/access/daily', (req, res) => {
+  const days = Math.min(parseInt(req.query.days) || 7, 30);
+  res.json(db.getDailyAccessCount(days));
+});
+
 // ─── ヘルスチェック ───────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 

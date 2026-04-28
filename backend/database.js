@@ -3,20 +3,32 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, 'admin.db.json');
+const DB_PATH  = path.join(__dirname, 'admin.db.json');
+const LOGS_DIR = path.join(__dirname, 'logs');
+
+if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
+
+const LOGIN_LOG_FILE  = path.join(LOGS_DIR, 'login.log');
+const ACCESS_LOG_FILE = path.join(LOGS_DIR, 'access.log');
+
+function appendLog(file, line) {
+  fs.appendFileSync(file, line + '\n', 'utf8');
+}
 
 // sql.js はメモリ上で動作するため、JSONファイルに永続化する
 let db;
-let dbData = { users: [], blogs: [], settings: [], login_logs: [], _seq: { users: 0, blogs: 0, login_logs: 0 } };
+let dbData = { users: [], blogs: [], settings: [], login_logs: [], access_logs: [], _seq: { users: 0, blogs: 0, login_logs: 0, access_logs: 0 } };
 
 function loadData() {
   if (fs.existsSync(DB_PATH)) {
     try { dbData = JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); } catch {}
   }
-  if (!dbData.settings)    dbData.settings    = [];
-  if (!dbData.login_logs)  dbData.login_logs  = [];
-  if (!dbData._seq)        dbData._seq        = { users: 0, blogs: 0, login_logs: 0 };
-  if (!dbData._seq.login_logs) dbData._seq.login_logs = 0;
+  if (!dbData.settings)     dbData.settings     = [];
+  if (!dbData.login_logs)   dbData.login_logs   = [];
+  if (!dbData.access_logs)  dbData.access_logs  = [];
+  if (!dbData._seq)         dbData._seq         = { users: 0, blogs: 0, login_logs: 0, access_logs: 0 };
+  if (!dbData._seq.login_logs)  dbData._seq.login_logs  = 0;
+  if (!dbData._seq.access_logs) dbData._seq.access_logs = 0;
 }
 
 function saveData() {
@@ -72,10 +84,40 @@ const database = {
 
   // ログイン履歴
   addLoginLog: (username, success, ip) => {
-    dbData.login_logs.push({ id: nextId('login_logs'), username, success: success ? 1 : 0, ip, logged_at: new Date().toISOString() });
+    const logged_at = new Date().toISOString();
+    dbData.login_logs.push({ id: nextId('login_logs'), username, success: success ? 1 : 0, ip, logged_at });
     saveData();
+    const result = success ? 'SUCCESS' : 'FAILED';
+    appendLog(LOGIN_LOG_FILE, `${logged_at} [${result}] user=${username} ip=${ip || '-'}`);
   },
   getLoginHistory: () => [...dbData.login_logs].sort((a, b) => b.logged_at > a.logged_at ? 1 : -1).slice(0, 50),
+  getDailyAccessCount: (days = 7) => {
+    const result = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const date = d.toISOString().slice(0, 10);
+      const count = dbData.access_logs.filter(a => a.visited_at.startsWith(date)).length;
+      result.push({ date, count });
+    }
+    return result;
+  },
+
+  // アクセスカウント
+  hitAccess: (ip, userAgent) => {
+    const visited_at = new Date().toISOString();
+    dbData.access_logs.push({ id: nextId('access_logs'), ip: ip || '-', visited_at });
+    saveData();
+    appendLog(ACCESS_LOG_FILE, `${visited_at} ip=${ip || '-'} ua=${(userAgent || '-').slice(0, 80)}`);
+    const today = visited_at.slice(0, 10);
+    const todayCount = dbData.access_logs.filter(a => a.visited_at.startsWith(today)).length;
+    return { total: dbData.access_logs.length, today: todayCount };
+  },
+  getAccessCount: () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const todayCount = dbData.access_logs.filter(a => a.visited_at.startsWith(today)).length;
+    return { total: dbData.access_logs.length, today: todayCount };
+  },
 };
 
 module.exports = database;
