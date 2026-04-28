@@ -383,6 +383,7 @@ function makeGnome(x) {
     vx: 0, vy: 0,
     onGround: true,
     onLadder: false,
+    onRope: false,
     climbing: false,
     state: 'idle',
     waypoints: [],
@@ -589,6 +590,31 @@ function getBestLadder() {
   return best;
 }
 
+// パスが急勾配（縦線=ロープ）か判定
+function isPathSteep(path) {
+  if (path.length < 2) return false;
+  const dx = Math.abs(path[path.length - 1].x - path[0].x);
+  const dy = Math.abs(path[path.length - 1].y - path[0].y);
+  return dy > dx * 1.2; // 縦成分が横成分の1.2倍以上 → ロープ扱い
+}
+
+// パス上の最近傍点を返す
+function getNearestOnPath(path, gx, gy) {
+  let bestDist = Infinity, bestX = gx, bestY = gy;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq < 1) continue;
+    let t = ((gx - a.x) * dx + (gy - a.y) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const px = a.x + t * dx, py = a.y + t * dy;
+    const d = (gx - px) ** 2 + (gy - py) ** 2;
+    if (d < bestDist) { bestDist = d; bestX = px; bestY = py; }
+  }
+  return { dist: Math.sqrt(bestDist), x: bestX, y: bestY };
+}
+
 // 引いた線の x 位置における y を線形補間で返す（範囲外なら null）
 function getPathYAtX(path, x) {
   for (let i = 0; i < path.length - 1; i++) {
@@ -625,6 +651,15 @@ function updateGnomeAI(g, idx) {
     const dx = wp.x - g.x;
     const dy = wp.y - g.y;
     const d  = Math.sqrt(dx * dx + dy * dy);
+
+    if (g.onRope) {
+      // ロープよじ登り: パスの方向ベクトルで直接移動
+      const speed = 1.6;
+      g.vx = d > 1 ? (dx / d) * speed : 0;
+      g.vy = d > 1 ? (dy / d) * speed : 0;
+      g.state = 'climb';
+      return;
+    }
 
     // 坂として歩けるか判定（dx方向の傾斜が緩やかなら坂歩き）
     const onSlope = g.rawPath && getPathYAtX(g.rawPath, g.x) !== null;
@@ -749,13 +784,25 @@ function updateGnomeAI(g, idx) {
 
 function updateGnomePhysics(g) {
   if (g.jumpCooldown > 0) g.jumpCooldown--;
-  if (!g.onLadder) g.vy += GRAVITY;
+  if (!g.onLadder && !g.onRope) g.vy += GRAVITY;
 
   g.x += g.vx;
   g.y += g.vy;
 
+  // ロープ（急勾配の線）をよじ登る
+  g.onRope = false;
+  if (g.rawPath && g.rawPath.length > 1 && isPathSteep(g.rawPath)) {
+    const near = getNearestOnPath(g.rawPath, g.x, g.y);
+    if (near.dist < 20) {
+      g.x = near.x;
+      g.y = near.y;
+      g.vy = 0;
+      g.onRope = true;
+    }
+  }
+
   // 引いた線を坂として歩く（物理より先に判定して重力を打ち消す）
-  if (g.rawPath && g.rawPath.length > 1) {
+  if (!g.onRope && g.rawPath && g.rawPath.length > 1) {
     const pathY = getPathYAtX(g.rawPath, g.x);
     if (pathY !== null && g.y >= pathY - 32 && g.y < pathY + 8) {
       g.y = pathY;
@@ -785,7 +832,7 @@ function updateGnomePhysics(g) {
     g.vy = 0;
     g.onGround = true;
     if (g.state === 'jump') g.state = 'idle';
-  } else if (!onBlock && (!g.rawPath || getPathYAtX(g.rawPath, g.x) === null)) {
+  } else if (!onBlock && !g.onRope && (!g.rawPath || getPathYAtX(g.rawPath, g.x) === null)) {
     g.onGround = false;
   }
 
