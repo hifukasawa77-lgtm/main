@@ -4108,10 +4108,11 @@
       const GAS_AREA_CACHE_KEY = 'gas-area-cache-v1';
 
       async function detectGasArea() {
-        // 1時間キャッシュ
+        // 1時間キャッシュ（muniCd の形式も検証してから使用）
         try {
           const c = JSON.parse(localStorage.getItem(GAS_AREA_CACHE_KEY) || 'null');
-          if (c && Date.now() - c.ts < 60 * 60 * 1000) return c;
+          if (c && Date.now() - c.ts < 60 * 60 * 1000
+              && /^\d{5,6}$/.test(c.muniCd || '')) return c;
         } catch (e) { /* ignore */ }
 
         // 位置情報取得
@@ -4124,37 +4125,23 @@
 
         const { latitude: lat, longitude: lon } = pos.coords;
 
-        // GSI（市区町村コード）と Nominatim（市区町村名）を並列取得
-        const [gsiRes, nomRes] = await Promise.allSettled([
-          fetchWithTimeout(
-            `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lon}`,
-            6000
-          ).then(r => r.json()),
-          fetchWithTimeout(
-            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=ja`,
-            6000
-          ).then(r => r.json()),
-        ]);
+        // 国土地理院 逆ジオコーダのみ使用（muniCd と市区町村名を取得）
+        // ※ 第三者サービスへの座標送信を避けるため Nominatim は使わない
+        const gsiData = await fetchWithTimeout(
+          `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lon}`,
+          6000
+        ).then(r => r.json());
 
-        // muniCd（国土地理院）
-        const muniCd = gsiRes.status === 'fulfilled'
-          ? String(gsiRes.value?.results?.muniCd || '').trim()
-          : '';
-        if (!muniCd) throw new Error('gsi-no-muni');
+        const results = gsiData?.results || {};
+        const muniCd = String(results.muniCd || '').trim();
+        // muniCd は必ず5〜6桁の数字（JIS市区町村コード）
+        if (!muniCd || !/^\d{5,6}$/.test(muniCd)) throw new Error('gsi-no-muni');
 
-        // 市区町村名（Nominatim）
-        let cityName = '';
-        if (nomRes.status === 'fulfilled') {
-          const addr = nomRes.value?.address || {};
-          cityName = addr.city || addr.town || addr.village || addr.municipality || addr.county || '';
-          // 「〇〇市」「〇〇町」「〇〇村」「〇〇区」のみ抽出
-          const m = cityName.match(/([^都道府県\s]{2,8}[市区町村])/);
-          if (m) cityName = m[1];
-        }
-        // Nominatim失敗時は muniCd 下3桁から仮称
-        if (!cityName) cityName = `エリア${muniCd}`;
+        // 市区町村名は gogo.gs HTML から後で確定する。ここでは仮称のみ設定
+        const cityName = String(results.lv01Nm || `エリア${muniCd}`).trim();
 
-        const result = { muniCd, cityName, lat, lon, ts: Date.now() };
+        // 座標は保存しない（プライバシー配慮）
+        const result = { muniCd, cityName, ts: Date.now() };
         try { localStorage.setItem(GAS_AREA_CACHE_KEY, JSON.stringify(result)); } catch (e) { /* ignore */ }
         return result;
       }
@@ -4212,7 +4199,11 @@
         const el = document.getElementById('home-gas-ranking');
         if (!el) return;
         if (!stations || !stations.length) {
-          el.innerHTML = `<div style="font-size:0.75rem;color:var(--muted)">${note || 'ランキングデータなし'}</div>`;
+          // textContent で安全に書き込む（innerHTML XSS を回避）
+          const div = document.createElement('div');
+          div.style.cssText = 'font-size:0.75rem;color:var(--muted)';
+          div.textContent = note || 'ランキングデータなし';
+          el.replaceChildren(div);
           return;
         }
         const rankClass = i => ['r1', 'r2', 'r3', '', ''][i] || '';
