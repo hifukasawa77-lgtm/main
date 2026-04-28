@@ -356,6 +356,7 @@ function makeGnome(x) {
     climbing: false,
     state: 'idle',
     waypoints: [],
+    rawPath: null,
     jumpBoost: 1.0,
     jumpCooldown: 0,
     waypointTimer: 0,
@@ -536,13 +537,27 @@ function getBestLadder() {
   return best;
 }
 
+// 引いた線の x 位置における y を線形補間で返す（範囲外なら null）
+function getPathYAtX(path, x) {
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1];
+    const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+    if (x >= minX - 2 && x <= maxX + 2) {
+      if (Math.abs(b.x - a.x) < 1) return (a.y + b.y) / 2;
+      const t = (x - a.x) / (b.x - a.x);
+      return a.y + t * (b.y - a.y);
+    }
+  }
+  return null;
+}
+
 // === 小人AI ===
 function updateGnomeAI(g, idx) {
   // 1. ウェイポイント追跡（線引き）
   if (g.waypoints.length > 0) {
     // 300フレーム到達できなければ経路リセット
     g.waypointTimer++;
-    if (g.waypointTimer > 300) { g.waypoints = []; g.waypointTimer = 0; return; }
+    if (g.waypointTimer > 300) { g.waypoints = []; g.rawPath = null; g.waypointTimer = 0; return; }
 
     // 到達済み・通過済みウェイポイントを除去
     while (g.waypoints.length > 0) {
@@ -552,18 +567,21 @@ function updateGnomeAI(g, idx) {
         g.waypoints.shift(); g.waypointTimer = 0;
       } else break;
     }
-    if (g.waypoints.length === 0) return;
+    if (g.waypoints.length === 0) { g.rawPath = null; return; }
 
     const wp = g.waypoints[0];
     const dx = wp.x - g.x;
     const dy = wp.y - g.y;
     const d  = Math.sqrt(dx * dx + dy * dy);
 
+    // 坂として歩けるか判定（dx方向の傾斜が緩やかなら坂歩き）
+    const onSlope = g.rawPath && getPathYAtX(g.rawPath, g.x) !== null;
+
     g.vx = Math.sign(dx) * Math.min(2.0, d * 0.1) * 1.5;
     if (dy < -20 && g.onLadder) {
       g.climbing = true;
-    } else if (dy < -8 && g.onGround && g.jumpCooldown === 0) {
-      // 先読みで最高地点を探し、届く速度でジャンプ
+    } else if (dy < -8 && !onSlope && g.onGround && g.jumpCooldown === 0) {
+      // 坂の上でなければジャンプ（垂直段差など）
       let minY = wp.y;
       for (let i = 1; i < Math.min(g.waypoints.length, 20); i++) {
         if (g.waypoints[i].y < minY) minY = g.waypoints[i].y;
@@ -684,13 +702,23 @@ function updateGnomePhysics(g) {
   g.x += g.vx;
   g.y += g.vy;
 
+  // 引いた線を坂として歩く（物理より先に判定して重力を打ち消す）
+  if (g.rawPath && g.rawPath.length > 1) {
+    const pathY = getPathYAtX(g.rawPath, g.x);
+    if (pathY !== null && g.y >= pathY - 32 && g.y < pathY + 8) {
+      g.y = pathY;
+      g.vy = 0;
+      g.onGround = true;
+    }
+  }
+
   // 地面（足底が g.y+5 になる描画オフセットを考慮して -5）
   if (g.y >= GROUND_Y - 5) {
     g.y = GROUND_Y - 5;
     g.vy = 0;
     g.onGround = true;
     if (g.state === 'jump') g.state = 'idle';
-  } else {
+  } else if (!g.rawPath || getPathYAtX(g.rawPath, g.x) === null) {
     g.onGround = false;
   }
 
@@ -1276,6 +1304,7 @@ canvas.addEventListener('mouseup', e => {
   const pos = getCanvasPos(e);
   if (isDrawing && activeGnomeIdx >= 0 && drawnPath.length > 2) {
     gnomes[activeGnomeIdx].waypoints = [...drawnPath];
+    gnomes[activeGnomeIdx].rawPath  = [...drawnPath];
     gnomes[activeGnomeIdx].waypointTimer = 0;
   }
   isDrawing = false;
