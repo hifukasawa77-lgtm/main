@@ -64,7 +64,7 @@
     </div>
     <canvas id="c" width="480" height="640"></canvas>
   </div>
-  <div id="hint">クリック/タップ: 泡を割る | 小人をドラッグ: 経路を引く | 落下梯子をクリック: 設置</div>
+  <div id="hint">クリック/タップ: 泡を割る | 小人をドラッグ: 経路を引く | カラスに注意 | ⚡雷は即死</div>
   <script>
 'use strict';
 // === 定数 ===
@@ -267,7 +267,6 @@ const AudioSystem = {
         break;
       }
       case 'hammer': {
-        // 衝撃音: 低い打撃音
         const osc = ac.createOscillator();
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(120, now);
@@ -275,6 +274,31 @@ const AudioSystem = {
         g.gain.setValueAtTime(0.5, now);
         g.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
         osc.connect(g); osc.start(now); osc.stop(now + 0.15);
+        break;
+      }
+      case 'crow': {
+        const osc = ac.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(700, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.18);
+        g.gain.setValueAtTime(0.18, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+        osc.connect(g); osc.start(now); osc.stop(now + 0.18);
+        break;
+      }
+      case 'thunder': {
+        const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.5), ac.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < data.length; i++)
+          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 0.5);
+        const src = ac.createBufferSource();
+        src.buffer = buf;
+        const biq = ac.createBiquadFilter();
+        biq.type = 'highpass'; biq.frequency.value = 150;
+        src.connect(biq); biq.connect(g);
+        g.gain.setValueAtTime(0.7, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+        src.start(now);
         break;
       }
     }
@@ -325,6 +349,12 @@ let stageStartTime = 0;
 let comboCount = 0, comboTimer = 0;
 const COMBO_WINDOW = 90;
 let bonusPopups = [];
+
+// 浮遊ブロック・カラス・雷
+let floatingBlocks = [];
+let crows = [];
+let lightnings = [];
+let lightningTimer = 0;
 
 // === エンティティ生成 ===
 function makeBubble() {
@@ -392,6 +422,28 @@ function makeParticle(x, y, color) {
     color,
     r: 2 + Math.random() * 3,
   };
+}
+
+function makeBlock(x, y, w) {
+  return { x, y, w: w || 48, h: 18 };
+}
+
+function makeCrow() {
+  const side = Math.random() < 0.5 ? 0 : 1;
+  return {
+    x: side === 0 ? -20 : W + 20,
+    y: 80 + Math.random() * 200,
+    vx: side === 0 ? (1.2 + Math.random() * 0.8) : -(1.2 + Math.random() * 0.8),
+    vy: 0,
+    wingAnim: 0,
+    attackCooldown: 0,
+    diving: false,
+    diveTimer: 0,
+  };
+}
+
+function makeLightning(x) {
+  return { x, phase: 'warn', timer: 0, boltPoints: null };
 }
 
 // === 物理ヘルパー ===
@@ -712,13 +764,28 @@ function updateGnomePhysics(g) {
     }
   }
 
+  // 浮遊ブロックの上に乗る
+  let onBlock = false;
+  for (const bl of floatingBlocks) {
+    if (g.vy >= 0
+        && g.y >= bl.y - 5 && g.y <= bl.y + 10
+        && g.x >= bl.x - 6 && g.x <= bl.x + bl.w + 6) {
+      g.y = bl.y - 5;
+      g.vy = 0;
+      g.onGround = true;
+      onBlock = true;
+      if (g.state === 'jump') g.state = 'idle';
+      break;
+    }
+  }
+
   // 地面（足底が g.y+5 になる描画オフセットを考慮して -5）
   if (g.y >= GROUND_Y - 5) {
     g.y = GROUND_Y - 5;
     g.vy = 0;
     g.onGround = true;
     if (g.state === 'jump') g.state = 'idle';
-  } else if (!g.rawPath || getPathYAtX(g.rawPath, g.x) === null) {
+  } else if (!onBlock && (!g.rawPath || getPathYAtX(g.rawPath, g.x) === null)) {
     g.onGround = false;
   }
 
@@ -787,6 +854,102 @@ function updateGnomePhysics(g) {
     }
   }
 }
+// === カラス更新 ===
+function updateCrow(crow) {
+  crow.wingAnim++;
+  if (crow.attackCooldown > 0) crow.attackCooldown--;
+
+  if (crow.diving) {
+    crow.diveTimer++;
+    crow.y += 2.5;
+
+    // 小人に当たったら吹き飛ばす
+    for (let i = gnomes.length - 1; i >= 0; i--) {
+      const g = gnomes[i];
+      if (dist2(crow.x, crow.y, g.x, g.y) < 28 * 28 && crow.attackCooldown === 0) {
+        g.vx += Math.sign(g.x - crow.x) * 4;
+        g.vy = -4.5;
+        g.onGround = false;
+        g.waypoints = [];
+        g.rawPath = null;
+        crow.attackCooldown = 100;
+        playSE('crow');
+        bonusPopups.push({ x: g.x, y: g.y - 30, text: 'CAW!', life: 50, maxLife: 50, color: '#ffaa00', large: false });
+        break;
+      }
+    }
+
+    // 梯子に触れたら破壊
+    if (crow.attackCooldown === 0) {
+      for (const lad of ladders) {
+        if (!lad.active) continue;
+        if (Math.abs(crow.x - lad.x) < 18 && crow.y > lad.bottomY - lad.height - 10 && crow.y < lad.bottomY) {
+          lad.active = false;
+          crow.attackCooldown = 130;
+          playSE('crow');
+          bonusPopups.push({ x: lad.x, y: lad.bottomY - lad.height / 2, text: '梯子破壊!', life: 70, maxLife: 70, color: '#ff4444', large: false });
+          for (let k = 0; k < 8; k++) particles.push(makeParticle(lad.x, lad.bottomY - lad.height / 2, '#c8a06a'));
+          break;
+        }
+      }
+    }
+
+    if (crow.diveTimer > 45) {
+      crow.diving = false;
+      crow.diveTimer = 0;
+      crow.vy = -2.5;
+    }
+  } else {
+    crow.x += crow.vx;
+    crow.y += crow.vy;
+    crow.vy *= 0.94;
+    crow.vy += Math.sin(frameCount * 0.022 + crow.x * 0.012) * 0.06;
+    crow.y = Math.max(55, Math.min(340, crow.y));
+
+    // 画面外に出たら反対側から再登場
+    if (crow.x < -40) { crow.x = W + 40; crow.vx = Math.abs(crow.vx); }
+    if (crow.x > W + 40) { crow.x = -40; crow.vx = -Math.abs(crow.vx); }
+
+    // 近くに小人がいればダイブ
+    if (crow.attackCooldown === 0) {
+      for (const g of gnomes) {
+        const dx = Math.abs(crow.x - g.x);
+        const dy = crow.y - g.y;
+        if (dx < 55 && dy > 20 && dy < 260) {
+          crow.diving = true;
+          crow.diveTimer = 0;
+          break;
+        }
+      }
+    }
+  }
+}
+
+// === 雷更新 ===
+function updateLightning(lt) {
+  lt.timer++;
+  if (lt.phase === 'warn') {
+    if (lt.timer >= 65) {
+      lt.phase = 'strike';
+      lt.timer = 0;
+      // ボルトの折れ線を事前生成（毎フレーム乱数を使わないよう）
+      const pts = [{ x: lt.x, y: 0 }];
+      for (let i = 1; i < 9; i++) {
+        pts.push({ x: lt.x + (Math.random() - 0.5) * 22, y: (GROUND_Y / 9) * i });
+      }
+      pts.push({ x: lt.x, y: GROUND_Y });
+      lt.boltPoints = pts;
+      playSE('thunder');
+      // 小人が範囲内なら即死
+      for (let i = gnomes.length - 1; i >= 0; i--) {
+        if (Math.abs(gnomes[i].x - lt.x) < 26) killGnome(gnomes[i]);
+      }
+    }
+  } else if (lt.phase === 'strike') {
+    if (lt.timer >= 22) lt.phase = 'done';
+  }
+}
+
 // === HUD更新 ===
 function updateHUD() {
   document.getElementById('score-disp').textContent  = 'SCORE: ' + score;
@@ -1001,6 +1164,121 @@ function drawParticles() {
     ctx.fill();
   }
   ctx.restore();
+}
+
+// === 浮遊ブロック描画（マリオ風レンガ）===
+function drawFloatingBlocks() {
+  for (const bl of floatingBlocks) {
+    const { x, y, w, h } = bl;
+    // メイン面
+    ctx.fillStyle = '#c8843a';
+    ctx.fillRect(x, y, w, h);
+    // 水平目地
+    ctx.fillStyle = '#8b4513';
+    ctx.fillRect(x, y + Math.floor(h / 2) - 1, w, 2);
+    // 垂直目地（上段・下段で半ズレ）
+    const bw = Math.floor(w / 2);
+    ctx.fillRect(x + bw - 1, y, 2, Math.floor(h / 2) - 1);
+    ctx.fillRect(x + Math.floor(bw / 2) - 1, y + Math.floor(h / 2) + 1, 2, h - Math.floor(h / 2) - 1);
+    ctx.fillRect(x + bw + Math.floor(bw / 2) - 1, y + Math.floor(h / 2) + 1, 2, h - Math.floor(h / 2) - 1);
+    // 上端ハイライト
+    ctx.fillStyle = '#e8a450';
+    ctx.fillRect(x, y, w, 2);
+    // 下端シャドウ
+    ctx.fillStyle = '#6a3010';
+    ctx.fillRect(x, y + h - 2, w, 2);
+  }
+}
+
+// === カラス描画 ===
+function drawCrow(crow) {
+  const cx = Math.round(crow.x), cy = Math.round(crow.y);
+  const wing = Math.sin(crow.wingAnim * 0.28) * 7;
+  const facingRight = crow.vx >= 0;
+  ctx.save();
+  // 翼（左右）
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(cx - 13, cy + wing, 11, 5, -0.35, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cx + 13, cy + wing, 11, 5, 0.35, 0, Math.PI * 2);
+  ctx.fill();
+  // 胴体
+  ctx.fillStyle = '#222';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, 9, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // くちばし
+  ctx.fillStyle = '#cc7700';
+  const bx = facingRight ? cx + 9 : cx - 9;
+  const bdir = facingRight ? 1 : -1;
+  ctx.beginPath();
+  ctx.moveTo(bx, cy - 1);
+  ctx.lineTo(bx + bdir * 7, cy + 1);
+  ctx.lineTo(bx, cy + 4);
+  ctx.closePath();
+  ctx.fill();
+  // 目（赤）
+  ctx.fillStyle = '#ff3333';
+  ctx.beginPath();
+  ctx.arc(cx + bdir * 5, cy - 1, 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// === 雷描画 ===
+function drawLightnings() {
+  for (const lt of lightnings) {
+    if (lt.phase === 'done') continue;
+    ctx.save();
+    if (lt.phase === 'warn') {
+      // 点滅する警告ライン
+      if (Math.floor(lt.timer / 6) % 2 === 0) {
+        ctx.strokeStyle = 'rgba(255,255,80,0.35)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(lt.x, 0);
+        ctx.lineTo(lt.x, GROUND_Y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // 警告マーク
+        ctx.fillStyle = 'rgba(255,220,0,0.7)';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('⚡', lt.x, 50 + Math.sin(frameCount * 0.15) * 5);
+      }
+    } else if (lt.phase === 'strike' && lt.boltPoints) {
+      const alpha = Math.max(0, 1 - lt.timer / 22);
+      ctx.globalAlpha = alpha;
+      // 光エフェクト
+      ctx.fillStyle = 'rgba(255,255,180,0.2)';
+      ctx.fillRect(lt.x - 32, 0, 64, GROUND_Y);
+      // ボルト本体
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.shadowColor = '#ffff00';
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.moveTo(lt.boltPoints[0].x, lt.boltPoints[0].y);
+      for (let i = 1; i < lt.boltPoints.length; i++) {
+        ctx.lineTo(lt.boltPoints[i].x, lt.boltPoints[i].y);
+      }
+      ctx.stroke();
+      // 細いコア
+      ctx.strokeStyle = '#ffffaa';
+      ctx.lineWidth = 1.5;
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.moveTo(lt.boltPoints[0].x, lt.boltPoints[0].y);
+      for (let i = 1; i < lt.boltPoints.length; i++) {
+        ctx.lineTo(lt.boltPoints[i].x, lt.boltPoints[i].y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 }
 
 // ボーナスポップアップ表示（スコア加算時のフローティングテキスト）
@@ -1352,6 +1630,7 @@ function initStage() {
   particles = []; drawnPath = [];
   bubbleTimer = 0;
   gnomes = [];
+  floatingBlocks = []; crows = []; lightnings = []; lightningTimer = 0;
   // Phase 2: ステージ開始時にlivesをリセット（Stage 8〜10はlives:2）
   lives = cfg.lives || MAX_LIVES;
   // Phase 6: コンボ・タイム計測リセット
@@ -1361,6 +1640,22 @@ function initStage() {
   for (let i = 0; i < cfg.gnomes; i++) {
     gnomes.push(makeGnome(80 + i * Math.floor((W - 160) / Math.max(1, cfg.gnomes - 1))));
   }
+
+  // 浮遊ブロックを生成（1～5個、ステージが進むほど増加）
+  const blockCount = Math.min(5, stage + 1);
+  for (let i = 0; i < blockCount; i++) {
+    const bw = 40 + Math.floor(Math.random() * 36);
+    const bx = 20 + Math.floor(Math.random() * (W - bw - 40));
+    const by = 130 + Math.floor(Math.random() * 210);
+    floatingBlocks.push(makeBlock(bx, by, bw));
+  }
+
+  // カラスを生成（ステージ3以降: 1〜3羽）
+  if (stage >= 2) {
+    const crowCount = Math.min(3, Math.floor((stage - 1) / 2) + 1);
+    for (let i = 0; i < crowCount; i++) crows.push(makeCrow());
+  }
+
   // 初期泡を2個スポーン
   bubbles.push(makeBubble());
   bubbles.push(makeBubble());
@@ -1419,6 +1714,21 @@ function update() {
     if (comboTimer === 0) comboCount = 0;
   }
 
+  // カラス更新
+  for (let i = crows.length - 1; i >= 0; i--) updateCrow(crows[i]);
+
+  // 雷更新・スポーン（ステージ5以降）
+  lightnings = lightnings.filter(lt => lt.phase !== 'done');
+  for (const lt of lightnings) updateLightning(lt);
+  if (stage >= 4) {
+    lightningTimer++;
+    const interval = Math.max(180, 520 - stage * 28);
+    if (lightningTimer >= interval) {
+      lightningTimer = 0;
+      lightnings.push(makeLightning(44 + Math.random() * (W - 88)));
+    }
+  }
+
   // 小人更新（逆順でsplice時のスキップを防止）
   for (let i = gnomes.length - 1; i >= 0; i--) {
     if (!gnomes[i]) continue;
@@ -1435,12 +1745,15 @@ function render() {
 
   drawBackground();
   drawGround();
+  drawFloatingBlocks();
   ladders.forEach(drawLadder);
   bubbles.forEach(drawBubble);
   items.forEach(drawItem);
   gnomes.forEach(drawGnome);
+  crows.forEach(drawCrow);
+  drawLightnings();
   drawParticles();
-  drawBonusPopups(); // Phase 6: ボーナスポップアップ
+  drawBonusPopups();
   drawPath();
   drawHUDBar();
 }
