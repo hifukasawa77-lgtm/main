@@ -1829,6 +1829,22 @@
               <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:55%"></div><div class="skeleton-bar" style="width:20%"></div></li>
             </ul>
             <button id="home-stock-retry-btn" class="dash-todo-btn" style="display:none;margin:6px 0 4px;background:var(--blue);width:100%" type="button">🔄 再取得</button>
+
+            <!-- 比較チャート -->
+            <div id="home-stock-compare-wrap" style="margin:8px 0 4px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.72rem;color:var(--muted)">主要指数 騰落率比較</span>
+                <div class="stock-chart-tabs" id="home-compare-tabs">
+                  <button class="stock-tab-btn active" data-crange="1y">1Y</button>
+                  <button class="stock-tab-btn" data-crange="3y">3Y</button>
+                  <button class="stock-tab-btn" data-crange="5y">5Y</button>
+                </div>
+              </div>
+              <canvas id="home-stock-compare-canvas" height="120" style="width:100%;display:block;border-radius:6px;background:rgba(0,0,0,0.03)"></canvas>
+              <div id="home-stock-compare-legend" style="display:flex;flex-wrap:wrap;gap:2px 10px;margin-top:4px;font-size:0.68rem;line-height:1.6"></div>
+              <div id="home-stock-compare-msg" style="font-size:0.72rem;color:var(--muted);text-align:center;min-height:1em"></div>
+            </div>
+
             <form class="dash-row" id="home-stock-form">
               <input class="dash-input grow" id="home-stock-input" type="text" maxlength="48" placeholder="会社名 or ティッカー（例: トヨタ / AAPL / 7203.T）">
               <button class="dash-todo-btn" type="submit">追加</button>
@@ -3025,6 +3041,161 @@
         ]);
       }
 
+      // ── 比較チャート ─────────────────────────────────────
+      const COMPARE_INDICES = [
+        { symbol: '^GSPC',     name: 'S&P500',   color: '#22c55e' },
+        { symbol: '^N225',     name: '日経平均',  color: '#38bdf8' },
+        { symbol: '^DJI',      name: 'NYダウ',   color: '#818cf8' },
+        { symbol: '^GDAXI',    name: 'DAX',      color: '#fb923c' },
+        { symbol: '000001.SS', name: '上海総合',  color: '#f87171' },
+      ];
+      let compareRange = '1y';
+
+      async function fetchStockHistoryMulti(symbol, range) {
+        const cacheKey = `stock-compare-${symbol}-${range}`;
+        try {
+          const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+          if (cached && Date.now() - cached.ts < 4 * 60 * 60 * 1000) return cached.data;
+        } catch (e) { /* ignore */ }
+
+        const interval = range === '1y' ? '1wk' : '1mo';
+        const enc = encodeURIComponent(symbol);
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${enc}?interval=${interval}&range=${range}`;
+        const payload = await fetchJsonWithProxies(url);
+        const result = payload?.chart?.result?.[0];
+        if (!result) throw new Error('no-result');
+
+        const timestamps = result.timestamp || [];
+        const closes = result.indicators?.quote?.[0]?.close || [];
+        const points = [];
+        for (let i = 0; i < timestamps.length; i++) {
+          if (closes[i] != null) points.push({ t: timestamps[i] * 1000, v: closes[i] });
+        }
+        if (!points.length) throw new Error('no-data');
+        try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: points })); } catch (e) { /* ignore */ }
+        return points;
+      }
+
+      function drawCompareChart(canvas, seriesList) {
+        const W = canvas.clientWidth || canvas.offsetWidth || 300;
+        const H = 120;
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, W, H);
+
+        if (!seriesList.length) return;
+
+        const pad = { top: 10, bottom: 18, left: 36, right: 10 };
+        const cW = W - pad.left - pad.right;
+        const cH = H - pad.top - pad.bottom;
+
+        // 全時刻の範囲
+        const allTs = seriesList.flatMap(s => s.norm.map(p => p.t));
+        const tMin = Math.min(...allTs), tMax = Math.max(...allTs);
+
+        // Y軸範囲（全シリーズの騰落率）
+        const allVals = seriesList.flatMap(s => s.norm.map(p => p.v));
+        const vMin = Math.min(...allVals), vMax = Math.max(...allVals);
+        const vPad = (vMax - vMin) * 0.08 || 2;
+        const lo = vMin - vPad, hi = vMax + vPad;
+
+        const xOf = t => pad.left + ((t - tMin) / (tMax - tMin || 1)) * cW;
+        const yOf = v => pad.top + (1 - (v - lo) / (hi - lo)) * cH;
+
+        // グリッド・ゼロライン
+        ctx.strokeStyle = 'rgba(150,150,180,0.18)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 4]);
+        [0.25, 0.5, 0.75].forEach(t => {
+          const y = pad.top + t * cH;
+          ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
+        });
+        if (lo < 0 && hi > 0) {
+          ctx.strokeStyle = 'rgba(180,180,200,0.45)';
+          ctx.lineWidth = 1;
+          const y0 = yOf(0);
+          ctx.beginPath(); ctx.moveTo(pad.left, y0); ctx.lineTo(pad.left + cW, y0); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+
+        // Y軸ラベル
+        ctx.fillStyle = 'rgba(120,130,150,0.85)';
+        ctx.font = '8px sans-serif';
+        ctx.textAlign = 'right';
+        [lo + (hi - lo) * 0.1, lo + (hi - lo) * 0.9].forEach(v => {
+          ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(0) + '%', pad.left - 2, yOf(v) + 3);
+        });
+
+        // X軸ラベル（両端）
+        ctx.fillStyle = 'rgba(120,130,150,0.7)';
+        ctx.textAlign = 'left';
+        ctx.fillText(new Date(tMin).getFullYear(), pad.left, H - 3);
+        ctx.textAlign = 'right';
+        ctx.fillText(new Date(tMax).getFullYear(), pad.left + cW, H - 3);
+
+        // 各指数の折れ線
+        seriesList.forEach(s => {
+          if (s.norm.length < 2) return;
+          ctx.beginPath();
+          s.norm.forEach((p, i) => {
+            if (i === 0) ctx.moveTo(xOf(p.t), yOf(p.v));
+            else ctx.lineTo(xOf(p.t), yOf(p.v));
+          });
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 1.6;
+          ctx.shadowColor = s.color;
+          ctx.shadowBlur = 4;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+
+          // 末端ラベル
+          const last = s.norm[s.norm.length - 1];
+          const sign = last.v >= 0 ? '+' : '';
+          ctx.fillStyle = s.color;
+          ctx.font = 'bold 7.5px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillText(`${sign}${last.v.toFixed(0)}%`, Math.min(xOf(last.t) + 2, W - 28), yOf(last.v) + 3);
+        });
+      }
+
+      async function renderCompareChart() {
+        const canvas = document.getElementById('home-stock-compare-canvas');
+        const legend = document.getElementById('home-stock-compare-legend');
+        const msgEl = document.getElementById('home-stock-compare-msg');
+        if (!canvas) return;
+        msgEl.textContent = '取得中…';
+
+        const results = await Promise.allSettled(
+          COMPARE_INDICES.map(idx =>
+            fetchStockHistoryMulti(idx.symbol, compareRange)
+              .then(points => ({ ...idx, points }))
+          )
+        );
+
+        const seriesList = results
+          .filter(r => r.status === 'fulfilled')
+          .map(r => r.value)
+          .filter(s => s.points && s.points.length > 1)
+          .map(s => {
+            const base = s.points[0].v;
+            return { ...s, norm: s.points.map(p => ({ t: p.t, v: (p.v / base - 1) * 100 })) };
+          });
+
+        msgEl.textContent = '';
+        if (!seriesList.length) { msgEl.textContent = 'データ取得失敗'; return; }
+
+        canvas._lastSeries = seriesList;
+        drawCompareChart(canvas, seriesList);
+
+        legend.innerHTML = seriesList.map(s => {
+          const last = s.norm[s.norm.length - 1];
+          const sign = last.v >= 0 ? '+' : '';
+          const cls = last.v >= 0 ? 'dash-market-up' : 'dash-market-down';
+          return `<span style="white-space:nowrap"><span style="color:${s.color}">■</span> ${s.name} <span class="${cls}">${sign}${last.v.toFixed(1)}%</span></span>`;
+        }).join('');
+      }
+
       async function fetchStock(symbol) {
         const cacheKey = 'dashboard-stock-quote-' + symbol;
         try {
@@ -3339,6 +3510,7 @@
 
       async function initStockCard() {
         const indices = [
+          { symbol: '^GSPC', name: 'S&P500' },
           { symbol: '^N225', name: '日経225' },
           { symbol: '^DJI',  name: 'NYダウ' },
           { symbol: '^IXIC', name: 'NASDAQ' },
@@ -3403,6 +3575,26 @@
         stockRetryBtn.disabled = true;
         stockTime.textContent = '再取得中…';
         initStockCard().finally(() => { stockRetryBtn.disabled = false; });
+      });
+
+      // 比較チャートのレンジタブ
+      document.getElementById('home-compare-tabs')?.addEventListener('click', e => {
+        const btn = e.target.closest('[data-crange]');
+        if (!btn) return;
+        compareRange = btn.dataset.crange;
+        document.querySelectorAll('#home-compare-tabs .stock-tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+        renderCompareChart();
+      });
+
+      // リサイズ時に比較チャートを再描画（キャッシュデータから即時再描画）
+      let compareResizeTimer = null;
+      window.addEventListener('resize', () => {
+        clearTimeout(compareResizeTimer);
+        compareResizeTimer = setTimeout(() => {
+          const canvas = document.getElementById('home-stock-compare-canvas');
+          if (!canvas || !canvas._lastSeries) return;
+          drawCompareChart(canvas, canvas._lastSeries);
+        }, 200);
       });
 
       stockForm.addEventListener('submit', async (event) => {
@@ -4442,6 +4634,7 @@
           initFxCard(),
           initStockCard(),
           renderCustomStocks(),
+          renderCompareChart(),
           initGasCard(),
           initTrainCard(),
           initQuakeCard(),
