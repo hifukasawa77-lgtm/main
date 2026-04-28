@@ -851,10 +851,18 @@
 // ─── 認証チェック ─────────────────────────────────────────
 const API_BASE = 'http://localhost:3001';
 
-if (!sessionStorage.getItem('admin_token')) location.href = 'admin-login.html';
+// バックエンドあり(JWT)・なし(localStorage)の両方に対応
+const HAS_TOKEN = !!sessionStorage.getItem('admin_token');
+const HAS_SESSION = sessionStorage.getItem('admin_session') === '1';
+if (!HAS_TOKEN && !HAS_SESSION) location.href = 'admin-login.html';
 
 function getToken() { return sessionStorage.getItem('admin_token') || ''; }
-function authHeaders() { return { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' }; }
+function authHeaders() {
+  const token = getToken();
+  return token
+    ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+    : { 'Content-Type': 'application/json' };
+}
 
 const DEFAULT_USERNAME = 'admin';
 function getUsername() { return sessionStorage.getItem('admin_username') || DEFAULT_USERNAME; }
@@ -864,6 +872,7 @@ document.getElementById('currentUsernameBadge').value = getUsername();
 
 function logout() {
   sessionStorage.removeItem('admin_token');
+  sessionStorage.removeItem('admin_session');
   sessionStorage.removeItem('admin_username');
   location.href = 'admin-login.html';
 }
@@ -1830,27 +1839,35 @@ function saveIotDevices() {
 }
 
 // ─── ログイン履歴 ─────────────────────────────────────────
-async function loadLoginHistory() {
+function renderLoginHistory(logs) {
   const empty = document.getElementById('logEmpty');
   const table = document.getElementById('logTable');
   const tbody = document.getElementById('logTableBody');
+  if (!logs.length) { empty.style.display = ''; empty.textContent = 'ログイン履歴がありません'; table.style.display = 'none'; return; }
+  empty.style.display = 'none'; table.style.display = '';
+  tbody.innerHTML = logs.map(l => `
+    <tr>
+      <td>${l.logged_at.replace('T',' ').slice(0,19)}</td>
+      <td>${escHtml(l.username)}</td>
+      <td><span class="${l.success ? 'badge-ok' : 'badge-err'}">${l.success ? '✅ 成功' : '❌ 失敗'}</span></td>
+    </tr>`).join('');
+}
+
+async function loadLoginHistory() {
+  // バックエンドAPIを試みる
   try {
-    const res = await fetch(`${API_BASE}/api/auth/login-history`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('取得失敗');
-    const logs = await res.json();
-    if (!logs.length) { empty.style.display = ''; table.style.display = 'none'; return; }
-    empty.style.display = 'none'; table.style.display = '';
-    tbody.innerHTML = logs.map(l => `
-      <tr>
-        <td>${l.logged_at.replace('T',' ').slice(0,19)}</td>
-        <td>${escHtml(l.username)}</td>
-        <td><span class="${l.success ? 'badge-ok' : 'badge-err'}">${l.success ? '✅ 成功' : '❌ 失敗'}</span></td>
-      </tr>`).join('');
-  } catch {
-    empty.style.display = '';
-    empty.textContent = 'ログイン履歴の取得に失敗しました。バックエンドサーバーを起動してください。';
-    table.style.display = 'none';
-  }
+    const res = await fetch(`${API_BASE}/api/auth/login-history`, {
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(3000)
+    });
+    if (!res.ok) throw new Error();
+    renderLoginHistory(await res.json());
+    return;
+  } catch {}
+
+  // フォールバック: localStorage（バックエンドなし環境）
+  const logs = JSON.parse(localStorage.getItem('admin_login_history') || '[]');
+  renderLoginHistory(logs);
 }
 
 // ─── サマリー統計バー ─────────────────────────────────────
