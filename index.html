@@ -4097,84 +4097,33 @@
       }
 
       // ── ガソリン価格ランキング ──────────────────────────────
-      async function fetchGasRankingHtml() {
-        const target = 'https://gogo.gs/rank/11237/';
-        const enc = encodeURIComponent(target);
-        return Promise.any([
-          fetchWithTimeout(`https://corsproxy.io/?${enc}`, 8000)
-            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }),
-          fetchWithTimeout(`https://api.allorigins.win/raw?url=${enc}`, 8000)
-            .then(r => { if (!r.ok) throw new Error(); return r.text(); }),
-          fetchWithTimeout(`https://api.allorigins.win/get?url=${enc}`, 8000)
-            .then(r => { if (!r.ok) throw new Error(); return r.json().then(d => d.contents || ''); }),
-        ]);
-      }
-
+      // gogo.gs の HTML 構造: class="shop-name" → class="address" → class="price"
       function parseGasRankingHtml(html) {
         const src = String(html || '');
         const stations = [];
         const seen = new Set();
+        const stripTags = s => s.replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
+          .replace(/&[a-z#0-9]+;/gi, '').trim();
 
-        // 戦略A: HTMLクラスベース(shop-name + address + price)
-        const stripTags = s => s.replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&[a-z#0-9]+;/gi, '').trim();
-        const shopPattern = /class="[^"]*\bshop-name\b[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+        // shop-name → address(p.address) → price の順で抽出
+        const shopRe = /class="shop-name"[^>]*>([\s\S]*?)<\/a>([\s\S]{0,600}?)class="price"[^>]*>\s*(\d{2,3})\s*</gi;
         let m;
-        while ((m = shopPattern.exec(src)) !== null) {
+        while ((m = shopRe.exec(src)) !== null) {
           const rawName = stripTags(m[1]);
           if (!rawName || rawName.length < 2) continue;
+          const price = Number(m[3]);
+          if (price < 100 || price > 250) continue;
           const name = rawName.split(/\s*[/／]\s*/)[0].trim();
           if (seen.has(name)) continue;
 
-          // 前後1000文字の中で住所と価格を探す
-          const start = Math.max(0, m.index - 200);
-          const end = Math.min(src.length, m.index + 1000);
-          const chunk = src.slice(start, end);
-
-          // 住所: 都道府県パターン
-          const addrM = chunk.match(/([都道府県]\S{0,4}[都道府県]?[\s\S]{0,3}[市区町村]\S{2,30})/);
-          const address = addrM ? stripTags(addrM[1]).replace(/\s+/g, '') : '';
-
-          // 価格
-          const priceM = chunk.match(/class="[^"]*\bprice\b[^"]*"[^>]*>\s*(\d{2,3})\s*</);
-          if (!priceM) continue;
-          const price = Number(priceM[1]);
-          if (price < 100 || price > 250) continue;
+          // class="address" から住所を抽出
+          const addrM = m[2].match(/class="address"[^>]*>([\s\S]*?)<\/p>/i);
+          const address = addrM ? stripTags(addrM[1]) : '';
 
           seen.add(name);
           stations.push({ name: rawName, address, price });
-          if (stations.length >= 10) break;
-        }
-
-        // 戦略B: テキストベースフォールバック
-        if (stations.length < 3) {
-          stations.length = 0; seen.clear();
-          const text = src
-            .replace(/<script[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[\s\S]*?<\/style>/gi, '')
-            .replace(/<\/(?:div|p|li|tr|td|a|span)>/gi, '\n')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&[a-z#0-9]+;/gi, ' ')
-            .replace(/[ \t　]+/g, ' ').replace(/\n[ \t]*/g, '\n').replace(/\n{3,}/g, '\n\n');
-
-          const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-          const isName = s => s.length >= 4 && s.length <= 60
-            && /[ァ-ヶーぁ-ん一-龯]/.test(s) && !/^\d+$/.test(s) && s.includes('SS');
-
-          for (let i = 0; i < lines.length - 2; i++) {
-            if (!isName(lines[i])) continue;
-            const name = lines[i].split(/\s*[/／]\s*/)[0].trim();
-            if (seen.has(name)) continue;
-            // 次の数行で住所と価格を探す
-            let address = '', price = 0;
-            for (let j = i + 1; j <= Math.min(lines.length - 1, i + 8); j++) {
-              if (!price && /^\d{2,3}$/.test(lines[j])) price = Number(lines[j]);
-              if (!address && /[市区町村]/.test(lines[j]) && lines[j].length >= 8) address = lines[j];
-            }
-            if (!price || price < 100 || price > 250) continue;
-            seen.add(name);
-            stations.push({ name: lines[i], address, price });
-            if (stations.length >= 10) break;
-          }
+          if (stations.length >= 8) break;
         }
 
         return stations.sort((a, b) => a.price - b.price).slice(0, 5);
@@ -4203,21 +4152,18 @@
 
       async function initGasCard() {
         gasList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
-
-        // 平均価格とランキングを並列取得
-        const [gasResult, rankResult] = await Promise.allSettled([
-          fetchGasHtml(),
-          fetchGasRankingHtml(),
-        ]);
-
-        // 平均価格
         try {
-          if (gasResult.status !== 'fulfilled') throw new Error('gas-fetch');
-          const html = gasResult.value;
+          const html = await fetchGasHtml(); // 1回のフェッチで平均価格＋ランキング両方取得
           const snapshot = parseGasSnapshot(html);
           if (!snapshot) throw new Error('gas-parse');
-          snapshot.stations = parseGasStations(html);
+
+          // ランキング解析（同じHTML）
+          const ranking = parseGasRankingHtml(html);
+          snapshot.stations = ranking;
           localStorage.setItem(GAS_SNAPSHOT_KEY, JSON.stringify(snapshot));
+          if (ranking.length) {
+            try { localStorage.setItem('gas-ranking-cache', JSON.stringify({ ts: Date.now(), stations: ranking })); } catch (e) { /* ignore */ }
+          }
 
           const histPrices = parseGasHistory(html);
           if (histPrices && histPrices.length >= 2) seedGasPriceHistory(histPrices);
@@ -4225,39 +4171,21 @@
 
           renderGasSnapshot(snapshot, false);
           renderGasChart('daily');
+          renderGasRanking(ranking, ranking.length ? '' : 'ランキングデータなし');
         } catch (e) {
           try {
             const cached = JSON.parse(localStorage.getItem(GAS_SNAPSHOT_KEY) || 'null');
             if (cached && cached.price) {
               renderGasSnapshot(cached, true);
               renderGasChart('daily');
-            } else {
-              gasList.innerHTML = '<li class="dashboard-mini-item"><span>相場の取得に失敗しました</span></li>';
-              gasTime.textContent = '更新時刻: 取得失敗（リンク先で確認してください）';
+              const rankCached = JSON.parse(localStorage.getItem('gas-ranking-cache') || 'null');
+              renderGasRanking(rankCached?.stations || [], rankCached?.stations?.length ? '' : 'ランキングデータなし');
+              return;
             }
           } catch (ignore) { /* no-op */ }
-        }
-
-        // ランキング
-        try {
-          if (rankResult.status !== 'fulfilled') throw new Error('rank-fetch');
-          const rankHtml = rankResult.value;
-          const stations = parseGasRankingHtml(rankHtml);
-          // キャッシュに保存
-          try { localStorage.setItem('gas-ranking-cache', JSON.stringify({ ts: Date.now(), stations })); } catch (e) { /* ignore */ }
-          renderGasRanking(stations, stations.length ? '' : 'ランキングを解析できませんでした');
-        } catch (e) {
-          // キャッシュから復元を試みる
-          try {
-            const cached = JSON.parse(localStorage.getItem('gas-ranking-cache') || 'null');
-            if (cached && cached.stations && cached.stations.length) {
-              renderGasRanking(cached.stations, '');
-            } else {
-              renderGasRanking([], 'ランキングの取得に失敗しました');
-            }
-          } catch (ignore) {
-            renderGasRanking([], 'ランキングの取得に失敗しました');
-          }
+          gasList.innerHTML = '<li class="dashboard-mini-item"><span>相場の取得に失敗しました</span></li>';
+          gasTime.textContent = '更新時刻: 取得失敗（リンク先で確認してください）';
+          renderGasRanking([], 'データ取得失敗');
         }
       }
 
