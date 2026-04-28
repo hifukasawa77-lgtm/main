@@ -1901,7 +1901,12 @@
           </article>
 
           <article class="card dashboard-card reveal" id="dash-card-gas">
-            <h3>⛽ 三郷市ガソリン相場</h3>
+            <h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span id="gas-card-title">⛽ ガソリン相場</span>
+              <button id="gas-locate-btn" class="dash-todo-btn" type="button"
+                style="font-size:0.7rem;padding:2px 9px;margin-left:auto">📍 現在地</button>
+            </h3>
+            <div id="gas-location-status" style="font-size:0.72rem;color:var(--muted);margin-bottom:4px;min-height:1.1em"></div>
             <ul class="dashboard-mini-list" id="home-gas-list">
               <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:60%"></div><div class="skeleton-bar" style="width:20%"></div></li>
               <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:60%"></div><div class="skeleton-bar" style="width:20%"></div></li>
@@ -1920,7 +1925,7 @@
             <canvas id="home-gas-chart" style="display:none"></canvas>
             <div id="home-gas-chart-msg">データ蓄積中… 数日後にグラフが表示されます</div>
             <div class="dash-mini-note" id="home-gas-time">更新時刻を取得中…</div>
-            <a class="dash-open-link" href="https://gogo.gs/11237?device=sp" target="_blank" rel="noreferrer">価格詳細を見る →</a>
+            <a class="dash-open-link" id="gas-detail-link" href="https://gogo.gs/11237?device=sp" target="_blank" rel="noreferrer">価格詳細を見る →</a>
           </article>
 
           <article class="card dashboard-card reveal" id="dash-card-updates">
@@ -3857,27 +3862,21 @@
           : `${snapshot.asOf} / 出典: gogo.gs`;
       }
 
-      async function fetchGasHtml() {
-        const target = 'https://gogo.gs/11237?device=sp';
-        const endpoints = [
-          { mode: 'json', url: `https://api.allorigins.win/get?url=${encodeURIComponent(target)}` },
-          { mode: 'text', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}` },
-          { mode: 'text', url: `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(target)}` },
-        ];
-
-        for (const ep of endpoints) {
-          try {
-            const res = await fetchWithTimeout(ep.url, 9000);
-            if (!res.ok) continue;
-            const body = ep.mode === 'json'
-              ? String((await res.json()).contents || '')
-              : await res.text();
-            if (body && body.length > 300) return body;
-          } catch (e) {
-            // Try next endpoint
-          }
-        }
-        throw new Error('gas-fetch-failed');
+      async function fetchGasHtml(muniCd) {
+        const code = muniCd || '11237';
+        const target = `https://gogo.gs/${code}?device=sp`;
+        const enc = encodeURIComponent(target);
+        return Promise.any([
+          fetchWithTimeout(`https://corsproxy.io/?${enc}`, 9000)
+            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+            .then(b => { if (!b || b.length < 300) throw new Error('short'); return b; }),
+          fetchWithTimeout(`https://api.allorigins.win/get?url=${enc}`, 9000)
+            .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+            .then(d => { const b = String(d.contents || ''); if (b.length < 300) throw new Error('short'); return b; }),
+          fetchWithTimeout(`https://api.allorigins.win/raw?url=${enc}`, 9000)
+            .then(r => { if (!r.ok) throw new Error(); return r.text(); })
+            .then(b => { if (!b || b.length < 300) throw new Error('short'); return b; }),
+        ]);
       }
 
       const GAS_HISTORY_KEY = 'gas-price-history-v1';
@@ -4060,6 +4059,15 @@
         });
       });
 
+      // 📍 現在地ボタン: キャッシュをクリアして再取得
+      document.getElementById('gas-locate-btn')?.addEventListener('click', () => {
+        const btn = document.getElementById('gas-locate-btn');
+        if (btn) { btn.disabled = true; btn.textContent = '取得中…'; }
+        initGasCard(true).finally(() => {
+          if (btn) { btn.disabled = false; btn.textContent = '📍 現在地'; }
+        });
+      });
+
       // gogo.gs HTML のスクリプトタグから価格履歴配列を抽出
       function parseGasHistory(rawHtml) {
         const scriptRe = /<script[^>]*>([\s\S]*?)<\/script>/gi;
@@ -4094,6 +4102,77 @@
         const trimmed = {};
         Object.keys(hist).sort().slice(-180).forEach(k => { trimmed[k] = hist[k]; });
         localStorage.setItem(GAS_HISTORY_KEY, JSON.stringify(trimmed));
+      }
+
+      // ── 位置情報 → 市区町村コード（国土地理院逆ジオコーダ）──────
+      const GAS_AREA_CACHE_KEY = 'gas-area-cache-v1';
+
+      async function detectGasArea() {
+        // 1時間キャッシュ
+        try {
+          const c = JSON.parse(localStorage.getItem(GAS_AREA_CACHE_KEY) || 'null');
+          if (c && Date.now() - c.ts < 60 * 60 * 1000) return c;
+        } catch (e) { /* ignore */ }
+
+        // 位置情報取得
+        const pos = await new Promise((resolve, reject) => {
+          if (!navigator.geolocation) return reject(new Error('no-geolocation'));
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            timeout: 12000, maximumAge: 300000, enableHighAccuracy: false,
+          });
+        });
+
+        const { latitude: lat, longitude: lon } = pos.coords;
+
+        // GSI（市区町村コード）と Nominatim（市区町村名）を並列取得
+        const [gsiRes, nomRes] = await Promise.allSettled([
+          fetchWithTimeout(
+            `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lon}`,
+            6000
+          ).then(r => r.json()),
+          fetchWithTimeout(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=ja`,
+            6000
+          ).then(r => r.json()),
+        ]);
+
+        // muniCd（国土地理院）
+        const muniCd = gsiRes.status === 'fulfilled'
+          ? String(gsiRes.value?.results?.muniCd || '').trim()
+          : '';
+        if (!muniCd) throw new Error('gsi-no-muni');
+
+        // 市区町村名（Nominatim）
+        let cityName = '';
+        if (nomRes.status === 'fulfilled') {
+          const addr = nomRes.value?.address || {};
+          cityName = addr.city || addr.town || addr.village || addr.municipality || addr.county || '';
+          // 「〇〇市」「〇〇町」「〇〇村」「〇〇区」のみ抽出
+          const m = cityName.match(/([^都道府県\s]{2,8}[市区町村])/);
+          if (m) cityName = m[1];
+        }
+        // Nominatim失敗時は muniCd 下3桁から仮称
+        if (!cityName) cityName = `エリア${muniCd}`;
+
+        const result = { muniCd, cityName, lat, lon, ts: Date.now() };
+        try { localStorage.setItem(GAS_AREA_CACHE_KEY, JSON.stringify(result)); } catch (e) { /* ignore */ }
+        return result;
+      }
+
+      // gogo.gs HTML からページタイトルの市区町村名を抽出（確認用）
+      function parseCityNameFromGasHtml(html) {
+        const h1M = String(html).match(/<h1[^>]*>([\s\S]{0,100}?)<\/h1>/i);
+        if (h1M) {
+          const text = h1M[1].replace(/<[^>]+>/g, '');
+          const m = text.match(/([^\s　]{2,6}[市区町村])/);
+          if (m) return m[1];
+        }
+        const titleM = String(html).match(/<title[^>]*>([\s\S]{0,80}?)<\/title>/i);
+        if (titleM) {
+          const m = titleM[1].replace(/<[^>]+>/g, '').match(/([^\s　]{2,6}[市区町村])/);
+          if (m) return m[1];
+        }
+        return '';
       }
 
       // ── ガソリン価格ランキング ──────────────────────────────
@@ -4150,19 +4229,64 @@
           </div>`).join('');
       }
 
-      async function initGasCard() {
+      async function initGasCard(forceDetect) {
+        const titleEl  = document.getElementById('gas-card-title');
+        const statusEl = document.getElementById('gas-location-status');
+        const linkEl   = document.getElementById('gas-detail-link');
         gasList.innerHTML = '<li class="dashboard-mini-item"><span>読み込み中…</span></li>';
+
+        // 位置情報から市区町村を特定
+        let muniCd = '11237', cityName = '三郷市';
+        if (statusEl) statusEl.textContent = '📍 現在地を取得中…';
         try {
-          const html = await fetchGasHtml(); // 1回のフェッチで平均価格＋ランキング両方取得
+          if (forceDetect) {
+            try { localStorage.removeItem(GAS_AREA_CACHE_KEY); } catch (e) { /* ignore */ }
+          }
+          const area = await detectGasArea();
+          muniCd   = area.muniCd;
+          cityName = area.cityName;
+          if (statusEl) statusEl.textContent = `📍 ${cityName} の価格を表示中`;
+        } catch (e) {
+          const msg = e?.code === 1 ? '位置情報の許可が必要です（三郷市で表示）'
+                    : e?.message === 'no-geolocation' ? '位置情報非対応（三郷市で表示）'
+                    : '現在地取得失敗（三郷市で表示）';
+          if (statusEl) statusEl.textContent = msg;
+        }
+
+        if (titleEl)  titleEl.textContent  = `⛽ ${cityName}のガソリン相場`;
+        if (linkEl) {
+          linkEl.href = `https://gogo.gs/${muniCd}?device=sp`;
+        }
+
+        // キャッシュキーはエリアコードごとに分離
+        const snapKey = `dashboard-gas-snapshot-${muniCd}`;
+        const rankKey = `gas-ranking-${muniCd}`;
+
+        try {
+          const html = await fetchGasHtml(muniCd);
+          // gogo.gs HTML から市区町村名を確定（Nominatim より正確）
+          const confirmedCity = parseCityNameFromGasHtml(html) || cityName;
+          if (confirmedCity !== cityName) {
+            cityName = confirmedCity;
+            if (titleEl)  titleEl.textContent  = `⛽ ${cityName}のガソリン相場`;
+            if (statusEl) statusEl.textContent = `📍 ${cityName}`;
+            // キャッシュ更新
+            try {
+              const c = JSON.parse(localStorage.getItem(GAS_AREA_CACHE_KEY) || 'null');
+              if (c) { c.cityName = cityName; localStorage.setItem(GAS_AREA_CACHE_KEY, JSON.stringify(c)); }
+            } catch (e) { /* ignore */ }
+          }
+
           const snapshot = parseGasSnapshot(html);
           if (!snapshot) throw new Error('gas-parse');
 
-          // ランキング解析（同じHTML）
           const ranking = parseGasRankingHtml(html);
           snapshot.stations = ranking;
-          localStorage.setItem(GAS_SNAPSHOT_KEY, JSON.stringify(snapshot));
+          snapshot.muniCd   = muniCd;
+          snapshot.cityName = cityName;
+          localStorage.setItem(snapKey, JSON.stringify(snapshot));
           if (ranking.length) {
-            try { localStorage.setItem('gas-ranking-cache', JSON.stringify({ ts: Date.now(), stations: ranking })); } catch (e) { /* ignore */ }
+            try { localStorage.setItem(rankKey, JSON.stringify({ ts: Date.now(), stations: ranking })); } catch (e) { /* ignore */ }
           }
 
           const histPrices = parseGasHistory(html);
@@ -4172,14 +4296,15 @@
           renderGasSnapshot(snapshot, false);
           renderGasChart('daily');
           renderGasRanking(ranking, ranking.length ? '' : 'ランキングデータなし');
+          if (statusEl) statusEl.textContent = `📍 ${cityName}`;
         } catch (e) {
           try {
-            const cached = JSON.parse(localStorage.getItem(GAS_SNAPSHOT_KEY) || 'null');
+            const cached = JSON.parse(localStorage.getItem(snapKey) || 'null');
             if (cached && cached.price) {
               renderGasSnapshot(cached, true);
               renderGasChart('daily');
-              const rankCached = JSON.parse(localStorage.getItem('gas-ranking-cache') || 'null');
-              renderGasRanking(rankCached?.stations || [], rankCached?.stations?.length ? '' : 'ランキングデータなし');
+              const rc = JSON.parse(localStorage.getItem(rankKey) || 'null');
+              renderGasRanking(rc?.stations || [], rc?.stations?.length ? '' : 'ランキングデータなし');
               return;
             }
           } catch (ignore) { /* no-op */ }
