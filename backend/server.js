@@ -368,7 +368,12 @@ app.get('/api/access/daily', (req, res) => {
 // ─── ヘルスチェック ───────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(PORT, () => {
-  console.log(`[Server] http://localhost:${PORT} で起動しました`);
-  console.log('[Server] Ctrl+C で停止');
+db.init().then(() => {
+  app.listen(PORT, () => {
+    console.log(`[Server] http://localhost:${PORT} で起動しました`);
+    console.log('[Server] Ctrl+C で停止');
+  });
+}).catch(err => {
+  console.error('[DB] 初期化失敗:', err);
+  process.exit(1);
 });

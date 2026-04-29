@@ -3,121 +3,134 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH  = path.join(__dirname, 'admin.db.json');
-const LOGS_DIR = path.join(__dirname, 'logs');
+const DB_PATH = path.join(__dirname, 'admin.db');
 
-if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
-
-const LOGIN_LOG_FILE  = path.join(LOGS_DIR, 'login.log');
-const ACCESS_LOG_FILE = path.join(LOGS_DIR, 'access.log');
-
-function appendLog(file, line) {
-  fs.appendFileSync(file, line + '\n', 'utf8');
-}
-
-// sql.js はメモリ上で動作するため、JSONファイルに永続化する
 let db;
-let dbData = { users: [], blogs: [], settings: [], login_logs: [], access_logs: [], _seq: { users: 0, blogs: 0, login_logs: 0, access_logs: 0 } };
 
-function loadData() {
-  if (fs.existsSync(DB_PATH)) {
-    try { dbData = JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); } catch {}
+function save() {
+  const data = db.export();
+  fs.writeFileSync(DB_PATH, Buffer.from(data));
+}
+
+function queryAll(sql, params = []) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  const rows = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return rows;
+}
+
+function queryOne(sql, params = []) {
+  return queryAll(sql, params)[0] || null;
+}
+
+function run(sql, params = []) {
+  db.run(sql, params);
+  save();
+}
+
+async function init() {
+  const SQL = await initSqlJs();
+  const buf = fs.existsSync(DB_PATH) ? fs.readFileSync(DB_PATH) : null;
+  db = buf ? new SQL.Database(buf) : new SQL.Database();
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS blogs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      bg_color TEXT NOT NULL DEFAULT '#0d0d1a',
+      content TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS login_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      success INTEGER NOT NULL,
+      ip TEXT,
+      logged_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS access_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ip TEXT,
+      visited_at TEXT NOT NULL
+    );
+  `);
+
+  if (!queryOne('SELECT 1 FROM users WHERE username=?', ['admin'])) {
+    run('INSERT INTO users (username,password,created_at) VALUES (?,?,?)',
+      ['admin', bcrypt.hashSync('password', 10), new Date().toISOString()]);
+    console.log('[DB] 初期管理者アカウントを作成しました (username: admin, password: password)');
   }
-  if (!dbData.settings)     dbData.settings     = [];
-  if (!dbData.login_logs)   dbData.login_logs   = [];
-  if (!dbData.access_logs)  dbData.access_logs  = [];
-  if (!dbData._seq)         dbData._seq         = { users: 0, blogs: 0, login_logs: 0, access_logs: 0 };
-  if (!dbData._seq.login_logs)  dbData._seq.login_logs  = 0;
-  if (!dbData._seq.access_logs) dbData._seq.access_logs = 0;
 }
 
-function saveData() {
-  fs.writeFileSync(DB_PATH, JSON.stringify(dbData, null, 2), 'utf8');
-}
+module.exports = {
+  init,
 
-loadData();
+  getUserByUsername: (username) => queryOne('SELECT * FROM users WHERE username=?', [username]),
+  getUserById: (id) => queryOne('SELECT * FROM users WHERE id=?', [id]),
+  updatePassword: (id, hash) => run('UPDATE users SET password=? WHERE id=?', [hash, id]),
+  updateUsername: (id, username) => run('UPDATE users SET username=? WHERE id=?', [username, id]),
+  getUserByUsernameExcept: (username, id) =>
+    queryOne('SELECT * FROM users WHERE username=? AND id!=?', [username, id]),
 
-// シーケンスID採番
-function nextId(table) {
-  dbData._seq[table] = (dbData._seq[table] || 0) + 1;
-  return dbData._seq[table];
-}
-
-// 初期管理者アカウント
-if (!dbData.users.find(u => u.username === 'admin')) {
-  const hash = bcrypt.hashSync('password', 10);
-  dbData.users.push({ id: nextId('users'), username: 'admin', password: hash, created_at: new Date().toISOString() });
-  saveData();
-  console.log('[DB] 初期管理者アカウントを作成しました (username: admin, password: password)');
-}
-
-// ─── DB API（better-sqlite3 互換インターフェース） ───────────
-const database = {
-  // ユーザー
-  getUserByUsername: (username) => dbData.users.find(u => u.username === username) || null,
-  getUserById: (id) => dbData.users.find(u => u.id === id) || null,
-  updatePassword: (id, hash) => { const u = dbData.users.find(u => u.id === id); if (u) { u.password = hash; saveData(); } },
-  updateUsername: (id, username) => { const u = dbData.users.find(u => u.id === id); if (u) { u.username = username; saveData(); } },
-  getUserByUsernameExcept: (username, id) => dbData.users.find(u => u.username === username && u.id !== id) || null,
-
-  // ブログ
-  getBlogs: () => dbData.blogs.map(b => ({ ...b, content: undefined })).sort((a, b) => b.updated_at > a.updated_at ? 1 : -1),
-  getBlogById: (id) => dbData.blogs.find(b => b.id === id) || null,
+  getBlogs: () => queryAll('SELECT id,title,bg_color,created_at,updated_at FROM blogs ORDER BY updated_at DESC'),
+  getBlogById: (id) => queryOne('SELECT * FROM blogs WHERE id=?', [id]),
   createBlog: (title, bg_color, content) => {
     const now = new Date().toISOString();
-    const blog = { id: nextId('blogs'), title, bg_color, content: JSON.stringify(content), created_at: now, updated_at: now };
-    dbData.blogs.push(blog); saveData(); return blog.id;
+    run('INSERT INTO blogs (title,bg_color,content,created_at,updated_at) VALUES (?,?,?,?,?)',
+      [title, bg_color, JSON.stringify(content), now, now]);
+    return db.exec('SELECT last_insert_rowid()')[0].values[0][0];
   },
   updateBlog: (id, title, bg_color, content) => {
-    const b = dbData.blogs.find(b => b.id === id);
-    if (b) { b.title = title; b.bg_color = bg_color; b.content = JSON.stringify(content); b.updated_at = new Date().toISOString(); saveData(); }
+    run('UPDATE blogs SET title=?,bg_color=?,content=?,updated_at=? WHERE id=?',
+      [title, bg_color, JSON.stringify(content), new Date().toISOString(), id]);
   },
-  deleteBlog: (id) => { dbData.blogs = dbData.blogs.filter(b => b.id !== id); saveData(); },
+  deleteBlog: (id) => run('DELETE FROM blogs WHERE id=?', [id]),
 
-  // 設定
-  getSetting: (key) => { const s = dbData.settings.find(s => s.key === key); return s ? s.value : null; },
-  setSetting: (key, value) => {
-    const s = dbData.settings.find(s => s.key === key);
-    if (s) s.value = value; else dbData.settings.push({ key, value });
-    saveData();
-  },
+  getSetting: (key) => queryOne('SELECT value FROM settings WHERE key=?', [key])?.value ?? null,
+  setSetting: (key, value) => run('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)', [key, value]),
 
-  // ログイン履歴
   addLoginLog: (username, success, ip) => {
-    const logged_at = new Date().toISOString();
-    dbData.login_logs.push({ id: nextId('login_logs'), username, success: success ? 1 : 0, ip, logged_at });
-    saveData();
-    const result = success ? 'SUCCESS' : 'FAILED';
-    appendLog(LOGIN_LOG_FILE, `${logged_at} [${result}] user=${username} ip=${ip || '-'}`);
+    run('INSERT INTO login_logs (username,success,ip,logged_at) VALUES (?,?,?,?)',
+      [username, success ? 1 : 0, ip || '', new Date().toISOString()]);
   },
-  getLoginHistory: () => [...dbData.login_logs].sort((a, b) => b.logged_at > a.logged_at ? 1 : -1).slice(0, 50),
+  getLoginHistory: () => queryAll('SELECT * FROM login_logs ORDER BY logged_at DESC LIMIT 50'),
+
+  hitAccess: (ip) => {
+    const visited_at = new Date().toISOString();
+    run('INSERT INTO access_logs (ip,visited_at) VALUES (?,?)', [ip || '-', visited_at]);
+    const today = visited_at.slice(0, 10);
+    const total = queryOne('SELECT COUNT(*) as c FROM access_logs').c;
+    const todayCount = queryOne("SELECT COUNT(*) as c FROM access_logs WHERE visited_at LIKE ?", [today + '%']).c;
+    return { total, today: todayCount };
+  },
+  getAccessCount: () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const total = queryOne('SELECT COUNT(*) as c FROM access_logs').c;
+    const todayCount = queryOne("SELECT COUNT(*) as c FROM access_logs WHERE visited_at LIKE ?", [today + '%']).c;
+    return { total, today: todayCount };
+  },
   getDailyAccessCount: (days = 7) => {
     const result = [];
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const date = d.toISOString().slice(0, 10);
-      const count = dbData.access_logs.filter(a => a.visited_at.startsWith(date)).length;
+      const count = queryOne("SELECT COUNT(*) as c FROM access_logs WHERE visited_at LIKE ?", [date + '%']).c;
       result.push({ date, count });
     }
     return result;
   },
-
-  // アクセスカウント
-  hitAccess: (ip, userAgent) => {
-    const visited_at = new Date().toISOString();
-    dbData.access_logs.push({ id: nextId('access_logs'), ip: ip || '-', visited_at });
-    saveData();
-    appendLog(ACCESS_LOG_FILE, `${visited_at} ip=${ip || '-'} ua=${(userAgent || '-').slice(0, 80)}`);
-    const today = visited_at.slice(0, 10);
-    const todayCount = dbData.access_logs.filter(a => a.visited_at.startsWith(today)).length;
-    return { total: dbData.access_logs.length, today: todayCount };
-  },
-  getAccessCount: () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const todayCount = dbData.access_logs.filter(a => a.visited_at.startsWith(today)).length;
-    return { total: dbData.access_logs.length, today: todayCount };
-  },
 };
-
-module.exports = database;
