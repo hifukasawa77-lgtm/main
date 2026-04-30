@@ -1904,7 +1904,7 @@
           </article>
 
           <article class="card dashboard-card reveal" id="dash-card-weather">
-            <h3>🌤 三郷市の天気</h3>
+            <h3 id="home-weather-city-title">🌤 天気</h3>
             <div class="dashboard-kpi" id="home-weather-kpi"><span class="skeleton-bar" style="display:inline-block;width:6rem;height:1.6rem;vertical-align:middle;border-radius:8px"></span></div>
             <p class="dashboard-sub" id="home-weather-sub">現在の気象データを取得しています。</p>
             <ul class="dashboard-mini-list" id="home-weather-detail">
@@ -2787,8 +2787,45 @@
         ctx.fillText(`${Math.round(minT)}°`, pad.left - 2, pad.top + cH);
       }
 
+      // ── 位置情報から市区町村を取得（国土地理院逆ジオコーダ使用）──
+      // セキュリティ方針: enableHighAccuracy:false で市区町村レベルの精度のみ取得、
+      // 座標は小数点2桁（約1km精度）に丸めてキャッシュ。Google等の第三者サービスへは送信しない。
+      const WEATHER_LOC_KEY = 'weather-loc-v1';
+      const WEATHER_LOC_TTL = 30 * 60 * 1000; // 30分
+
+      async function getWeatherLocation() {
+        try {
+          const c = JSON.parse(localStorage.getItem(WEATHER_LOC_KEY) || 'null');
+          if (c && Date.now() - c.ts < WEATHER_LOC_TTL) return c;
+        } catch {}
+        const pos = await new Promise((resolve, reject) =>
+          navigator.geolocation
+            ? navigator.geolocation.getCurrentPosition(resolve, reject, {
+                timeout: 12000, maximumAge: 300000, enableHighAccuracy: false
+              })
+            : reject(new Error('unsupported'))
+        );
+        const { latitude: lat, longitude: lon } = pos.coords;
+        const gsi = await fetchWithTimeout(
+          `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lon}`,
+          6000
+        ).then(r => r.json());
+        const city = String(gsi?.results?.lv01Nm || '現在地').trim();
+        const result = { lat: Math.round(lat * 100) / 100, lon: Math.round(lon * 100) / 100, city, ts: Date.now() };
+        try { localStorage.setItem(WEATHER_LOC_KEY, JSON.stringify(result)); } catch {}
+        return result;
+      }
+
       async function initWeatherCard() {
-        const url = 'https://api.open-meteo.com/v1/forecast?latitude=35.83&longitude=139.87'
+        let lat = 35.83, lon = 139.87, city = '三郷市';
+        try {
+          const loc = await getWeatherLocation();
+          lat = loc.lat; lon = loc.lon; city = loc.city;
+        } catch {}
+        const titleEl = document.getElementById('home-weather-city-title');
+        if (titleEl) titleEl.textContent = `🌤 ${city}の天気`;
+
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
           + '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,wind_direction_10m,uv_index,surface_pressure'
           + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
           + '&hourly=temperature_2m'
@@ -2817,6 +2854,7 @@
           const tomorrowMinNum = Number.isFinite(Number(tomorrowMin)) ? Number(tomorrowMin) : temp - 3;
 
           const pollen = await getPollenForecast({
+            lat, lon,
             humidity,
             wind: windSpeed,
             tomorrowMax: tomorrowMaxNum,
@@ -2900,7 +2938,7 @@
       async function getPollenForecast(params) {
         try {
           const api = 'https://air-quality-api.open-meteo.com/v1/air-quality'
-            + '?latitude=35.83&longitude=139.87'
+            + `?latitude=${params.lat || 35.83}&longitude=${params.lon || 139.87}`
             + '&hourly=alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen'
             + '&timezone=Asia%2FTokyo&forecast_days=2';
           const res = await fetchWithTimeout(api, 8000);

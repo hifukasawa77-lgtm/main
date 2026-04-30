@@ -337,7 +337,7 @@
 
   <!-- ② 天気・カレンダー -->
   <div class="card" id="card-weather">
-    <div class="card-title"><span class="icon">🌤</span> 天気 — 三郷市</div>
+    <div class="card-title" id="weather-card-title"><span class="icon">🌤</span> 天気</div>
     <div id="weather-body" class="loading">読み込み中…</div>
   </div>
 
@@ -465,8 +465,37 @@ async function initVisit(){
 }
 
 /* ────────────────────────────────────────────
-   ② 天気 (Open-Meteo, 三郷市 lat=35.83 lon=139.87)
+   ② 天気 (Open-Meteo, 現在地 or 三郷市フォールバック)
 ──────────────────────────────────────────── */
+
+// セキュリティ方針: enableHighAccuracy:false で市区町村レベルの精度のみ取得、
+// 座標は小数点2桁（約1km精度）に丸めてキャッシュ。Google等の第三者サービスへは送信しない。
+const WEATHER_LOC_KEY = 'weather-loc-v1';
+const WEATHER_LOC_TTL = 30 * 60 * 1000; // 30分
+
+async function getWeatherLocation() {
+  try {
+    const c = JSON.parse(localStorage.getItem(WEATHER_LOC_KEY) || 'null');
+    if (c && Date.now() - c.ts < WEATHER_LOC_TTL) return c;
+  } catch {}
+  const pos = await new Promise((resolve, reject) =>
+    navigator.geolocation
+      ? navigator.geolocation.getCurrentPosition(resolve, reject, {
+          timeout: 12000, maximumAge: 300000, enableHighAccuracy: false
+        })
+      : reject(new Error('unsupported'))
+  );
+  const { latitude: lat, longitude: lon } = pos.coords;
+  const gsi = await fetchWithTimeout(
+    `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lon}`,
+    {}, 6000
+  ).then(r => r.json());
+  const city = String(gsi?.results?.lv01Nm || '現在地').trim();
+  const result = { lat: Math.round(lat * 100) / 100, lon: Math.round(lon * 100) / 100, city, ts: Date.now() };
+  try { localStorage.setItem(WEATHER_LOC_KEY, JSON.stringify(result)); } catch {}
+  return result;
+}
+
 const WMO = {
   0:'☀️',1:'🌤',2:'⛅',3:'☁️',
   45:'🌫',48:'🌫',
@@ -491,8 +520,15 @@ const DAYS = ['日','月','火','水','木','金','土'];
 
 async function initWeather(){
   const el = document.getElementById('weather-body');
+  let lat = 35.83, lon = 139.87, city = '三郷市';
   try {
-    const url = 'https://api.open-meteo.com/v1/forecast?latitude=35.83&longitude=139.87' +
+    const loc = await getWeatherLocation();
+    lat = loc.lat; lon = loc.lon; city = loc.city;
+  } catch {}
+  const titleEl = document.getElementById('weather-card-title');
+  if (titleEl) titleEl.innerHTML = `<span class="icon">🌤</span> ${city}の天気`;
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
       '&current=temperature_2m,weather_code,relative_humidity_2m' +
       '&daily=weather_code,temperature_2m_max,temperature_2m_min' +
       '&timezone=Asia%2FTokyo&forecast_days=7';
