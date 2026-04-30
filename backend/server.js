@@ -133,6 +133,19 @@ app.delete('/api/blogs/:id', authMiddleware, (req, res) => {
   res.json({ message: '削除しました' });
 });
 
+// POST /api/blogs/export — フロントエンド用 blogs.json をリポジトリルートへ書き出し
+app.post('/api/blogs/export', authMiddleware, (req, res) => {
+  const { blogs } = req.body;
+  if (!Array.isArray(blogs)) return res.status(400).json({ error: 'blogsが必要です' });
+  const outPath = path.join(__dirname, '..', 'blogs.json');
+  try {
+    fs.writeFileSync(outPath, JSON.stringify(blogs, null, 2), 'utf8');
+    res.json({ message: 'blogs.jsonを書き出しました' });
+  } catch (e) {
+    res.status(500).json({ error: '書き出し失敗: ' + e.message });
+  }
+});
+
 // ─── ファイルアップロード API ──────────────────────────────
 
 app.post('/api/upload', authMiddleware, upload.single('image'), (req, res) => {
