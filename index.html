@@ -1342,6 +1342,35 @@
     .blog-card-cover.cover-blue   { background: linear-gradient(90deg, #0ea5e9, #38bdf8, #0284c7); }
     .blog-card-cover.cover-green  { background: linear-gradient(90deg, #22c55e, #4ade80, #16a34a); }
     .blog-card-body { padding: 20px 26px 24px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+    #home-stock-candidates {
+      list-style: none;
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      margin-top: 2px;
+      background: #fff;
+      border: 1.5px solid var(--blue);
+      border-radius: 10px;
+      padding: 4px;
+      box-shadow: 0 4px 16px rgba(14,165,233,0.15);
+    }
+    #home-stock-candidates.active { display: flex; }
+    .stock-candidate-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      background: none;
+      border: none;
+      border-radius: 7px;
+      padding: 7px 10px;
+      font-size: 0.84rem;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: left;
+      color: inherit;
+    }
+    .stock-candidate-btn:hover { background: rgba(14,165,233,0.10); color: var(--blue); }
   </style>
   <!-- Schema.org 構造化データ -->
   <script type="application/ld+json">
@@ -1941,6 +1970,7 @@
               <input class="dash-input grow" id="home-stock-input" type="text" maxlength="48" placeholder="会社名 or ティッカー（例: トヨタ / AAPL / 7203.T）">
               <button class="dash-todo-btn" type="submit">追加</button>
             </form>
+            <ul id="home-stock-candidates"></ul>
             <ul class="dashboard-mini-list" id="home-stock-custom-list">
               <li class="dashboard-mini-item"><span>追加銘柄なし</span></li>
             </ul>
@@ -3543,42 +3573,61 @@
         localStorage.setItem(CUSTOM_STOCKS_KEY, JSON.stringify(customStocks));
       }
 
-      async function resolveStockInput(query) {
+      async function searchStockCandidates(query) {
         const raw = String(query || '').trim();
-        if (!raw) throw new Error('empty-query');
-
+        if (!raw) return [];
         const normalized = raw.toLowerCase().replace(/[ \u3000]/g, '');
-        const alias = STOCK_ALIASES.find((item) => item.keys.some((k) => normalized.includes(String(k).toLowerCase().replace(/[ \u3000]/g, ''))));
-        if (alias) {
-          return { symbol: alias.symbol, name: alias.name };
-        }
 
-        // 日本株コードの4桁入力に対応 (例: 7203 -> 7203.T)
-        if (/^\d{4}$/.test(raw)) {
-          return { symbol: `${raw}.T`, name: `${raw}.T` };
-        }
+        const aliasMatches = STOCK_ALIASES.filter((item) =>
+          item.keys.some((k) => {
+            const nk = String(k).toLowerCase().replace(/[ \u3000]/g, '');
+            return nk.includes(normalized) || normalized.includes(nk);
+          })
+        );
+        if (aliasMatches.length) return aliasMatches;
+
+        if (/^\d{4}$/.test(raw)) return [{ symbol: `${raw}.T`, name: `${raw}.T` }];
 
         const maybeSymbol = raw.toUpperCase();
-        const symbolLike = /^[\^A-Z0-9.\-]{1,12}$/.test(maybeSymbol);
-        if (symbolLike) {
-          try {
-            await fetchStock(maybeSymbol);
-            return { symbol: maybeSymbol, name: raw };
-          } catch (e) {
-            // fall through to search
-          }
+        if (/^[\^A-Z0-9.\-]{1,12}$/.test(maybeSymbol)) {
+          try { await fetchStock(maybeSymbol); return [{ symbol: maybeSymbol, name: raw }]; }
+          catch (e) { /* fall through */ }
         }
 
         const searchUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(raw)}&quotesCount=10&newsCount=0`;
         const payload = await fetchJsonWithProxies(searchUrl);
         const quotes = Array.isArray(payload?.quotes) ? payload.quotes : [];
-        const preferred = quotes.find((q) => q && q.symbol && q.quoteType === 'EQUITY') || quotes.find((q) => q && q.symbol);
-        if (!preferred) throw new Error('stock-search-not-found');
+        const equities = quotes.filter((q) => q?.symbol && q.quoteType === 'EQUITY');
+        const pool = equities.length ? equities : quotes.filter((q) => q?.symbol);
+        return pool.slice(0, 7).map((q) => ({
+          symbol: String(q.symbol),
+          name: String(q.shortname || q.longname || q.symbol),
+        }));
+      }
 
-        return {
-          symbol: String(preferred.symbol),
-          name: String(preferred.shortname || preferred.longname || preferred.symbol),
-        };
+      const stockCandidatesEl = document.getElementById('home-stock-candidates');
+
+      function showStockCandidates(candidates) {
+        stockCandidatesEl.innerHTML = candidates.map((c) =>
+          `<li><button type="button" class="stock-candidate-btn" data-symbol="${escHtml(c.symbol)}" data-name="${escHtml(c.name)}">` +
+          `${escHtml(c.name)} <small>(${escHtml(c.symbol)})</small></button></li>`
+        ).join('');
+        stockCandidatesEl.classList.add('active');
+      }
+
+      function hideStockCandidates() {
+        stockCandidatesEl.classList.remove('active');
+        stockCandidatesEl.innerHTML = '';
+      }
+
+      async function addStockItem(resolved) {
+        const exists = customStocks.some(
+          (s) => String(s.symbol).toUpperCase() === String(resolved.symbol).toUpperCase()
+        );
+        if (!exists) {
+          customStocks.push({ id: Date.now() + Math.floor(Math.random() * 1000), name: resolved.name, symbol: resolved.symbol });
+          saveCustomStocks();
+        }
       }
 
       async function renderCustomStocks() {
@@ -3716,23 +3765,22 @@
         event.preventDefault();
         const query = stockInput.value.trim();
         if (!query) return;
+        hideStockCandidates();
         const prevLabel = stockTime.textContent;
         stockTime.textContent = '銘柄を検索中…';
         stockInput.disabled = true;
         try {
-          const resolved = await resolveStockInput(query);
-          const exists = customStocks.some((s) => String(s.symbol).toUpperCase() === String(resolved.symbol).toUpperCase());
-          if (!exists) {
-            customStocks.push({
-              id: Date.now() + Math.floor(Math.random() * 1000),
-              name: resolved.name,
-              symbol: resolved.symbol,
-            });
-            saveCustomStocks();
+          const candidates = await searchStockCandidates(query);
+          if (!candidates.length) throw new Error('stock-search-not-found');
+          if (candidates.length === 1) {
+            await addStockItem(candidates[0]);
+            stockInput.value = '';
+            await renderCustomStocks();
+            stockTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+          } else {
+            showStockCandidates(candidates);
+            stockTime.textContent = '候補を選択してください';
           }
-          stockInput.value = '';
-          await renderCustomStocks();
-          stockTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
         } catch (e) {
           stockTime.textContent = '銘柄が見つかりませんでした（会社名またはティッカーを確認）';
           setTimeout(() => {
@@ -3740,6 +3788,23 @@
           }, 3000);
         } finally {
           stockInput.disabled = false;
+        }
+      });
+
+      stockCandidatesEl.addEventListener('click', async (event) => {
+        const btn = event.target.closest('.stock-candidate-btn');
+        if (!btn) return;
+        hideStockCandidates();
+        await addStockItem({ symbol: btn.dataset.symbol, name: btn.dataset.name });
+        stockInput.value = '';
+        await renderCustomStocks();
+        stockTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+      });
+
+      document.addEventListener('click', (event) => {
+        if (!stockCandidatesEl.classList.contains('active')) return;
+        if (!stockForm.contains(event.target) && !stockCandidatesEl.contains(event.target)) {
+          hideStockCandidates();
         }
       });
 
