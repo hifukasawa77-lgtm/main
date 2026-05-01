@@ -1894,7 +1894,7 @@
         <div class="sec-header reveal">
           <div class="sec-label">Dashboard</div>
           <h2 class="sec-title">📊 ホームダッシュボード</h2>
-          <p class="sec-desc">アクセス数・更新履歴・TODO/メモ・予定カレンダー・天気・円相場・株価・三郷市ガソリン相場をまとめて確認できます。</p>
+          <p class="sec-desc">アクセス数・更新履歴・TODO/メモ・予定カレンダー・天気・円相場・株価・三郷市ガソリン相場・周辺交通情報をまとめて確認できます。</p>
         </div>
         <div class="dashboard-grid">
           <article class="card dashboard-card reveal" id="dash-card-visit">
@@ -2014,6 +2014,26 @@
             <div id="home-gas-chart-msg">データ蓄積中… 数日後にグラフが表示されます</div>
             <div class="dash-mini-note" id="home-gas-time">更新時刻を取得中…</div>
             <a class="dash-open-link" id="gas-detail-link" href="https://gogo.gs/11237?device=sp" target="_blank" rel="noreferrer">価格詳細を見る →</a>
+          </article>
+
+          <article class="card dashboard-card reveal" id="dash-card-traffic">
+            <h3>🚦 交通情報（三郷市周辺）</h3>
+            <div id="home-traffic-congestion" style="display:none;margin-bottom:6px;font-size:0.78rem;font-weight:600;padding:4px 8px;border-radius:6px;text-align:center"></div>
+            <ul class="dashboard-mini-list" id="home-traffic-list">
+              <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:70%"></div></li>
+              <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:55%"></div></li>
+              <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:65%"></div></li>
+              <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:50%"></div></li>
+            </ul>
+            <div class="dash-mini-note" id="home-traffic-time">取得中…</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+              <a href="https://www.driveplaza.com/traffic/" target="_blank" rel="noreferrer"
+                style="font-size:0.7rem;padding:3px 8px;border-radius:20px;background:rgba(0,200,255,0.12);color:var(--accent-cyan);border:1px solid rgba(0,200,255,0.3);text-decoration:none">ドラぷら →</a>
+              <a href="https://www.shutoko.co.jp/use/traffic-info/" target="_blank" rel="noreferrer"
+                style="font-size:0.7rem;padding:3px 8px;border-radius:20px;background:rgba(0,200,255,0.12);color:var(--accent-cyan);border:1px solid rgba(0,200,255,0.3);text-decoration:none">首都高 →</a>
+              <a href="https://www.jartic.or.jp/" target="_blank" rel="noreferrer"
+                style="font-size:0.7rem;padding:3px 8px;border-radius:20px;background:rgba(0,200,255,0.12);color:var(--accent-cyan);border:1px solid rgba(0,200,255,0.3);text-decoration:none">JARTIC →</a>
+            </div>
           </article>
 
           <article class="card dashboard-card reveal" id="dash-card-updates">
@@ -5008,6 +5028,79 @@
       }
       setInterval(initQuakeCard, 10 * 60 * 1000);
 
+      // ─── 交通情報（三郷市周辺）────────────────────────────────
+      function initTrafficCard() {
+        const listEl = document.getElementById('home-traffic-list');
+        const timeEl = document.getElementById('home-traffic-time');
+        const congEl = document.getElementById('home-traffic-congestion');
+        if (!listEl) return;
+
+        // 時間帯ヒューリスティックで混雑度を推定
+        const h = parseInt(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo', hour: 'numeric', hour12: false }), 10);
+        let label, bg, col;
+        if ((h >= 7 && h <= 9) || (h >= 17 && h <= 20)) {
+          label = '⚠️ ラッシュ時間帯 — 混雑しやすい';
+          bg = 'rgba(234,179,8,0.15)'; col = '#eab308';
+        } else if (h >= 23 || h <= 5) {
+          label = '✅ 深夜・早朝 — 空いている傾向';
+          bg = 'rgba(34,197,94,0.12)'; col = '#22c55e';
+        } else {
+          label = '🟡 通常時間帯';
+          bg = 'rgba(0,200,255,0.10)'; col = 'var(--accent-cyan)';
+        }
+        if (congEl) {
+          congEl.textContent = label;
+          Object.assign(congEl.style, { background: bg, color: col, display: 'block' });
+        }
+
+        // 主要ルート一覧
+        const routes = [
+          { name: '常磐道', dir: '三郷JCT → 柏IC / 守谷SA方面', emoji: '🛣️' },
+          { name: '外環道(C3)', dir: '三郷JCT ↔ 川口JCT / 高谷JCT', emoji: '🔄' },
+          { name: '国道6号', dir: '三郷市内 → 松戸・東京方面', emoji: '🚗' },
+          { name: '首都高6号', dir: '三郷線 → 箱崎JCT', emoji: '🌆' },
+        ];
+        listEl.innerHTML = routes.map(r =>
+          `<li class="dashboard-mini-item">
+            <span>${r.emoji} <strong>${escHtml(r.name)}</strong>
+              <span style="font-size:0.68rem;color:var(--muted);margin-left:4px">${escHtml(r.dir)}</span>
+            </span>
+          </li>`
+        ).join('');
+
+        if (timeEl) timeEl.textContent = '時間帯推定 — ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 現在';
+
+        // JARTIC open traffic APIを試行（交通量データ）
+        (async () => {
+          const url = [
+            'https://api.jartic-open-traffic.org/geoserver/ows',
+            '?service=WFS&version=2.0.0&request=GetFeature',
+            '&typeNames=t_travospublic_measure_5m',
+            '&outputFormat=application/json&count=10&srsName=EPSG:4326',
+            "&CQL_FILTER=BBOX(the_geom,139.83,35.79,139.92,35.87,'EPSG:4326')"
+          ].join('');
+          try {
+            const res = await fetchWithTimeout(url, 6000);
+            if (!res.ok) return;
+            const data = await res.json();
+            const features = data.features;
+            if (!Array.isArray(features) || !features.length) return;
+            listEl.innerHTML = features.slice(0, 5).map(f => {
+              const p = f.properties || {};
+              const vol = p.vol_5m ?? p.traffic_volume ?? p.volume ?? null;
+              const road = p.road_name ?? p.roadname ?? p.section ?? '観測点';
+              const dir = p.direction ?? p.dir ?? '';
+              const volStr = vol !== null ? `<span style="font-size:0.8rem;color:var(--accent-cyan)">${Number(vol)}台/5分</span>` : '';
+              return `<li class="dashboard-mini-item">
+                <span>📡 <strong>${escHtml(String(road))}</strong>${dir ? ' <span style="color:var(--muted)">' + escHtml(String(dir)) + '</span>' : ''}</span>
+                ${volStr}
+              </li>`;
+            }).join('');
+            if (timeEl) timeEl.textContent = 'JARTIC API — ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 更新';
+          } catch { /* 時間帯推定表示のまま維持 */ }
+        })();
+      }
+
       // ─── 世界時計 ──────────────────────────────────────────────
       (function() {
         const CITIES = [
@@ -5070,6 +5163,7 @@
           initGasCard(),
           initTrainCard(),
           initQuakeCard(),
+          initTrafficCard(),
         ]).catch(() => {});
       }
 
