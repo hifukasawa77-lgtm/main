@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backgammon AI — hide_0001</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background:#060612;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      min-height:100vh;
+      font-family:monospace;
+      overflow-x:hidden;
+    }
+    header {
+      width:100%;
+      padding:8px 20px;
+      background:rgba(10,22,40,0.95);
+      border-bottom:1px solid #1a2a4a;
+      display:flex;
+      align-items:center;
+      gap:20px;
+    }
+    header .brand { color:#ff00cc; font-weight:bold; font-size:16px; }
+    header a { color:#00dcff; text-decoration:none; font-size:14px; }
+    canvas {
+      display:block;
+      margin:16px auto;
+      border:1px solid #1a2a4a;
+      box-shadow:0 0 40px rgba(0,220,255,0.12);
+      cursor:pointer;
+      max-width:100%;
+      height:auto;
+    }
+  </style>
+</head>
+<body>
+<header>
+  <span class="brand">hide_0001</span>
+  <a href="index.html">← Portfolio</a>
+</header>
+<canvas id="c" width="880" height="590"></canvas>
+<script>
+'use strict';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// ── Layout constants ──────────────────────────────────────────────
+const PW   = 60;   // point width
+const LX   = 10;   // left section start x
+const RX   = 430;  // right section start x
+const BARX = 370;  // bar x start
+const BARW = 60;   // bar width
+const BOFFX= 790;  // bear-off area x start
+const BOFFW= 80;   // bear-off width
+const TY   = 25;   // top board y
+const BY   = 565;  // bottom board y
+const TRIH = 235;  // triangle height
+const TTIP = TY + TRIH;   // top tip y  = 260
+const BTIP = BY - TRIH;   // bottom tip y = 330
+const CKR  = 21;   // checker radius
+
+// ── Game state ────────────────────────────────────────────────────
+const G = {
+  board:     new Int8Array(25), // 1-24; positive=player(cyan), negative=AI(magenta)
+  bar:       [0, 0],
+  borneOff:  [0, 0],
+  dice:      [],
+  usedIdx:   new Set(),
+  turn:      0,
+  phase:     'TITLE',   // TITLE | ROLLING | SELECTING | AI_TURN | DONE
+  difficulty:'normal',
+  selected:  null,      // null | 'bar' | point 1-24
+  legalDests:[],
+  winner:    null,
+  message:   '',
+};
+
+// ── Colours ───────────────────────────────────────────────────────
+const COL = {
+  bg:        '#060612',
+  board:     '#0a1628',
+  boardLine: '#1a2a4a',
+  bar:       '#071020',
+  triA:      'rgba(0,210,255,0.28)',
+  triB:      'rgba(210,0,180,0.28)',
+  player:    '#00dcff',
+  playerGlow:'#00dcff',
+  ai:        '#ff22cc',
+  aiGlow:    '#ff22cc',
+  legalDot:  'rgba(0,255,110,0.85)',
+  selRing:   '#ffee00',
+  text:      '#c8d8f0',
+  dim:       '#3a4a6a',
+};
+
+// ── Helpers ───────────────────────────────────────────────────────
+function ptX(pt) {
+  if (pt >= 1  && pt <= 6)  return RX  + (6  - pt) * PW + PW / 2;
+  if (pt >= 7  && pt <= 12) return LX  + (12 - pt) * PW + PW / 2;
+  if (pt >= 13 && pt <= 18) return LX  + (pt - 13) * PW + PW / 2;
+  if (pt >= 19 && pt <= 24) return RX  + (pt - 19) * PW + PW / 2;
+  return 0;
+}
+function isTop(pt) { return pt >= 13; }
+
+function checkerY(pt, idx, total) {
+  const maxStack = 5;
+  const step = total > maxStack ? 26 : CKR * 2 + 2;
+  if (isTop(pt)) return TY  + CKR + idx * step;
+  return              BY  - CKR - idx * step;
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y);  ctx.arcTo(x+w,y,  x+w,y+r,  r);
+  ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h);  ctx.arcTo(x,y+h,  x,y+h-r,  r);
+  ctx.lineTo(x,y+r);    ctx.arcTo(x,y,    x+r,y,    r);
+  ctx.closePath();
+}
+
+// ── Rules ─────────────────────────────────────────────────────────
+function initBoard() {
+  G.board.fill(0);
+  G.board[24] =  2; G.board[13] =  5; G.board[8] =  3; G.board[6] =  5;
+  G.board[1]  = -2; G.board[12] = -5; G.board[17]= -3; G.board[19]= -5;
+  G.bar       = [0, 0];
+  G.borneOff  = [0, 0];
+}
+
+function rollDice() {
+  const d1 = Math.ceil(Math.random()*6);
+  const d2 = Math.ceil(Math.random()*6);
+  G.dice   = (d1 === d2) ? [d1,d1,d1,d1] : [d1,d2];
+  G.usedIdx = new Set();
+}
+
+function availDice()       { return G.dice.filter((_,i)=>!G.usedIdx.has(i)); }
+function uniqueAvailDice() { return [...new Set(availDice())]; }
+
+function isBlockedFor(pt, player) {
+  // true if opponent has 2+ checkers on pt
+  return player === 0 ? G.board[pt] <= -2 : G.board[pt] >= 2;
+}
+
+function canBearOff(player) {
+  if (G.bar[player] > 0) return false;
+  const sign = player === 0 ? 1 : -1;
+  for (let p = 1; p <= 24; p++) {
+    if (G.board[p] * sign > 0) {
+      if (player === 0 && p > 6)  return false;
+      if (player === 1 && p < 19) return false;
+    }
+  }
+  return true;
+}
+
+// Returns array of legal destination points (0 = player bear-off, 25 = AI bear-off)
+function getDestsFrom(from, player) {
+  const sign  = player === 0 ? -1 : 1;
+  const dvals = uniqueAvailDice();
+  const bearOff = canBearOff(player);
+  const out = new Set();
+
+  for (const d of dvals) {
+    const to = (from === 'bar')
+      ? (player === 0 ? 25 - d : d)
+      : from + sign * d;
+
+    if (to >= 1 && to <= 24) {
+      if (!isBlockedFor(to, player)) out.add(to);
+    } else if (bearOff && from !== 'bar') {
+      if (player === 0 && to <= 0) {
+        if (to === 0) {
+          out.add(0);
+        } else {
+          // die overshoots: OK only if no checker on a higher home point
+          let higher = false;
+          for (let p = from+1; p <= 6; p++) if (G.board[p] > 0) { higher=true; break; }
+          if (!higher) out.add(0);
+        }
+      } else if (player === 1 && to >= 25) {
+        if (to === 25) {
+          out.add(25);
+        } else {
+          let lower = false;
+          for (let p = from-1; p >= 19; p--) if (G.board[p] < 0) { lower=true; break; }
+          if (!lower) out.add(25);
+        }
+      }
+    }
+  }
+  return [...out];
+}
+
+// Returns [{from, dests}] for the current player
+function getAllSources(player) {
+  const sign = player === 0 ? 1 : -1;
+  if (G.bar[player] > 0) {
+    const dests = getDestsFrom('bar', player);
+    return dests.length ? [{ from:'bar', dests }] : [];
+  }
+  const result = [];
+  for (let p = 1; p <= 24; p++) {
+    if (G.board[p] * sign > 0) {
+      const dests = getDestsFrom(p, player);
+      if (dests.length) result.push({ from:p, dests });
+    }
+  }
+  return result;
+}
+
+function applyMove(from, to, player) {
+  const sign = player === 0 ? 1 : -1;
+
+  // Remove from source
+  if (from === 'bar') G.bar[player]--;
+  else G.board[from] -= sign;
+
+  // Determine which die value was used
+  const dieVal = (from === 'bar')
+    ? (player === 0 ? 25 - to : to)
+    : Math.abs(to - from);
+
+  // Mark first matching unused die
+  for (let i = 0; i < G.dice.length; i++) {
+    if (!G.usedIdx.has(i) && G.dice[i] === dieVal) { G.usedIdx.add(i); break; }
+  }
+
+  if (to === 0 || to === 25) {
+    G.borneOff[player]++;
+    return;
+  }
+
+  // Hit
+  const opp = 1 - player;
+  if (player === 0 && G.board[to] === -1) { G.board[to] = 0; G.bar[opp]++; }
+  else if (player === 1 && G.board[to] === 1) { G.board[to] = 0; G.bar[opp]++; }
+
+  G.board[to] += sign;
+}
+
+function checkWin() {
+  if (G.borneOff[0] >= 15) { G.winner = 0; G.phase = 'DONE'; }
+  if (G.borneOff[1] >= 15) { G.winner = 1; G.phase = 'DONE'; }
+}
+
+// ── AI ────────────────────────────────────────────────────────────
+function evalBoard(board, bar, borneOff) {
+  let score = 0;
+  let pPip = bar[0]*25, aPip = bar[1]*25;
+  for (let p=1;p<=24;p++) {
+    if (board[p]>0) pPip += board[p]*p;
+    if (board[p]<0) aPip += (-board[p])*(25-p);
+  }
+  score += (aPip - pPip) * 2;
+  for (let p=1;p<=24;p++) {
+    if (board[p] === 1)  score -= 8;
+    if (board[p] ===-1)  score += 8;
+    if (board[p] >= 2)   score += 5;
+    if (board[p] <=-2)   score -= 5;
+  }
+  score -= bar[0]*15; score += bar[1]*15;
+  score += borneOff[0]*10; score -= borneOff[1]*10;
+  return score;
+}
+
+function aiPickMove(player) {
+  const sources = getAllSources(player);
+  if (!sources.length) return null;
+
+  if (G.difficulty === 'easy') {
+    const s = sources[Math.floor(Math.random()*sources.length)];
+    return { from:s.from, to:s.dests[Math.floor(Math.random()*s.dests.length)] };
+  }
+
+  let best = null, bestScore = -Infinity;
+  const sign = player===0 ? 1 : -1;
+
+  for (const { from, dests } of sources) {
+    for (const to of dests) {
+      // Simulate
+      const bCopy  = new Int8Array(G.board);
+      const barC   = [...G.bar];
+      const boC    = [...G.borneOff];
+      const usedC  = new Set(G.usedIdx);
+
+      if (from==='bar') barC[player]--;
+      else bCopy[from] -= sign;
+
+      const dv = from==='bar'?(player===0?25-to:to):Math.abs(to-from);
+      for (let i=0;i<G.dice.length;i++) {
+        if (!usedC.has(i)&&G.dice[i]===dv){usedC.add(i);break;}
+      }
+
+      if (to===0||to===25) { boC[player]++; }
+      else {
+        if (player===0&&bCopy[to]===-1){bCopy[to]=0;barC[1]++;}
+        else if(player===1&&bCopy[to]===1){bCopy[to]=0;barC[0]++;}
+        bCopy[to]+=sign;
+      }
+
+      let sc = evalBoard(bCopy,barC,boC);
+      if (player===1) sc = -sc;
+
+      // Hard: shallow lookahead
+      if (G.difficulty==='hard') {
+        const remDice = [...new Set(G.dice.filter((_,i)=>!usedC.has(i)))];
+        let bestNext = 0;
+        for (const d2 of remDice) {
+          const s2 = sign * d2;
+          for (let p=1;p<=24;p++) {
+            if (bCopy[p]*sign>0) {
+              const t2 = p + (player===0?-1:1)*d2;
+              if (t2>=1&&t2<=24) {
+                const blocked = player===0?bCopy[t2]<=-2:bCopy[t2]>=2;
+                if (!blocked) {
+                  const b2=new Int8Array(bCopy), ba2=[...barC], bo2=[...boC];
+                  b2[p]-=sign;
+                  if(player===0&&b2[t2]===-1){b2[t2]=0;ba2[1]++;}
+                  else if(player===1&&b2[t2]===1){b2[t2]=0;ba2[0]++;}
+                  b2[t2]+=sign;
+                  const ns=evalBoard(b2,ba2,bo2);
+                  const adj=player===1?-ns:ns;
+                  if(adj>bestNext) bestNext=adj;
+                }
+              }
+            }
+          }
+        }
+        sc += bestNext*0.5;
+      }
+
+      if (sc > bestScore) { bestScore=sc; best={from,to}; }
+    }
+  }
+  return best;
+}
+
+// ── Drawing ───────────────────────────────────────────────────────
+function drawTriangle(pt) {
+  const x   = ptX(pt);
+  const top  = isTop(pt);
+  const even = pt % 2 === 0;
+  ctx.fillStyle = even ? COL.triA : COL.triB;
+  ctx.beginPath();
+  if (top) {
+    ctx.moveTo(x-PW/2, TY); ctx.lineTo(x+PW/2, TY); ctx.lineTo(x, TTIP);
+  } else {
+    ctx.moveTo(x-PW/2, BY); ctx.lineTo(x+PW/2, BY); ctx.lineTo(x, BTIP);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(120,160,220,0.45)';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(pt, x, top ? TY+11 : BY-3);
+}
+
+function drawOneChecker(x, y, player, showCount, sel) {
+  const fill = player===0 ? COL.player : COL.ai;
+  const glow = player===0 ? COL.playerGlow : COL.aiGlow;
+  ctx.save();
+  ctx.shadowColor = sel ? COL.selRing : glow;
+  ctx.shadowBlur  = sel ? 22 : 10;
+  ctx.beginPath();
+  ctx.arc(x, y, CKR, 0, Math.PI*2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = sel ? COL.selRing : 'rgba(255,255,255,0.35)';
+  ctx.lineWidth   = sel ? 3 : 1.5;
+  ctx.stroke();
+  ctx.restore();
+
+  // inner ring decoration
+  ctx.beginPath();
+  ctx.arc(x, y, CKR*0.58, 0, Math.PI*2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  if (showCount > 1) {
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${showCount>9?10:13}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(showCount, x, y);
+    ctx.textBaseline = 'alphabetic';
+  }
+}
+
+function drawCheckers() {
+  for (let pt=1; pt<=24; pt++) {
+    const cnt = G.board[pt];
+    if (cnt===0) continue;
+    const player = cnt>0 ? 0 : 1;
+    const n = Math.abs(cnt);
+    const x = ptX(pt);
+    const maxShow = 5;
+    const show = Math.min(n, maxShow);
+    const sel = G.selected === pt;
+
+    for (let i=0; i<show; i++) {
+      const y = checkerY(pt, i, n);
+      const isLast = i===show-1;
+      drawOneChecker(x, y, player, isLast&&n>1?n:0, sel&&isLast);
+    }
+  }
+
+  // Bar checkers
+  const bx = BARX + BARW/2;
+  for (let i=0; i<G.bar[0]; i++) {
+    const y = TTIP - 12 - i*(CKR*2+3);
+    const sel = G.selected==='bar' && i===G.bar[0]-1;
+    drawOneChecker(bx, y, 0, 0, sel);
+  }
+  for (let i=0; i<G.bar[1]; i++) {
+    const y = BTIP + 12 + i*(CKR*2+3);
+    drawOneChecker(bx, y, 1, 0, false);
+  }
+
+  // Bear-off counts
+  const boffCX = BOFFX + BOFFW/2;
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = COL.player;
+  ctx.fillText(`OFF ${G.borneOff[0]}`, boffCX, TY+28);
+  ctx.fillStyle = COL.ai;
+  ctx.fillText(`OFF ${G.borneOff[1]}`, boffCX, BY-12);
+
+  // Bear-off stacks (visual)
+  for (let i=0; i<Math.min(G.borneOff[0],8); i++) {
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath();
+    ctx.arc(boffCX, TY+50+i*18, 12, 0, Math.PI*2);
+    ctx.fillStyle = COL.player;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  for (let i=0; i<Math.min(G.borneOff[1],8); i++) {
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath();
+    ctx.arc(boffCX, BY-55-i*18, 12, 0, Math.PI*2);
+    ctx.fillStyle = COL.ai;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawHighlight() {
+  if (G.selected===null) return;
+  for (const dest of G.legalDests) {
+    if (dest===0||dest===25) {
+      ctx.fillStyle='rgba(0,255,110,0.18)';
+      roundRect(BOFFX,TY,BOFFW,BY-TY,4);
+      ctx.fill();
+      ctx.strokeStyle=COL.legalDot;
+      ctx.lineWidth=2;
+      roundRect(BOFFX,TY,BOFFW,BY-TY,4);
+      ctx.stroke();
+    } else {
+      const x = ptX(dest);
+      const top = isTop(dest);
+      const dy = top ? TTIP-18 : BTIP+18;
+      ctx.beginPath();
+      ctx.arc(x, dy, 12, 0, Math.PI*2);
+      ctx.fillStyle = COL.legalDot;
+      ctx.fill();
+    }
+  }
+}
+
+function drawDicePips(ox, oy, w, h, val) {
+  const r = 4;
+  const cx=ox+w/2, cy=oy+h/2, o=15;
+  const pts={
+    1:[[cx,cy]],
+    2:[[cx-o,cy-o],[cx+o,cy+o]],
+    3:[[cx-o,cy-o],[cx,cy],[cx+o,cy+o]],
+    4:[[cx-o,cy-o],[cx+o,cy-o],[cx-o,cy+o],[cx+o,cy+o]],
+    5:[[cx-o,cy-o],[cx+o,cy-o],[cx,cy],[cx-o,cy+o],[cx+o,cy+o]],
+    6:[[cx-o,cy-o],[cx+o,cy-o],[cx-o,cy],[cx+o,cy],[cx-o,cy+o],[cx+o,cy+o]],
+  };
+  for(const[px,py] of pts[val]){
+    ctx.beginPath(); ctx.arc(px,py,r,0,Math.PI*2); ctx.fill();
+  }
+}
+
+function drawDice() {
+  if (!G.dice.length) return;
+  const dw=52, dh=52, gap=8;
+  const totalW = G.dice.length*(dw+gap)-gap;
+  const sx = BARX + BARW/2 - totalW/2;
+  const sy = (TTIP+BTIP)/2 - dh/2;
+
+  G.dice.forEach((d,i) => {
+    const dx = sx + i*(dw+gap);
+    const used = G.usedIdx.has(i);
+    ctx.globalAlpha = used ? 0.28 : 1;
+    ctx.fillStyle='#111836';
+    ctx.strokeStyle=used?'#222':'#99b';
+    ctx.lineWidth=1.5;
+    roundRect(dx,sy,dw,dh,7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=used?'#445':'#fff';
+    drawDicePips(dx,sy,dw,dh,d);
+    ctx.globalAlpha=1;
+  });
+}
+
+function drawButton(x,y,w,h,label,col) {
+  ctx.fillStyle=col+'18';
+  ctx.strokeStyle=col;
+  ctx.lineWidth=2;
+  roundRect(x,y,w,h,8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=col;
+  ctx.shadowColor=col; ctx.shadowBlur=10;
+  ctx.font='bold 15px monospace';
+  ctx.textAlign='center';
+  ctx.fillText(label, x+w/2, y+h/2+5);
+  ctx.shadowBlur=0;
+}
+
+function drawUI() {
+  // Turn label
+  const tCol = G.turn===0 ? COL.player : COL.ai;
+  const tLabel = G.turn===0 ? 'YOUR TURN (CYAN)' : 'AI TURN (MAGENTA)';
+  ctx.fillStyle=tCol; ctx.shadowColor=tCol; ctx.shadowBlur=8;
+  ctx.font='bold 13px monospace'; ctx.textAlign='center';
+  ctx.fillText(tLabel, 400, 15);
+  ctx.shadowBlur=0;
+
+  // Difficulty badge
+  ctx.fillStyle='#1a2a4a';
+  roundRect(780,2,95,16,3); ctx.fill();
+  ctx.fillStyle='#6080a0'; ctx.font='10px monospace'; ctx.textAlign='center';
+  ctx.fillText('['+G.difficulty.toUpperCase()+']', 827, 13);
+
+  // Back to top to see bar label
+  ctx.fillStyle=COL.dim; ctx.font='10px monospace'; ctx.textAlign='center';
+  ctx.fillText('BAR', BARX+BARW/2, (TTIP+BTIP)/2);
+
+  // Message
+  if (G.message) {
+    ctx.fillStyle='rgba(255,220,60,0.9)';
+    ctx.font='12px monospace'; ctx.textAlign='left';
+    ctx.fillText(G.message, 460, 15);
+  }
+
+  // ROLL button
+  if (G.phase==='ROLLING'&&G.turn===0) {
+    drawButton(BARX-30, (TTIP+BTIP)/2-28, 120, 44, 'ROLL DICE', '#00ff88');
+  }
+
+  // PASS button
+  if (G.phase==='SELECTING'&&G.turn===0&&!getAllSources(0).length) {
+    drawButton(BARX-30, (TTIP+BTIP)/2-28, 120, 44, 'PASS', '#ff4488');
+  }
+}
+
+function drawBoard() {
+  // background
+  ctx.fillStyle=COL.bg;
+  ctx.fillRect(0,0,880,590);
+
+  // Board area
+  ctx.fillStyle=COL.board;
+  ctx.strokeStyle=COL.boardLine;
+  ctx.lineWidth=2;
+  roundRect(LX,TY,860,BY-TY,4); ctx.fill(); ctx.stroke();
+
+  // Bar
+  ctx.fillStyle=COL.bar;
+  ctx.strokeStyle=COL.boardLine; ctx.lineWidth=1;
+  roundRect(BARX,TY,BARW,BY-TY,0); ctx.fill(); ctx.stroke();
+
+  // Bear-off
+  roundRect(BOFFX,TY,BOFFW,BY-TY,0); ctx.fill(); ctx.stroke();
+
+  // Dividing line (mid)
+  ctx.strokeStyle='rgba(30,50,80,0.8)'; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(LX,(TTIP+BTIP)/2); ctx.lineTo(BOFFX,(TTIP+BTIP)/2);
+  ctx.stroke();
+
+  // Triangles
+  for(let p=1;p<=24;p++) drawTriangle(p);
+}
+
+// ── Title screen ──────────────────────────────────────────────────
+function drawTitle() {
+  ctx.fillStyle=COL.bg; ctx.fillRect(0,0,880,590);
+
+  // Title glow
+  ctx.textAlign='center';
+  ctx.font='bold 54px monospace';
+  ctx.fillStyle=COL.player; ctx.shadowColor=COL.player; ctx.shadowBlur=28;
+  ctx.fillText('BACKGAMMON', 440, 105);
+  ctx.shadowBlur=0;
+
+  ctx.font='18px monospace';
+  ctx.fillStyle=COL.ai; ctx.shadowColor=COL.ai; ctx.shadowBlur=10;
+  ctx.fillText('— CYBER EDITION —', 440, 142);
+  ctx.shadowBlur=0;
+
+  // Board preview (mini)
+  ctx.fillStyle='rgba(10,22,40,0.7)';
+  roundRect(200,160,480,60,6); ctx.fill();
+  ctx.fillStyle='rgba(100,150,200,0.5)'; ctx.font='12px monospace';
+  ctx.fillText('You play CYAN  ·  Move 24 → 1  ·  Bear off all 15 checkers to win', 440, 196);
+
+  // Difficulty
+  ctx.fillStyle=COL.dim; ctx.font='13px monospace';
+  ctx.fillText('SELECT DIFFICULTY', 440, 255);
+
+  const diffs=[['easy','EASY','#00ff88'],['normal','NORMAL',COL.player],['hard','HARD',COL.ai]];
+  diffs.forEach(([d,label,col],i) => {
+    const bx=175+i*178, by=268;
+    const sel = G.difficulty===d;
+    ctx.fillStyle=sel?'rgba(255,255,255,0.07)':'transparent';
+    ctx.strokeStyle=sel?col:'#2a3a5a';
+    ctx.lineWidth=sel?2:1;
+    roundRect(bx,by,148,48,7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=sel?col:'#4060a0';
+    if(sel){ctx.shadowColor=col;ctx.shadowBlur=10;}
+    ctx.font=`bold ${sel?16:14}px monospace`;
+    ctx.fillText(label, bx+74, by+28);
+    ctx.shadowBlur=0;
+  });
+
+  // Start
+  drawButton(315,345,250,62,'START GAME','#00ff88');
+
+  // Controls hint
+  ctx.fillStyle='rgba(80,110,160,0.8)'; ctx.font='11px monospace';
+  ctx.fillText('Click a checker to select · Click destination to move', 440, 450);
+  ctx.fillText('Click ROLL to roll dice on your turn', 440, 468);
+}
+
+// ── Game over screen ──────────────────────────────────────────────
+function drawDone() {
+  drawBoard(); drawCheckers();
+
+  ctx.fillStyle='rgba(6,6,18,0.82)';
+  ctx.fillRect(0,0,880,590);
+
+  const win=G.winner===0;
+  const col=win?COL.player:COL.ai;
+  ctx.textAlign='center';
+  ctx.font='bold 64px monospace';
+  ctx.fillStyle=col; ctx.shadowColor=col; ctx.shadowBlur=35;
+  ctx.fillText(win?'YOU WIN!':'AI WINS!', 440, 225);
+  ctx.shadowBlur=0;
+
+  ctx.fillStyle=COL.dim; ctx.font='17px monospace';
+  ctx.fillText(win?'Congratulations!':'Better luck next time.', 440, 278);
+
+  drawButton(320,320,240,62,'PLAY AGAIN','#00ff88');
+}
+
+// ── Main render ───────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0,0,880,590);
+  if (G.phase==='TITLE') { drawTitle(); return; }
+  if (G.phase==='DONE')  { drawDone();  return; }
+  drawBoard();
+  drawHighlight();
+  drawCheckers();
+  drawDice();
+  drawUI();
+}
+
+// ── Click handling ────────────────────────────────────────────────
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (880 / rect.width);
+  const my = (e.clientY - rect.top)  * (590 / rect.height);
+  handleClick(mx, my);
+});
+
+function handleClick(mx, my) {
+  if (G.phase==='TITLE') {
+    handleTitleClick(mx,my); return;
+  }
+  if (G.phase==='DONE') {
+    if (mx>=320&&mx<=560&&my>=320&&my<=382) { G.phase='TITLE'; render(); }
+    return;
+  }
+  if ((G.phase==='AI_TURN')||(G.phase==='ROLLING'&&G.turn===1)) return;
+
+  if (G.phase==='ROLLING'&&G.turn===0) {
+    // ROLL button area
+    if (mx>=BARX-30&&mx<=BARX+90&&my>=(TTIP+BTIP)/2-28&&my<=(TTIP+BTIP)/2+16) {
+      rollDice();
+      G.phase='SELECTING';
+      G.message='';
+      if (!getAllSources(0).length) G.message='No moves — click PASS';
+      render();
+    }
+    return;
+  }
+
+  if (G.phase==='SELECTING'&&G.turn===0) {
+    handlePlayerMove(mx,my);
+  }
+}
+
+function handleTitleClick(mx, my) {
+  // Difficulty buttons
+  [['easy','#00ff88'],['normal',COL.player],['hard',COL.ai]].forEach(([d],i) => {
+    const bx=175+i*178, by=268;
+    if (mx>=bx&&mx<=bx+148&&my>=by&&my<=by+48) G.difficulty=d;
+  });
+  // Start
+  if (mx>=315&&mx<=565&&my>=345&&my<=407) startGame();
+  else render();
+}
+
+function handlePlayerMove(mx, my) {
+  // PASS button
+  if (!getAllSources(0).length) {
+    if (mx>=BARX-30&&mx<=BARX+90&&my>=(TTIP+BTIP)/2-28&&my<=(TTIP+BTIP)/2+16) {
+      endTurn(); return;
+    }
+    return;
+  }
+
+  // Bear-off click
+  if (mx>=BOFFX && G.selected!==null && (G.legalDests.includes(0))) {
+    doPlayerMove(G.selected, 0); return;
+  }
+
+  // Bar click (select own checker on bar)
+  if (mx>=BARX&&mx<=BARX+BARW && G.bar[0]>0) {
+    G.selected='bar';
+    G.legalDests=getDestsFrom('bar',0);
+    render(); return;
+  }
+
+  const pt = getClickedPt(mx,my);
+  if (pt===null) { G.selected=null; G.legalDests=[]; render(); return; }
+
+  // Move to destination
+  if (G.selected!==null && G.legalDests.includes(pt)) {
+    doPlayerMove(G.selected, pt); return;
+  }
+
+  // Select source
+  if (G.bar[0]===0 && G.board[pt]>0) {
+    const dests=getDestsFrom(pt,0);
+    if (dests.length) { G.selected=pt; G.legalDests=dests; }
+    else              { G.selected=null; G.legalDests=[]; }
+    render(); return;
+  }
+
+  G.selected=null; G.legalDests=[]; render();
+}
+
+function doPlayerMove(from, to) {
+  applyMove(from, to, 0);
+  G.selected=null; G.legalDests=[];
+  checkWin();
+  if (G.phase==='DONE') { render(); return; }
+  if (!availDice().length || !getAllSources(0).length) { endTurn(); }
+  else {
+    G.message = getAllSources(0).length ? '' : 'No more moves — click PASS';
+    render();
+  }
+}
+
+function getClickedPt(mx, my) {
+  for (let p=13;p<=24;p++) {
+    if (my>=TY&&my<=TTIP) {
+      const x=ptX(p);
+      if (mx>=x-PW/2&&mx<x+PW/2) return p;
+    }
+  }
+  for (let p=1;p<=12;p++) {
+    if (my>=BTIP&&my<=BY) {
+      const x=ptX(p);
+      if (mx>=x-PW/2&&mx<x+PW/2) return p;
+    }
+  }
+  return null;
+}
+
+function endTurn() {
+  G.selected=null; G.legalDests=[];
+  G.turn = 1-G.turn;
+  G.dice=[]; G.usedIdx=new Set();
+  G.message='';
+  G.phase='ROLLING';
+
+  if (G.turn===1) {
+    render();
+    setTimeout(aiTakeTurn, 700);
+  } else {
+    render();
+  }
+}
+
+async function aiTakeTurn() {
+  rollDice();
+  G.phase='AI_TURN';
+  render();
+  await sleep(500);
+
+  while (availDice().length>0) {
+    const move=aiPickMove(1);
+    if (!move) break;
+    await sleep(G.difficulty==='easy'?350:480);
+    applyMove(move.from, move.to, 1);
+    checkWin();
+    if (G.phase==='DONE') { render(); return; }
+    render();
+  }
+
+  await sleep(400);
+  endTurn();
+}
+
+function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
+
+// ── Start ─────────────────────────────────────────────────────────
+function startGame() {
+  initBoard();
+  G.turn=0; G.phase='ROLLING';
+  G.selected=null; G.legalDests=[];
+  G.winner=null; G.dice=[]; G.usedIdx=new Set();
+  G.message='Click ROLL to start!';
+  render();
+}
+
+render(); // show title
+</script>
+</body>
+</html>
