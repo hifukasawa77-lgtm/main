@@ -5168,6 +5168,73 @@
         ctx.textAlign = 'left';
       }
 
+      function isMisatoArea(lat, lon) {
+        return lat >= 35.75 && lat <= 35.90 && lon >= 139.80 && lon <= 139.95;
+      }
+
+      function drawTrafficIndicator(level, cityName) {
+        const canvas = document.getElementById('traffic-map-canvas');
+        if (!canvas || !canvas.getContext) return;
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        const cx = W / 2, cy = H / 2 + 10;
+        const R = 80, LW = 16;
+
+        const CONFIG = {
+          rush:   { angle: Math.PI * 1.5, color: '#ff2244', label: '混雑' },
+          normal: { angle: Math.PI * 0.9, color: '#ff8800', label: '普通' },
+          night:  { angle: Math.PI * 0.45, color: '#00cc44', label: '空き' }
+        };
+        const c = CONFIG[level] || CONFIG.normal;
+        const startAngle = -Math.PI / 2;
+
+        ctx.fillStyle = '#070e18';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = 'rgba(0,180,255,0.04)';
+        for (let gx = 20; gx < W; gx += 40)
+          for (let gy = 20; gy < H; gy += 40) {
+            ctx.beginPath(); ctx.arc(gx, gy, 1, 0, Math.PI * 2); ctx.fill();
+          }
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, startAngle, startAngle + Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = LW;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, startAngle, startAngle + c.angle);
+        ctx.shadowColor = c.color;
+        ctx.shadowBlur = 18;
+        ctx.strokeStyle = c.color;
+        ctx.lineWidth = LW;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        ctx.font = 'bold 28px "Hiragino Kaku Gothic ProN","Meiryo",sans-serif';
+        ctx.fillStyle = c.color;
+        ctx.textAlign = 'center';
+        ctx.shadowColor = c.color;
+        ctx.shadowBlur = 12;
+        ctx.fillText(c.label, cx, cy + 10);
+        ctx.shadowBlur = 0;
+
+        if (cityName) {
+          ctx.font = '11px "Consolas","Courier New",monospace';
+          ctx.fillStyle = 'rgba(180,220,255,0.7)';
+          ctx.fillText(cityName, cx, cy + 36);
+        }
+
+        const now = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+        ctx.font = '9px "Consolas",monospace';
+        ctx.fillStyle = 'rgba(100,150,170,0.5)';
+        ctx.textAlign = 'right';
+        ctx.fillText(now, W - 8, H - 6);
+        ctx.textAlign = 'left';
+      }
+
       // ─── 交通情報（三郷市周辺）────────────────────────────────
       function initTrafficCard() {
         const listEl = document.getElementById('home-traffic-list');
@@ -5196,22 +5263,12 @@
 
         const trafficLevel = ((h >= 7 && h <= 9) || (h >= 17 && h <= 20)) ? 'rush' :
                             (h >= 23 || h <= 5) ? 'night' : 'normal';
-        drawTrafficMap(trafficLevel);
+        drawTrafficIndicator(trafficLevel, '');
 
-        // 三郷市フォールバック用デフォルトルート
-        const defaultRoutes = [
-          { name: '常磐道', dir: '三郷JCT → 柏IC / 守谷SA方面', emoji: '🛣️' },
-          { name: '外環道(C3)', dir: '三郷JCT ↔ 川口JCT / 高谷JCT', emoji: '🔄' },
-          { name: '国道6号', dir: '三郷市内 → 松戸・東京方面', emoji: '🚗' },
-          { name: '首都高6号', dir: '三郷線 → 箱崎JCT', emoji: '🌆' },
-        ];
-        listEl.innerHTML = defaultRoutes.map(r =>
-          `<li class="dashboard-mini-item">
-            <span>${r.emoji} <strong>${escHtml(r.name)}</strong>
-              <span style="font-size:0.68rem;color:var(--muted);margin-left:4px">${escHtml(r.dir)}</span>
-            </span>
-          </li>`
-        ).join('');
+        listEl.innerHTML =
+          '<li class="dashboard-mini-item">' +
+          '<span style="color:var(--muted)">📡 周辺の交通情報を取得中…</span>' +
+          '</li>';
         if (timeEl) timeEl.textContent = '時間帯推定 — ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 現在';
 
         // 位置情報取得 → JARTIC APIを現在地周辺で問い合わせ
@@ -5224,6 +5281,35 @@
 
           if (titleEl) titleEl.textContent = `🚦 交通情報（${city}周辺）`;
 
+          if (isMisatoArea(lat, lon)) {
+            drawTrafficMap(trafficLevel);
+          } else {
+            drawTrafficIndicator(trafficLevel, city);
+          }
+
+          const showFallback = () => {
+            if (isMisatoArea(lat, lon)) {
+              const defaultRoutes = [
+                { name: '常磐道', dir: '三郷JCT → 柏IC / 守谷SA方面', emoji: '🛣️' },
+                { name: '外環道(C3)', dir: '三郷JCT ↔ 川口JCT / 高谷JCT', emoji: '🔄' },
+                { name: '国道6号', dir: '三郷市内 → 松戸・東京方面', emoji: '🚗' },
+                { name: '首都高6号', dir: '三郷線 → 箱崎JCT', emoji: '🌆' },
+              ];
+              listEl.innerHTML = defaultRoutes.map(r =>
+                `<li class="dashboard-mini-item">
+                  <span>${r.emoji} <strong>${escHtml(r.name)}</strong>
+                    <span style="font-size:0.68rem;color:var(--muted);margin-left:4px">${escHtml(r.dir)}</span>
+                  </span>
+                </li>`
+              ).join('');
+            } else {
+              listEl.innerHTML =
+                '<li class="dashboard-mini-item">' +
+                '<span style="color:var(--muted)">JARTICデータなし（小都市は対象外）</span>' +
+                '</li>';
+            }
+          };
+
           const d = 0.05;
           const url = [
             'https://api.jartic-open-traffic.org/geoserver/ows',
@@ -5234,10 +5320,10 @@
           ].join('');
           try {
             const res = await fetchWithTimeout(url, 6000);
-            if (!res.ok) return;
+            if (!res.ok) { showFallback(); return; }
             const data = await res.json();
             const features = data.features;
-            if (!Array.isArray(features) || !features.length) return;
+            if (!Array.isArray(features) || !features.length) { showFallback(); return; }
             listEl.innerHTML = features.slice(0, 5).map(f => {
               const p = f.properties || {};
               const vol = p.vol_5m ?? p.traffic_volume ?? p.volume ?? null;
@@ -5250,7 +5336,7 @@
               </li>`;
             }).join('');
             if (timeEl) timeEl.textContent = 'JARTIC API — ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 更新';
-          } catch { /* 時間帯推定表示のまま維持 */ }
+          } catch { showFallback(); }
         })();
       }
 
