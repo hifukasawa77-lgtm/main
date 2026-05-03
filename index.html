@@ -2147,16 +2147,21 @@
             </div>
           </article>
 
-          <!-- 地震情報 -->
+          <!-- 地震・防災情報 -->
           <article class="card dashboard-card reveal" id="dash-card-quake">
             <h3 style="display:flex;align-items:center;gap:8px;">
-              🌍 地震情報
+              🌍 地震・防災情報
               <button onclick="initQuakeCard()" class="dash-todo-btn" style="font-size:0.72rem;padding:3px 10px;margin-left:auto">更新</button>
             </h3>
+            <div id="home-quake-eew" style="display:none;background:#ef4444;color:#fff;border-radius:6px;padding:6px 10px;margin-bottom:6px;font-size:0.82rem;font-weight:700"></div>
+            <div id="home-quake-tsunami" style="display:none;border-radius:6px;padding:5px 10px;margin-bottom:6px;font-size:0.8rem;font-weight:600;color:#fff"></div>
             <ul class="dashboard-mini-list" id="home-quake-list">
               <li class="dashboard-mini-item"><span>読み込み中…</span></li>
             </ul>
-            <div class="dash-mini-note" id="home-quake-time"></div>
+            <div class="dash-mini-note" id="home-quake-time" style="display:flex;justify-content:space-between;align-items:center">
+              <span id="home-quake-time-label"></span>
+              <a href="https://www.jma.go.jp/bosai/map.html#5/35/135/&elem=int" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.72rem;text-decoration:none">気象庁 地震情報 →</a>
+            </div>
           </article>
 
           <!-- 世界時計 -->
@@ -5030,34 +5035,92 @@
         renderPomo();
       })();
 
-      // ─── 地震情報 ──────────────────────────────────────────────
+      // ─── 地震・防災情報 ────────────────────────────────────────
       const QUAKE_SCALE = { 10:'1', 20:'2', 30:'3', 40:'4', 45:'5弱', 50:'5強', 55:'6弱', 60:'6強', 70:'7' };
+      const TSUNAMI_GRADE = {
+        'Checking':     ['調査中',         '#eab308'],
+        'NonEffective': ['若干の海面変動', '#eab308'],
+        'Watch':        ['津波注意報',     '#f97316'],
+        'Warning':      ['津波警報',       '#ef4444'],
+        'MajorWarning': ['大津波警報',     '#ef4444'],
+      };
       function quakeColor(s) { return s >= 60 ? '#ef4444' : s >= 50 ? '#f97316' : s >= 40 ? '#eab308' : 'var(--muted)'; }
       window.initQuakeCard = async function initQuakeCard() {
-        const list = document.getElementById('home-quake-list');
-        const timeEl = document.getElementById('home-quake-time');
+        const list      = document.getElementById('home-quake-list');
+        const timeLabel = document.getElementById('home-quake-time-label');
+        const eewEl     = document.getElementById('home-quake-eew');
+        const tsunamiEl = document.getElementById('home-quake-tsunami');
         if (!list) return;
         try {
-          const res = await fetchWithTimeout('https://api.p2pquake.net/v2/history?codes=551&limit=3', 8000);
-          if (!res.ok) throw new Error();
-          const data = await res.json();
+          const [quakeRes, tsunamiRes, eewRes] = await Promise.allSettled([
+            fetchWithTimeout('https://api.p2pquake.net/v2/history?codes=551&limit=5', 8000),
+            fetchWithTimeout('https://api.p2pquake.net/v2/history?codes=552&limit=1', 5000),
+            fetchWithTimeout('https://api.p2pquake.net/v2/history?codes=556&limit=1', 5000),
+          ]);
+          // EEW
+          if (eewEl) {
+            let showEew = false;
+            if (eewRes.status === 'fulfilled' && eewRes.value.ok) {
+              const eewData = await eewRes.value.json();
+              if (eewData.length) {
+                const eew = eewData[0];
+                const ageMs = Date.now() - new Date(eew.time || 0).getTime();
+                if (ageMs < 30 * 60 * 1000) {
+                  const sc = eew.earthquake?.maxScale || 0;
+                  eewEl.textContent = `🚨 緊急地震速報 — ${escHtml(eew.earthquake?.hypocenter?.name || '不明')} 推定震度${QUAKE_SCALE[sc] || '?'}`;
+                  showEew = true;
+                }
+              }
+            }
+            eewEl.style.display = showEew ? 'block' : 'none';
+          }
+          // 津波
+          if (tsunamiEl) {
+            let tsInfo = null;
+            if (tsunamiRes.status === 'fulfilled' && tsunamiRes.value.ok) {
+              const tsData = await tsunamiRes.value.json();
+              if (tsData.length) {
+                const gradeOrder = ['MajorWarning','Warning','Watch','NonEffective','Checking'];
+                const maxGrade = (tsData[0].areas || []).reduce((best, a) => {
+                  const bi = gradeOrder.indexOf(best), ai = gradeOrder.indexOf(a.grade);
+                  return ai >= 0 && (bi < 0 || ai < bi) ? a.grade : best;
+                }, '');
+                tsInfo = TSUNAMI_GRADE[maxGrade] || null;
+              }
+            }
+            if (tsInfo) {
+              tsunamiEl.textContent = `🌊 ${tsInfo[0]}`;
+              tsunamiEl.style.background = tsInfo[1];
+              tsunamiEl.style.display = 'block';
+            } else {
+              tsunamiEl.style.display = 'none';
+            }
+          }
+          // 地震リスト
+          if (quakeRes.status !== 'fulfilled' || !quakeRes.value.ok) throw new Error();
+          const data = await quakeRes.value.json();
           if (!data.length) { list.innerHTML = '<li class="dashboard-mini-item"><span>地震情報なし</span></li>'; return; }
           list.innerHTML = data.map(d => {
-            const eq = d.earthquake || {};
-            const h  = eq.hypocenter || {};
-            const sc = d.scale || eq.maxScale || 0;
-            const dt = new Date(eq.time || d.time || Date.now());
+            const eq  = d.earthquake || {};
+            const h   = eq.hypocenter || {};
+            const sc  = d.scale || eq.maxScale || 0;
+            const dt  = new Date(eq.time || d.time || Date.now());
             const dtStr = dt.toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
+            const depth = h.depth != null && h.depth >= 0 ? `・深さ${h.depth}km` : '';
+            const tsKey = eq.domesticTsunami;
+            const tsLabel = TSUNAMI_GRADE[tsKey]
+              ? `<span style="color:${TSUNAMI_GRADE[tsKey][1]};font-size:0.7rem;margin-left:4px">🌊${TSUNAMI_GRADE[tsKey][0]}</span>`
+              : '';
             return `<li class="dashboard-mini-item" style="flex-direction:column;align-items:flex-start;gap:2px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
               <div style="display:flex;gap:8px;align-items:center;width:100%">
                 <span style="color:${quakeColor(sc)};font-weight:700;min-width:44px">震度${QUAKE_SCALE[sc] || '不明'}</span>
                 <span style="flex:1;font-size:0.85rem">${escHtml(h.name || '不明')}</span>
                 <span style="font-size:0.72rem;color:var(--muted)">M${h.magnitude ?? '?'}</span>
               </div>
-              <div style="font-size:0.72rem;color:var(--muted)">${dtStr}</div>
+              <div style="font-size:0.72rem;color:var(--muted)">${dtStr}${depth}${tsLabel}</div>
             </li>`;
           }).join('');
-          if (timeEl) timeEl.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+          if (timeLabel) timeLabel.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
         } catch {
           list.innerHTML = '<li class="dashboard-mini-item"><span style="color:var(--muted)">取得失敗 — 更新ボタンで再試行</span></li>';
         }
