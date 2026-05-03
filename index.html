@@ -620,17 +620,9 @@
       border-radius: 8px;
       overflow: hidden;
       border: 1px solid rgba(0,200,255,0.13);
-      background: #070e18;
+      background: rgba(0,200,255,0.04);
       margin-bottom: 4px;
-    }
-    #traffic-map-canvas { display: block; width: 100%; height: auto; }
-    .traffic-map-legend {
-      display: flex; gap: 10px;
-      font-size: 0.68rem; color: var(--muted); align-items: center;
-    }
-    .tl-dot {
-      display: inline-block; width: 9px; height: 9px;
-      border-radius: 50%; margin-right: 3px; vertical-align: middle;
+      min-height: 60px;
     }
     .dashboard-card h3 {
       font-size: 1.02rem;
@@ -2035,13 +2027,29 @@
           <article class="card dashboard-card reveal" id="dash-card-traffic">
             <h3 id="home-traffic-title">🚦 交通情報（現在地周辺）</h3>
             <div id="home-traffic-congestion" style="display:none;margin-bottom:6px;font-size:0.78rem;font-weight:600;padding:4px 8px;border-radius:6px;text-align:center"></div>
-            <div class="traffic-map-wrap">
-              <canvas id="traffic-map-canvas" width="400" height="240"></canvas>
-            </div>
-            <div class="traffic-map-legend">
-              <span><span class="tl-dot" style="background:#ff2244"></span>渋滞</span>
-              <span><span class="tl-dot" style="background:#ff8800"></span>混雑</span>
-              <span><span class="tl-dot" style="background:#00cc44"></span>順調</span>
+            <div class="traffic-map-wrap" id="traffic-map-wrap">
+              <iframe
+                id="traffic-map-iframe"
+                src="about:blank"
+                title="Yahoo!マップ 渋滞情報"
+                referrerpolicy="no-referrer"
+                style="display:none;width:100%;height:240px;border:none;border-radius:8px"
+              ></iframe>
+              <div id="traffic-map-fallback" style="display:none;padding:16px 12px;text-align:center">
+                <p style="font-size:0.78rem;color:var(--muted);margin-bottom:8px">
+                  📍 現在地周辺の渋滞情報を Yahoo!マップ で確認できます
+                </p>
+                <a id="traffic-map-fallback-link"
+                   href="https://map.yahoo.co.jp/maps?lat=35.9185&amp;lon=139.7775&amp;z=14&amp;traffic=1"
+                   target="_blank" rel="noreferrer"
+                   style="display:inline-block;font-size:0.78rem;padding:6px 14px;border-radius:20px;background:rgba(0,200,255,0.12);color:#00c8ff;border:1px solid rgba(0,200,255,0.3);text-decoration:none">
+                  Yahoo!マップで渋滞を見る →
+                </a>
+              </div>
+              <div id="traffic-map-loading"
+                   style="height:60px;display:flex;align-items:center;justify-content:center;font-size:0.78rem;color:var(--muted)">
+                📍 現在地を確認中…
+              </div>
             </div>
             <ul class="dashboard-mini-list" id="home-traffic-list">
               <li class="dashboard-mini-item"><div class="skeleton-bar" style="width:70%"></div></li>
@@ -2051,6 +2059,10 @@
             </ul>
             <div class="dash-mini-note" id="home-traffic-time">取得中…</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+              <a id="traffic-yahoo-link"
+                href="https://map.yahoo.co.jp/maps?lat=35.9185&amp;lon=139.7775&amp;z=14&amp;traffic=1"
+                target="_blank" rel="noreferrer"
+                style="font-size:0.7rem;padding:3px 8px;border-radius:20px;background:rgba(0,200,255,0.12);color:#00c8ff;border:1px solid rgba(0,200,255,0.3);text-decoration:none">Yahoo!マップ →</a>
               <a href="https://www.driveplaza.com/traffic/" target="_blank" rel="noreferrer"
                 style="font-size:0.7rem;padding:3px 8px;border-radius:20px;background:rgba(0,200,255,0.12);color:var(--accent-cyan);border:1px solid rgba(0,200,255,0.3);text-decoration:none">ドラぷら →</a>
               <a href="https://www.shutoko.co.jp/use/traffic-info/" target="_blank" rel="noreferrer"
@@ -5052,190 +5064,43 @@
       }
       setInterval(initQuakeCard, 10 * 60 * 1000);
 
-      // ─── 交通情報マップ描画────────────────────────────────────
-      function drawTrafficMap(level) {
-        const canvas = document.getElementById('traffic-map-canvas');
-        if (!canvas || !canvas.getContext) return;
-        const ctx = canvas.getContext('2d');
-        const W = canvas.width, H = canvas.height;
-
-        const RED = '#ff2244', ORANGE = '#ff8800', GREEN = '#00cc44';
-        const ROAD_BG = '#162435', LABEL = '#7ac0d0', JCT_COL = '#00e5ff';
-        const BG = '#070e18', GRID_COL = 'rgba(0,180,255,0.04)';
-
-        const STATUS = {
-          rush: { gaW: ORANGE, gaE: ORANGE, joban: GREEN, sW: RED, c2: RED, s6: RED },
-          normal: { gaW: GREEN, gaE: GREEN, joban: GREEN, sW: ORANGE, c2: ORANGE, s6: ORANGE },
-          night: { gaW: GREEN, gaE: GREEN, joban: GREEN, sW: GREEN, c2: GREEN, s6: GREEN }
-        };
-        const s = STATUS[level] || STATUS.normal;
-
-        ctx.fillStyle = BG;
-        ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = GRID_COL;
-        for (let gx = 20; gx < W; gx += 40)
-          for (let gy = 20; gy < H; gy += 40) {
-            ctx.beginPath(); ctx.arc(gx, gy, 1, 0, Math.PI * 2); ctx.fill();
+      // ─── 交通情報（Yahoo!マップ連携）──────────────────────────
+      function updateTrafficIframe(lat, lon) {
+        const iframe = document.getElementById('traffic-map-iframe');
+        const loading = document.getElementById('traffic-map-loading');
+        const fallback = document.getElementById('traffic-map-fallback');
+        if (!iframe) return;
+        const yahooUrl = `https://map.yahoo.co.jp/maps?lat=${lat}&lon=${lon}&z=14&traffic=1`;
+        const fbLink = document.getElementById('traffic-map-fallback-link');
+        const navLink = document.getElementById('traffic-yahoo-link');
+        if (fbLink) fbLink.href = yahooUrl;
+        if (navLink) navLink.href = yahooUrl;
+        if (loading) loading.style.display = 'none';
+        iframe.style.display = 'block';
+        iframe.src = yahooUrl;
+        const timer = setTimeout(() => showTrafficFallback(), 3000);
+        iframe.addEventListener('load', () => {
+          try {
+            const doc = iframe.contentDocument;
+            if (!doc || !doc.body || doc.body.innerHTML === '') throw new Error();
+            clearTimeout(timer);
+          } catch {
+            clearTimeout(timer);
+            showTrafficFallback();
           }
-
-        function road(pts, color, w = 5) {
-          if (pts.length < 2) return;
-          ctx.beginPath();
-          ctx.moveTo(pts[0][0], pts[0][1]);
-          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-          ctx.strokeStyle = ROAD_BG; ctx.lineWidth = w + 4;
-          ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.shadowBlur = 0; ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(pts[0][0], pts[0][1]);
-          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-          ctx.shadowColor = color; ctx.shadowBlur = 8;
-          ctx.strokeStyle = color; ctx.lineWidth = w;
-          ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke(); ctx.shadowBlur = 0;
-        }
-
-        function jct(x, y, r = 5) {
-          ctx.beginPath(); ctx.arc(x, y, r + 2, 0, Math.PI * 2);
-          ctx.fillStyle = ROAD_BG; ctx.fill();
-          ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-          ctx.shadowColor = JCT_COL; ctx.shadowBlur = 14;
-          ctx.fillStyle = JCT_COL; ctx.fill(); ctx.shadowBlur = 0;
-        }
-
-        function lbl(text, x, y, color = LABEL, size = 9, align = 'left') {
-          ctx.font = `${size}px "Consolas","Courier New",monospace`;
-          ctx.fillStyle = color; ctx.textAlign = align; ctx.fillText(text, x, y);
-          ctx.textAlign = 'left';
-        }
-
-        function badge(text, cx, cy) {
-          ctx.font = 'bold 8px "Consolas","Courier New",monospace';
-          const pw = ctx.measureText(text).width;
-          const bw = pw + 10, bh = 14, br = 3;
-          const bx = cx - bw / 2, by = cy - bh / 2;
-          ctx.beginPath(); ctx.moveTo(bx + br, by);
-          ctx.lineTo(bx + bw - br, by);
-          ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + br);
-          ctx.lineTo(bx + bw, by + bh - br);
-          ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - br, by + bh);
-          ctx.lineTo(bx + br, by + bh);
-          ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - br);
-          ctx.lineTo(bx, by + br);
-          ctx.quadraticCurveTo(bx, by, bx + br, by);
-          ctx.closePath();
-          ctx.fillStyle = '#0d1e30'; ctx.fill();
-          ctx.strokeStyle = 'rgba(0,200,255,0.35)'; ctx.lineWidth = 1; ctx.stroke();
-          lbl(text, cx, cy + 4, '#00ccff', 8, 'center');
-        }
-
-        road([[10, 82], [43, 80]], s.gaW, 6);
-        road([[43, 80], [224, 83], [286, 87], [360, 95], [400, 98]], s.gaE, 6);
-        road([[224, 83], [286, 54], [340, 33], [386, 20], [400, 14]], s.joban, 6);
-        road([[43, 80], [28, 108], [14, 132], [4, 155], [0, 172]], s.sW, 5);
-        road([[0, 174], [50, 187], [115, 192], [185, 190], [240, 184], [268, 175]], s.c2, 5);
-        road([[224, 83], [238, 112], [250, 142], [258, 168], [263, 195], [265, 218]], s.s6, 5);
-        road([[170, 83], [172, 118], [173, 158], [174, 198], [175, 220]], 'rgba(100,130,160,0.7)', 3);
-
-        jct(43, 80); jct(224, 83); jct(265, 175);
-
-        lbl('外環道(C3)', 65, 72, LABEL, 8.5);
-        lbl('常磐道', 295, 58, LABEL, 8.5);
-        lbl('首都高', 5, 152, LABEL, 8);
-        lbl('6号線', 237, 132, LABEL, 8);
-        lbl('C2', 22, 180, LABEL, 8);
-
-        lbl('川口JCT', 15, 73, '#a0dde8', 8);
-        lbl('三郷JCT', 200, 76, '#a0dde8', 8);
-        lbl('守谷SA→', 345, 23, '#5cd085', 8);
-        lbl('柏・高谷→', 345, 103, LABEL, 8);
-        lbl('三郷料金所', 264, 80, LABEL, 7.5);
-
-        badge('C3', 155, 77);
-        badge('C2', 65, 192);
-        badge('6', 255, 200);
-        badge('51', 168, 148);
-
-        const nx = W - 22, ny = 14;
-        ctx.font = '9px "Consolas",monospace';
-        ctx.fillStyle = 'rgba(100,150,170,0.5)';
-        ctx.textAlign = 'center';
-        ctx.fillText('N', nx, ny + 1);
-        ctx.beginPath();
-        ctx.moveTo(nx, ny - 10);
-        ctx.lineTo(nx, ny - 5);
-        ctx.strokeStyle = 'rgba(100,150,170,0.4)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.textAlign = 'left';
+        }, { once: true });
       }
 
-      function isMisatoArea(lat, lon) {
-        return lat >= 35.75 && lat <= 35.90 && lon >= 139.80 && lon <= 139.95;
+      function showTrafficFallback() {
+        const iframe = document.getElementById('traffic-map-iframe');
+        const fallback = document.getElementById('traffic-map-fallback');
+        const loading = document.getElementById('traffic-map-loading');
+        if (iframe) { iframe.src = 'about:blank'; iframe.style.display = 'none'; }
+        if (loading) loading.style.display = 'none';
+        if (fallback) fallback.style.display = 'block';
       }
 
-      function drawTrafficIndicator(level, cityName) {
-        const canvas = document.getElementById('traffic-map-canvas');
-        if (!canvas || !canvas.getContext) return;
-        const ctx = canvas.getContext('2d');
-        const W = canvas.width, H = canvas.height;
-        const cx = W / 2, cy = H / 2 + 10;
-        const R = 80, LW = 16;
-
-        const CONFIG = {
-          rush:   { angle: Math.PI * 1.5, color: '#ff2244', label: '混雑' },
-          normal: { angle: Math.PI * 0.9, color: '#ff8800', label: '普通' },
-          night:  { angle: Math.PI * 0.45, color: '#00cc44', label: '空き' }
-        };
-        const c = CONFIG[level] || CONFIG.normal;
-        const startAngle = -Math.PI / 2;
-
-        ctx.fillStyle = '#070e18';
-        ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = 'rgba(0,180,255,0.04)';
-        for (let gx = 20; gx < W; gx += 40)
-          for (let gy = 20; gy < H; gy += 40) {
-            ctx.beginPath(); ctx.arc(gx, gy, 1, 0, Math.PI * 2); ctx.fill();
-          }
-
-        ctx.beginPath();
-        ctx.arc(cx, cy, R, startAngle, startAngle + Math.PI * 2);
-        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-        ctx.lineWidth = LW;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.arc(cx, cy, R, startAngle, startAngle + c.angle);
-        ctx.shadowColor = c.color;
-        ctx.shadowBlur = 18;
-        ctx.strokeStyle = c.color;
-        ctx.lineWidth = LW;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        ctx.font = 'bold 28px "Hiragino Kaku Gothic ProN","Meiryo",sans-serif';
-        ctx.fillStyle = c.color;
-        ctx.textAlign = 'center';
-        ctx.shadowColor = c.color;
-        ctx.shadowBlur = 12;
-        ctx.fillText(c.label, cx, cy + 10);
-        ctx.shadowBlur = 0;
-
-        if (cityName) {
-          ctx.font = '11px "Consolas","Courier New",monospace';
-          ctx.fillStyle = 'rgba(180,220,255,0.7)';
-          ctx.fillText(cityName, cx, cy + 36);
-        }
-
-        const now = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
-        ctx.font = '9px "Consolas",monospace';
-        ctx.fillStyle = 'rgba(100,150,170,0.5)';
-        ctx.textAlign = 'right';
-        ctx.fillText(now, W - 8, H - 6);
-        ctx.textAlign = 'left';
-      }
-
-      // ─── 交通情報（三郷市周辺）────────────────────────────────
+      // ─── 交通情報────────────────────────────────────────────
       function initTrafficCard() {
         const listEl = document.getElementById('home-traffic-list');
         const timeEl = document.getElementById('home-traffic-time');
@@ -5261,19 +5126,15 @@
           Object.assign(congEl.style, { background: bg, color: col, display: 'block' });
         }
 
-        const trafficLevel = ((h >= 7 && h <= 9) || (h >= 17 && h <= 20)) ? 'rush' :
-                            (h >= 23 || h <= 5) ? 'night' : 'normal';
-        drawTrafficIndicator(trafficLevel, '');
-
         listEl.innerHTML =
           '<li class="dashboard-mini-item">' +
           '<span style="color:var(--muted)">📡 周辺の交通情報を取得中…</span>' +
           '</li>';
         if (timeEl) timeEl.textContent = '時間帯推定 — ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 現在';
 
-        // 位置情報取得 → JARTIC APIを現在地周辺で問い合わせ
+        // 位置情報取得 → Yahoo!マップiframe + JARTIC APIを現在地周辺で問い合わせ
         (async () => {
-          let lat = 35.83, lon = 139.87, city = '三郷市';
+          let lat = 35.9185, lon = 139.7775, city = '三郷市';
           try {
             const loc = await getWeatherLocation();
             lat = loc.lat; lon = loc.lon; city = loc.city;
@@ -5281,33 +5142,14 @@
 
           if (titleEl) titleEl.textContent = `🚦 交通情報（${city}周辺）`;
 
-          if (isMisatoArea(lat, lon)) {
-            drawTrafficMap(trafficLevel);
-          } else {
-            drawTrafficIndicator(trafficLevel, city);
-          }
+          updateTrafficIframe(lat, lon);
 
           const showFallback = () => {
-            if (isMisatoArea(lat, lon)) {
-              const defaultRoutes = [
-                { name: '常磐道', dir: '三郷JCT → 柏IC / 守谷SA方面', emoji: '🛣️' },
-                { name: '外環道(C3)', dir: '三郷JCT ↔ 川口JCT / 高谷JCT', emoji: '🔄' },
-                { name: '国道6号', dir: '三郷市内 → 松戸・東京方面', emoji: '🚗' },
-                { name: '首都高6号', dir: '三郷線 → 箱崎JCT', emoji: '🌆' },
-              ];
-              listEl.innerHTML = defaultRoutes.map(r =>
-                `<li class="dashboard-mini-item">
-                  <span>${r.emoji} <strong>${escHtml(r.name)}</strong>
-                    <span style="font-size:0.68rem;color:var(--muted);margin-left:4px">${escHtml(r.dir)}</span>
-                  </span>
-                </li>`
-              ).join('');
-            } else {
-              listEl.innerHTML =
-                '<li class="dashboard-mini-item">' +
-                '<span style="color:var(--muted)">JARTICデータなし（小都市は対象外）</span>' +
-                '</li>';
-            }
+            listEl.innerHTML =
+              `<li class="dashboard-mini-item">` +
+              `<span style="color:var(--muted)">📍 <a href="https://map.yahoo.co.jp/maps?lat=${lat}&lon=${lon}&z=14&traffic=1" ` +
+              `target="_blank" rel="noreferrer" style="color:#00c8ff;text-decoration:none">Yahoo!マップ</a> で渋滞情報を確認できます</span>` +
+              `</li>`;
           };
 
           const d = 0.05;
