@@ -360,6 +360,13 @@ let lightningTimer = 0;
 let shakeFrames = 0, shakeAmt = 0;
 let rings = [];
 
+// === チュートリアル ===
+let tutorialTimer = 0;
+const TUTORIAL_DURATION = 240;
+
+// HUDポーズボタンX（drawHUDBar・handlePlayClick で共用）
+function getPauseButtonX() { return 38; }
+
 // === エンティティ生成 ===
 function makeBubble() {
   const cfg = STAGE_CFG[stage];
@@ -497,7 +504,8 @@ function popBubble(b) {
   const pColors = { coin:'#ffd700', chest:'#c8843a', tool:'#aaaacc', ladder:'#c8a06a', bomb:'#ff4400', hammer:'#888888' };
   for (let i = 0; i < 20; i++) particles.push(makeParticle(b.x, b.y, pColors[b.contents] || '#fff'));
   rings.push(makeRing(b.x, b.y, b.radius * 2.0, pColors[b.contents] || '#aadeee'));
-  playSE('pop'); // Phase 3: pop SE
+  playSE('pop');
+  if (navigator.vibrate) navigator.vibrate(10);
 }
 
 function collectItem(it, gnome) {
@@ -542,7 +550,9 @@ function placeLadder(x) {
   }
   score += ITEM_SCORE['ladder'];
   itemsCollected++;
-  playSE('ladder'); // Phase 3: ladder SE
+  playSE('ladder');
+  bonusPopups.push({ x, y: GROUND_Y - 40, text: '🪜 SET!', life: 50, maxLife: 50, color: '#44ff88', large: false });
+  rings.push(makeRing(x, GROUND_Y - 20, 30, '#44ff88'));
   updateHUD();
   if (itemsCollected >= STAGE_CFG[stage].target) {
     if (stage < STAGE_CFG.length - 1) {
@@ -559,6 +569,7 @@ function placeLadder(x) {
 // Phase 8-4: 小人消滅関数
 function killGnome(g) {
   shakeFrames = 12; shakeAmt = 4;
+  if (navigator.vibrate) navigator.vibrate(50);
   for (let i = 0; i < 16; i++) {
     particles.push(makeParticle(g.x, g.y, '#ff3333'));
   }
@@ -1477,11 +1488,21 @@ function drawHUDBar() {
   ctx.fillStyle = '#aaeeff';
   ctx.fillText('STAGE ' + (stage + 1), W / 2, 27);
 
-  // Phase 6: コンボ表示
+  // B2: コンボ表示（残り30フレームで赤フラッシュ＋タイマーバー）
   if (comboCount >= 2) {
-    ctx.fillStyle = '#ffdd44';
+    const warning = comboTimer > 0 && comboTimer < 30;
+    const flash = warning && Math.floor(frameCount / 4) % 2 === 0;
+    ctx.fillStyle = flash ? '#ff4444' : '#ffdd44';
     ctx.font = 'bold 12px monospace';
     ctx.fillText('COMBO x' + comboCount, W / 2, 40);
+    if (comboTimer > 0) {
+      const prog2 = comboTimer / COMBO_WINDOW;
+      ctx.fillStyle = warning ? '#ff4444' : '#ffdd44';
+      ctx.globalAlpha = 0.4;
+      ctx.fillRect(W / 2 - 30, 42, 60, 2);
+      ctx.globalAlpha = 1;
+      ctx.fillRect(W / 2 - 30, 42, 60 * prog2, 2);
+    }
   }
 
   // Phase 2: ハートでライフ表示（右上端）
@@ -1490,13 +1511,16 @@ function drawHUDBar() {
     drawHeart(W - 18 - h * 22, 14, 7, h < lives);
   }
 
-  // Phase 3: ミュートボタン（左上）
+  // ミュートボタン
   ctx.textAlign = 'center';
   ctx.font = '14px sans-serif';
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.fillText(AudioSystem.muted ? '🔇' : '🔊', W - 18 - maxLives * 22 - 22, 18);
 
-  // プログレスバー
+  // B1: ポーズボタン
+  ctx.fillText('⏸', getPauseButtonX(), 18);
+
+  // プログレスバー（アイテム収集）
   ctx.textAlign = 'right';
   ctx.fillStyle = '#88ffaa';
   ctx.font = '12px monospace';
@@ -1506,6 +1530,69 @@ function drawHUDBar() {
   ctx.fillRect(10, 33, W - 20, 5);
   ctx.fillStyle = '#44ff88';
   ctx.fillRect(10, 33, (W - 20) * prog, 5);
+
+  // B3: タイムボーナスバー（右寄せ、金色）
+  const elapsed = (Date.now() - stageStartTime) / 1000;
+  const timeProg = Math.max(0, 1 - elapsed / 100);
+  if (timeProg > 0) {
+    const bw = 80, bx = W - bw - 10;
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(bx, 38, bw, 3);
+    ctx.fillStyle = timeProg > 0.3 ? '#ffd700' : '#ff8844';
+    ctx.fillRect(bx, 38, bw * timeProg, 3);
+  }
+
+  ctx.restore();
+}
+
+// B1: ポーズオーバーレイ
+function drawPauseOverlay() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,30,0.72)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaeeff';
+  ctx.font = 'bold 32px monospace';
+  ctx.fillText('⏸ PAUSE', W / 2, H * 0.38);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '14px sans-serif';
+  ctx.fillText(AudioSystem.muted ? '🔇 ミュート中' : '🔊 音あり', W / 2, H * 0.50);
+  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#ffffff' : '#66aaff';
+  ctx.font = '14px monospace';
+  ctx.fillText('タップ / Esc で再開', W / 2, H * 0.62);
+  ctx.restore();
+}
+
+// C2: 初回チュートリアルオーバーレイ
+function drawTutorialOverlay() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,30,0.80)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaeeff';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('操作ガイド', W / 2, H * 0.22);
+  const tips = [
+    ['👆 タップ',   '泡を割る'],
+    ['👆 ドラッグ', '小人に経路を指示'],
+    ['🐦 カラス',   '小人を吹き飛ばす'],
+    ['⚡ 雷',       '小人が即死'],
+    ['💣 爆弾',     '落下に注意！'],
+  ];
+  ctx.font = '13px monospace';
+  tips.forEach(([icon, desc], i) => {
+    ctx.fillStyle = '#ffd700';
+    ctx.textAlign = 'right';
+    ctx.fillText(icon, W / 2 - 5, H * 0.33 + i * 22);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.fillText(desc, W / 2 + 5, H * 0.33 + i * 22);
+  });
+  ctx.globalAlpha = Math.min(1, tutorialTimer / 40);
+  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#aaaaaa' : '#666688';
+  ctx.textAlign = 'center';
+  ctx.font = '11px monospace';
+  ctx.fillText('タップでスキップ', W / 2, H * 0.80);
   ctx.restore();
 }
 
@@ -1635,19 +1722,25 @@ function getCanvasPos(e) {
 }
 
 function handleStateClick(pos) {
-  // Phase 3: AudioContext はユーザー操作で初期化（autoplay policy対策）
   AudioSystem.init();
   if (state === 'title')    { initGame(); state = 'play'; AudioSystem.startBGM(); return true; }
   if (state === 'gameover') { initGame(); state = 'play'; AudioSystem.startBGM(); return true; }
   if (state === 'clear')    { state = 'title';            AudioSystem.stopBGM();  return true; }
+  if (state === 'pause')    { state = 'play';                                     return true; }
   return false;
 }
 
 function handlePlayClick(pos) {
-  // Phase 3: ミュートボタン判定（HUDバー右上）
+  // B1: ポーズボタン判定
+  if (pos.y < 42 && Math.abs(pos.x - getPauseButtonX()) < 20) {
+    state = 'pause'; return;
+  }
+  // C2: チュートリアルスキップ
+  if (tutorialTimer > 0) { tutorialTimer = 0; return; }
+  // C3: ミュートボタン判定（ヒット半径拡大: 18→30）
   const maxLives = STAGE_CFG[stage].lives || MAX_LIVES;
   const muteX = W - 18 - maxLives * 22 - 22;
-  if (pos.y < 42 && Math.abs(pos.x - muteX) < 18) {
+  if (pos.y < 42 && Math.abs(pos.x - muteX) < 30) {
     AudioSystem.toggleMute();
     return;
   }
@@ -1737,6 +1830,11 @@ document.addEventListener('keydown', e => {
     if (state === 'title')    { initGame(); state = 'play'; }
     else if (state === 'gameover') { initGame(); state = 'play'; }
     else if (state === 'clear')    { state = 'title'; }
+    else if (state === 'pause')    { state = 'play'; }
+  }
+  if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
+    if (state === 'play')  state = 'pause';
+    else if (state === 'pause') state = 'play';
   }
 });
 document.addEventListener('keyup', e => { keys[e.key] = false; });
@@ -1788,11 +1886,17 @@ function initGame() {
   comboCount = 0; comboTimer = 0;
   bonusPopups = [];
   initStage();
+  // C2: 初回チュートリアル
+  if (!localStorage.getItem('brc_tutorial')) {
+    tutorialTimer = TUTORIAL_DURATION;
+    localStorage.setItem('brc_tutorial', '1');
+  }
 }
 
 // === メインループ ===
 function update() {
   frameCount++;
+  if (tutorialTimer > 0) tutorialTimer--;
   if (state !== 'play') return;
   const cfg = STAGE_CFG[stage];
 
@@ -1885,6 +1989,9 @@ function render() {
   drawBonusPopups();
   drawPath();
   drawHUDBar();
+
+  if (state === 'pause') drawPauseOverlay();
+  if (state === 'play' && tutorialTimer > 0) drawTutorialOverlay();
 
   ctx.restore();
 }
