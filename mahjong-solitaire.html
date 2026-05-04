@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>麻雀ソリティア - hide の部屋</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f1f0f;
+      color: #f5f0e8;
+      font-family: "Hiragino Kaku Gothic Pro", "Yu Gothic UI", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 24px;
+      background: #1a3a1a;
+      border-bottom: 2px solid #5a8a3a;
+    }
+    header a {
+      color: #a8d070;
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    header a:hover { text-decoration: underline; }
+    header h1 {
+      font-family: "游明朝", "YuMincho", "Hiragino Mincho Pro", serif;
+      font-size: 1.4rem;
+      color: #d4a840;
+    }
+    #stats { font-size: 0.95rem; color: #c8e0a0; }
+    main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      flex: 1;
+    }
+    canvas {
+      border: 3px solid #5a8a3a;
+      border-radius: 8px;
+      max-width: 100%;
+      cursor: pointer;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    #controls {
+      margin-top: 16px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    button {
+      padding: 10px 20px;
+      background: #2a4a1a;
+      color: #c8e0a0;
+      border: 1px solid #5a8a3a;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-family: inherit;
+      transition: background 0.2s;
+    }
+    button:hover { background: #3a6a2a; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    #message {
+      margin-top: 16px;
+      font-size: 1.1rem;
+      color: #d4a840;
+      font-family: "游明朝", "YuMincho", "Hiragino Mincho Pro", serif;
+      min-height: 1.5em;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="index.html">← ポートフォリオ</a>
+    <h1>麻雀ソリティア</h1>
+    <div id="stats">残り: <span id="remaining">144</span>枚 / <span id="timer">0:00</span></div>
+  </header>
+  <main>
+    <canvas id="gameCanvas" width="900" height="500"></canvas>
+    <div id="controls">
+      <button onclick="newGame()">🔄 新ゲーム</button>
+      <button onclick="hint()">💡 ヒント</button>
+      <button onclick="undo()">↩ アンドゥ</button>
+      <button onclick="shuffle()">🔀 シャッフル</button>
+    </div>
+    <div id="message"></div>
+  </main>
+
+  <script>
+    // ============================================================
+    // 定数
+    // ============================================================
+    const TW = 40;   // タイル幅 (px)
+    const TH = 52;   // タイル高さ (px)
+    const CANVAS_W = 900;
+    const CANVAS_H = 500;
+
+    // Canvas 取得
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // ============================================================
+    // 牌定義（144枚）
+    // ============================================================
+
+    // 各 type の定義: [type, group, label, labelColor]
+    // 万子: 朱赤
+    // 筒子: 紺
+    // 索子: 深緑
+    // 字牌: 墨（三元牌は個別対応）
+    const TILE_DEFS = [
+      // 万子 1〜9萬 （各4枚）
+      ['1m','man','１萬','#cc2200'],
+      ['2m','man','２萬','#cc2200'],
+      ['3m','man','３萬','#cc2200'],
+      ['4m','man','４萬','#cc2200'],
+      ['5m','man','５萬','#cc2200'],
+      ['6m','man','６萬','#cc2200'],
+      ['7m','man','７萬','#cc2200'],
+      ['8m','man','８萬','#cc2200'],
+      ['9m','man','９萬','#cc2200'],
+      // 筒子 1〜9筒 （各4枚）
+      ['1p','pin','①','#1a4a8a'],
+      ['2p','pin','②','#1a4a8a'],
+      ['3p','pin','③','#1a4a8a'],
+      ['4p','pin','④','#1a4a8a'],
+      ['5p','pin','⑤','#1a4a8a'],
+      ['6p','pin','⑥','#1a4a8a'],
+      ['7p','pin','⑦','#1a4a8a'],
+      ['8p','pin','⑧','#1a4a8a'],
+      ['9p','pin','⑨','#1a4a8a'],
+      // 索子 1〜9索 （各4枚）
+      ['1s','sou','１索','#1a6a2a'],
+      ['2s','sou','２索','#1a6a2a'],
+      ['3s','sou','３索','#1a6a2a'],
+      ['4s','sou','４索','#1a6a2a'],
+      ['5s','sou','５索','#1a6a2a'],
+      ['6s','sou','６索','#1a6a2a'],
+      ['7s','sou','７索','#1a6a2a'],
+      ['8s','sou','８索','#1a6a2a'],
+      ['9s','sou','９索','#1a6a2a'],
+      // 風牌 （各4枚）
+      ['east','wind','東','#1a1a1a'],
+      ['south','wind','南','#1a1a1a'],
+      ['west','wind','西','#1a1a1a'],
+      ['north','wind','北','#1a1a1a'],
+      // 三元牌 （各4枚）
+      ['chun','dragon','中','#cc2200'],   // 中=赤
+      ['hatsu','dragon','発','#1a6a2a'],  // 発=緑
+      ['haku','dragon','白','#1a1a1a'],   // 白=黒枠
+      // 花牌 （1枚ずつ）
+      ['flower1','flower','春','#cc2200'],
+      ['flower2','flower','夏','#1a6a2a'],
+      ['flower3','flower','秋','#cc8800'],
+      ['flower4','flower','冬','#1a4a8a'],
+      // 季節牌 （1枚ずつ）
+      ['season1','season','梅','#cc2200'],
+      ['season2','season','蘭','#1a6a2a'],
+      ['season3','season','菊','#cc8800'],
+      ['season4','season','竹','#1a4a8a'],
+    ];
+
+    // 144枚の types リストを生成（各牌4枚ずつ、花・季節は1枚ずつ）
+    function buildTypeList() {
+      const list = [];
+      for (const def of TILE_DEFS) {
+        const [type, group] = def;
+        const count = (group === 'flower' || group === 'season') ? 1 : 4;
+        for (let i = 0; i < count; i++) {
+          list.push(type);
+        }
+      }
+      return list; // 合計144
+    }
+
+    // type → def マップ
+    const TYPE_MAP = {};
+    for (const def of TILE_DEFS) {
+      TYPE_MAP[def[0]] = def; // [type, group, label, labelColor]
+    }
+
+    // ============================================================
+    // レイアウト定義（144枚）
+    // L0: 7行(y=0,2,4,6,8,10,12) × 12列(x=2,4,...,24) = 84枚
+    //     + 左棒(0,4) + 右棒(26,4) = 86枚
+    // L1: 5行(y=2,4,6,8,10) × 8列(x=6,8,...,20) = 40枚
+    // L2: 3行(y=4,6,8) × 5列(x=8,10,...,16) = 15枚
+    // L3: 1行(y=6) × 3列(x=10,12,14) = 3枚
+    // 合計: 86 + 40 + 15 + 3 = 144 ✓
+    // ============================================================
+    function buildLayout() {
+      const positions = [];
+
+      // Layer 0: 中央矩形 (7行×12列=84) + 左右棒2枚 = 86枚
+      for (let y = 0; y <= 12; y += 2) {           // 0,2,4,6,8,10,12 → 7行
+        for (let x = 2; x <= 24; x += 2) {          // 2,4,...,24 → 12列
+          positions.push({ x, y, z: 0 });
+        }
+      }
+      positions.push({ x: 0,  y: 4, z: 0 });       // 左端棒
+      positions.push({ x: 26, y: 4, z: 0 });       // 右端棒
+
+      // Layer 1: 5行×8列 = 40枚
+      for (let y = 2; y <= 10; y += 2) {            // 2,4,6,8,10 → 5行
+        for (let x = 6; x <= 20; x += 2) {          // 6,8,...,20 → 8列
+          positions.push({ x, y, z: 1 });
+        }
+      }
+
+      // Layer 2: 3行×5列 = 15枚
+      for (let y = 4; y <= 8; y += 2) {             // 4,6,8 → 3行
+        for (let x = 8; x <= 16; x += 2) {          // 8,10,12,14,16 → 5列
+          positions.push({ x, y, z: 2 });
+        }
+      }
+
+      // Layer 3: 1行×3列 = 3枚
+      for (let x = 10; x <= 14; x += 2) {           // 10,12,14 → 3列
+        positions.push({ x, y: 6, z: 3 });
+      }
+
+      return positions; // 144件
+    }
+
+    // ============================================================
+    // ゲーム状態
+    // ============================================================
+    let tiles = [];         // 全牌オブジェクト
+    let selected = null;    // 選択中の牌
+    let undoStack = [];     // アンドゥ用スタック [[tileA, tileB], ...]
+    let hintTiles = [];     // ヒント表示中の牌
+    let hintTimer = null;   // ヒントタイマー
+    let timerInterval = null;
+    let elapsedSec = 0;
+    let gameOver = false;
+    let confettiParticles = [];
+    let confettiRafId = null;
+
+    // ============================================================
+    // ボードオフセット計算
+    // ============================================================
+    // 半タイル単位 x → px: boardOffsetX + x*(TW/2) + z*3
+    // 半タイル単位 y → px: boardOffsetY + y*(TH/2) + z*(-4)
+    // ボード最大 x: L0右端 x=26+2(牌幅) → 実px = 26*(TW/2)+TW = 26*20+40 = 560
+    // ボード最大 y: L0下端 y=12+2(牌高) → 実px = 12*(TH/2)+TH = 12*26+52 = 364
+    // 3D側面分の余白: 右+4, 下+4
+    // Layer最大z=3: dx=9px右, dy=-12px上
+    const BOARD_PX_W = 26 * (TW / 2) + TW + 4 + 3 * 3;  // ~583
+    const BOARD_PX_H = 12 * (TH / 2) + TH + 4 + 3 * 4;   // ~380
+    const boardOffsetX = Math.floor((CANVAS_W - BOARD_PX_W) / 2);
+    const boardOffsetY = Math.floor((CANVAS_H - BOARD_PX_H) / 2) + 12;
+
+    // ============================================================
+    // 描画ユーティリティ
+    // ============================================================
+
+    // 角丸矩形
+    function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+      if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+    }
+
+    // タイル文字描画
+    function drawTileLabel(ctx, tile, px, py, blocked) {
+      const def = TYPE_MAP[tile.type];
+      if (!def) return;
+      const label = def[2];
+      const color = blocked ? '#9a8a7a' : def[3];
+
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.textAlign = 'center';
+
+      // 白牌は特殊: 黒枠の空文字
+      if (tile.type === 'haku') {
+        ctx.strokeStyle = blocked ? '#9a8a7a' : '#1a1a1a';
+        ctx.lineWidth = 2;
+        roundRect(ctx, px + 8, py + 8, TW - 16, TH - 16, 2, null, blocked ? '#9a8a7a' : '#1a1a1a');
+        ctx.restore();
+        return;
+      }
+
+      // 万子・索子: 2段表示（数字 + 萬/索）
+      if (tile.group === 'man' || tile.group === 'sou') {
+        const num = label.charAt(0);
+        const suit = label.charAt(1);
+        ctx.font = `bold 16px "游明朝", "YuMincho", serif`;
+        ctx.fillText(num, px + TW / 2, py + TH / 2 - 3);
+        ctx.font = `bold 12px "游明朝", "YuMincho", serif`;
+        ctx.fillText(suit, px + TW / 2, py + TH / 2 + 13);
+      } else {
+        // 1文字表示（筒子の丸数字、風牌、三元牌、花・季節）
+        const fontSize = label.length === 1 ? 20 : 14;
+        ctx.font = `bold ${fontSize}px "游明朝", "YuMincho", serif`;
+        ctx.fillText(label, px + TW / 2, py + TH / 2 + 7);
+      }
+      ctx.restore();
+    }
+
+    // タイル1枚を描画（state: "normal"|"selected"|"blocked"|"hint"）
+    function drawTile(ctx, tile, state) {
+      const px = boardOffsetX + tile.x * (TW / 2) + tile.z * 3;
+      const py = boardOffsetY + tile.y * (TH / 2) + tile.z * (-4);
+
+      // 3D側面（右・下）
+      const sideColor = state === 'blocked' ? '#3a2a1a' : '#6b4c1a';
+      ctx.fillStyle = sideColor;
+      ctx.fillRect(px + TW, py + 4, 4, TH);   // 右側面
+      ctx.fillRect(px + 4,  py + TH, TW, 4);  // 下側面
+
+      // 牌面色
+      const faceColor = state === 'selected' ? '#fff3a0'
+        : state === 'blocked' ? '#c8bfa8'
+        : state === 'hint'    ? '#fffbbf'
+        : '#f5f0e8';
+      const borderColor = state === 'selected' ? '#cc8800'
+        : state === 'blocked' ? '#6b5a3e'
+        : state === 'hint'    ? '#ffaa00'
+        : '#8b6914';
+
+      // 牌面（角丸）
+      roundRect(ctx, px, py, TW, TH, 4, faceColor, borderColor);
+
+      // 内枠（立体感）
+      roundRect(ctx, px + 3, py + 3, TW - 6, TH - 6, 2, null, 'rgba(255,255,255,0.3)');
+
+      // 文字
+      drawTileLabel(ctx, tile, px, py, state === 'blocked');
+    }
+
+    // ============================================================
+    // isFree / isMatch
+    // ============================================================
+    function isFree(tile) {
+      if (tile.removed) return false;
+
+      // 上から被覆チェック（z+1 の牌が重なっているか）
+      const blockedAbove = tiles.some(t =>
+        !t.removed && t.z === tile.z + 1 &&
+        Math.abs(t.x - tile.x) < 2 && Math.abs(t.y - tile.y) < 2
+      );
+      if (blockedAbove) return false;
+
+      // 左右チェック（同 z で x が隣接する牌が両側にあれば詰まり）
+      const blockedLeft = tiles.some(t =>
+        !t.removed && t.z === tile.z &&
+        t.x + 2 === tile.x && Math.abs(t.y - tile.y) < 2
+      );
+      const blockedRight = tiles.some(t =>
+        !t.removed && t.z === tile.z &&
+        t.x - 2 === tile.x && Math.abs(t.y - tile.y) < 2
+      );
+      // 左右どちらかが空いていれば取れる
+      return !blockedLeft || !blockedRight;
+    }
+
+    function isMatch(a, b) {
+      if (a.group === 'flower' && b.group === 'flower') return true;
+      if (a.group === 'season' && b.group === 'season') return true;
+      return a.type === b.type;
+    }
+
+    // ============================================================
+    // ゲーム状態チェック
+    // ============================================================
+    function countRemaining() {
+      return tiles.filter(t => !t.removed).length;
+    }
+
+    function findFreePairs() {
+      const free = tiles.filter(t => !t.removed && isFree(t));
+      const pairs = [];
+      for (let i = 0; i < free.length; i++) {
+        for (let j = i + 1; j < free.length; j++) {
+          if (isMatch(free[i], free[j])) {
+            pairs.push([free[i], free[j]]);
+          }
+        }
+      }
+      return pairs;
+    }
+
+    function checkGameState() {
+      const remaining = countRemaining();
+      document.getElementById('remaining').textContent = remaining;
+
+      if (remaining === 0) {
+        gameOver = true;
+        stopTimer();
+        setMessage('クリア！おめでとうございます！ / Congratulations!');
+        startConfetti();
+        return;
+      }
+
+      const pairs = findFreePairs();
+      if (pairs.length === 0) {
+        setMessage('詰まりました。シャッフルまたは新ゲームをどうぞ。 / No more moves.');
+      } else {
+        setMessage('');
+      }
+    }
+
+    function setMessage(msg) {
+      document.getElementById('message').textContent = msg;
+    }
+
+    // ============================================================
+    // タイマー
+    // ============================================================
+    function startTimer() {
+      stopTimer();
+      elapsedSec = 0;
+      updateTimerDisplay();
+      timerInterval = setInterval(() => {
+        if (!gameOver) {
+          elapsedSec++;
+          updateTimerDisplay();
+        }
+      }, 1000);
+    }
+
+    function stopTimer() {
+      if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    }
+
+    function updateTimerDisplay() {
+      const m = Math.floor(elapsedSec / 60);
+      const s = elapsedSec % 60;
+      document.getElementById('timer').textContent = `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    // ============================================================
+    // シャッフルユーティリティ
+    // ============================================================
+    function arrayShuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    // ペアを保ちながら types リストを生成
+    // 花牌同士・季節牌同士はそれぞれグループ内でランダム割り当て
+    function buildShuffledTypes() {
+      const allTypes = buildTypeList(); // 144要素
+
+      // 通常牌（花・季節以外）: 4枚ずつのペア → 2ペアに分けてシャッフル
+      const normalTypes = allTypes.filter(t => {
+        const def = TYPE_MAP[t];
+        return def[1] !== 'flower' && def[1] !== 'season';
+      });
+      // flower / season は別処理
+      const flowerTypes = allTypes.filter(t => TYPE_MAP[t][1] === 'flower');
+      const seasonTypes = allTypes.filter(t => TYPE_MAP[t][1] === 'season');
+
+      // 風牌: 4種×4枚 → 8ペア
+      const windTypes = normalTypes.filter(t => TYPE_MAP[t][1] === 'wind');
+      const windUniq = [...new Set(windTypes)];
+      let windPairs = [];
+      for (const t of windUniq) {
+        windPairs.push([t, t]);
+        windPairs.push([t, t]);
+      }
+      arrayShuffle(windPairs);
+      const shuffledWind = windPairs.flat();
+
+      // 三元牌: 3種×4枚 → 6ペア
+      const dragonTypes = normalTypes.filter(t => TYPE_MAP[t][1] === 'dragon');
+      const dragonUniq = [...new Set(dragonTypes)];
+      let dragonPairs = [];
+      for (const t of dragonUniq) {
+        dragonPairs.push([t, t]);
+        dragonPairs.push([t, t]);
+      }
+      arrayShuffle(dragonPairs);
+      const shuffledDragon = dragonPairs.flat();
+
+      // 萬・筒・索 各9種×4枚 → ペアシャッフル
+      const manTypes = normalTypes.filter(t => TYPE_MAP[t][1] === 'man');
+      const pinTypes = normalTypes.filter(t => TYPE_MAP[t][1] === 'pin');
+      const souTypes = normalTypes.filter(t => TYPE_MAP[t][1] === 'sou');
+
+      function makePairsFromGroup(arr) {
+        const uniq = [...new Set(arr)];
+        let pairs = [];
+        for (const t of uniq) { pairs.push([t,t]); pairs.push([t,t]); }
+        arrayShuffle(pairs);
+        return pairs.flat();
+      }
+
+      const shuffledMan = makePairsFromGroup(manTypes);
+      const shuffledPin = makePairsFromGroup(pinTypes);
+      const shuffledSou = makePairsFromGroup(souTypes);
+
+      // 花牌・季節牌: グループ内でシャッフル（どれ同士でも一致するので順序だけ変える）
+      arrayShuffle(flowerTypes);
+      arrayShuffle(seasonTypes);
+
+      // 全部結合してシャッフル（ペア構造を保つ必要があるので、ペアペア単位でシャッフル）
+      // 108+36(wind+dragon)+4+4 = 152…ではなく
+      // man:36, pin:36, sou:36, wind:16, dragon:12, flower:4, season:4 = 144
+      const combined = [
+        ...shuffledMan, ...shuffledPin, ...shuffledSou,
+        ...shuffledWind, ...shuffledDragon,
+        ...flowerTypes, ...seasonTypes
+      ];
+
+      // ペア単位(2枚)でシャッフル: combined を 2枚ずつのチャンクにしてチャンクをシャッフル
+      const chunks = [];
+      for (let i = 0; i < combined.length; i += 2) {
+        chunks.push([combined[i], combined[i + 1]]);
+      }
+      arrayShuffle(chunks);
+      return chunks.flat(); // 144
+    }
+
+    // ============================================================
+    // 新ゲーム
+    // ============================================================
+    function newGame() {
+      // クリア演出停止
+      if (confettiRafId) { cancelAnimationFrame(confettiRafId); confettiRafId = null; }
+      confettiParticles = [];
+
+      // ヒントタイマーリセット
+      if (hintTimer) { clearTimeout(hintTimer); hintTimer = null; }
+      hintTiles = [];
+
+      gameOver = false;
+      selected = null;
+      undoStack = [];
+      setMessage('');
+
+      const positions = buildLayout(); // 144個の {x,y,z}
+      const types = buildShuffledTypes(); // 144個の type 文字列
+
+      tiles = positions.map((pos, i) => {
+        const type = types[i];
+        const def = TYPE_MAP[type];
+        return {
+          id: i,
+          type: type,
+          group: def[1],
+          label: def[2],
+          labelColor: def[3],
+          x: pos.x,
+          y: pos.y,
+          z: pos.z,
+          removed: false,
+          selected: false
+        };
+      });
+
+      document.getElementById('remaining').textContent = tiles.length;
+      startTimer();
+      render();
+    }
+
+    // ============================================================
+    // 描画
+    // ============================================================
+    function render() {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+      // 背景: 深緑フェルト + 格子模様
+      ctx.fillStyle = '#1c3a1c';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      // 格子模様
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      ctx.lineWidth = 1;
+      const gridSize = 30;
+      for (let x = 0; x < CANVAS_W; x += gridSize) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+      }
+      for (let y = 0; y < CANVAS_H; y += gridSize) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
+      }
+
+      // タイルをz昇順で描画（奥から手前へ）
+      const sortedTiles = [...tiles].sort((a, b) => {
+        if (a.z !== b.z) return a.z - b.z;
+        // 同z: y大きい方を後ろ（先に描画）
+        if (a.y !== b.y) return a.y - b.y;
+        return a.x - b.x;
+      });
+
+      for (const tile of sortedTiles) {
+        if (tile.removed) continue;
+
+        let state;
+        if (tile === selected) {
+          state = 'selected';
+        } else if (hintTiles.includes(tile)) {
+          state = 'hint';
+        } else if (!isFree(tile)) {
+          state = 'blocked';
+        } else {
+          state = 'normal';
+        }
+        drawTile(ctx, tile, state);
+      }
+    }
+
+    // ============================================================
+    // クリック処理
+    // ============================================================
+    canvas.addEventListener('click', (e) => {
+      if (gameOver) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = CANVAS_W / rect.width;
+      const scaleY = CANVAS_H / rect.height;
+      const mx = (e.clientX - rect.left) * scaleX;
+      const my = (e.clientY - rect.top)  * scaleY;
+
+      // ヒット判定: z降順（前面優先）
+      const hitTile = hitTest(mx, my);
+      if (!hitTile) return;
+
+      handleClick(hitTile);
+    });
+
+    function hitTest(mx, my) {
+      // z降順, y降順でソートして前面から順に判定
+      const candidates = tiles
+        .filter(t => !t.removed)
+        .sort((a, b) => {
+          if (b.z !== a.z) return b.z - a.z;
+          return b.y - a.y;
+        });
+
+      for (const tile of candidates) {
+        const px = boardOffsetX + tile.x * (TW / 2) + tile.z * 3;
+        const py = boardOffsetY + tile.y * (TH / 2) + tile.z * (-4);
+        if (mx >= px && mx <= px + TW && my >= py && my <= py + TH) {
+          return tile;
+        }
+      }
+      return null;
+    }
+
+    function handleClick(tile) {
+      if (!isFree(tile)) return;
+
+      if (selected) {
+        if (selected === tile) {
+          // 選択解除
+          selected = null;
+          render();
+          return;
+        }
+        if (isMatch(selected, tile)) {
+          // マッチ成立: アンドゥスタックに積んで除去
+          undoStack.push([selected, tile]);
+          selected.removed = true;
+          tile.removed = true;
+          selected = null;
+          render();
+          checkGameState();
+        } else {
+          // 不一致: 選択を切り替え
+          selected = tile;
+          render();
+        }
+      } else {
+        selected = tile;
+        render();
+      }
+    }
+
+    // ============================================================
+    // ヒント
+    // ============================================================
+    function hint() {
+      if (gameOver) return;
+      if (hintTimer) { clearTimeout(hintTimer); hintTimer = null; }
+
+      const pairs = findFreePairs();
+      if (pairs.length === 0) {
+        setMessage('ヒントなし: 手詰まりです。/ No hints available.');
+        return;
+      }
+
+      hintTiles = pairs[0];
+      render();
+
+      hintTimer = setTimeout(() => {
+        hintTiles = [];
+        hintTimer = null;
+        render();
+      }, 2000);
+    }
+
+    // ============================================================
+    // アンドゥ
+    // ============================================================
+    function undo() {
+      if (gameOver) return;
+      if (undoStack.length === 0) {
+        setMessage('アンドゥ不可: 操作履歴がありません。/ Nothing to undo.');
+        return;
+      }
+
+      const [a, b] = undoStack.pop();
+      a.removed = false;
+      b.removed = false;
+      selected = null;
+
+      document.getElementById('remaining').textContent = countRemaining();
+      setMessage('');
+      render();
+    }
+
+    // ============================================================
+    // シャッフル（残り牌の type を再配置）
+    // ============================================================
+    function shuffle() {
+      if (gameOver) return;
+
+      const remaining = tiles.filter(t => !t.removed);
+      if (remaining.length === 0) return;
+
+      // ペアが必ず成立するようにグループ別にシャッフル
+      const flowerRemaining = remaining.filter(t => t.group === 'flower');
+      const seasonRemaining = remaining.filter(t => t.group === 'season');
+      // 通常牌 (man/pin/sou/wind/dragon): type を集計してペア単位でシャッフル
+      const normalRemaining = remaining.filter(t => t.group !== 'flower' && t.group !== 'season');
+
+      // 通常牌: 残りの type を集計 → 同 type を2枚ずつペアチャンクに → シャッフル
+      // typeCount を数えてペアを再構築する
+      const typeCount = {};
+      for (const tile of normalRemaining) {
+        typeCount[tile.type] = (typeCount[tile.type] || 0) + 1;
+      }
+      const pairChunks = [];
+      for (const [type, cnt] of Object.entries(typeCount)) {
+        const pairs = Math.floor(cnt / 2);
+        const singles = cnt % 2;
+        for (let i = 0; i < pairs; i++) pairChunks.push([type, type]);
+        if (singles > 0) pairChunks.push([type]);  // 奇数枚の余り（通常発生しない）
+      }
+      arrayShuffle(pairChunks);
+      const newNormalTypes = pairChunks.flat();
+
+      // 花・季節: グループ内でシャッフル（どれ同士でも一致するので順序のみ変える）
+      const flowerTypeList = flowerRemaining.map(t => t.type);
+      const seasonTypeList = seasonRemaining.map(t => t.type);
+      arrayShuffle(flowerTypeList);
+      arrayShuffle(seasonTypeList);
+
+      // 再割り当て
+      let ni = 0, fi = 0, si = 0;
+      for (const tile of remaining) {
+        let newType;
+        if (tile.group === 'flower') {
+          newType = flowerTypeList[fi++];
+        } else if (tile.group === 'season') {
+          newType = seasonTypeList[si++];
+        } else {
+          newType = newNormalTypes[ni++];
+        }
+        const def = TYPE_MAP[newType];
+        tile.type = newType;
+        tile.group = def[1];
+        tile.label = def[2];
+        tile.labelColor = def[3];
+      }
+
+      selected = null;
+      hintTiles = [];
+      setMessage('シャッフルしました。/ Shuffled!');
+      render();
+      checkGameState();
+    }
+
+    // ============================================================
+    // クリア演出（Confetti）
+    // ============================================================
+    function startConfetti() {
+      confettiParticles = [];
+      const colors = ['#d4a840', '#ff6688', '#66cc88', '#88aaff', '#ffdd44', '#ff88cc'];
+      for (let i = 0; i < 80; i++) {
+        confettiParticles.push({
+          x: Math.random() * CANVAS_W,
+          y: -10 - Math.random() * 40,
+          vx: (Math.random() - 0.5) * 3,
+          vy: 2 + Math.random() * 3,
+          size: 4 + Math.random() * 6,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          rot: Math.random() * Math.PI * 2,
+          rotV: (Math.random() - 0.5) * 0.2,
+          shape: Math.random() < 0.5 ? 'circle' : 'rect'
+        });
+      }
+      animateConfetti();
+    }
+
+    function animateConfetti() {
+      render(); // ゲームボードを再描画
+
+      // 半透明オーバーレイ
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      // クリアメッセージ
+      ctx.save();
+      ctx.fillStyle = '#d4a840';
+      ctx.font = 'bold 42px "游明朝", "YuMincho", serif';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = '#d4a840';
+      ctx.shadowBlur = 20;
+      ctx.fillText('クリア！', CANVAS_W / 2, CANVAS_H / 2 - 20);
+      ctx.font = '22px "Hiragino Kaku Gothic Pro", sans-serif';
+      ctx.fillStyle = '#f5f0e8';
+      ctx.shadowBlur = 0;
+      ctx.fillText('Congratulations! / おめでとうございます', CANVAS_W / 2, CANVAS_H / 2 + 20);
+      ctx.restore();
+
+      // コンフェッティ更新・描画
+      let alive = false;
+      for (const p of confettiParticles) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.05; // 重力
+        p.rot += p.rotV;
+        if (p.y < CANVAS_H + 20) alive = true;
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        if (p.shape === 'circle') {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+        }
+        ctx.restore();
+      }
+
+      if (alive) {
+        confettiRafId = requestAnimationFrame(animateConfetti);
+      } else {
+        confettiRafId = null;
+      }
+    }
+
+    // ============================================================
+    // 初期化
+    // ============================================================
+    newGame();
+  </script>
+</body>
+</html>
