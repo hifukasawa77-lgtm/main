@@ -2,6 +2,7 @@
 // Garmin Connect からヘルスデータを取得して garmin-data.json に書き出す
 // 使用ライブラリ: garmin-connect (非公式API)
 // 必要環境変数: GARMIN_EMAIL, GARMIN_PASSWORD
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const { GarminConnect } = require('garmin-connect');
 const fs = require('fs');
