@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://www.gstatic.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src https://fonts.gstatic.com https://unpkg.com; img-src 'self' data: https:; connect-src 'self' https:; frame-src https://accounts.google.com https://www.gstatic.com;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https:; frame-src https://accounts.google.com https://www.gstatic.com;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="三郷市在住のhide。ゲーム・ツール開発、趣味、ペット、地域情報をのんびり発信しています。">
   <title>hide の部屋 | 三郷市から発信するゆるい個人サイト</title>
@@ -829,11 +829,11 @@
     .dashboard-card:hover { border-color: var(--blue); }
     .traffic-map-wrap {
       border-radius: 8px;
-      overflow: hidden;
       border: 1px solid rgba(0,200,255,0.13);
       background: rgba(0,200,255,0.04);
       margin-bottom: 4px;
       min-height: 60px;
+      position: relative;
     }
     .dashboard-card h3 {
       font-size: 1.02rem;
@@ -2303,7 +2303,16 @@
             <h3 id="home-traffic-title">🚦 交通情報（現在地周辺）</h3>
             <div id="home-traffic-congestion" style="display:none;margin-bottom:6px;font-size:0.78rem;font-weight:600;padding:4px 8px;border-radius:6px;text-align:center"></div>
             <div class="traffic-map-wrap" id="traffic-map-wrap">
-              <div id="jartic-leaflet-map" style="height:240px;width:100%;border-radius:8px;display:none;position:relative;z-index:0"></div>
+              <div style="position:relative">
+                <canvas id="jartic-traffic-canvas" height="240"
+                  style="width:100%;height:240px;border-radius:8px;display:none;cursor:grab;touch-action:none;user-select:none"></canvas>
+                <div id="jartic-zoom-ctrl" style="position:absolute;top:8px;right:8px;display:none;flex-direction:column;gap:3px;z-index:10">
+                  <button onclick="zoomJarticMap(1)"
+                    style="width:28px;height:28px;background:rgba(255,255,255,0.88);border:none;border-radius:4px;cursor:pointer;font-size:1.1rem;font-weight:700;color:#333;line-height:1">+</button>
+                  <button onclick="zoomJarticMap(-1)"
+                    style="width:28px;height:28px;background:rgba(255,255,255,0.88);border:none;border-radius:4px;cursor:pointer;font-size:1.1rem;font-weight:700;color:#333;line-height:1">−</button>
+                </div>
+              </div>
               <div id="traffic-map-fallback" style="display:none;padding:16px 12px;text-align:center">
                 <p style="font-size:0.78rem;color:var(--muted);margin-bottom:8px">
                   📍 現在地周辺の渋滞情報をJARTICで確認できます
@@ -5526,78 +5535,153 @@
       }
       setInterval(initQuakeCard, 10 * 60 * 1000);
 
-      // ─── 交通情報（JARTIC Leafletマップ）──────────────────────
-      let _jarticMap = null;
+      // ─── 交通情報（Canvas タイルマップ / JARTIC）────────────────
+      (function () {
+        const TILE = 256;
+        let zoom = 13, center = null, cv = null, ctx = null;
+        let osmCache = {}, jrCache = {};
+        let homeLat = 35.9185, homeLon = 139.7775;
 
-      function loadLeaflet(callback) {
-        if (window.L) { callback(); return; }
-        const link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        link.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=';
-        link.crossOrigin = '';
-        document.head.appendChild(link);
-        const script = document.createElement('script');
-        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-        script.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV/XN/WLcE=';
-        script.crossOrigin = '';
-        script.onload = callback;
-        script.onerror = () => showJarticFallback();
-        document.head.appendChild(script);
-      }
+        function ll2tile(lat, lon, z) {
+          const n = 1 << z;
+          const x = (lon + 180) / 360 * n;
+          const sinLat = Math.sin(lat * Math.PI / 180);
+          const y = (1 - Math.log((sinLat + 1) / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * n;
+          return { x, y };
+        }
 
-      function initJarticLeafletMap(lat, lon) {
-        const mapDiv = document.getElementById('jartic-leaflet-map');
-        const loading = document.getElementById('traffic-map-loading');
-        if (!mapDiv) return;
-        if (loading) loading.style.display = 'none';
-        mapDiv.style.display = 'block';
+        function clamp(t, z) { const n = 1 << z; return ((t % n) + n) % n; }
 
-        if (_jarticMap) { _jarticMap.remove(); _jarticMap = null; }
+        function loadImg(src, cache, key, redraw) {
+          if (cache[key]) return cache[key];
+          cache[key] = 'pending';
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => { cache[key] = img; redraw(); };
+          img.onerror = () => { cache[key] = 'error'; };
+          img.src = src;
+          return null;
+        }
 
-        _jarticMap = L.map('jartic-leaflet-map', { scrollWheelZoom: false, zoomControl: true });
-        _jarticMap.setView([lat, lon], 13);
+        function draw() {
+          if (!cv || !ctx || !center) return;
+          const W = cv.width, H = cv.height;
+          ctx.clearRect(0, 0, W, H);
+          ctx.fillStyle = '#f2efe9';
+          ctx.fillRect(0, 0, W, H);
 
-        // OpenStreetMap ベースタイル
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
-          maxZoom: 18
-        }).addTo(_jarticMap);
+          const cx = center.x * TILE, cy = center.y * TILE;
+          const x0 = Math.floor((cx - W / 2) / TILE);
+          const y0 = Math.floor((cy - H / 2) / TILE);
+          const x1 = Math.ceil((cx + W / 2) / TILE);
+          const y1 = Math.ceil((cy + H / 2) / TILE);
 
-        // JARTIC 渋滞情報 WMS オーバーレイ
-        L.tileLayer.wms('https://api.jartic-open-traffic.org/geoserver/ows', {
-          layers: 't_travospublic_measure_5m',
-          styles: '',
-          format: 'image/png',
-          transparent: true,
-          version: '1.1.1',
-          attribution: '&copy; <a href="https://www.jartic.or.jp/" target="_blank" rel="noreferrer">JARTIC</a>',
-          opacity: 0.85
-        }).addTo(_jarticMap);
+          for (let tx = x0; tx <= x1; tx++) {
+            for (let ty = y0; ty <= y1; ty++) {
+              const px = Math.round(tx * TILE - cx + W / 2);
+              const py = Math.round(ty * TILE - cy + H / 2);
+              const tx2 = clamp(tx, zoom), ty2 = clamp(ty, zoom);
+              const key = `${zoom}/${tx2}/${ty2}`;
 
-        // 現在地マーカー
-        L.circleMarker([lat, lon], {
-          radius: 7, color: '#00e5ff', fillColor: '#00e5ff',
-          fillOpacity: 0.85, weight: 2
-        }).addTo(_jarticMap).bindTooltip('現在地', { direction: 'top', permanent: false });
-      }
+              // OSM ベース
+              const osmImg = loadImg(
+                `https://tile.openstreetmap.org/${zoom}/${tx2}/${ty2}.png`,
+                osmCache, key, draw
+              );
+              if (osmImg instanceof HTMLImageElement) ctx.drawImage(osmImg, px, py, TILE, TILE);
 
-      function showJarticFallback() {
-        const loading = document.getElementById('traffic-map-loading');
-        const fallback = document.getElementById('traffic-map-fallback');
-        const mapDiv = document.getElementById('jartic-leaflet-map');
-        if (loading) loading.style.display = 'none';
-        if (mapDiv) mapDiv.style.display = 'none';
-        if (fallback) fallback.style.display = 'block';
-      }
+              // JARTIC 渋滞オーバーレイ
+              const jrImg = loadImg(
+                `https://www.jartic.or.jp/d/roadtraffic/${zoom}/${tx2}/${ty2}.png`,
+                jrCache, 'j' + key, draw
+              );
+              if (jrImg instanceof HTMLImageElement) {
+                ctx.save(); ctx.globalAlpha = 0.85;
+                ctx.drawImage(jrImg, px, py, TILE, TILE);
+                ctx.restore();
+              }
+            }
+          }
 
-      // ─── 交通情報────────────────────────────────────────────
+          // 現在地マーカー
+          const mx = Math.round(W / 2), my = Math.round(H / 2);
+          ctx.beginPath(); ctx.arc(mx, my, 10, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(0,229,255,0.22)'; ctx.fill();
+          ctx.beginPath(); ctx.arc(mx, my, 6, 0, Math.PI * 2);
+          ctx.fillStyle = '#00e5ff'; ctx.fill();
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+
+          // © 表示
+          ctx.fillStyle = 'rgba(0,0,0,0.45)';
+          ctx.font = '10px sans-serif';
+          ctx.fillText('© OpenStreetMap contributors  © JARTIC', 4, H - 4);
+        }
+
+        function resizeDraw() {
+          if (!cv) return;
+          const w = cv.parentElement ? cv.parentElement.clientWidth : 400;
+          if (w > 0) cv.width = w;
+          draw();
+        }
+
+        window.initJarticCanvasMap = function (lat, lon) {
+          homeLat = lat; homeLon = lon;
+          cv = document.getElementById('jartic-traffic-canvas');
+          const loading = document.getElementById('traffic-map-loading');
+          const zctrl = document.getElementById('jartic-zoom-ctrl');
+          if (!cv) return;
+          ctx = cv.getContext('2d');
+          center = ll2tile(lat, lon, zoom);
+
+          if (loading) loading.style.display = 'none';
+          cv.style.display = 'block';
+          if (zctrl) zctrl.style.display = 'flex';
+
+          resizeDraw();
+
+          // ドラッグ（マウス）
+          let dragging = false, lx, ly;
+          cv.addEventListener('mousedown', e => { dragging = true; lx = e.clientX; ly = e.clientY; cv.style.cursor = 'grabbing'; });
+          cv.addEventListener('mousemove', e => {
+            if (!dragging) return;
+            center.x -= (e.clientX - lx) / TILE; center.y -= (e.clientY - ly) / TILE;
+            lx = e.clientX; ly = e.clientY; draw();
+          });
+          cv.addEventListener('mouseup', () => { dragging = false; cv.style.cursor = 'grab'; });
+          cv.addEventListener('mouseleave', () => { dragging = false; cv.style.cursor = 'grab'; });
+
+          // ドラッグ（タッチ）
+          let lt = null;
+          cv.addEventListener('touchstart', e => { lt = e.touches[0]; e.preventDefault(); }, { passive: false });
+          cv.addEventListener('touchmove', e => {
+            if (!lt) return;
+            center.x -= (e.touches[0].clientX - lt.clientX) / TILE;
+            center.y -= (e.touches[0].clientY - lt.clientY) / TILE;
+            lt = e.touches[0]; draw(); e.preventDefault();
+          }, { passive: false });
+          cv.addEventListener('touchend', () => { lt = null; });
+
+          window.addEventListener('resize', resizeDraw);
+        };
+
+        window.zoomJarticMap = function (delta) {
+          if (!center) return;
+          const nz = Math.max(9, Math.min(16, zoom + delta));
+          if (nz === zoom) return;
+          const scale = Math.pow(2, nz - zoom);
+          center.x *= scale; center.y *= scale;
+          zoom = nz; osmCache = {}; jrCache = {};
+          draw();
+        };
+      })();
+
+      // ─── 交通情報 ─────────────────────────────────────────────
       function initTrafficCard() {
         const timeEl = document.getElementById('home-traffic-time');
         const congEl = document.getElementById('home-traffic-congestion');
         const titleEl = document.getElementById('home-traffic-title');
 
-        // 時間帯ヒューリスティックで混雑度を推定
+        // 時間帯ヒューリスティック
         const h = parseInt(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo', hour: 'numeric', hour12: false }), 10);
         let label, bg, col;
         if ((h >= 7 && h <= 9) || (h >= 17 && h <= 20)) {
@@ -5614,7 +5698,7 @@
           congEl.textContent = label;
           Object.assign(congEl.style, { background: bg, color: col, display: 'block' });
         }
-        if (timeEl) timeEl.textContent = '地図読み込み中…';
+        if (timeEl) timeEl.textContent = '地図を読み込み中…';
 
         (async () => {
           let lat = 35.9185, lon = 139.7775, city = '三郷市';
@@ -5623,8 +5707,8 @@
             lat = loc.lat; lon = loc.lon; city = loc.city;
           } catch {}
           if (titleEl) titleEl.textContent = `🚦 交通情報（${city}周辺）`;
-          if (timeEl) timeEl.textContent = 'JARTIC — ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 現在';
-          loadLeaflet(() => initJarticLeafletMap(lat, lon));
+          if (timeEl) timeEl.textContent = '© JARTIC — ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 現在';
+          window.initJarticCanvasMap(lat, lon);
         })();
       }
 
