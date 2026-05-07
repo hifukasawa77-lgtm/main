@@ -64,7 +64,7 @@
     </div>
     <canvas id="c" width="480" height="640"></canvas>
   </div>
-  <div id="hint">クリック/タップ: 泡を割る | 小人をドラッグ: 経路を引く | カラスに注意 | ⚡雷は即死</div>
+  <div id="hint">クリック/タップ: 玉を投げる 🔮×10 | 泡を割ると玉が3個出現 | 小人をドラッグ: 経路を引く | カラスに注意</div>
   <script>
 'use strict';
 // === 定数 ===
@@ -108,7 +108,7 @@ const STAGE_CFG = [
     bgColor:['#1e0010','#2a0010'],
     contents:['coin','bomb','hammer','coin','bomb','ladder','hammer','bomb','coin','chest'] },
 ];
-const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20, bomb:0, hammer:0 };
+const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20, bomb:0, hammer:0, ball:0 };
 // Phase 8-1: 危険アイテム種別
 const HAZARD_TYPES = new Set(['bomb', 'hammer']);
 const MAX_LIVES = 3;
@@ -301,6 +301,16 @@ const AudioSystem = {
         src.start(now);
         break;
       }
+      case 'throw': {
+        const osc = ac.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1200, now);
+        osc.frequency.exponentialRampToValueAtTime(600, now + 0.08);
+        g.gain.setValueAtTime(0.18, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+        osc.connect(g); osc.start(now); osc.stop(now + 0.08);
+        break;
+      }
     }
   }
 };
@@ -347,6 +357,8 @@ const _pPool = Array.from({ length: POOL_SIZE }, () =>
   ({ x:0, y:0, vx:0, vy:0, life:0, maxLife:45, color:'#fff', r:2, active:false })
 );
 let bubbleTimer = 0;
+let ballCount = 10;  // 残り弾数
+let balls = [];      // 飛翔中の投射物
 let isDrawing = false;
 let drawnPath = [];
 let activeGnomeIdx = -1;
@@ -461,6 +473,20 @@ function makeRing(x, y, maxR, color) {
   return { x, y, r: maxR * 0.15, maxR, color, life: 20, maxLife: 20 };
 }
 
+function makeProjectile(gnome, tx, ty) {
+  const sx = gnome.x, sy = gnome.y - 22;
+  const dx = tx - sx, dy = ty - sy;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+  const speed = 10;
+  return {
+    x: sx, y: sy,
+    vx: (dx / dist) * speed,
+    vy: (dy / dist) * speed,
+    life: 90,
+    trail: [],
+  };
+}
+
 function makeBlock(x, y, w) {
   return { x, y, w: w || 48, h: 18 };
 }
@@ -522,7 +548,16 @@ function popBubble(b) {
   if (b.popped) return;
   b.popped = true;
   items.push(makeItem(b.x, b.y, b.contents));
-  const pColors = { coin:'#ffd700', chest:'#c8843a', tool:'#aaaacc', ladder:'#c8a06a', bomb:'#ff4400', hammer:'#888888' };
+  // 玉アイテムを3個スポーン
+  for (let i = 0; i < 3; i++) {
+    const bx = b.x + (Math.random() - 0.5) * b.radius;
+    const by = b.y + (Math.random() - 0.5) * b.radius * 0.4;
+    const ballItem = makeItem(bx, by, 'ball');
+    ballItem.vx = (Math.random() - 0.5) * 2.5;
+    ballItem.vy = -1 - Math.random() * 1.5;
+    items.push(ballItem);
+  }
+  const pColors = { coin:'#ffd700', chest:'#c8843a', tool:'#aaaacc', ladder:'#c8a06a', bomb:'#ff4400', hammer:'#888888', ball:'#88ddff' };
   for (let i = 0; i < 20; i++) spawnParticle(b.x, b.y, pColors[b.contents] || '#fff');
   rings.push(makeRing(b.x, b.y, b.radius * 2.0, pColors[b.contents] || '#aadeee'));
   playSE('pop');
@@ -917,7 +952,12 @@ function updateGnomePhysics(g) {
         return; // この小人のループを抜ける
       }
     } else if (dist2(g.x, g.y, it.x, it.y) < COLLECT_R2) {
-      if (it.type === 'ladder') {
+      if (it.type === 'ball') {
+        it.collected = true;
+        ballCount++;
+        updateHUD();
+        bonusPopups.push({ x: it.x, y: it.y - 20, text: '🔮+1', life: 40, maxLife: 40, color: '#88ddff', large: false });
+      } else if (it.type === 'ladder') {
         it.collected = true;
         const bestLad = getBestLadder();
         if (bestLad) {
@@ -1203,6 +1243,23 @@ function drawItemIcon(x, y, type, size) {
     ctx.fillRect(x - size * 0.9, y - size * 0.9, size * 1.8, size * 0.7); // ヘッド
     ctx.fillStyle = '#8B4513';
     ctx.fillRect(x - size * 0.15, y - size * 0.2, size * 0.3, size * 1.2); // 柄
+  } else if (type === 'ball') {
+    // 玉アイテム — シアン発光オーブ
+    const pulse = 0.85 + 0.15 * Math.sin(frameCount * 0.18);
+    const grad = ctx.createRadialGradient(x - size * 0.25, y - size * 0.25, 0, x, y, size * 0.7 * pulse);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.35, '#aaeeff');
+    grad.addColorStop(0.7, '#44aaff');
+    grad.addColorStop(1, 'rgba(0,100,255,0)');
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.7 * pulse, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.7 * pulse, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(136,221,255,0.6)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -1280,6 +1337,29 @@ function drawGnome(g) {
   ctx.fillStyle = '#3a2008';
   ctx.fillRect(x - 5, ay - GNOME_H + 26 + legSwing, 5, 7);
   ctx.fillRect(x,     ay - GNOME_H + 26 - legSwing, 5, 7);
+}
+
+function drawBall(ball) {
+  ctx.save();
+  // トレイル
+  for (let i = 0; i < ball.trail.length; i++) {
+    const t = ball.trail[i];
+    const a = (i / ball.trail.length) * 0.35;
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(136,221,255,${a})`;
+    ctx.fill();
+  }
+  // 玉本体（グロー）
+  const grd = ctx.createRadialGradient(ball.x - 2, ball.y - 2, 0, ball.x, ball.y, 8);
+  grd.addColorStop(0, '#ffffff');
+  grd.addColorStop(0.3, '#88eeff');
+  grd.addColorStop(1, 'rgba(0,180,255,0)');
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, 8, 0, Math.PI * 2);
+  ctx.fillStyle = grd;
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawItem(it) {
@@ -1563,6 +1643,13 @@ function drawHUDBar() {
   // B1: ポーズボタン
   ctx.fillText('⏸', getPauseButtonX(), 18);
 
+  // 玉残数
+  ctx.textAlign = 'left';
+  ctx.font = '12px monospace';
+  const ballFlash = ballCount <= 3 && Math.floor(frameCount / 10) % 2 === 0;
+  ctx.fillStyle = ballFlash ? '#ff4444' : '#88ddff';
+  ctx.fillText('🔮 ' + ballCount, 56, 27);
+
   // プログレスバー（アイテム収集）
   ctx.textAlign = 'right';
   ctx.fillStyle = '#88ffaa';
@@ -1809,10 +1896,22 @@ function handlePlayClick(pos) {
     AudioSystem.toggleMute();
     return;
   }
-  // 泡をPOP
-  for (const b of bubbles) {
-    if (b.popped) continue;
-    if (dist2(b.x, b.y, pos.x, pos.y) < (b.radius + 8) ** 2) { popBubble(b); return; }
+  // 最近傍の小人から玉を発射
+  if (gnomes.length > 0) {
+    if (ballCount <= 0) {
+      bonusPopups.push({ x: pos.x, y: pos.y - 20, text: '弾切れ!', life: 50, maxLife: 50, color: '#ff4444', large: false });
+      return;
+    }
+    let nearestG = gnomes[0], nearestD = dist2(gnomes[0].x, gnomes[0].y, pos.x, pos.y);
+    for (let i = 1; i < gnomes.length; i++) {
+      const d = dist2(gnomes[i].x, gnomes[i].y, pos.x, pos.y);
+      if (d < nearestD) { nearestD = d; nearestG = gnomes[i]; }
+    }
+    balls.push(makeProjectile(nearestG, pos.x, pos.y));
+    ballCount--;
+    playSE('throw');
+    updateHUD();
+    return;
   }
   // 梯子アイテムを設置（地面付近でクリック）
   for (const it of items) {
@@ -1925,6 +2024,7 @@ function initStage() {
   bubbles = []; items = []; ladders = [];
   _pPool.forEach(p => p.active = false); particles = []; rings = []; drawnPath = [];
   bubbleTimer = 0;
+  balls = []; ballCount = 10;
   gnomes = [];
   floatingBlocks = []; crows = []; lightnings = []; lightningTimer = 0;
   // Phase 2: ステージ開始時にlivesをリセット（Stage 8〜10はlives:2）
@@ -2011,6 +2111,28 @@ function update() {
   // アイテム更新
   for (const it of items) updateItem(it);
 
+  // 投射物（玉）更新
+  for (let i = balls.length - 1; i >= 0; i--) {
+    const ball = balls[i];
+    ball.trail.push({ x: ball.x, y: ball.y });
+    if (ball.trail.length > 5) ball.trail.shift();
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+    ball.life--;
+    let hit = false;
+    if (ball.x < 0 || ball.x > W || ball.y > GROUND_Y || ball.y < 0) {
+      hit = true;
+    } else {
+      for (const b of bubbles) {
+        if (b.popped) continue;
+        if (dist2(ball.x, ball.y, b.x, b.y) < (b.radius + 6) ** 2) {
+          popBubble(b); hit = true; break;
+        }
+      }
+    }
+    if (hit || ball.life <= 0) balls.splice(i, 1);
+  }
+
   // Phase 6: コンボタイマー更新
   if (comboTimer > 0) {
     comboTimer--;
@@ -2063,6 +2185,7 @@ function render() {
   bubbles.forEach(drawBubble);
   items.forEach(drawItem);
   gnomes.forEach(drawGnome);
+  balls.forEach(drawBall);
   crows.forEach(drawCrow);
   drawLightnings();
   drawParticles();
