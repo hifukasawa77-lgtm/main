@@ -1284,14 +1284,238 @@
     return true;
   }
 
-  function detectYaku(tiles, pid) {
-    if (isKokushiWin(tiles)) return "国士無双";
-    if (isDaisangenWin(tiles, G.melds[pid] || [])) return "大三元";
-    return null;
+  function isChiitoitsuWin(tiles) {
+    if (tiles.length !== 14) return false;
+    const c = toCounts(tiles);
+    let pairs = 0;
+    for (let t = 0; t < 34; t++) {
+      if (c[t] === 0) continue;
+      if (c[t] !== 2) return false;
+      pairs++;
+    }
+    return pairs === 7;
+  }
+
+  function shantenChiitoitsu(tiles) {
+    const c = toCounts(tiles);
+    let pairs = 0;
+    for (let t = 0; t < 34; t++) if (c[t] >= 2) pairs++;
+    return 6 - pairs;
+  }
+
+  function findHandDecompositions(tiles) {
+    const c = toCounts(tiles);
+    const results = [];
+    for (let head = 0; head < 34; head++) {
+      if (c[head] < 2) continue;
+      c[head] -= 2;
+      gatherMelds(c, 0, [], results, head);
+      c[head] += 2;
+    }
+    return results;
+  }
+
+  function gatherMelds(c, pos, current, results, head) {
+    while (pos < 34 && c[pos] === 0) pos++;
+    if (pos >= 34) { results.push({head, melds: current.map(m => m.slice())}); return; }
+    if (c[pos] >= 3) {
+      c[pos] -= 3; current.push([pos, pos, pos]);
+      gatherMelds(c, pos, current, results, head);
+      current.pop(); c[pos] += 3;
+    }
+    if (pos < 27) {
+      const {s, v} = TILE.type(pos);
+      if (s !== "z" && v <= 7 && c[pos] > 0 && c[pos+1] > 0 && c[pos+2] > 0) {
+        c[pos]--; c[pos+1]--; c[pos+2]--;
+        current.push([pos, pos+1, pos+2]);
+        gatherMelds(c, pos, current, results, head);
+        current.pop(); c[pos]++; c[pos+1]++; c[pos+2]++;
+      }
+    }
+  }
+
+  function detectYaku(tiles, pid, ctx) {
+    ctx = ctx || {};
+    const {isTsumo = false, winTile = null, isRinshan = false} = ctx;
+    const melds = G.melds[pid] || [];
+    const isClosed = melds.length === 0;
+    const yaku = [];
+    const isTerminal = t => t===0||t===8||t===9||t===17||t===18||t===26;
+    const isHonorTile = t => t >= 27;
+    const isYaochuTile = t => isTerminal(t) || isHonorTile(t);
+
+    if (isKokushiWin(tiles)) {
+      if (G.riichi[pid]) yaku.push("立直");
+      yaku.push("国士無双");
+      return yaku;
+    }
+    if (isChiitoitsuWin(tiles)) {
+      if (G.riichi[pid]) yaku.push("立直");
+      yaku.push("七対子");
+      return yaku;
+    }
+
+    // All tiles including open melds
+    const allTiles = tiles.slice();
+    for (const m of melds) {
+      const mt = (m.type==="kan"||m.type==="ankan") ? m.tiles.slice(0,3) : m.tiles;
+      allTiles.push(...mt);
+    }
+
+    // Suit / composition analysis
+    let hasHonor = false;
+    const suits = new Set();
+    for (const t of allTiles) {
+      if (isHonorTile(t)) hasHonor = true;
+      else suits.add(TILE.type(t).s);
+    }
+    const isChinitsu = suits.size===1 && !hasHonor;
+    const isHonitsu  = suits.size===1 && hasHonor;
+    const allYaochu   = allTiles.every(t => isYaochuTile(t));
+    const allHonors   = allTiles.every(t => isHonorTile(t));
+    const allTerminals= allTiles.every(t => isTerminal(t));
+
+    const openGroups = melds.map(m => ({
+      tiles: (m.type==="kan"||m.type==="ankan") ? m.tiles.slice(0,3) : m.tiles,
+      isKoutsu: m.type !== "chi"
+    }));
+
+    // --- Checks that don't require decomposition ---
+    if (G.riichi[pid]) yaku.push("立直");
+    if (isTsumo && isClosed && !isRinshan) yaku.push("門前清自摸和");
+    if (isRinshan) yaku.push("嶺上開花");
+    if (isTsumo && !isRinshan && G.pos >= G.wall.length) yaku.push("海底摸月");
+    if (!isTsumo && G.pos >= G.wall.length) yaku.push("河底撈魚");
+    if (allTiles.every(t => !isYaochuTile(t))) yaku.push("断么九");
+    const numKan = melds.filter(m => m.type==="kan"||m.type==="ankan").length;
+    if (numKan >= 4) yaku.push("四槓子");
+    else if (numKan >= 3) yaku.push("三槓子");
+
+    // --- Decomposition-based checks ---
+    const decomps = findHandDecompositions(tiles);
+    let hasPinfu=false, hasIipeiko=false, hasRyanpeikou=false;
+    let hasToitoi=false, hasChanta=false, hasJunchan=false;
+    let hasSanankou=false, hasSuuankou=false;
+    let hasIttsuu=false, hasSanshokuDoujun=false, hasSanshokuDoukou=false;
+
+    for (const {head, melds: handMelds} of decomps) {
+      const handGroups = handMelds.map(m => ({tiles: m, isKoutsu: m[0]===m[1]}));
+      const allGroups = [...openGroups, ...handGroups];
+
+      if (allGroups.every(g => g.isKoutsu)) hasToitoi = true;
+
+      // Pinfu: closed, all sequences, non-honor head, ryanmen wait
+      if (isClosed && winTile !== null && !allGroups.some(g => g.isKoutsu) && !isHonorTile(head)) {
+        for (const g of handGroups) {
+          const [a,,c_] = g.tiles;
+          if (winTile===a && TILE.type(a).v>1) { hasPinfu=true; break; }
+          if (winTile===c_ && TILE.type(c_).v<9) { hasPinfu=true; break; }
+        }
+      }
+
+      // Iipeiko / Ryanpeikou (closed)
+      if (isClosed) {
+        const seqCount = {};
+        for (const g of allGroups) if (!g.isKoutsu) seqCount[g.tiles[0]]=(seqCount[g.tiles[0]]||0)+1;
+        const pairs = Object.values(seqCount).filter(v => v>=2).length;
+        if (pairs >= 2) hasRyanpeikou = true;
+        else if (pairs >= 1) hasIipeiko = true;
+      }
+
+      // Chanta / Junchan
+      if (isYaochuTile(head) && allGroups.every(g => g.tiles.some(t => isYaochuTile(t)))) hasChanta = true;
+      if (isTerminal(head)   && allGroups.every(g => g.tiles.some(t => isTerminal(t))))   hasJunchan = true;
+
+      // Sanankou / Suuankou
+      let concealedK = melds.filter(m => m.type==="ankan").length;
+      for (const g of handGroups) {
+        if (!g.isKoutsu) continue;
+        if (!isTsumo && winTile === g.tiles[0]) continue; // ron-completed triplet is open
+        concealedK++;
+      }
+      if (concealedK >= 4) hasSuuankou = true;
+      else if (concealedK >= 3) hasSanankou = true;
+
+      // Ittsu
+      for (const suit of ["m","p","s"]) {
+        const starts = new Set(
+          allGroups.filter(g => !g.isKoutsu && TILE.type(g.tiles[0]).s===suit)
+                   .map(g => TILE.type(g.tiles[0]).v)
+        );
+        if (starts.has(1) && starts.has(4) && starts.has(7)) hasIttsuu = true;
+      }
+
+      // Sanshoku Doujun
+      const seqByVal = {};
+      for (const g of allGroups) {
+        if (g.isKoutsu) continue;
+        const {s,v} = TILE.type(g.tiles[0]);
+        if (s==="z") continue;
+        if (!seqByVal[v]) seqByVal[v] = new Set();
+        seqByVal[v].add(s);
+      }
+      for (const sv of Object.values(seqByVal)) if (sv.size>=3) hasSanshokuDoujun = true;
+
+      // Sanshoku Doukou
+      const kByVal = {};
+      for (const g of allGroups) {
+        if (!g.isKoutsu) continue;
+        const {s,v} = TILE.type(g.tiles[0]);
+        if (s==="z") continue;
+        if (!kByVal[v]) kByVal[v] = new Set();
+        kByVal[v].add(s);
+      }
+      for (const sv of Object.values(kByVal)) if (sv.size>=3) hasSanshokuDoukou = true;
+    }
+
+    // --- Dragon yaku ---
+    const handCounts = toCounts(tiles);
+    let dragonTriplets = 0, dragonPairTile = -1;
+    for (const d of [31,32,33]) {
+      const inMeld = melds.some(m => m.type!=="chi" && m.tiles[0]===d);
+      if (inMeld || handCounts[d]>=3) dragonTriplets++;
+      if (handCounts[d]===2 && !melds.some(m => m.tiles[0]===d)) dragonPairTile = d;
+    }
+    if (dragonTriplets===3) {
+      yaku.push("大三元");
+    } else if (dragonTriplets===2 && dragonPairTile>=0) {
+      yaku.push("小三元");
+      for (const d of [31,32,33]) {
+        const inMeld = melds.some(m => m.type!=="chi" && m.tiles[0]===d);
+        if (inMeld || handCounts[d]>=3) yaku.push(["役牌・白","役牌・発","役牌・中"][d-31]);
+      }
+    } else {
+      for (const d of [31,32,33]) {
+        const inMeld = melds.some(m => m.type!=="chi" && m.tiles[0]===d);
+        if (inMeld || handCounts[d]>=3) yaku.push(["役牌・白","役牌・発","役牌・中"][d-31]);
+      }
+    }
+
+    // --- Tile composition yaku ---
+    if (allTerminals) yaku.push("清老頭");
+    else if (allHonors) yaku.push("字一色");
+    else if (allYaochu) yaku.push("混老頭");
+    if (isChinitsu) yaku.push("清一色");
+    else if (isHonitsu) yaku.push("混一色");
+
+    // --- Decomposition results ---
+    if (hasSuuankou) yaku.push("四暗刻");
+    else if (hasSanankou) yaku.push("三暗刻");
+    if (hasToitoi && !hasSuuankou) yaku.push("対々和");
+    if (hasJunchan && !allTerminals) yaku.push("純全帯么九");
+    else if (hasChanta && !hasJunchan && !allYaochu) yaku.push("混全帯么九");
+    if (hasRyanpeikou) yaku.push("二盃口");
+    else if (hasIipeiko) yaku.push("一盃口");
+    if (hasPinfu) yaku.push("平和");
+    if (hasIttsuu) yaku.push("一気通貫");
+    if (hasSanshokuDoujun) yaku.push("三色同順");
+    if (hasSanshokuDoukou) yaku.push("三色同刻");
+
+    return yaku.length > 0 ? yaku : null;
   }
 
   function isWinningHand(tiles) {
-    return isStandardWin(tiles) || isKokushiWin(tiles);
+    return isStandardWin(tiles) || isKokushiWin(tiles) || isChiitoitsuWin(tiles);
   }
 
   // --- 鳴きユーティリティ ---
@@ -1418,8 +1642,8 @@
     G.lastDraw = {who:pid, tile:rinshan};
     pushLog(`${seatName(pid)} 嶺上: ${TILE.name(rinshan)}`);
     if (isWinningHand(G.hands[pid])){
-      const yaku = detectYaku(G.hands[pid], pid) || "役無し";
-      endGame("嶺上ツモ",`${seatName(pid)}の勝ち【${yaku}】`);
+      const yk = detectYaku(G.hands[pid], pid, {isTsumo:true, winTile:rinshan, isRinshan:true});
+      endGame("嶺上ツモ",`${seatName(pid)}の勝ち【${yk ? yk.join("・") : "役無し"}】`);
       return;
     }
     if (pid==="p"){
@@ -1614,7 +1838,7 @@
     let best = 8;
     for (let i=0;i<hand14.length;i++){
       const h = hand14.slice(); h.splice(i,1);
-      const s = noMelds ? Math.min(shantenNormal(h), shantenKokushi(h)) : shantenNormal(h);
+      const s = noMelds ? Math.min(shantenNormal(h), shantenKokushi(h), shantenChiitoitsu(h)) : shantenNormal(h);
       if (s < best) best = s;
     }
     return best;
@@ -1765,8 +1989,8 @@
 
     // win by tsumo
     if (isWinningHand(G.hands[who])){
-      const yaku = detectYaku(G.hands[who], who) || "役無し";
-      endGame("ツモ", `${seatName(who)}の勝ち【${yaku}】`);
+      const yk = detectYaku(G.hands[who], who, {isTsumo:true, winTile:tile});
+      endGame("ツモ", `${seatName(who)}の勝ち【${yk ? yk.join("・") : "役無し"}】`);
       return;
     }
 
@@ -1838,8 +2062,8 @@
     for (const pid of inOrderFrom(who)){
       const test = [...G.hands[pid], tile];
       if (isWinningHand(test)){
-        const yaku = detectYaku(test, pid) || "役無し";
-        endGame("ロン", `${seatName(pid)}の勝ち【${yaku}】`);
+        const yk = detectYaku(test, pid, {isTsumo:false, winTile:tile});
+        endGame("ロン", `${seatName(pid)}の勝ち【${yk ? yk.join("・") : "役無し"}】`);
         return;
       }
     }
