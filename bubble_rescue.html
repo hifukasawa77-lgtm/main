@@ -64,7 +64,7 @@
     </div>
     <canvas id="c" width="480" height="640"></canvas>
   </div>
-  <div id="hint">クリック/タップ: 玉を投げる 🔮×10 | 泡を割ると玉が3個出現 | 小人をドラッグ: 経路を引く | カラスに注意</div>
+  <div id="hint">クリック/タップ: 玉を投げる 🔮 | ←→↑↓キー: 小人操作 | 小人の近くをタップ: 方向操作 | 小人ドラッグ: 経路指示</div>
   <script>
 'use strict';
 // === 定数 ===
@@ -359,6 +359,10 @@ const _pPool = Array.from({ length: POOL_SIZE }, () =>
 let bubbleTimer = 0;
 let ballCount = 10;  // 残り弾数
 let balls = [];      // 飛翔中の投射物
+let playerControl = { left: false, right: false, up: false, down: false };
+let touchControlActive = false;
+let touchControlledGnomeIdx = -1;
+const PLAYER_SPEED = 2.5;
 let isDrawing = false;
 let drawnPath = [];
 let activeGnomeIdx = -1;
@@ -428,6 +432,7 @@ function makeGnome(x) {
     onLadder: false,
     onRope: false,
     climbing: false,
+    descending: false,
     state: 'idle',
     waypoints: [],
     rawPath: null,
@@ -705,6 +710,24 @@ function getPathYAtX(path, x) {
 
 // === 小人AI ===
 function updateGnomeAI(g, idx) {
+  // プレイヤー操作チェック
+  const isKbCtrl = idx === 0 && !touchControlActive &&
+    (playerControl.left || playerControl.right || playerControl.up || playerControl.down);
+  const isTouchCtrl = touchControlActive && idx === touchControlledGnomeIdx;
+  if (isKbCtrl || isTouchCtrl) {
+    g.climbing = false; g.descending = false;
+    if (playerControl.left)       { g.vx = -PLAYER_SPEED; g.state = 'walk'; }
+    else if (playerControl.right) { g.vx =  PLAYER_SPEED; g.state = 'walk'; }
+    else { g.vx = 0; g.state = 'idle'; }
+    if (g.onLadder) {
+      if (playerControl.up)   { g.climbing = true; }
+      if (playerControl.down) { g.descending = true; }
+    } else if (playerControl.up && g.onGround && g.jumpCooldown === 0) {
+      g.vy = -8 * g.jumpBoost; g.onGround = false; g.jumpCooldown = 40; g.state = 'jump';
+    }
+    g.waypoints = []; g.rawPath = null;
+    return;
+  }
   // 1. ウェイポイント追跡（線引き）
   if (g.waypoints.length > 0) {
     // 300フレーム到達できなければ経路リセット
@@ -924,6 +947,8 @@ function updateGnomePhysics(g) {
       g.x = lad.x;
       if (g.climbing) {
         g.vy = -CLIMB_SPEED;
+      } else if (g.descending) {
+        g.vy = CLIMB_SPEED;
       } else if (g.vy > 0) {
         g.vy = 0;
       }
@@ -1287,6 +1312,19 @@ function drawGnome(g) {
   const bob = g.state === 'walk' ? Math.sin(frameCount * 0.28) * 1.5 : 0;
   const ay = y + bob; // animation y offset applied to body
 
+  // プレイヤー操作中インジケータ
+  const gnomeIdx = gnomes.indexOf(g);
+  const isPlayerCtrl = (gnomeIdx === 0 && !touchControlActive &&
+    (playerControl.left || playerControl.right || playerControl.up || playerControl.down)) ||
+    (touchControlActive && gnomeIdx === touchControlledGnomeIdx);
+  if (isPlayerCtrl) {
+    ctx.save();
+    ctx.fillStyle = '#ffff44';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('▶◀', x, ay - GNOME_H - 13);
+    ctx.restore();
+  }
   // 帽子（三角）
   ctx.fillStyle = g.hatColor;
   ctx.beginPath();
@@ -1971,25 +2009,60 @@ canvas.addEventListener('mouseup', e => {
   mouseDownPos = null;
 });
 
-// タッチイベントをマウスイベントへ変換
+// タッチイベント — 方向操作 or マウスイベント変換
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
   const t = e.touches[0];
+  const pos = getCanvasPos({ clientX: t.clientX, clientY: t.clientY });
+  // 方向タッチ判定
+  if (state === 'play' && gnomes.length > 0) {
+    let nearestIdx = 0, nearestD = Infinity;
+    for (let i = 0; i < gnomes.length; i++) {
+      const g = gnomes[i];
+      const d = Math.sqrt((g.x - pos.x) ** 2 + (g.y - pos.y) ** 2);
+      if (d < nearestD) { nearestD = d; nearestIdx = i; }
+    }
+    if (nearestD > 18 && nearestD < 90) {
+      const g = gnomes[nearestIdx];
+      const dx = pos.x - g.x, dy = pos.y - g.y;
+      touchControlActive = true;
+      touchControlledGnomeIdx = nearestIdx;
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        if (dx < 0) playerControl.left = true; else playerControl.right = true;
+      } else {
+        if (dy < 0) playerControl.up = true; else playerControl.down = true;
+      }
+      return;
+    }
+  }
   canvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: t.clientX, clientY: t.clientY }));
 }, { passive: false });
 canvas.addEventListener('touchmove', e => {
   e.preventDefault();
+  if (touchControlActive) return;
   const t = e.touches[0];
   canvas.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: t.clientX, clientY: t.clientY }));
 }, { passive: false });
 canvas.addEventListener('touchend', e => {
   e.preventDefault();
+  if (touchControlActive) {
+    playerControl.left = playerControl.right = playerControl.up = playerControl.down = false;
+    touchControlActive = false;
+    touchControlledGnomeIdx = -1;
+    return;
+  }
   const t = e.changedTouches[0];
   canvas.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: t.clientX, clientY: t.clientY }));
 }, { passive: false });
 
 document.addEventListener('keydown', e => {
   keys[e.key] = true;
+  if (state === 'play') {
+    if (e.key === 'ArrowLeft')  { playerControl.left  = true; e.preventDefault(); }
+    if (e.key === 'ArrowRight') { playerControl.right = true; e.preventDefault(); }
+    if (e.key === 'ArrowUp')    { playerControl.up    = true; e.preventDefault(); }
+    if (e.key === 'ArrowDown')  { playerControl.down  = true; e.preventDefault(); }
+  }
   if (e.key === 'Enter') {
     if (state === 'title')    { initGame(); state = 'play'; }
     else if (state === 'gameover') { initGame(); state = 'play'; }
@@ -2001,7 +2074,13 @@ document.addEventListener('keydown', e => {
     else if (state === 'pause') state = 'play';
   }
 });
-document.addEventListener('keyup', e => { keys[e.key] = false; });
+document.addEventListener('keyup', e => {
+  keys[e.key] = false;
+  if (e.key === 'ArrowLeft')  playerControl.left  = false;
+  if (e.key === 'ArrowRight') playerControl.right = false;
+  if (e.key === 'ArrowUp')    playerControl.up    = false;
+  if (e.key === 'ArrowDown')  playerControl.down  = false;
+});
 
 // === ゲーム管理 ===
 function initStage() {
@@ -2025,6 +2104,8 @@ function initStage() {
   _pPool.forEach(p => p.active = false); particles = []; rings = []; drawnPath = [];
   bubbleTimer = 0;
   balls = []; ballCount = 10;
+  playerControl.left = playerControl.right = playerControl.up = playerControl.down = false;
+  touchControlActive = false; touchControlledGnomeIdx = -1;
   gnomes = [];
   floatingBlocks = []; crows = []; lightnings = []; lightningTimer = 0;
   // Phase 2: ステージ開始時にlivesをリセット（Stage 8〜10はlives:2）
