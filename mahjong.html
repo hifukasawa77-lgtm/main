@@ -1250,6 +1250,50 @@
     return true;
   }
 
+  const KOKUSHI_TILES = [0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33];
+
+  function isKokushiWin(tiles) {
+    if (tiles.length !== 14) return false;
+    const c = toCounts(tiles);
+    let hasPair = false;
+    for (const t of KOKUSHI_TILES) {
+      if (c[t] === 0) return false;
+      if (c[t] >= 2) hasPair = true;
+    }
+    return hasPair;
+  }
+
+  function shantenKokushi(tiles) {
+    const c = toCounts(tiles);
+    let distinct = 0, hasPair = false;
+    for (const t of KOKUSHI_TILES) {
+      if (c[t] >= 1) distinct++;
+      if (c[t] >= 2) hasPair = true;
+    }
+    return 13 - distinct - (hasPair ? 1 : 0);
+  }
+
+  function isDaisangenWin(tiles, melds) {
+    const c = toCounts(tiles);
+    for (const dragon of [31, 32, 33]) {
+      const inMeld = (melds || []).some(m =>
+        (m.type === "pon" || m.type === "kan" || m.type === "ankan") && m.tiles[0] === dragon
+      );
+      if (!inMeld && c[dragon] < 3) return false;
+    }
+    return true;
+  }
+
+  function detectYaku(tiles, pid) {
+    if (isKokushiWin(tiles)) return "国士無双";
+    if (isDaisangenWin(tiles, G.melds[pid] || [])) return "大三元";
+    return null;
+  }
+
+  function isWinningHand(tiles) {
+    return isStandardWin(tiles) || isKokushiWin(tiles);
+  }
+
   // --- 鳴きユーティリティ ---
   function shantenWithMelds(hand, melds){
     const all = hand.slice();
@@ -1373,8 +1417,9 @@
     sortHand(G.hands[pid]);
     G.lastDraw = {who:pid, tile:rinshan};
     pushLog(`${seatName(pid)} 嶺上: ${TILE.name(rinshan)}`);
-    if (isStandardWin(G.hands[pid])){
-      endGame("嶺上ツモ",`${seatName(pid)}の勝ち（役無し簡易）`);
+    if (isWinningHand(G.hands[pid])){
+      const yaku = detectYaku(G.hands[pid], pid) || "役無し";
+      endGame("嶺上ツモ",`${seatName(pid)}の勝ち【${yaku}】`);
       return;
     }
     if (pid==="p"){
@@ -1564,13 +1609,12 @@
     }
   }
 
-  function bestShantenAfterDiscard(hand14){
+  function bestShantenAfterDiscard(hand14, noMelds){
     if (hand14.length !== 14) return shantenNormal(hand14);
     let best = 8;
     for (let i=0;i<hand14.length;i++){
-      const t = hand14[i];
       const h = hand14.slice(); h.splice(i,1);
-      const s = shantenNormal(h);
+      const s = noMelds ? Math.min(shantenNormal(h), shantenKokushi(h)) : shantenNormal(h);
       if (s < best) best = s;
     }
     return best;
@@ -1643,7 +1687,8 @@
     el.pillTurn.innerHTML = `手番: <strong>${who}</strong>`;
     el.pillWall.innerHTML = `山: <strong>${Math.max(0, G.wall.length - G.pos)}</strong>`;
     const ph = (G.hands.p || []);
-    const s = (ph.length >= 13) ? bestShantenAfterDiscard(ph.length===14 ? ph : ph.slice()) : "-";
+    const noMelds = (G.melds.p || []).length === 0;
+    const s = (ph.length >= 13) ? bestShantenAfterDiscard(ph.length===14 ? ph : ph.slice(), noMelds) : "-";
     el.pillShanten.innerHTML = `シャンテン: <strong>${s}</strong>`;
   }
 
@@ -1719,8 +1764,9 @@
     pushLog(`${seatName(who)} ツモ: ${TILE.name(tile)}`);
 
     // win by tsumo
-    if (isStandardWin(G.hands[who])){
-      endGame("ツモ", `${seatName(who)}の勝ち（役無し簡易）`);
+    if (isWinningHand(G.hands[who])){
+      const yaku = detectYaku(G.hands[who], who) || "役無し";
+      endGame("ツモ", `${seatName(who)}の勝ち【${yaku}】`);
       return;
     }
 
@@ -1791,8 +1837,9 @@
     // check ron
     for (const pid of inOrderFrom(who)){
       const test = [...G.hands[pid], tile];
-      if (isStandardWin(test)){
-        endGame("ロン", `${seatName(pid)}の勝ち（役無し簡易）`);
+      if (isWinningHand(test)){
+        const yaku = detectYaku(test, pid) || "役無し";
+        endGame("ロン", `${seatName(pid)}の勝ち【${yaku}】`);
         return;
       }
     }
