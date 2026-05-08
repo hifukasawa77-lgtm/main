@@ -64,7 +64,7 @@
     </div>
     <canvas id="c" width="480" height="640"></canvas>
   </div>
-  <div id="hint">クリック/タップ: 泡を割る | 小人をドラッグ: 経路を引く | カラスに注意 | ⚡雷は即死</div>
+  <div id="hint">クリック/タップ: 玉を投げる 🔮 | ←→↑↓キー: 小人操作 | 小人の近くをタップ: 方向操作 | 小人ドラッグ: 経路指示</div>
   <script>
 'use strict';
 // === 定数 ===
@@ -108,7 +108,7 @@ const STAGE_CFG = [
     bgColor:['#1e0010','#2a0010'],
     contents:['coin','bomb','hammer','coin','bomb','ladder','hammer','bomb','coin','chest'] },
 ];
-const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20, bomb:0, hammer:0 };
+const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20, bomb:0, hammer:0, ball:0 };
 // Phase 8-1: 危険アイテム種別
 const HAZARD_TYPES = new Set(['bomb', 'hammer']);
 const MAX_LIVES = 3;
@@ -301,6 +301,16 @@ const AudioSystem = {
         src.start(now);
         break;
       }
+      case 'throw': {
+        const osc = ac.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1200, now);
+        osc.frequency.exponentialRampToValueAtTime(600, now + 0.08);
+        g.gain.setValueAtTime(0.18, now);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+        osc.connect(g); osc.start(now); osc.stop(now + 0.08);
+        break;
+      }
     }
   }
 };
@@ -308,16 +318,25 @@ function playSE(type) { AudioSystem.playSE(type); }
 
 // === ハイスコア (Phase 5) ===
 const HiScore = {
+  scores: [0, 0, 0],
   load() {
-    hiScore = parseInt(localStorage.getItem('bubble_rescue_hi') || '0');
-  },
-  save() {
-    if (score > hiScore) {
-      hiScore = score;
-      localStorage.setItem('bubble_rescue_hi', String(hiScore));
-      return true; // NEW RECORD
+    const saved = localStorage.getItem('brc_hi_v2');
+    if (saved) { try { this.scores = JSON.parse(saved); } catch(e) {} }
+    else {
+      const old = parseInt(localStorage.getItem('bubble_rescue_hi') || '0');
+      if (old > 0) { this.scores[0] = old; this.saveRaw(); }
     }
-    return false;
+    hiScore = this.scores[0] || 0;
+  },
+  saveRaw() { localStorage.setItem('brc_hi_v2', JSON.stringify(this.scores)); },
+  save() {
+    const pos = this.scores.findIndex(s => score > s);
+    if (pos < 0) return false;
+    this.scores.splice(pos, 0, score);
+    this.scores = this.scores.slice(0, 3);
+    hiScore = this.scores[0];
+    this.saveRaw();
+    return true;
   }
 };
 
@@ -332,8 +351,18 @@ let bubbles = [];
 let gnomes  = [];
 let items   = [];
 let ladders = [];
-let particles = [];
+let particles = []; // 後方互換のため残すが未使用
+const POOL_SIZE = 200;
+const _pPool = Array.from({ length: POOL_SIZE }, () =>
+  ({ x:0, y:0, vx:0, vy:0, life:0, maxLife:45, color:'#fff', r:2, active:false })
+);
 let bubbleTimer = 0;
+let ballCount = 10;  // 残り弾数
+let balls = [];      // 飛翔中の投射物
+let playerControl = { left: false, right: false, up: false, down: false };
+let touchControlActive = false;
+let touchControlledGnomeIdx = -1;
+const PLAYER_SPEED = 2.5;
 let isDrawing = false;
 let drawnPath = [];
 let activeGnomeIdx = -1;
@@ -355,6 +384,24 @@ let floatingBlocks = [];
 let crows = [];
 let lightnings = [];
 let lightningTimer = 0;
+
+// === Visual Effects ===
+let shakeFrames = 0, shakeAmt = 0;
+let rings = [];
+
+// === チュートリアル ===
+let tutorialTimer = 0;
+const TUTORIAL_DURATION = 240;
+
+// D4: 背景色スムーズ遷移
+let bgTransProgress = 1.0;
+let prevBgColor = null;
+
+// E3: エンドレスモード
+let isEndless = false;
+
+// HUDポーズボタンX（drawHUDBar・handlePlayClick で共用）
+function getPauseButtonX() { return 38; }
 
 // === エンティティ生成 ===
 function makeBubble() {
@@ -385,6 +432,7 @@ function makeGnome(x) {
     onLadder: false,
     onRope: false,
     climbing: false,
+    descending: false,
     state: 'idle',
     waypoints: [],
     rawPath: null,
@@ -393,6 +441,7 @@ function makeGnome(x) {
     waypointTimer: 0,
     hatColor: ['#cc3333','#33aa33','#5555dd'][gnomes.length % 3],
     bodyColor: ['#3344cc','#884422','#338866'][gnomes.length % 3],
+    expression: 'normal', expressionTimer: 0,
   };
 }
 
@@ -411,17 +460,35 @@ function makeLadder(x) {
   return { x, bottomY: GROUND_Y, height: LADDER_HEIGHT, active: true };
 }
 
-function makeParticle(x, y, color) {
+function spawnParticle(x, y, color) {
+  const p = _pPool.find(p => !p.active);
+  if (!p) return;
   const angle = Math.random() * Math.PI * 2;
   const speed = 1.5 + Math.random() * 3;
+  p.x = x; p.y = y;
+  p.vx = Math.cos(angle) * speed;
+  p.vy = Math.sin(angle) * speed - 1;
+  p.life = 25 + Math.floor(Math.random() * 20);
+  p.maxLife = p.life;
+  p.color = color; p.r = 2 + Math.random() * 3;
+  p.active = true;
+}
+
+function makeRing(x, y, maxR, color) {
+  return { x, y, r: maxR * 0.15, maxR, color, life: 20, maxLife: 20 };
+}
+
+function makeProjectile(gnome, tx, ty) {
+  const sx = gnome.x, sy = gnome.y - 22;
+  const dx = tx - sx, dy = ty - sy;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+  const speed = 10;
   return {
-    x, y,
-    vx: Math.cos(angle) * speed,
-    vy: Math.sin(angle) * speed - 1,
-    life: 25 + Math.floor(Math.random() * 20),
-    maxLife: 45,
-    color,
-    r: 2 + Math.random() * 3,
+    x: sx, y: sy,
+    vx: (dx / dist) * speed,
+    vy: (dy / dist) * speed,
+    life: 90,
+    trail: [],
   };
 }
 
@@ -440,6 +507,7 @@ function makeCrow() {
     attackCooldown: 0,
     diving: false,
     diveTimer: 0,
+    warnTimer: 0,
   };
 }
 
@@ -485,9 +553,20 @@ function popBubble(b) {
   if (b.popped) return;
   b.popped = true;
   items.push(makeItem(b.x, b.y, b.contents));
-  const pColors = { coin:'#ffd700', chest:'#c8843a', tool:'#aaaacc', ladder:'#c8a06a', bomb:'#ff4400', hammer:'#888888' };
-  for (let i = 0; i < 10; i++) particles.push(makeParticle(b.x, b.y, pColors[b.contents] || '#fff'));
-  playSE('pop'); // Phase 3: pop SE
+  // 玉アイテムを3個スポーン
+  for (let i = 0; i < 3; i++) {
+    const bx = b.x + (Math.random() - 0.5) * b.radius;
+    const by = b.y + (Math.random() - 0.5) * b.radius * 0.4;
+    const ballItem = makeItem(bx, by, 'ball');
+    ballItem.vx = (Math.random() - 0.5) * 2.5;
+    ballItem.vy = -1 - Math.random() * 1.5;
+    items.push(ballItem);
+  }
+  const pColors = { coin:'#ffd700', chest:'#c8843a', tool:'#aaaacc', ladder:'#c8a06a', bomb:'#ff4400', hammer:'#888888', ball:'#88ddff' };
+  for (let i = 0; i < 20; i++) spawnParticle(b.x, b.y, pColors[b.contents] || '#fff');
+  rings.push(makeRing(b.x, b.y, b.radius * 2.0, pColors[b.contents] || '#aadeee'));
+  playSE('pop');
+  if (navigator.vibrate) navigator.vibrate(10);
 }
 
 function collectItem(it, gnome) {
@@ -505,20 +584,24 @@ function collectItem(it, gnome) {
   if (comboCount >= 3) {
     bonusPopups.push({ x: it.x, y: it.y - 20, text: 'x' + comboMult.toFixed(1) + ' COMBO! +' + earned, life: 80, maxLife: 80, color: '#ff8800', large: true });
     playSE('combo'); // Phase 3: combo SE
+    if (gnome) { gnome.expression = 'happy'; gnome.expressionTimer = 50; }
   } else {
     if (earned > 0) bonusPopups.push({ x: it.x, y: it.y - 20, text: '+' + earned, life: 60, maxLife: 60, color: '#ffd700', large: false });
     playSE('collect'); // Phase 3: collect SE
   }
   updateHUD();
-  if (itemsCollected >= STAGE_CFG[stage].target) {
-    if (stage < STAGE_CFG.length - 1) {
-      playSE('clear'); // Phase 3: clear SE
-      showStageBonus();
-    } else {
-      playSE('clear');
-      HiScore.save(); // Phase 5: ハイスコア保存
-      state = 'clear';
-    }
+  checkStageClear();
+}
+
+function checkStageClear() {
+  const cfg = stage < STAGE_CFG.length ? STAGE_CFG[stage]
+    : (() => { const b = STAGE_CFG[STAGE_CFG.length-1]; const ex = stage-STAGE_CFG.length+1; return {...b, target: b.target+ex*15}; })();
+  if (itemsCollected < cfg.target) return;
+  playSE('clear');
+  if (!isEndless && stage === STAGE_CFG.length - 1) {
+    HiScore.save(); state = 'clear';
+  } else {
+    showStageBonus();
   }
 }
 
@@ -531,24 +614,19 @@ function placeLadder(x) {
   }
   score += ITEM_SCORE['ladder'];
   itemsCollected++;
-  playSE('ladder'); // Phase 3: ladder SE
+  playSE('ladder');
+  bonusPopups.push({ x, y: GROUND_Y - 40, text: '🪜 SET!', life: 50, maxLife: 50, color: '#44ff88', large: false });
+  rings.push(makeRing(x, GROUND_Y - 20, 30, '#44ff88'));
   updateHUD();
-  if (itemsCollected >= STAGE_CFG[stage].target) {
-    if (stage < STAGE_CFG.length - 1) {
-      playSE('clear');
-      showStageBonus();
-    } else {
-      playSE('clear');
-      HiScore.save();
-      state = 'clear';
-    }
-  }
+  checkStageClear();
 }
 
 // Phase 8-4: 小人消滅関数
 function killGnome(g) {
+  shakeFrames = 12; shakeAmt = 4;
+  if (navigator.vibrate) navigator.vibrate(50);
   for (let i = 0; i < 16; i++) {
-    particles.push(makeParticle(g.x, g.y, '#ff3333'));
+    spawnParticle(g.x, g.y, '#ff3333');
   }
   const idx = gnomes.indexOf(g);
   if (idx >= 0) gnomes.splice(idx, 1);
@@ -568,7 +646,7 @@ function showStageBonus() {
   const timeBonus = Math.max(0, Math.round(500 - elapsed * 5));
   const comboBonus = comboCount * 20;
   score += timeBonus + comboBonus;
-  for (let i = 0; i < 40; i++) particles.push(makeParticle(W/2, H/2, ['#ffd700','#ff88aa','#88ffcc','#88aaff'][i%4]));
+  for (let i = 0; i < 40; i++) spawnParticle(W/2, H/2, ['#ffd700','#ff88aa','#88ffcc','#88aaff'][i%4]);
   if (timeBonus > 0) bonusPopups.push({ x: W/2, y: H*0.4, text: 'TIME BONUS +' + timeBonus, life: 120, maxLife: 120, color: '#88ffcc', large: true });
   if (comboBonus > 0) bonusPopups.push({ x: W/2, y: H*0.5, text: 'COMBO BONUS +' + comboBonus, life: 120, maxLife: 120, color: '#ffaa44', large: true });
   const nextStage = stage + 1;
@@ -576,6 +654,7 @@ function showStageBonus() {
     if (state === 'play') {
       stage = nextStage;
       itemsCollected = 0;
+      if (stage >= STAGE_CFG.length) isEndless = true;
       initStage();
     }
   }, 1800);
@@ -631,6 +710,24 @@ function getPathYAtX(path, x) {
 
 // === 小人AI ===
 function updateGnomeAI(g, idx) {
+  // プレイヤー操作チェック
+  const isKbCtrl = idx === 0 && !touchControlActive &&
+    (playerControl.left || playerControl.right || playerControl.up || playerControl.down);
+  const isTouchCtrl = touchControlActive && idx === touchControlledGnomeIdx;
+  if (isKbCtrl || isTouchCtrl) {
+    g.climbing = false; g.descending = false;
+    if (playerControl.left)       { g.vx = -PLAYER_SPEED; g.state = 'walk'; }
+    else if (playerControl.right) { g.vx =  PLAYER_SPEED; g.state = 'walk'; }
+    else { g.vx = 0; g.state = 'idle'; }
+    if (g.onLadder) {
+      if (playerControl.up)   { g.climbing = true; }
+      if (playerControl.down) { g.descending = true; }
+    } else if (playerControl.up && g.onGround && g.jumpCooldown === 0) {
+      g.vy = -8 * g.jumpBoost; g.onGround = false; g.jumpCooldown = 40; g.state = 'jump';
+    }
+    g.waypoints = []; g.rawPath = null;
+    return;
+  }
   // 1. ウェイポイント追跡（線引き）
   if (g.waypoints.length > 0) {
     // 300フレーム到達できなければ経路リセット
@@ -850,6 +947,8 @@ function updateGnomePhysics(g) {
       g.x = lad.x;
       if (g.climbing) {
         g.vy = -CLIMB_SPEED;
+      } else if (g.descending) {
+        g.vy = CLIMB_SPEED;
       } else if (g.vy > 0) {
         g.vy = 0;
       }
@@ -878,7 +977,12 @@ function updateGnomePhysics(g) {
         return; // この小人のループを抜ける
       }
     } else if (dist2(g.x, g.y, it.x, it.y) < COLLECT_R2) {
-      if (it.type === 'ladder') {
+      if (it.type === 'ball') {
+        it.collected = true;
+        ballCount++;
+        updateHUD();
+        bonusPopups.push({ x: it.x, y: it.y - 20, text: '🔮+1', life: 40, maxLife: 40, color: '#88ddff', large: false });
+      } else if (it.type === 'ladder') {
         it.collected = true;
         const bestLad = getBestLadder();
         if (bestLad) {
@@ -888,10 +992,7 @@ function updateGnomePhysics(g) {
           itemsCollected++;
           playSE('ladder');
           updateHUD();
-          if (itemsCollected >= STAGE_CFG[stage].target) {
-            if (stage < STAGE_CFG.length - 1) { playSE('clear'); showStageBonus(); }
-            else { playSE('clear'); HiScore.save(); state = 'clear'; }
-          }
+          checkStageClear();
         } else {
           placeLadder(it.x);
         }
@@ -922,6 +1023,7 @@ function updateCrow(crow) {
         crow.attackCooldown = 100;
         playSE('crow');
         bonusPopups.push({ x: g.x, y: g.y - 30, text: 'CAW!', life: 50, maxLife: 50, color: '#ffaa00', large: false });
+        g.expression = 'surprised'; g.expressionTimer = 65;
         break;
       }
     }
@@ -935,7 +1037,7 @@ function updateCrow(crow) {
           crow.attackCooldown = 130;
           playSE('crow');
           bonusPopups.push({ x: lad.x, y: lad.bottomY - lad.height / 2, text: '梯子破壊!', life: 70, maxLife: 70, color: '#ff4444', large: false });
-          for (let k = 0; k < 8; k++) particles.push(makeParticle(lad.x, lad.bottomY - lad.height / 2, '#c8a06a'));
+          for (let k = 0; k < 8; k++) spawnParticle(lad.x, lad.bottomY - lad.height / 2, '#c8a06a');
           break;
         }
       }
@@ -957,14 +1059,17 @@ function updateCrow(crow) {
     if (crow.x < -40) { crow.x = W + 40; crow.vx = Math.abs(crow.vx); }
     if (crow.x > W + 40) { crow.x = -40; crow.vx = -Math.abs(crow.vx); }
 
-    // 近くに小人がいればダイブ
-    if (crow.attackCooldown === 0) {
+    // D3: 警告フェーズ中は警告タイマーを消化してからダイブ
+    if (crow.warnTimer > 0) {
+      crow.warnTimer--;
+      if (crow.warnTimer === 0) { crow.diving = true; crow.diveTimer = 0; }
+    } else if (crow.attackCooldown === 0) {
+      // 近くに小人がいれば警告開始
       for (const g of gnomes) {
         const dx = Math.abs(crow.x - g.x);
         const dy = crow.y - g.y;
         if (dx < 55 && dy > 20 && dy < 260) {
-          crow.diving = true;
-          crow.diveTimer = 0;
+          crow.warnTimer = 30;
           break;
         }
       }
@@ -1006,20 +1111,38 @@ function updateHUD() {
 
 // === 描画ヘルパー ===
 function drawBackground() {
-  // Phase 4: ステージ背景色をSTAGE_CFGから参照
-  const bgColor = STAGE_CFG[stage] ? STAGE_CFG[stage].bgColor : ['#06061e','#0a1a3e'];
+  // D4: ステージ間背景色補間
+  function lerpHex(a, b, t) {
+    const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+    const r  = Math.round(((pa>>16)&0xff)*(1-t)+((pb>>16)&0xff)*t);
+    const g2 = Math.round(((pa>>8) &0xff)*(1-t)+((pb>>8) &0xff)*t);
+    const bl = Math.round((pa      &0xff)*(1-t)+(pb      &0xff)*t);
+    return '#'+[r,g2,bl].map(v=>v.toString(16).padStart(2,'0')).join('');
+  }
+  const cur = stage < STAGE_CFG.length ? STAGE_CFG[stage].bgColor : ['#1e0010','#2a0010'];
+  const bgColor = prevBgColor && bgTransProgress < 1
+    ? [lerpHex(prevBgColor[0], cur[0], bgTransProgress), lerpHex(prevBgColor[1], cur[1], bgTransProgress)]
+    : cur;
   const grad = ctx.createLinearGradient(0, 0, 0, H);
   grad.addColorStop(0, bgColor[0]);
   grad.addColorStop(0.75, bgColor[1]);
   grad.addColorStop(1, '#0a2a0a');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
-  // 星
-  for (let i = 0; i < 45; i++) {
-    const sx = (i * 137 + 29) % W;
+  // D1: 視差星2層（遠層30個・近層15個）
+  for (let i = 0; i < 30; i++) {
+    const sx = ((i * 137 + 29) + frameCount * 0.04) % W;
     const sy = (i * 97 + 11) % (H - 120);
-    ctx.fillStyle = `rgba(255,255,255,${0.3 + 0.4 * ((Math.sin(frameCount * 0.04 + i) + 1) / 2)})`;
-    ctx.fillRect(sx, sy, 1 + (i % 2), 1 + (i % 2));
+    const a  = 0.2 + 0.3 * ((Math.sin(frameCount * 0.03 + i) + 1) / 2);
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.fillRect(sx, sy, 1, 1);
+  }
+  for (let i = 0; i < 15; i++) {
+    const sx = ((i * 211 + 73) + frameCount * 0.11) % W;
+    const sy = (i * 59 + 43) % (H - 120);
+    const a  = 0.5 + 0.4 * ((Math.sin(frameCount * 0.05 + i * 1.7) + 1) / 2);
+    ctx.fillStyle = `rgba(220,240,255,${a})`;
+    ctx.fillRect(sx, sy, 2, 2);
   }
 }
 
@@ -1049,22 +1172,35 @@ function drawBubble(b) {
   ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
   ctx.fillStyle = grad;
   ctx.fill();
-  // Phase 8-7: 危険アイテムの泡は赤縁で点滅表示
+  // 危険アイテムの泡は内部に赤ティントを重ねる
+  if (HAZARD_TYPES.has(b.contents) && !b.popped) {
+    const pulse2 = 0.5 + 0.5 * Math.sin(frameCount * 0.18);
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,0,0,${0.07 + 0.05 * pulse2})`;
+    ctx.fill();
+  }
+  // 危険アイテムの泡は赤縁グロー＋太いボーダーで点滅表示
   if (HAZARD_TYPES.has(b.contents)) {
-    ctx.strokeStyle = `rgba(255,80,80,${0.6 + 0.3 * Math.sin(frameCount * 0.15)})`;
-    ctx.lineWidth = 2.5;
+    const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.18);
+    ctx.strokeStyle = `rgba(255,50,50,${0.7 + 0.3 * pulse})`;
+    ctx.lineWidth = 4;
+    ctx.shadowColor = '#ff2200';
+    ctx.shadowBlur = 8 + 10 * pulse;
   } else {
     ctx.strokeStyle = 'rgba(180,240,255,0.85)';
     ctx.lineWidth = 1.5;
   }
   ctx.stroke();
+  ctx.shadowBlur = 0;
   // ハイライト
   ctx.beginPath();
   ctx.arc(b.x - r * 0.28, b.y - r * 0.32, r * 0.2, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
   ctx.fill();
-  // 中身アイコン
-  if (!b.popped) drawItemIcon(b.x, b.y, b.contents, Math.floor(r * 0.55));
+  // 中身アイコン（危険アイテムは拡大表示）
+  if (!b.popped) drawItemIcon(b.x, b.y, b.contents,
+    Math.floor(r * (HAZARD_TYPES.has(b.contents) ? 0.68 : 0.55)));
   ctx.restore();
 }
 
@@ -1132,6 +1268,23 @@ function drawItemIcon(x, y, type, size) {
     ctx.fillRect(x - size * 0.9, y - size * 0.9, size * 1.8, size * 0.7); // ヘッド
     ctx.fillStyle = '#8B4513';
     ctx.fillRect(x - size * 0.15, y - size * 0.2, size * 0.3, size * 1.2); // 柄
+  } else if (type === 'ball') {
+    // 玉アイテム — シアン発光オーブ
+    const pulse = 0.85 + 0.15 * Math.sin(frameCount * 0.18);
+    const grad = ctx.createRadialGradient(x - size * 0.25, y - size * 0.25, 0, x, y, size * 0.7 * pulse);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.35, '#aaeeff');
+    grad.addColorStop(0.7, '#44aaff');
+    grad.addColorStop(1, 'rgba(0,100,255,0)');
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.7 * pulse, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.7 * pulse, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(136,221,255,0.6)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -1151,10 +1304,27 @@ function drawLadder(lad) {
 }
 
 function drawGnome(g) {
+  // 表情タイマー更新
+  if (g.expressionTimer > 0) g.expressionTimer--;
+  else g.expression = 'normal';
+
   const x = Math.round(g.x), y = Math.round(g.y);
   const bob = g.state === 'walk' ? Math.sin(frameCount * 0.28) * 1.5 : 0;
   const ay = y + bob; // animation y offset applied to body
 
+  // プレイヤー操作中インジケータ
+  const gnomeIdx = gnomes.indexOf(g);
+  const isPlayerCtrl = (gnomeIdx === 0 && !touchControlActive &&
+    (playerControl.left || playerControl.right || playerControl.up || playerControl.down)) ||
+    (touchControlActive && gnomeIdx === touchControlledGnomeIdx);
+  if (isPlayerCtrl) {
+    ctx.save();
+    ctx.fillStyle = '#ffff44';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('▶◀', x, ay - GNOME_H - 13);
+    ctx.restore();
+  }
   // 帽子（三角）
   ctx.fillStyle = g.hatColor;
   ctx.beginPath();
@@ -1169,11 +1339,32 @@ function drawGnome(g) {
   // 顔
   ctx.fillStyle = '#f5c07a';
   ctx.fillRect(x - 6, ay - GNOME_H + 6, 12, 10);
-  ctx.fillStyle = '#222';
-  ctx.fillRect(x - 4, ay - GNOME_H + 8,  2, 2); // 左目
-  ctx.fillRect(x + 2, ay - GNOME_H + 8,  2, 2); // 右目
-  ctx.fillStyle = '#d08060';
-  ctx.fillRect(x - 1, ay - GNOME_H + 11, 2, 2); // 鼻
+  if (g.expression === 'surprised') {
+    // 驚き顔: 大きい目＋O型の口
+    ctx.fillStyle = '#222';
+    ctx.fillRect(x - 4, ay - GNOME_H + 7, 3, 3);
+    ctx.fillRect(x + 1, ay - GNOME_H + 7, 3, 3);
+    ctx.beginPath();
+    ctx.arc(x, ay - GNOME_H + 13, 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (g.expression === 'happy') {
+    // 笑顔: 通常目＋上向きカーブ口
+    ctx.fillStyle = '#222';
+    ctx.fillRect(x - 4, ay - GNOME_H + 8, 2, 2);
+    ctx.fillRect(x + 2, ay - GNOME_H + 8, 2, 2);
+    ctx.beginPath();
+    ctx.arc(x, ay - GNOME_H + 11, 3, 0, Math.PI);
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  } else {
+    // 通常顔
+    ctx.fillStyle = '#222';
+    ctx.fillRect(x - 4, ay - GNOME_H + 8, 2, 2);
+    ctx.fillRect(x + 2, ay - GNOME_H + 8, 2, 2);
+    ctx.fillStyle = '#d08060';
+    ctx.fillRect(x - 1, ay - GNOME_H + 11, 2, 2);
+  }
 
   // ボディ
   ctx.fillStyle = g.bodyColor;
@@ -1184,6 +1375,29 @@ function drawGnome(g) {
   ctx.fillStyle = '#3a2008';
   ctx.fillRect(x - 5, ay - GNOME_H + 26 + legSwing, 5, 7);
   ctx.fillRect(x,     ay - GNOME_H + 26 - legSwing, 5, 7);
+}
+
+function drawBall(ball) {
+  ctx.save();
+  // トレイル
+  for (let i = 0; i < ball.trail.length; i++) {
+    const t = ball.trail[i];
+    const a = (i / ball.trail.length) * 0.35;
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(136,221,255,${a})`;
+    ctx.fill();
+  }
+  // 玉本体（グロー）
+  const grd = ctx.createRadialGradient(ball.x - 2, ball.y - 2, 0, ball.x, ball.y, 8);
+  grd.addColorStop(0, '#ffffff');
+  grd.addColorStop(0.3, '#88eeff');
+  grd.addColorStop(1, 'rgba(0,180,255,0)');
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, 8, 0, Math.PI * 2);
+  ctx.fillStyle = grd;
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawItem(it) {
@@ -1200,15 +1414,35 @@ function drawItem(it) {
 
 function drawParticles() {
   ctx.save();
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
+  for (const p of _pPool) {
+    if (!p.active) continue;
     p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--;
-    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    if (p.life <= 0) { p.active = false; continue; }
     ctx.globalAlpha = p.life / p.maxLife;
     ctx.fillStyle = p.color;
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
     ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawRings() {
+  ctx.save();
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const rg = rings[i];
+    rg.r += (rg.maxR - rg.r) * 0.22;
+    rg.life--;
+    if (rg.life <= 0) { rings.splice(i, 1); continue; }
+    const alpha = rg.life / rg.maxLife;
+    ctx.globalAlpha = alpha * 0.75;
+    ctx.strokeStyle = rg.color;
+    ctx.lineWidth = 3 * alpha;
+    ctx.shadowColor = rg.color;
+    ctx.shadowBlur = 6 * alpha;
+    ctx.beginPath();
+    ctx.arc(rg.x, rg.y, rg.r, 0, Math.PI * 2);
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -1272,6 +1506,15 @@ function drawCrow(crow) {
   ctx.arc(cx + bdir * 5, cy - 1, 2, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+  // D3: 警告マーク
+  if (crow.warnTimer > 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.floor(crow.warnTimer / 5) % 2 === 0 ? 1.0 : 0.3;
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('⚠', cx, cy - 22);
+    ctx.restore();
+  }
 }
 
 // === 雷描画 ===
@@ -1404,13 +1647,23 @@ function drawHUDBar() {
   ctx.fillText('SCORE ' + score, 10, 27);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#aaeeff';
-  ctx.fillText('STAGE ' + (stage + 1), W / 2, 27);
+  ctx.fillText(isEndless ? 'ENDLESS ' + (stage - STAGE_CFG.length + 2) : 'STAGE ' + (stage + 1), W / 2, 27);
 
-  // Phase 6: コンボ表示
+  // B2: コンボ表示（残り30フレームで赤フラッシュ＋タイマーバー）
   if (comboCount >= 2) {
-    ctx.fillStyle = '#ffdd44';
+    const warning = comboTimer > 0 && comboTimer < 30;
+    const flash = warning && Math.floor(frameCount / 4) % 2 === 0;
+    ctx.fillStyle = flash ? '#ff4444' : '#ffdd44';
     ctx.font = 'bold 12px monospace';
     ctx.fillText('COMBO x' + comboCount, W / 2, 40);
+    if (comboTimer > 0) {
+      const prog2 = comboTimer / COMBO_WINDOW;
+      ctx.fillStyle = warning ? '#ff4444' : '#ffdd44';
+      ctx.globalAlpha = 0.4;
+      ctx.fillRect(W / 2 - 30, 42, 60, 2);
+      ctx.globalAlpha = 1;
+      ctx.fillRect(W / 2 - 30, 42, 60 * prog2, 2);
+    }
   }
 
   // Phase 2: ハートでライフ表示（右上端）
@@ -1419,13 +1672,23 @@ function drawHUDBar() {
     drawHeart(W - 18 - h * 22, 14, 7, h < lives);
   }
 
-  // Phase 3: ミュートボタン（左上）
+  // ミュートボタン
   ctx.textAlign = 'center';
   ctx.font = '14px sans-serif';
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.fillText(AudioSystem.muted ? '🔇' : '🔊', W - 18 - maxLives * 22 - 22, 18);
 
-  // プログレスバー
+  // B1: ポーズボタン
+  ctx.fillText('⏸', getPauseButtonX(), 18);
+
+  // 玉残数
+  ctx.textAlign = 'left';
+  ctx.font = '12px monospace';
+  const ballFlash = ballCount <= 3 && Math.floor(frameCount / 10) % 2 === 0;
+  ctx.fillStyle = ballFlash ? '#ff4444' : '#88ddff';
+  ctx.fillText('🔮 ' + ballCount, 56, 27);
+
+  // プログレスバー（アイテム収集）
   ctx.textAlign = 'right';
   ctx.fillStyle = '#88ffaa';
   ctx.font = '12px monospace';
@@ -1435,6 +1698,69 @@ function drawHUDBar() {
   ctx.fillRect(10, 33, W - 20, 5);
   ctx.fillStyle = '#44ff88';
   ctx.fillRect(10, 33, (W - 20) * prog, 5);
+
+  // B3: タイムボーナスバー（右寄せ、金色）
+  const elapsed = (Date.now() - stageStartTime) / 1000;
+  const timeProg = Math.max(0, 1 - elapsed / 100);
+  if (timeProg > 0) {
+    const bw = 80, bx = W - bw - 10;
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(bx, 38, bw, 3);
+    ctx.fillStyle = timeProg > 0.3 ? '#ffd700' : '#ff8844';
+    ctx.fillRect(bx, 38, bw * timeProg, 3);
+  }
+
+  ctx.restore();
+}
+
+// B1: ポーズオーバーレイ
+function drawPauseOverlay() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,30,0.72)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaeeff';
+  ctx.font = 'bold 32px monospace';
+  ctx.fillText('⏸ PAUSE', W / 2, H * 0.38);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '14px sans-serif';
+  ctx.fillText(AudioSystem.muted ? '🔇 ミュート中' : '🔊 音あり', W / 2, H * 0.50);
+  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#ffffff' : '#66aaff';
+  ctx.font = '14px monospace';
+  ctx.fillText('タップ / Esc で再開', W / 2, H * 0.62);
+  ctx.restore();
+}
+
+// C2: 初回チュートリアルオーバーレイ
+function drawTutorialOverlay() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,30,0.80)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaeeff';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('操作ガイド', W / 2, H * 0.22);
+  const tips = [
+    ['👆 タップ',   '泡を割る'],
+    ['👆 ドラッグ', '小人に経路を指示'],
+    ['🐦 カラス',   '小人を吹き飛ばす'],
+    ['⚡ 雷',       '小人が即死'],
+    ['💣 爆弾',     '落下に注意！'],
+  ];
+  ctx.font = '13px monospace';
+  tips.forEach(([icon, desc], i) => {
+    ctx.fillStyle = '#ffd700';
+    ctx.textAlign = 'right';
+    ctx.fillText(icon, W / 2 - 5, H * 0.33 + i * 22);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.fillText(desc, W / 2 + 5, H * 0.33 + i * 22);
+  });
+  ctx.globalAlpha = Math.min(1, tutorialTimer / 40);
+  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#aaaaaa' : '#666688';
+  ctx.textAlign = 'center';
+  ctx.font = '11px monospace';
+  ctx.fillText('タップでスキップ', W / 2, H * 0.80);
   ctx.restore();
 }
 
@@ -1472,10 +1798,14 @@ function drawTitle() {
   drawGnome(demoG);
 
   // Phase 5: ハイスコア表示
-  if (hiScore > 0) {
-    ctx.fillStyle = '#ffd700';
-    ctx.font = 'bold 13px monospace';
-    ctx.fillText('★ BEST: ' + hiScore, W / 2, H * 0.52);
+  if (HiScore.scores[0] > 0) {
+    ctx.font = 'bold 12px monospace';
+    ['#ffd700','#cccccc','#cd7f32'].forEach((col, i) => {
+      if (HiScore.scores[i] > 0) {
+        ctx.fillStyle = col;
+        ctx.fillText(['🥇','🥈','🥉'][i] + ' ' + HiScore.scores[i], W / 2, H * 0.50 + i * 15);
+      }
+    });
   }
 
   ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#ffffff' : '#66aaff';
@@ -1529,19 +1859,37 @@ function drawGameOver() {
 function drawClear() {
   ctx.fillStyle = 'rgba(0,10,0,0.85)';
   ctx.fillRect(0, 0, W, H);
-  // 紙吹雪
-  for (let i = 0; i < 30; i++) {
-    ctx.fillStyle = ['#ffd700','#ff88aa','#88ffcc','#88aaff','#ffaa44'][i % 5];
+  // D2: 紙吹雪 80個（四角50＋円30）
+  const cfColors = ['#ffd700','#ff88aa','#88ffcc','#88aaff','#ffaa44','#ffffff'];
+  for (let i = 0; i < 50; i++) {
+    ctx.fillStyle = cfColors[i % cfColors.length];
     ctx.fillRect(
       ((i * 137 + frameCount * 3) % W + W) % W,
-      ((i * 79  + frameCount * 2) % H + H) % H,
-      4, 6
+      ((i * 79  + frameCount * 2) % H + H) % H, 5, 7
     );
   }
+  for (let i = 0; i < 30; i++) {
+    const cx2 = ((i * 173 + frameCount * 4 + 50) % W + W) % W;
+    const cy2 = ((i * 113 + frameCount * 2.5 + 80) % H + H) % H;
+    ctx.beginPath();
+    ctx.arc(cx2, cy2, 3, 0, Math.PI * 2);
+    ctx.fillStyle = cfColors[(i + 2) % cfColors.length];
+    ctx.fill();
+  }
+  // D2: "ALL CLEAR!" スケールパルス
+  const scale = 1.0 + 0.06 * Math.sin(frameCount * 0.12);
+  ctx.save();
+  ctx.translate(W / 2, H * 0.32);
+  ctx.scale(scale, scale);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffd700';
+  ctx.shadowColor = '#ffaa00';
+  ctx.shadowBlur = 18;
   ctx.font = 'bold 30px monospace';
-  ctx.fillText('ALL CLEAR!', W / 2, H * 0.32);
+  ctx.fillText('ALL CLEAR!', 0, 0);
+  ctx.restore();
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'center';
   ctx.fillStyle = '#88ffcc';
   ctx.font = '20px monospace';
   ctx.fillText('全ステージクリア！', W / 2, H * 0.44);
@@ -1564,26 +1912,44 @@ function getCanvasPos(e) {
 }
 
 function handleStateClick(pos) {
-  // Phase 3: AudioContext はユーザー操作で初期化（autoplay policy対策）
   AudioSystem.init();
   if (state === 'title')    { initGame(); state = 'play'; AudioSystem.startBGM(); return true; }
   if (state === 'gameover') { initGame(); state = 'play'; AudioSystem.startBGM(); return true; }
   if (state === 'clear')    { state = 'title';            AudioSystem.stopBGM();  return true; }
+  if (state === 'pause')    { state = 'play';                                     return true; }
   return false;
 }
 
 function handlePlayClick(pos) {
-  // Phase 3: ミュートボタン判定（HUDバー右上）
+  // B1: ポーズボタン判定
+  if (pos.y < 42 && Math.abs(pos.x - getPauseButtonX()) < 20) {
+    state = 'pause'; return;
+  }
+  // C2: チュートリアルスキップ
+  if (tutorialTimer > 0) { tutorialTimer = 0; return; }
+  // C3: ミュートボタン判定（ヒット半径拡大: 18→30）
   const maxLives = STAGE_CFG[stage].lives || MAX_LIVES;
   const muteX = W - 18 - maxLives * 22 - 22;
-  if (pos.y < 42 && Math.abs(pos.x - muteX) < 18) {
+  if (pos.y < 42 && Math.abs(pos.x - muteX) < 30) {
     AudioSystem.toggleMute();
     return;
   }
-  // 泡をPOP
-  for (const b of bubbles) {
-    if (b.popped) continue;
-    if (dist2(b.x, b.y, pos.x, pos.y) < (b.radius + 8) ** 2) { popBubble(b); return; }
+  // 最近傍の小人から玉を発射
+  if (gnomes.length > 0) {
+    if (ballCount <= 0) {
+      bonusPopups.push({ x: pos.x, y: pos.y - 20, text: '弾切れ!', life: 50, maxLife: 50, color: '#ff4444', large: false });
+      return;
+    }
+    let nearestG = gnomes[0], nearestD = dist2(gnomes[0].x, gnomes[0].y, pos.x, pos.y);
+    for (let i = 1; i < gnomes.length; i++) {
+      const d = dist2(gnomes[i].x, gnomes[i].y, pos.x, pos.y);
+      if (d < nearestD) { nearestD = d; nearestG = gnomes[i]; }
+    }
+    balls.push(makeProjectile(nearestG, pos.x, pos.y));
+    ballCount--;
+    playSE('throw');
+    updateHUD();
+    return;
   }
   // 梯子アイテムを設置（地面付近でクリック）
   for (const it of items) {
@@ -1643,39 +2009,103 @@ canvas.addEventListener('mouseup', e => {
   mouseDownPos = null;
 });
 
-// タッチイベントをマウスイベントへ変換
+// タッチイベント — 方向操作 or マウスイベント変換
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
   const t = e.touches[0];
+  const pos = getCanvasPos({ clientX: t.clientX, clientY: t.clientY });
+  // 方向タッチ判定
+  if (state === 'play' && gnomes.length > 0) {
+    let nearestIdx = 0, nearestD = Infinity;
+    for (let i = 0; i < gnomes.length; i++) {
+      const g = gnomes[i];
+      const d = Math.sqrt((g.x - pos.x) ** 2 + (g.y - pos.y) ** 2);
+      if (d < nearestD) { nearestD = d; nearestIdx = i; }
+    }
+    if (nearestD > 18 && nearestD < 90) {
+      const g = gnomes[nearestIdx];
+      const dx = pos.x - g.x, dy = pos.y - g.y;
+      touchControlActive = true;
+      touchControlledGnomeIdx = nearestIdx;
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        if (dx < 0) playerControl.left = true; else playerControl.right = true;
+      } else {
+        if (dy < 0) playerControl.up = true; else playerControl.down = true;
+      }
+      return;
+    }
+  }
   canvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: t.clientX, clientY: t.clientY }));
 }, { passive: false });
 canvas.addEventListener('touchmove', e => {
   e.preventDefault();
+  if (touchControlActive) return;
   const t = e.touches[0];
   canvas.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: t.clientX, clientY: t.clientY }));
 }, { passive: false });
 canvas.addEventListener('touchend', e => {
   e.preventDefault();
+  if (touchControlActive) {
+    playerControl.left = playerControl.right = playerControl.up = playerControl.down = false;
+    touchControlActive = false;
+    touchControlledGnomeIdx = -1;
+    return;
+  }
   const t = e.changedTouches[0];
   canvas.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: t.clientX, clientY: t.clientY }));
 }, { passive: false });
 
 document.addEventListener('keydown', e => {
   keys[e.key] = true;
+  if (state === 'play') {
+    if (e.key === 'ArrowLeft')  { playerControl.left  = true; e.preventDefault(); }
+    if (e.key === 'ArrowRight') { playerControl.right = true; e.preventDefault(); }
+    if (e.key === 'ArrowUp')    { playerControl.up    = true; e.preventDefault(); }
+    if (e.key === 'ArrowDown')  { playerControl.down  = true; e.preventDefault(); }
+  }
   if (e.key === 'Enter') {
     if (state === 'title')    { initGame(); state = 'play'; }
     else if (state === 'gameover') { initGame(); state = 'play'; }
     else if (state === 'clear')    { state = 'title'; }
+    else if (state === 'pause')    { state = 'play'; }
+  }
+  if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
+    if (state === 'play')  state = 'pause';
+    else if (state === 'pause') state = 'play';
   }
 });
-document.addEventListener('keyup', e => { keys[e.key] = false; });
+document.addEventListener('keyup', e => {
+  keys[e.key] = false;
+  if (e.key === 'ArrowLeft')  playerControl.left  = false;
+  if (e.key === 'ArrowRight') playerControl.right = false;
+  if (e.key === 'ArrowUp')    playerControl.up    = false;
+  if (e.key === 'ArrowDown')  playerControl.down  = false;
+});
 
 // === ゲーム管理 ===
 function initStage() {
-  const cfg = STAGE_CFG[stage];
+  // E3: エンドレス用に cfg を動的生成
+  const cfg = stage < STAGE_CFG.length ? STAGE_CFG[stage] : (() => {
+    const base = STAGE_CFG[STAGE_CFG.length - 1];
+    const ex = stage - STAGE_CFG.length + 1;
+    return { ...base,
+      bubbleRate:  Math.max(25, base.bubbleRate - ex * 3),
+      bubbleSpeed: Math.min(4.0, base.bubbleSpeed + ex * 0.15),
+      target:      base.target + ex * 15,
+      maxBubbles:  Math.min(12, base.maxBubbles + Math.floor(ex / 2)),
+      bgColor:     ['#1e0010','#2a0010'],
+    };
+  })();
+  // D4: 背景色遷移
+  const prevStage = Math.max(0, stage - 1);
+  prevBgColor = (prevStage < STAGE_CFG.length ? STAGE_CFG[prevStage] : { bgColor: ['#1e0010','#2a0010'] }).bgColor;
+  bgTransProgress = 0;
   bubbles = []; items = []; ladders = [];
-  particles = []; drawnPath = [];
+  _pPool.forEach(p => p.active = false); particles = []; rings = []; drawnPath = [];
   bubbleTimer = 0;
+  balls = []; ballCount = 10;
+  playerControl.left = playerControl.right = playerControl.up = playerControl.down = false;
+  touchControlActive = false; touchControlledGnomeIdx = -1;
   gnomes = [];
   floatingBlocks = []; crows = []; lightnings = []; lightningTimer = 0;
   // Phase 2: ステージ開始時にlivesをリセット（Stage 8〜10はlives:2）
@@ -1712,16 +2142,23 @@ function initStage() {
 }
 
 function initGame() {
-  stage = 0; score = 0; itemsCollected = 0;
-  lives = MAX_LIVES; // Phase 2: 全変数リセット
+  stage = 0; score = 0; itemsCollected = 0; isEndless = false;
+  lives = MAX_LIVES;
   comboCount = 0; comboTimer = 0;
   bonusPopups = [];
   initStage();
+  // C2: 初回チュートリアル
+  if (!localStorage.getItem('brc_tutorial')) {
+    tutorialTimer = TUTORIAL_DURATION;
+    localStorage.setItem('brc_tutorial', '1');
+  }
 }
 
 // === メインループ ===
 function update() {
   frameCount++;
+  if (tutorialTimer > 0) tutorialTimer--;
+  if (bgTransProgress < 1) bgTransProgress = Math.min(1, bgTransProgress + 1 / 60);
   if (state !== 'play') return;
   const cfg = STAGE_CFG[stage];
 
@@ -1754,6 +2191,28 @@ function update() {
 
   // アイテム更新
   for (const it of items) updateItem(it);
+
+  // 投射物（玉）更新
+  for (let i = balls.length - 1; i >= 0; i--) {
+    const ball = balls[i];
+    ball.trail.push({ x: ball.x, y: ball.y });
+    if (ball.trail.length > 5) ball.trail.shift();
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+    ball.life--;
+    let hit = false;
+    if (ball.x < 0 || ball.x > W || ball.y > GROUND_Y || ball.y < 0) {
+      hit = true;
+    } else {
+      for (const b of bubbles) {
+        if (b.popped) continue;
+        if (dist2(ball.x, ball.y, b.x, b.y) < (b.radius + 6) ** 2) {
+          popBubble(b); hit = true; break;
+        }
+      }
+    }
+    if (hit || ball.life <= 0) balls.splice(i, 1);
+  }
 
   // Phase 6: コンボタイマー更新
   if (comboTimer > 0) {
@@ -1790,6 +2249,16 @@ function render() {
   if (state === 'gameover') { drawGameOver(); return; }
   if (state === 'clear')    { drawClear();    return; }
 
+  // 画面シェイク
+  let shakeX = 0, shakeY = 0;
+  if (shakeFrames > 0) {
+    shakeX = (Math.random() - 0.5) * shakeAmt * 2;
+    shakeY = (Math.random() - 0.5) * shakeAmt * 2;
+    shakeFrames--;
+  }
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+
   drawBackground();
   drawGround();
   drawFloatingBlocks();
@@ -1797,12 +2266,19 @@ function render() {
   bubbles.forEach(drawBubble);
   items.forEach(drawItem);
   gnomes.forEach(drawGnome);
+  balls.forEach(drawBall);
   crows.forEach(drawCrow);
   drawLightnings();
   drawParticles();
+  drawRings();
   drawBonusPopups();
   drawPath();
   drawHUDBar();
+
+  if (state === 'pause') drawPauseOverlay();
+  if (state === 'play' && tutorialTimer > 0) drawTutorialOverlay();
+
+  ctx.restore();
 }
 
 function loop() {
