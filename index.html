@@ -2303,14 +2303,27 @@
             <h3 id="home-traffic-title">🚦 交通情報（現在地周辺）</h3>
             <div id="home-traffic-congestion" style="display:none;margin-bottom:6px;font-size:0.78rem;font-weight:600;padding:4px 8px;border-radius:6px;text-align:center"></div>
             <div class="traffic-map-wrap" id="traffic-map-wrap">
-              <div style="position:relative">
+              <div style="position:relative;overflow:hidden;border-radius:8px">
                 <canvas id="jartic-traffic-canvas" height="240"
-                  style="width:100%;height:240px;border-radius:8px;display:none;cursor:grab;touch-action:none;user-select:none"></canvas>
+                  style="width:100%;height:240px;display:none;cursor:grab;touch-action:none;user-select:none"></canvas>
+                <div id="jartic-img-overlay"
+                  style="position:absolute;top:0;left:0;width:100%;height:240px;overflow:hidden;pointer-events:none;display:none"></div>
+                <div id="jartic-loc-marker"
+                  style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:20px;height:20px;display:none;pointer-events:none;z-index:5">
+                  <div style="position:absolute;top:0;left:0;width:20px;height:20px;border-radius:50%;background:rgba(0,229,255,0.22)"></div>
+                  <div style="position:absolute;top:4px;left:4px;width:12px;height:12px;border-radius:50%;background:#00e5ff;border:2px solid #fff;box-shadow:0 0 6px rgba(0,229,255,0.7)"></div>
+                </div>
                 <div id="jartic-zoom-ctrl" style="position:absolute;top:8px;right:8px;display:none;flex-direction:column;gap:3px;z-index:10">
                   <button onclick="zoomJarticMap(1)"
                     style="width:28px;height:28px;background:rgba(255,255,255,0.88);border:none;border-radius:4px;cursor:pointer;font-size:1.1rem;font-weight:700;color:#333;line-height:1">+</button>
                   <button onclick="zoomJarticMap(-1)"
                     style="width:28px;height:28px;background:rgba(255,255,255,0.88);border:none;border-radius:4px;cursor:pointer;font-size:1.1rem;font-weight:700;color:#333;line-height:1">−</button>
+                </div>
+                <div id="jartic-legend"
+                  style="position:absolute;bottom:22px;right:4px;display:none;background:rgba(0,0,0,0.55);border-radius:4px;padding:3px 7px;font-size:9.5px;color:#eee;line-height:1.6;z-index:6;pointer-events:none">
+                  <span style="display:inline-block;width:14px;height:3px;background:#e00;vertical-align:middle;margin-right:3px;border-radius:1px"></span>渋滞
+                  <span style="display:inline-block;width:14px;height:3px;background:#f80;vertical-align:middle;margin:0 3px 0 6px;border-radius:1px"></span>混雑
+                  <span style="display:inline-block;width:14px;height:3px;background:#111;vertical-align:middle;margin:0 3px 0 6px;border-radius:1px;border:1px solid #999"></span>通行止
                 </div>
               </div>
               <div id="traffic-map-fallback" style="display:none;padding:16px 12px;text-align:center">
@@ -5539,8 +5552,9 @@
       (function () {
         const TILE = 256;
         let zoom = 13, center = null, cv = null, ctx = null;
-        let osmCache = {}, jrCache = {};
+        let osmCache = {};
         let homeLat = 35.9185, homeLon = 139.7775;
+        let overlay = null;
 
         function ll2tile(lat, lon, z) {
           const n = 1 << z;
@@ -5563,6 +5577,45 @@
           return null;
         }
 
+        // JARTIC オーバーレイ div に <img> 要素を絶対座標で配置
+        // crossOrigin を設定しないことで CORS ブロックを回避
+        function updateOverlay() {
+          if (!overlay || !center) return;
+          const W = cv.width, H = cv.offsetHeight || 240;
+          const cx = center.x * TILE, cy = center.y * TILE;
+          const x0 = Math.floor((cx - W / 2) / TILE);
+          const y0 = Math.floor((cy - H / 2) / TILE);
+          const x1 = Math.ceil((cx + W / 2) / TILE);
+          const y1 = Math.ceil((cy + H / 2) / TILE);
+
+          const existing = {};
+          for (const el of overlay.children) existing[el.dataset.key] = el;
+
+          const needed = new Set();
+          for (let tx = x0; tx <= x1; tx++) {
+            for (let ty = y0; ty <= y1; ty++) {
+              const tx2 = clamp(tx, zoom), ty2 = clamp(ty, zoom);
+              const key = zoom + '/' + tx2 + '/' + ty2;
+              const px = Math.round(tx * TILE - cx + W / 2);
+              const py = Math.round(ty * TILE - cy + H / 2);
+              needed.add(key);
+              let el = existing[key];
+              if (!el) {
+                el = document.createElement('img');
+                el.dataset.key = key;
+                el.style.cssText = 'position:absolute;width:256px;height:256px;opacity:0.85;pointer-events:none';
+                el.src = 'https://www.jartic.or.jp/d/roadtraffic/' + key + '.png';
+                overlay.appendChild(el);
+              }
+              el.style.left = px + 'px';
+              el.style.top = py + 'px';
+            }
+          }
+          for (const [k, el] of Object.entries(existing)) {
+            if (!needed.has(k)) overlay.removeChild(el);
+          }
+        }
+
         function draw() {
           if (!cv || !ctx || !center) return;
           const W = cv.width, H = cv.height;
@@ -5582,39 +5635,20 @@
               const py = Math.round(ty * TILE - cy + H / 2);
               const tx2 = clamp(tx, zoom), ty2 = clamp(ty, zoom);
               const key = `${zoom}/${tx2}/${ty2}`;
-
-              // OSM ベース
               const osmImg = loadImg(
                 `https://tile.openstreetmap.org/${zoom}/${tx2}/${ty2}.png`,
                 osmCache, key, draw
               );
               if (osmImg instanceof HTMLImageElement) ctx.drawImage(osmImg, px, py, TILE, TILE);
-
-              // JARTIC 渋滞オーバーレイ
-              const jrImg = loadImg(
-                `https://www.jartic.or.jp/d/roadtraffic/${zoom}/${tx2}/${ty2}.png`,
-                jrCache, 'j' + key, draw
-              );
-              if (jrImg instanceof HTMLImageElement) {
-                ctx.save(); ctx.globalAlpha = 0.85;
-                ctx.drawImage(jrImg, px, py, TILE, TILE);
-                ctx.restore();
-              }
             }
           }
-
-          // 現在地マーカー
-          const mx = Math.round(W / 2), my = Math.round(H / 2);
-          ctx.beginPath(); ctx.arc(mx, my, 10, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(0,229,255,0.22)'; ctx.fill();
-          ctx.beginPath(); ctx.arc(mx, my, 6, 0, Math.PI * 2);
-          ctx.fillStyle = '#00e5ff'; ctx.fill();
-          ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
 
           // © 表示
           ctx.fillStyle = 'rgba(0,0,0,0.45)';
           ctx.font = '10px sans-serif';
           ctx.fillText('© OpenStreetMap contributors  © JARTIC', 4, H - 4);
+
+          updateOverlay();
         }
 
         function resizeDraw() {
@@ -5627,6 +5661,9 @@
         window.initJarticCanvasMap = function (lat, lon) {
           homeLat = lat; homeLon = lon;
           cv = document.getElementById('jartic-traffic-canvas');
+          overlay = document.getElementById('jartic-img-overlay');
+          const marker = document.getElementById('jartic-loc-marker');
+          const legend = document.getElementById('jartic-legend');
           const loading = document.getElementById('traffic-map-loading');
           const zctrl = document.getElementById('jartic-zoom-ctrl');
           if (!cv) return;
@@ -5635,6 +5672,9 @@
 
           if (loading) loading.style.display = 'none';
           cv.style.display = 'block';
+          if (overlay) overlay.style.display = 'block';
+          if (marker) marker.style.display = 'block';
+          if (legend) legend.style.display = 'block';
           if (zctrl) zctrl.style.display = 'flex';
 
           resizeDraw();
@@ -5670,7 +5710,8 @@
           if (nz === zoom) return;
           const scale = Math.pow(2, nz - zoom);
           center.x *= scale; center.y *= scale;
-          zoom = nz; osmCache = {}; jrCache = {};
+          zoom = nz; osmCache = {};
+          if (overlay) overlay.innerHTML = '';
           draw();
         };
       })();
