@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>七並べ - Shichi Narabe</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0a0a0a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+  }
+  canvas { display: block; cursor: default; max-width: 100vw; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="960" height="660"></canvas>
+<script>
+'use strict';
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ---- Card Utilities ----
+function createDeck(includeJoker = false) {
+  const deck = [];
+  for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) deck.push({ suit: s, rank: r });
+  if (includeJoker) deck.push({ suit: -1, rank: 0 });
+  return deck;
+}
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+function rankStr(r) { return ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'][r]; }
+function suitStr(s) { return ['♠', '♥', '♦', '♣'][s]; }
+function isRed(s) { return s === 1 || s === 2; }
+
+// ---- SVGカード画像プリロード ----
+const CARD_SUITS = ['spade','heart','diamond','club'];
+const CARD_RANKS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+const cardImages = {};
+let cardImagesReady = false;
+function preloadCardImages(callback) {
+  let loaded = 0;
+  const total = 52 + 2;
+  function onLoad() { loaded++; if(loaded >= total) { cardImagesReady = true; if(callback) callback(); } }
+  CARD_SUITS.forEach(suit => {
+    CARD_RANKS.forEach(rank => {
+      const img = new Image();
+      img.onload = onLoad; img.onerror = onLoad;
+      img.src = 'assets/cards/' + suit + '_' + rank + '.svg';
+      cardImages[suit + '_' + rank] = img;
+    });
+  });
+  const back = new Image(); back.onload = onLoad; back.onerror = onLoad;
+  back.src = 'assets/cards/back.svg'; cardImages['back'] = back;
+  const joker = new Image(); joker.onload = onLoad; joker.onerror = onLoad;
+  joker.src = 'assets/cards/joker.svg'; cardImages['joker'] = joker;
+}
+function getCardImage(card) {
+  if(card.suit === -1) return cardImages['joker'];
+  return cardImages[CARD_SUITS[card.suit] + '_' + CARD_RANKS[card.rank - 1]];
+}
+
+function drawCardFallback(ctx, card, x, y, w, h) {
+  const radius = 4;
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y); ctx.lineTo(x + w - radius, y); ctx.arcTo(x + w, y, x + w, y + radius, radius);
+  ctx.lineTo(x + w, y + h - radius); ctx.arcTo(x + w, y + h, x + w - radius, y + h, radius);
+  ctx.lineTo(x + radius, y + h); ctx.arcTo(x, y + h, x, y + h - radius, radius);
+  ctx.lineTo(x, y + radius); ctx.arcTo(x, y, x + radius, y, radius);
+  ctx.closePath();
+  ctx.fillStyle = card.suit === -1 ? '#fff9' : '#f0f0f0'; ctx.fill();
+  ctx.strokeStyle = '#999'; ctx.lineWidth = 0.5; ctx.stroke();
+  if (card.suit === -1) {
+    ctx.fillStyle = '#666'; ctx.font = `bold ${Math.floor(h * 0.45)}px serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🃏', x + w / 2, y + h / 2); return;
+  }
+  const color = isRed(card.suit) ? '#cc0000' : '#111';
+  const fs = Math.max(10, Math.floor(h * 0.22));
+  ctx.fillStyle = color; ctx.font = `bold ${fs}px monospace`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(rankStr(card.rank), x + 3, y + 2);
+  ctx.font = `${Math.floor(fs * 0.9)}px serif`; ctx.fillText(suitStr(card.suit), x + 3, y + 2 + fs);
+  ctx.save(); ctx.translate(x + w, y + h); ctx.rotate(Math.PI);
+  ctx.fillStyle = color; ctx.font = `bold ${fs}px monospace`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(rankStr(card.rank), 3, 2); ctx.font = `${Math.floor(fs * 0.9)}px serif`; ctx.fillText(suitStr(card.suit), 3, 2 + fs);
+  ctx.restore();
+  ctx.font = `${Math.floor(h * 0.38)}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = color; ctx.fillText(suitStr(card.suit), x + w / 2, y + h / 2);
+}
+function drawCard(ctx, card, x, y, w, h, faceUp = true) {
+  if (!faceUp) {
+    const back = cardImages['back'];
+    if(back && back.complete && back.naturalWidth > 0){
+      ctx.drawImage(back, x, y, w, h);
+    } else {
+      ctx.fillStyle = '#1a3a6a'; ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 1; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      ctx.strokeStyle = 'rgba(0,200,200,0.3)';
+      for (let i = 0; i < w; i += 6) { ctx.beginPath(); ctx.moveTo(x + i, y); ctx.lineTo(x, y + i); ctx.stroke(); }
+      for (let i = 0; i < h; i += 6) { ctx.beginPath(); ctx.moveTo(x + w, y + i); ctx.lineTo(x + w - i, y + h); ctx.stroke(); }
+    }
+    return;
+  }
+  const img = getCardImage(card);
+  if(img && img.complete && img.naturalWidth > 0){
+    ctx.drawImage(img, x, y, w, h);
+  } else {
+    drawCardFallback(ctx, card, x, y, w, h);
+  }
+}
+
+function drawButton(ctx, text, x, y, w, h, hover = false, disabled = false) {
+  ctx.fillStyle = disabled ? '#333' : hover ? '#00ffff22' : '#001a1a'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = disabled ? '#444' : hover ? '#00ffff' : '#006666'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = disabled ? '#555' : hover ? '#00ffff' : '#aaffff';
+  ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + w / 2, y + h / 2);
+}
+
+// ---- 七並べ ゲームロジック ----
+// 場: board[suit][rank] = true/false
+// rank 1=A ... 13=K, suit 0=♠ 1=♥ 2=♦ 3=♣
+const MAX_PASS = 3;
+const CW = 50, CH = 70;
+
+// グリッドレイアウト: 13列 (A〜K), 4行
+// 7は列6(インデックス6)
+// x起点: グリッド全体を中央に
+const GRID_X = (960 - 13 * (CW + 2)) / 2;
+const GRID_Y = [140, 220, 300, 380]; // 4スートの行Y
+
+let board = [];       // board[s][r] = boolean
+let hands = [];       // hands[i] = [{suit,rank}]
+let passCount = [];   // passCount[i]
+let currentTurn = 0;
+let finishedOrder = [];
+let gameOver = false;
+let message = '';
+let mouseX = 0, mouseY = 0;
+let cpuTimerActive = false;
+
+const btnPass = { x: 820, y: 580, w: 120, h: 36 };
+const btnRestart = { x: 400, y: 580, w: 160, h: 36 };
+
+function initGame() {
+  board = [];
+  for (let s = 0; s < 4; s++) {
+    board[s] = new Array(14).fill(false);
+    board[s][7] = true; // 7は最初から「場に出た」扱いで初期化（プレイヤーが7を持っていたら出す）
+  }
+  // 実際の7は手札から出す処理を行う
+  // 初期化: 7は場に未出
+  for (let s = 0; s < 4; s++) board[s][7] = false;
+
+  const deck = shuffle(createDeck(false));
+  hands = [[], [], [], []];
+  for (let i = 0; i < deck.length; i++) hands[i % 4].push(deck[i]);
+
+  passCount = [0, 0, 0, 0];
+  finishedOrder = [];
+  gameOver = false;
+  cpuTimerActive = false;
+  message = '';
+
+  // 7を持つプレイヤーがスタート
+  // まず各プレイヤーの7を処理（スタートは7のハートを持つプレイヤー）
+  // ルール: 最初は全プレイヤーが持っている7を出す
+  // 実際のゲームではターンごとに7を出すが、簡略化: 最初に全員7を自動で出す
+  // → 実際には「7のハートを持つプレイヤー」がスタート
+  let startPlayer = 0;
+  for (let i = 0; i < 4; i++) {
+    for (const c of hands[i]) {
+      if (c.rank === 7) {
+        // 全ての7を最初から場に出す（一般的なルール）
+      }
+    }
+  }
+  // ♥の7を持つプレイヤーをスタートに
+  for (let i = 0; i < 4; i++) {
+    if (hands[i].some(c => c.suit === 1 && c.rank === 7)) {
+      startPlayer = i;
+      break;
+    }
+  }
+  currentTurn = startPlayer;
+  updateMessage();
+
+  // CPUターンなら遅延開始
+  if (currentTurn !== 0) {
+    cpuTimerActive = true;
+    setTimeout(() => {
+      cpuTimerActive = false;
+      doCpuTurn();
+    }, 1500);
+  }
+}
+
+// 出せるカードを求める
+function getPlayableCards(playerIdx) {
+  const playable = [];
+  for (const card of hands[playerIdx]) {
+    if (canPlay(card)) playable.push(card);
+  }
+  return playable;
+}
+
+function canPlay(card) {
+  const s = card.suit, r = card.rank;
+  if (r === 7) return true; // 7はいつでも出せる
+  if (!board[s][7]) return false; // 7が出ていないスートは出せない
+  // 左: r-1 が場にあるか または r-1 = 7
+  if (r < 7) {
+    return board[s][r + 1]; // r+1が場にある（= r+1が出ていれば rが出せる）
+  } else {
+    return board[s][r - 1];
+  }
+}
+
+function playCard(playerIdx, card) {
+  const hand = hands[playerIdx];
+  const idx = hand.findIndex(c => c.suit === card.suit && c.rank === card.rank);
+  if (idx === -1) return false;
+  hand.splice(idx, 1);
+  board[card.suit][card.rank] = true;
+  checkFinished(playerIdx);
+  return true;
+}
+
+function checkFinished(player) {
+  if (hands[player].length === 0 && !finishedOrder.includes(player)) {
+    finishedOrder.push(player);
+  }
+}
+
+function updateMessage() {
+  if (gameOver) { message = 'ゲーム終了！'; return; }
+  const names = ['あなた', 'CPU1', 'CPU2', 'CPU3'];
+  if (currentTurn === 0) {
+    message = 'あなたのターン: カードを出すかパスしてください';
+  } else {
+    message = `${names[currentTurn]} のターン...`;
+  }
+}
+
+// パス処理
+function doPass(playerIdx) {
+  if (passCount[playerIdx] >= MAX_PASS) return false;
+  passCount[playerIdx]++;
+  return true;
+}
+
+function nextTurn() {
+  // ゲーム終了チェック
+  const activePlayers = [0, 1, 2, 3].filter(p => !finishedOrder.includes(p));
+  if (activePlayers.length === 0) {
+    gameOver = true;
+    updateMessage();
+    return;
+  }
+  // 全員パスオーバー or 手札なし → 終了
+  const canAct = activePlayers.filter(p => {
+    return getPlayableCards(p).length > 0 || passCount[p] < MAX_PASS;
+  });
+  if (canAct.length === 0 && activePlayers.length > 0) {
+    // 残り全員が動けない: 残り全員を finished に
+    for (const p of activePlayers) {
+      if (!finishedOrder.includes(p)) finishedOrder.push(p);
+    }
+    gameOver = true;
+    updateMessage();
+    return;
+  }
+
+  currentTurn = (currentTurn + 1) % 4;
+  let tries = 0;
+  while (finishedOrder.includes(currentTurn) && tries < 4) {
+    currentTurn = (currentTurn + 1) % 4;
+    tries++;
+  }
+  cpuTimerActive = false;
+  updateMessage();
+  if (currentTurn !== 0 && !gameOver) {
+    cpuTimerActive = true;
+    setTimeout(() => {
+      cpuTimerActive = false;
+      doCpuTurn();
+    }, 1200);
+  }
+}
+
+function doCpuTurn() {
+  if (gameOver || currentTurn === 0) return;
+  const playable = getPlayableCards(currentTurn);
+  if (playable.length > 0) {
+    const card = playable[Math.floor(Math.random() * playable.length)];
+    playCard(currentTurn, card);
+  } else {
+    doPass(currentTurn);
+  }
+  nextTurn();
+}
+
+// プレイヤーアクション
+function playerPlayCard(card) {
+  if (currentTurn !== 0 || gameOver || cpuTimerActive) return;
+  if (!canPlay(card)) return;
+  playCard(0, card);
+  nextTurn();
+}
+
+function playerPass() {
+  if (currentTurn !== 0 || gameOver || cpuTimerActive) return;
+  if (getPlayableCards(0).length > 0) return; // 出せるカードがある場合はパス不可
+  if (passCount[0] >= MAX_PASS) return;
+  doPass(0);
+  nextTurn();
+}
+
+// ---- 描画 ----
+function drawBackground() {
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, 960, 660);
+}
+
+function drawBoard() {
+  // 背景パネル
+  ctx.fillStyle = '#0a1a0a';
+  ctx.fillRect(GRID_X - 4, GRID_Y[0] - 4, 13 * (CW + 2) + 8, 4 * (CH + 10) + 4);
+  ctx.strokeStyle = '#1a4a1a';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(GRID_X - 4, GRID_Y[0] - 4, 13 * (CW + 2) + 8, 4 * (CH + 10) + 4);
+
+  // スートラベル
+  const suitColors = ['#aaa', '#ff6666', '#ff6666', '#aaa'];
+  for (let s = 0; s < 4; s++) {
+    ctx.fillStyle = suitColors[s];
+    ctx.font = 'bold 18px serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(suitStr(s), GRID_X - 8, GRID_Y[s] + CH / 2);
+  }
+
+  // グリッド描画
+  for (let s = 0; s < 4; s++) {
+    for (let r = 1; r <= 13; r++) {
+      const gx = GRID_X + (r - 1) * (CW + 2);
+      const gy = GRID_Y[s];
+      if (board[s][r]) {
+        // 出されたカード
+        drawCard(ctx, { suit: s, rank: r }, gx, gy, CW, CH, true);
+      } else {
+        // 空マス
+        ctx.fillStyle = r === 7 ? '#0a3a1a' : '#111';
+        ctx.fillRect(gx, gy, CW, CH);
+        ctx.strokeStyle = r === 7 ? '#1a6a2a' : '#1a1a1a';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(gx, gy, CW, CH);
+        if (r === 7) {
+          ctx.fillStyle = '#1a4a1a';
+          ctx.font = 'bold 12px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('7', gx + CW / 2, gy + CH / 2);
+        }
+      }
+    }
+  }
+}
+
+function drawPlayerHand() {
+  const hand = hands[0];
+  if (hand.length === 0) return;
+  const gap = Math.min(CW + 4, Math.floor(820 / hand.length));
+  const totalW = (hand.length - 1) * gap + CW;
+  const startX = (960 - totalW) / 2;
+  const y = 500;
+
+  ctx.fillStyle = '#aaffff';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('あなたの手札 / Your Hand', 480, 498);
+
+  for (let i = 0; i < hand.length; i++) {
+    const card = hand[i];
+    const x = startX + i * gap;
+    const playable = canPlay(card);
+    if (!playable) {
+      ctx.globalAlpha = 0.4;
+    }
+    // ホバー
+    const hovered = mouseX >= x && mouseX <= x + CW && mouseY >= y && mouseY <= y + CH;
+    if (hovered && playable) {
+      ctx.shadowColor = '#00ffff';
+      ctx.shadowBlur = 10;
+    }
+    drawCard(ctx, card, x, y, CW, CH, true);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawCpuInfo() {
+  const names = ['', 'CPU1', 'CPU2', 'CPU3'];
+  const positions = [
+    null,
+    { x: 30, y: 480 },
+    { x: 480, y: 80 },
+    { x: 900, y: 480 }
+  ];
+  for (let i = 1; i <= 3; i++) {
+    const p = positions[i];
+    ctx.fillStyle = finishedOrder.includes(i) ? '#555' : '#9b59b6';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(names[i], p.x, p.y);
+    ctx.fillStyle = '#777';
+    ctx.font = '11px monospace';
+    const rank = finishedOrder.indexOf(i);
+    if (rank !== -1) {
+      ctx.fillStyle = rank === 0 ? '#ffdd00' : '#666';
+      ctx.fillText(`${rank + 1}位`, p.x, p.y + 15);
+    } else {
+      ctx.fillText(`${hands[i].length}枚 / パス:${passCount[i]}/${MAX_PASS}`, p.x, p.y + 15);
+    }
+  }
+
+  // プレイヤー情報
+  const pRank = finishedOrder.indexOf(0);
+  ctx.fillStyle = '#00ffff';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  if (pRank !== -1) {
+    ctx.fillStyle = pRank === 0 ? '#ffdd00' : '#aaa';
+    ctx.fillText(`あなた: ${pRank + 1}位 上がり！`, 20, 490);
+  } else {
+    ctx.fillText(`あなた: ${hands[0].length}枚 パス: ${passCount[0]}/${MAX_PASS}`, 20, 490);
+  }
+}
+
+function drawTurnIndicator() {
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(150, 470, 660, 28);
+  ctx.strokeStyle = '#00ffff33';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(150, 470, 660, 28);
+  ctx.fillStyle = '#00ffff';
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(message, 480, 484);
+}
+
+function drawPassButton() {
+  if (gameOver || currentTurn !== 0 || cpuTimerActive) return;
+  const playable = getPlayableCards(0).length > 0;
+  const disabled = playable || passCount[0] >= MAX_PASS;
+  drawButton(ctx, `パス (残り${MAX_PASS - passCount[0]}回)`, btnPass.x, btnPass.y, btnPass.w, btnPass.h,
+    isHover(btnPass) && !disabled, disabled);
+}
+
+function drawGameOver() {
+  if (!gameOver) return;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.88)';
+  ctx.fillRect(260, 160, 440, 240);
+  ctx.strokeStyle = '#9b59b6';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(260, 160, 440, 240);
+
+  ctx.fillStyle = '#9b59b6';
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('ゲーム終了！ Results', 480, 175);
+
+  const names = ['プレイヤー', 'CPU1', 'CPU2', 'CPU3'];
+  for (let i = 0; i < finishedOrder.length; i++) {
+    const p = finishedOrder[i];
+    const isFirst = i === 0;
+    const isLast = i === finishedOrder.length - 1;
+    ctx.fillStyle = isFirst ? '#ffdd00' : isLast ? '#ff00ff' : '#aaa';
+    ctx.font = `bold ${isFirst || isLast ? 16 : 13}px monospace`;
+    ctx.fillText(`${i + 1}位: ${names[p]}${isLast && finishedOrder.length === 4 ? '  (最下位)' : ''}`, 480, 210 + i * 24);
+  }
+
+  drawButton(ctx, 'もう一度 / Play Again', btnRestart.x, btnRestart.y, btnRestart.w, btnRestart.h,
+    isHover(btnRestart));
+}
+
+function isHover(btn) {
+  return mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h;
+}
+
+function gameLoop() {
+  drawBackground();
+  drawBoard();
+  drawCpuInfo();
+  drawTurnIndicator();
+  if (!gameOver) {
+    drawPlayerHand();
+    drawPassButton();
+  } else {
+    drawPlayerHand();
+    drawGameOver();
+    drawButton(ctx, 'もう一度 / Play Again', btnRestart.x, btnRestart.y, btnRestart.w, btnRestart.h,
+      isHover(btnRestart));
+  }
+  requestAnimationFrame(gameLoop);
+}
+
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / canvas.offsetWidth),
+    y: (e.clientY - rect.top) * (canvas.height / canvas.offsetHeight)
+  };
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  const pos = getCanvasPos(e);
+  mouseX = pos.x;
+  mouseY = pos.y;
+  canvas.style.cursor = 'default';
+
+  if (gameOver) {
+    if (isHover(btnRestart)) canvas.style.cursor = 'pointer';
+    return;
+  }
+  if (currentTurn === 0 && !cpuTimerActive) {
+    // パスボタン
+    const playable = getPlayableCards(0).length > 0;
+    if (isHover(btnPass) && !playable && passCount[0] < MAX_PASS) {
+      canvas.style.cursor = 'pointer';
+      return;
+    }
+    // 手札
+    const hand = hands[0];
+    const gap = Math.min(CW + 4, Math.floor(820 / Math.max(1, hand.length)));
+    const totalW = (hand.length - 1) * gap + CW;
+    const startX = (960 - totalW) / 2;
+    for (let i = 0; i < hand.length; i++) {
+      const x = startX + i * gap;
+      if (mouseX >= x && mouseX <= x + CW && mouseY >= 500 && mouseY <= 500 + CH) {
+        if (canPlay(hand[i])) canvas.style.cursor = 'pointer';
+        return;
+      }
+    }
+  }
+});
+
+canvas.addEventListener('click', (e) => {
+  const pos = getCanvasPos(e);
+  mouseX = pos.x;
+  mouseY = pos.y;
+
+  if (gameOver) {
+    if (isHover(btnRestart)) initGame();
+    return;
+  }
+
+  if (currentTurn !== 0 || cpuTimerActive) return;
+
+  // パスボタン
+  if (isHover(btnPass)) {
+    playerPass();
+    return;
+  }
+
+  // 手札クリック
+  const hand = hands[0];
+  const gap = Math.min(CW + 4, Math.floor(820 / Math.max(1, hand.length)));
+  const totalW = (hand.length - 1) * gap + CW;
+  const startX = (960 - totalW) / 2;
+  for (let i = hand.length - 1; i >= 0; i--) {
+    const x = startX + i * gap;
+    if (pos.x >= x && pos.x <= x + CW && pos.y >= 500 && pos.y <= 500 + CH) {
+      playerPlayCard(hand[i]);
+      return;
+    }
+  }
+});
+
+initGame();
+preloadCardImages(() => { /* 画像ロード完了 */ });
+gameLoop();
+</script>
+</body>
+</html>
