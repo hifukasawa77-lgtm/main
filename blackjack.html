@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BLACKJACK | hide の部屋</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #0a0a0a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+    }
+    canvas {
+      display: block;
+      cursor: default;
+      max-width: 100%;
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+<script>
+"use strict";
+
+// ---- カード共通関数 ----
+function createDeck(includeJoker=false) {
+  const deck = [];
+  for(let s=0;s<4;s++) for(let r=1;r<=13;r++) deck.push({suit:s,rank:r});
+  if(includeJoker) deck.push({suit:-1,rank:0});
+  return deck;
+}
+function shuffle(arr) {
+  for(let i=arr.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+  return arr;
+}
+function rankStr(r){ return ['','A','2','3','4','5','6','7','8','9','10','J','Q','K'][r]; }
+function suitStr(s){ return ['♠','♥','♦','♣'][s]; }
+function isRed(s){ return s===1||s===2; }
+
+function drawCard(ctx, card, x, y, w, h, faceUp=true) {
+  if(!faceUp){
+    ctx.fillStyle='#1a3a6a';
+    ctx.fillRect(x,y,w,h);
+    ctx.strokeStyle='#00ffff';
+    ctx.lineWidth=1;
+    ctx.strokeRect(x+1,y+1,w-2,h-2);
+    ctx.strokeStyle='rgba(0,200,200,0.3)';
+    for(let i=0;i<w;i+=6){ctx.beginPath();ctx.moveTo(x+i,y);ctx.lineTo(x,y+i);ctx.stroke();}
+    for(let i=0;i<h;i+=6){ctx.beginPath();ctx.moveTo(x+w,y+i);ctx.lineTo(x+w-i,y+h);ctx.stroke();}
+    return;
+  }
+  const radius=4;
+  ctx.beginPath();
+  ctx.moveTo(x+radius,y);
+  ctx.lineTo(x+w-radius,y);ctx.arcTo(x+w,y,x+w,y+radius,radius);
+  ctx.lineTo(x+w,y+h-radius);ctx.arcTo(x+w,y+h,x+w-radius,y+h,radius);
+  ctx.lineTo(x+radius,y+h);ctx.arcTo(x,y+h,x,y+h-radius,radius);
+  ctx.lineTo(x,y+radius);ctx.arcTo(x,y,x+radius,y,radius);
+  ctx.closePath();
+  ctx.fillStyle = card.suit===-1?'#fff9':'#f0f0f0';
+  ctx.fill();
+  ctx.strokeStyle='#999';ctx.lineWidth=0.5;ctx.stroke();
+  if(card.suit===-1){
+    ctx.fillStyle='#666';
+    ctx.font=`bold ${Math.floor(h*0.45)}px serif`;
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('🃏',x+w/2,y+h/2);
+    return;
+  }
+  const color = isRed(card.suit)?'#cc0000':'#111';
+  ctx.fillStyle=color;
+  const fs=Math.max(10,Math.floor(h*0.22));
+  ctx.font=`bold ${fs}px monospace`;
+  ctx.textAlign='left';ctx.textBaseline='top';
+  ctx.fillText(rankStr(card.rank),x+3,y+2);
+  ctx.font=`${Math.floor(fs*0.9)}px serif`;
+  ctx.fillText(suitStr(card.suit),x+3,y+2+fs);
+  ctx.save();ctx.translate(x+w,y+h);ctx.rotate(Math.PI);
+  ctx.fillStyle=color;
+  ctx.font=`bold ${fs}px monospace`;
+  ctx.textAlign='left';ctx.textBaseline='top';
+  ctx.fillText(rankStr(card.rank),3,2);
+  ctx.font=`${Math.floor(fs*0.9)}px serif`;
+  ctx.fillText(suitStr(card.suit),3,2+fs);
+  ctx.restore();
+  ctx.font=`${Math.floor(h*0.38)}px serif`;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(suitStr(card.suit),x+w/2,y+h/2);
+}
+
+function drawButton(ctx, text, x, y, w, h, hover=false, disabled=false){
+  ctx.fillStyle = disabled?'#333': hover?'#00ffff22':'#001a1a';
+  ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle = disabled?'#444': hover?'#00ffff':'#006666';
+  ctx.lineWidth=1.5;
+  ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle = disabled?'#555': hover?'#00ffff':'#aaffff';
+  ctx.font='bold 14px monospace';
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(text,x+w/2,y+h/2);
+}
+
+// ---- ゲームロジック ----
+const CARD_W = 70;
+const CARD_H = 100;
+const CARD_OFFSET = 80;
+
+// ブラックジャックの手札合計計算
+function calcScore(hand) {
+  let total = 0;
+  let aces = 0;
+  for(const c of hand){
+    if(!c.faceUp) continue; // 裏向きは計算から除外
+    if(c.card.rank === 1){ aces++; total += 11; }
+    else if(c.card.rank >= 10){ total += 10; }
+    else { total += c.card.rank; }
+  }
+  while(total > 21 && aces > 0){ total -= 10; aces--; }
+  return total;
+}
+
+// 全カード考慮（ディーラーの裏カードも含む）
+function calcScoreAll(hand) {
+  let total = 0;
+  let aces = 0;
+  for(const c of hand){
+    if(c.card.rank === 1){ aces++; total += 11; }
+    else if(c.card.rank >= 10){ total += 10; }
+    else { total += c.card.rank; }
+  }
+  while(total > 21 && aces > 0){ total -= 10; aces--; }
+  return total;
+}
+
+// ---- ゲーム状態 ----
+const CHIPS_KEY = 'bj_chips';
+let chips = parseInt(localStorage.getItem(CHIPS_KEY)) || 1000;
+let bet = 0;
+let state = 'betting'; // 'betting' | 'playing' | 'dealer' | 'result'
+let playerHand = [];
+let dealerHand = [];
+let deck = [];
+let resultMsg = '';
+let resultColor = '#00ffff';
+let isDoubled = false;
+
+// マウス状態
+let mouseX = 0;
+let mouseY = 0;
+
+// ボタン定義（ベット画面）
+const btns = {
+  bet100:   {x:100, y:510, w:120, h:36, label:'+100'},
+  bet500:   {x:240, y:510, w:120, h:36, label:'+500'},
+  bet1000:  {x:380, y:510, w:120, h:36, label:'+1000'},
+  betClear: {x:520, y:510, w:100, h:36, label:'クリア'},
+  start:    {x:320, y:555, w:160, h:36, label:'ゲームスタート'},
+  // プレイ中
+  hit:    {x:140, y:510, w:120, h:36, label:'ヒット'},
+  stand:  {x:280, y:510, w:120, h:36, label:'スタンド'},
+  double: {x:420, y:510, w:120, h:36, label:'ダブル'},
+  // リザルト
+  again:  {x:300, y:530, w:200, h:40, label:'もう一度'},
+  // チップなし
+  reset:  {x:250, y:530, w:300, h:40, label:'チップをリセット(1000)'},
+};
+
+function saveChips(){ localStorage.setItem(CHIPS_KEY, chips); }
+
+function dealCard(hand, faceUp=true){
+  if(deck.length === 0){ deck = shuffle(createDeck()); }
+  hand.push({card: deck.pop(), faceUp});
+}
+
+function startGame(){
+  if(bet <= 0 || bet > chips) return;
+  deck = shuffle(createDeck());
+  playerHand = [];
+  dealerHand = [];
+  isDoubled = false;
+  dealCard(playerHand);
+  dealCard(dealerHand);
+  dealCard(playerHand);
+  dealCard(dealerHand, false); // ディーラー2枚目は裏向き
+  state = 'playing';
+
+  // ブラックジャックチェック
+  const pScore = calcScore(playerHand);
+  const dScore = calcScoreAll(dealerHand);
+  if(pScore === 21){
+    revealDealer();
+    if(dScore === 21){
+      endRound('プッシュ（引き分け）', '#ffff00', 0);
+    } else {
+      endRound('ブラックジャック！ 勝ち', '#00ff88', Math.floor(bet * 1.5));
+    }
+  }
+}
+
+function revealDealer(){
+  for(const c of dealerHand) c.faceUp = true;
+}
+
+function hit(){
+  if(state !== 'playing') return;
+  dealCard(playerHand);
+  const s = calcScore(playerHand);
+  if(s > 21){
+    revealDealer();
+    endRound('バスト！ 負け', '#ff4444', -bet);
+  } else if(s === 21){
+    stand();
+  }
+}
+
+function stand(){
+  if(state !== 'playing') return;
+  state = 'dealer';
+  revealDealer();
+  dealerPlay();
+}
+
+function doDouble(){
+  if(state !== 'playing') return;
+  if(playerHand.length !== 2) return;
+  if(chips - bet < bet) return; // 追加ベット分が足りない
+  bet *= 2;
+  isDoubled = true;
+  dealCard(playerHand);
+  const s = calcScore(playerHand);
+  if(s > 21){
+    revealDealer();
+    endRound('ダブル バスト！ 負け', '#ff4444', -bet);
+  } else {
+    stand();
+  }
+}
+
+function dealerPlay(){
+  const doStep = () => {
+    const s = calcScoreAll(dealerHand);
+    if(s < 17){
+      dealCard(dealerHand);
+      setTimeout(doStep, 600);
+    } else {
+      judgeResult();
+    }
+  };
+  setTimeout(doStep, 600);
+}
+
+function judgeResult(){
+  const pScore = calcScore(playerHand);
+  const dScore = calcScoreAll(dealerHand);
+  if(dScore > 21){
+    endRound('ディーラーバスト！ 勝ち', '#00ff88', bet);
+  } else if(pScore > dScore){
+    endRound('勝ち！', '#00ff88', bet);
+  } else if(pScore < dScore){
+    endRound('負け', '#ff4444', -bet);
+  } else {
+    endRound('プッシュ（引き分け）', '#ffff00', 0);
+  }
+}
+
+function endRound(msg, color, chipDelta){
+  // chipDeltaは純利益（ベット回収込みで調整）
+  if(chipDelta > 0){
+    chips += chipDelta; // 利益分追加
+  } else if(chipDelta < 0){
+    chips += chipDelta; // マイナス(損失)
+  }
+  // bet自体は既にchipsから引いてある
+  resultMsg = msg;
+  resultColor = color;
+  state = 'result';
+  saveChips();
+}
+
+function resetGame(){
+  bet = 0;
+  playerHand = [];
+  dealerHand = [];
+  state = 'betting';
+  resultMsg = '';
+}
+
+function inBtn(b, x, y){ return x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h; }
+
+// ---- 描画 ----
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+function drawBackground(){
+  // 黒背景
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0,0,800,600);
+  // テーブル
+  ctx.fillStyle = '#0a2a0a';
+  ctx.fillRect(20, 40, 760, 440);
+  ctx.strokeStyle = '#006600';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, 40, 760, 440);
+  // タイトル
+  ctx.fillStyle = '#00ffff';
+  ctx.font = 'bold 32px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('BLACKJACK', 400, 8);
+}
+
+function drawHand(hand, startX, y, label){
+  ctx.fillStyle = '#aaffff';
+  ctx.font = '13px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(label, startX, y - 18);
+
+  for(let i=0;i<hand.length;i++){
+    const x = startX + i * CARD_OFFSET;
+    drawCard(ctx, hand[i].card, x, y, CARD_W, CARD_H, hand[i].faceUp);
+  }
+
+  // スコア表示
+  const score = calcScore(hand);
+  if(score > 0){
+    ctx.fillStyle = score > 21 ? '#ff4444' : '#ffffff';
+    ctx.font = 'bold 18px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`${score}`, startX, y + CARD_H + 4);
+  }
+}
+
+function drawInfoBar(){
+  // チップ・ベット情報
+  ctx.fillStyle = '#00ffff';
+  ctx.font = 'bold 15px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`チップ: ${chips}`, 30, 490);
+  ctx.fillStyle = '#ff00ff';
+  ctx.fillText(`ベット: ${bet}`, 200, 490);
+}
+
+function drawBettingUI(){
+  const bList = [btns.bet100, btns.bet500, btns.bet1000, btns.betClear, btns.start];
+  const startDisabled = bet <= 0 || bet > chips;
+  for(const b of bList){
+    const disabled = (b === btns.start && startDisabled);
+    drawButton(ctx, b.label, b.x, b.y, b.w, b.h, inBtn(b, mouseX, mouseY), disabled);
+  }
+}
+
+function drawPlayingUI(){
+  const canDouble = playerHand.length === 2 && chips >= bet;
+  drawButton(ctx, btns.hit.label,    btns.hit.x,    btns.hit.y,    btns.hit.w,    btns.hit.h,    inBtn(btns.hit,    mouseX,mouseY));
+  drawButton(ctx, btns.stand.label,  btns.stand.x,  btns.stand.y,  btns.stand.w,  btns.stand.h,  inBtn(btns.stand,  mouseX,mouseY));
+  drawButton(ctx, btns.double.label, btns.double.x, btns.double.y, btns.double.w, btns.double.h, inBtn(btns.double, mouseX,mouseY), !canDouble);
+}
+
+function drawResultUI(){
+  // 結果メッセージ
+  ctx.fillStyle = resultColor;
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(resultMsg, 400, 490);
+
+  if(chips <= 0){
+    ctx.fillStyle = '#ff4444';
+    ctx.font = '16px monospace';
+    ctx.fillText('チップがなくなりました。', 400, 515);
+    drawButton(ctx, btns.reset.label, btns.reset.x, btns.reset.y, btns.reset.w, btns.reset.h, inBtn(btns.reset, mouseX, mouseY));
+  } else {
+    drawButton(ctx, btns.again.label, btns.again.x, btns.again.y, btns.again.w, btns.again.h, inBtn(btns.again, mouseX, mouseY));
+  }
+}
+
+function draw(){
+  drawBackground();
+
+  if(state === 'betting'){
+    // ディーラーエリアに説明
+    ctx.fillStyle = '#336633';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('ベット額を選んでゲームを開始してください', 400, 240);
+    drawInfoBar();
+    drawBettingUI();
+  } else {
+    // ディーラーの手札
+    drawHand(dealerHand, 60, 65, 'ディーラー');
+    // プレイヤーの手札
+    drawHand(playerHand, 60, 310, 'あなた');
+    drawInfoBar();
+
+    if(state === 'playing'){
+      drawPlayingUI();
+    } else if(state === 'dealer'){
+      ctx.fillStyle = '#ffff88';
+      ctx.font = '14px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('ディーラーのターン...', 400, 510);
+    } else if(state === 'result'){
+      drawResultUI();
+    }
+  }
+}
+
+function gameLoop(){
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// ---- イベントハンドラ ----
+function getCanvasPos(e){
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / rect.width),
+    y: (e.clientY - rect.top)  * (canvas.height / rect.height)
+  };
+}
+
+canvas.addEventListener('mousemove', e => {
+  const p = getCanvasPos(e);
+  mouseX = p.x;
+  mouseY = p.y;
+  // カーソル変更
+  let over = false;
+  const allBtns = Object.values(btns);
+  for(const b of allBtns){
+    if(inBtn(b, mouseX, mouseY)){ over = true; break; }
+  }
+  canvas.style.cursor = over ? 'pointer' : 'default';
+});
+
+canvas.addEventListener('mousedown', e => {
+  const p = getCanvasPos(e);
+  const x = p.x, y = p.y;
+
+  if(state === 'betting'){
+    if(inBtn(btns.bet100, x, y)){
+      if(bet + 100 <= chips) bet += 100;
+    } else if(inBtn(btns.bet500, x, y)){
+      if(bet + 500 <= chips) bet += 500;
+    } else if(inBtn(btns.bet1000, x, y)){
+      if(bet + 1000 <= chips) bet += 1000;
+    } else if(inBtn(btns.betClear, x, y)){
+      bet = 0;
+    } else if(inBtn(btns.start, x, y)){
+      if(bet > 0 && bet <= chips){
+        chips -= bet; // ベット分を事前に引く
+        saveChips();
+        startGame();
+      }
+    }
+  } else if(state === 'playing'){
+    if(inBtn(btns.hit, x, y)){
+      hit();
+    } else if(inBtn(btns.stand, x, y)){
+      stand();
+    } else if(inBtn(btns.double, x, y)){
+      if(playerHand.length === 2 && chips >= bet){
+        chips -= bet; // 追加ベット分
+        saveChips();
+        doDouble();
+      }
+    }
+  } else if(state === 'result'){
+    if(chips <= 0){
+      if(inBtn(btns.reset, x, y)){
+        chips = 1000;
+        saveChips();
+        bet = 0;
+        resetGame();
+      }
+    } else {
+      if(inBtn(btns.again, x, y)){
+        bet = 0;
+        resetGame();
+      }
+    }
+  }
+});
+
+// ゲーム開始
+gameLoop();
+</script>
+</body>
+</html>
