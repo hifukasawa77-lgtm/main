@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FreeCell - hide_0001</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0a; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 100vh; overflow: hidden; font-family: 'Courier New', monospace; }
+    canvas { display: block; max-width: 100%; height: auto; cursor: default; }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="980" height="720"></canvas>
+<script>
+'use strict';
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ---- カード定数 ----
+const CARD_W = 60, CARD_H = 85;
+const CASCADE_OFFSET = 22;
+
+// ---- ユーティリティ ----
+function createDeck() {
+  const deck = [];
+  for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) deck.push({ suit: s, rank: r });
+  return deck;
+}
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+function rankStr(r) { return ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'][r]; }
+function suitStr(s) { return ['♠', '♥', '♦', '♣'][s]; }
+function isRed(s) { return s === 1 || s === 2; }
+
+function drawCard(ctx, card, x, y, w, h, faceUp = true) {
+  if (!faceUp) {
+    ctx.fillStyle = '#1a3a6a'; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 1; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    ctx.strokeStyle = 'rgba(0,200,200,0.25)';
+    for (let i = 0; i < Math.max(w, h) * 2; i += 8) {
+      ctx.beginPath(); ctx.moveTo(x + i, y); ctx.lineTo(x, y + i); ctx.stroke();
+    }
+    return;
+  }
+  const r = 4;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+  ctx.fillStyle = '#f0f0f0'; ctx.fill();
+  ctx.strokeStyle = '#bbb'; ctx.lineWidth = 0.5; ctx.stroke();
+  const color = isRed(card.suit) ? '#cc0000' : '#111';
+  const fs = Math.max(9, Math.floor(h * 0.18));
+  ctx.fillStyle = color;
+  ctx.font = `bold ${fs}px monospace`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(rankStr(card.rank), x + 2, y + 1);
+  ctx.font = `${Math.floor(fs * 0.9)}px serif`; ctx.fillText(suitStr(card.suit), x + 2, y + 1 + fs);
+  ctx.save(); ctx.translate(x + w, y + h); ctx.rotate(Math.PI);
+  ctx.fillStyle = color; ctx.font = `bold ${fs}px monospace`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(rankStr(card.rank), 2, 1); ctx.font = `${Math.floor(fs * 0.9)}px serif`; ctx.fillText(suitStr(card.suit), 2, 1 + fs);
+  ctx.restore();
+  ctx.font = `${Math.floor(h * 0.32)}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = color; ctx.fillText(suitStr(card.suit), x + w / 2, y + h / 2);
+}
+
+function drawEmptySlot(ctx, x, y, w, h) {
+  ctx.strokeStyle = 'rgba(0,255,255,0.3)'; ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
+}
+
+function drawButton(ctx, text, x, y, w, h, hover = false, disabled = false) {
+  ctx.fillStyle = disabled ? '#222' : hover ? '#00ffff22' : '#001a1a'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = disabled ? '#333' : hover ? '#00ffff' : '#006666'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = disabled ? '#444' : hover ? '#00ffff' : '#aaffff';
+  ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + w / 2, y + h / 2);
+}
+
+// ---- ゲーム状態 ----
+let freeCells = [null, null, null, null];
+let foundations = [[], [], [], []];
+let cascades = [[], [], [], [], [], [], [], []];
+let moveCount = 0;
+let gameWon = false;
+
+// ---- レイアウト定数 ----
+const FC_X = [10, 80, 150, 220];
+const FC_Y = 20;
+const FOUND_X = [520, 590, 660, 730];
+const FOUND_Y = 20;
+const CAS_X = [10, 120, 230, 340, 450, 560, 670, 780];
+const CAS_Y = 120;
+
+// ---- ボタン ----
+const BTN_NEW = { x: 330, y: 25, w: 90, h: 28, label: '新しいゲーム' };
+const BTN_AUTO = { x: 430, y: 25, w: 55, h: 28, label: 'AUTO' };
+
+// ---- ドラッグ状態 ----
+let drag = null;
+let mx = 0, my = 0;
+let hovBtn = null;
+
+// ---- 初期化 ----
+function newGame() {
+  const deck = shuffle(createDeck());
+  cascades = [[], [], [], [], [], [], [], []];
+  freeCells = [null, null, null, null];
+  foundations = [[], [], [], []];
+  moveCount = 0; gameWon = false;
+
+  // 0〜3列は7枚、4〜7列は6枚
+  let idx = 0;
+  for (let i = 0; i < 52; i++) {
+    cascades[i % 8].push({ ...deck[i], faceUp: true });
+  }
+}
+
+// ---- 移動ルール ----
+function canPlaceOnFoundation(card, fi) {
+  const f = foundations[fi];
+  if (f.length === 0) return card.rank === 1;
+  const top = f[f.length - 1];
+  return card.suit === top.suit && card.rank === top.rank + 1;
+}
+
+function findFoundationForCard(card) {
+  for (let i = 0; i < 4; i++) {
+    if (canPlaceOnFoundation(card, i)) return i;
+  }
+  return -1;
+}
+
+function canPlaceOnCascade(card, col) {
+  const t = cascades[col];
+  if (t.length === 0) return true; // 空カスケードは何でもOK
+  const top = t[t.length - 1];
+  return isRed(card.suit) !== isRed(top.suit) && card.rank === top.rank - 1;
+}
+
+function countEmptyFreeCells() {
+  return freeCells.filter(c => c === null).length;
+}
+
+function countEmptyCascades(excludeCol = -1) {
+  return cascades.filter((c, i) => i !== excludeCol && c.length === 0).length;
+}
+
+function maxMovable(srcCol) {
+  const emptyFC = countEmptyFreeCells();
+  const emptyC = countEmptyCascades(srcCol);
+  // (空フリーセル+1) * 2^(空カスケード数) — 簡略実装は (空FC+1) のみ
+  return (emptyFC + 1);
+}
+
+// カスケードの末尾から移動可能グループを取得
+function getMoveableGroup(col) {
+  const t = cascades[col];
+  if (t.length === 0) return [];
+  let groupSize = 1;
+  for (let i = t.length - 1; i > 0; i--) {
+    const curr = t[i], prev = t[i - 1];
+    if (isRed(curr.suit) !== isRed(prev.suit) && curr.rank === prev.rank - 1) {
+      groupSize++;
+    } else break;
+  }
+  return t.slice(t.length - groupSize);
+}
+
+// ---- セーフ自動移動 ----
+function autoMove() {
+  let moved = true;
+  while (moved) {
+    moved = false;
+
+    // セーフ条件: ランク <= 全ファウンデーション最小値 + 2
+    const minFound = Math.min(...foundations.map(f => f.length === 0 ? 0 : f[f.length - 1].rank));
+    const safeRank = minFound + 2;
+
+    // フリーセルから
+    for (let fc = 0; fc < 4; fc++) {
+      const card = freeCells[fc];
+      if (!card) continue;
+      if (card.rank > safeRank) continue;
+      const fi = findFoundationForCard(card);
+      if (fi >= 0) {
+        foundations[fi].push({ ...card });
+        freeCells[fc] = null;
+        moveCount++;
+        moved = true;
+        break;
+      }
+    }
+    if (moved) continue;
+
+    // カスケードから
+    for (let col = 0; col < 8; col++) {
+      const t = cascades[col];
+      if (t.length === 0) continue;
+      const card = t[t.length - 1];
+      if (card.rank > safeRank) continue;
+      const fi = findFoundationForCard(card);
+      if (fi >= 0) {
+        foundations[fi].push({ ...card });
+        t.pop();
+        moveCount++;
+        moved = true;
+        break;
+      }
+    }
+  }
+  checkWin();
+}
+
+function checkWin() {
+  gameWon = foundations.every(f => f.length === 13);
+}
+
+// ---- 描画 ----
+function draw() {
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, 980, 720);
+
+  // テーブル背景
+  ctx.fillStyle = '#0a2a0a';
+  ctx.fillRect(0, 10, 980, 700);
+
+  // タイトル
+  ctx.fillStyle = '#00ffff';
+  ctx.font = 'bold 15px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('FREECELL フリーセル', 10, 8);
+
+  // 移動回数
+  ctx.fillStyle = '#aaffff';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(`移動: ${moveCount}`, 970, 8);
+
+  // ボタン
+  drawButton(ctx, BTN_NEW.label, BTN_NEW.x, BTN_NEW.y, BTN_NEW.w, BTN_NEW.h, hovBtn === 'new');
+  drawButton(ctx, BTN_AUTO.label, BTN_AUTO.x, BTN_AUTO.y, BTN_AUTO.w, BTN_AUTO.h, hovBtn === 'auto');
+
+  // フリーセル
+  for (let i = 0; i < 4; i++) {
+    const fx = FC_X[i], fy = FC_Y;
+    const card = freeCells[i];
+    const isDragging = drag && drag.srcType === 'freecell' && drag.srcIndex === i;
+    if (!card || isDragging) {
+      drawEmptySlot(ctx, fx, fy, CARD_W, CARD_H);
+      ctx.fillStyle = 'rgba(255,0,255,0.15)';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('FREE', fx + CARD_W / 2, fy + CARD_H / 2);
+    } else {
+      drawCard(ctx, card, fx, fy, CARD_W, CARD_H, true);
+    }
+  }
+
+  // ファウンデーション
+  const suitLabels = ['♠', '♥', '♦', '♣'];
+  for (let i = 0; i < 4; i++) {
+    const fx = FOUND_X[i], fy = FOUND_Y;
+    const f = foundations[i];
+    const isDragging = drag && drag.srcType === 'foundation' && drag.srcIndex === i;
+    if (f.length === 0 || isDragging) {
+      drawEmptySlot(ctx, fx, fy, CARD_W, CARD_H);
+      ctx.fillStyle = 'rgba(0,255,255,0.2)';
+      ctx.font = 'bold 24px serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(suitLabels[i], fx + CARD_W / 2, fy + CARD_H / 2);
+    } else {
+      const showCard = isDragging ? f[f.length - 2] : f[f.length - 1];
+      if (showCard) drawCard(ctx, showCard, fx, fy, CARD_W, CARD_H, true);
+    }
+  }
+
+  // カスケード
+  for (let col = 0; col < 8; col++) {
+    const cx = CAS_X[col];
+    const cards = cascades[col];
+
+    if (cards.length === 0) {
+      drawEmptySlot(ctx, cx, CAS_Y, CARD_W, CARD_H);
+      continue;
+    }
+
+    let cy = CAS_Y;
+    const dragStart = drag && drag.srcType === 'cascade' && drag.srcIndex === col ? drag.srcCardIndex : cards.length;
+
+    for (let i = 0; i < dragStart; i++) {
+      drawCard(ctx, cards[i], cx, cy, CARD_W, CARD_H, true);
+      cy += CASCADE_OFFSET;
+    }
+
+    if (dragStart === 0) {
+      drawEmptySlot(ctx, cx, CAS_Y, CARD_W, CARD_H);
+    }
+  }
+
+  // ドラッグ中
+  if (drag) {
+    for (let i = 0; i < drag.cards.length; i++) {
+      drawCard(ctx, drag.cards[i], mx - drag.ox, my - drag.oy + i * CASCADE_OFFSET, CARD_W, CARD_H, true);
+    }
+  }
+
+  // 移動可能枚数ヒント
+  if (!gameWon) {
+    const maxM = (countEmptyFreeCells() + 1);
+    ctx.fillStyle = '#ff00ff66';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`移動可能: ${maxM}枚`, 10, 110);
+  }
+
+  // クリア画面
+  if (gameWon) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, 980, 720);
+    ctx.fillStyle = '#00ffff';
+    ctx.font = 'bold 48px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('CLEAR!', 490, 300);
+    ctx.fillStyle = '#ff00ff';
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText(`移動回数: ${moveCount}`, 490, 360);
+    ctx.fillStyle = '#aaffff';
+    ctx.font = '16px monospace';
+    ctx.fillText('「新しいゲーム」でもう一度', 490, 410);
+  }
+
+  requestAnimationFrame(draw);
+}
+
+// ---- ヒットテスト ----
+function hitRect(px, py, x, y, w, h) {
+  return px >= x && px <= x + w && py >= y && py <= y + h;
+}
+
+function hitTest(px, py) {
+  if (hitRect(px, py, BTN_NEW.x, BTN_NEW.y, BTN_NEW.w, BTN_NEW.h)) return { type: 'btn', id: 'new' };
+  if (hitRect(px, py, BTN_AUTO.x, BTN_AUTO.y, BTN_AUTO.w, BTN_AUTO.h)) return { type: 'btn', id: 'auto' };
+
+  // カスケード（上のカードを優先 = 逆順）
+  for (let col = 7; col >= 0; col--) {
+    const cards = cascades[col];
+    const cx = CAS_X[col];
+    if (cards.length === 0) {
+      if (hitRect(px, py, cx, CAS_Y, CARD_W, CARD_H)) return { type: 'cascade_empty', col };
+      continue;
+    }
+
+    // 各カードのY位置を計算
+    const yList = [CAS_Y];
+    for (let i = 0; i < cards.length - 1; i++) {
+      yList.push(yList[i] + CASCADE_OFFSET);
+    }
+
+    for (let i = cards.length - 1; i >= 0; i--) {
+      const cardH = i === cards.length - 1 ? CARD_H : CASCADE_OFFSET;
+      if (hitRect(px, py, cx, yList[i], CARD_W, cardH)) {
+        return { type: 'cascade', col, cardIndex: i };
+      }
+    }
+  }
+
+  // フリーセル
+  for (let i = 0; i < 4; i++) {
+    if (hitRect(px, py, FC_X[i], FC_Y, CARD_W, CARD_H)) return { type: 'freecell', index: i };
+  }
+
+  // ファウンデーション
+  for (let i = 0; i < 4; i++) {
+    if (hitRect(px, py, FOUND_X[i], FOUND_Y, CARD_W, CARD_H)) return { type: 'foundation', index: i };
+  }
+
+  return null;
+}
+
+function calcCascadeCardY(col, cardIndex) {
+  return CAS_Y + cardIndex * CASCADE_OFFSET;
+}
+
+// ---- マウスイベント ----
+function getPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
+  };
+}
+
+canvas.addEventListener('mousemove', e => {
+  const { x, y } = getPos(e);
+  mx = x; my = y;
+
+  if (hitRect(x, y, BTN_NEW.x, BTN_NEW.y, BTN_NEW.w, BTN_NEW.h)) {
+    hovBtn = 'new'; canvas.style.cursor = 'pointer';
+  } else if (hitRect(x, y, BTN_AUTO.x, BTN_AUTO.y, BTN_AUTO.w, BTN_AUTO.h)) {
+    hovBtn = 'auto'; canvas.style.cursor = 'pointer';
+  } else {
+    hovBtn = null;
+    canvas.style.cursor = drag ? 'grabbing' : 'default';
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  const { x, y } = getPos(e);
+  mx = x; my = y;
+  const hit = hitTest(x, y);
+  if (!hit) return;
+
+  if (hit.type === 'btn') {
+    if (hit.id === 'new') newGame();
+    else if (hit.id === 'auto') autoMove();
+    return;
+  }
+
+  // フリーセルからドラッグ
+  if (hit.type === 'freecell') {
+    const card = freeCells[hit.index];
+    if (!card) return;
+    drag = {
+      cards: [{ ...card }],
+      srcType: 'freecell',
+      srcIndex: hit.index,
+      ox: x - FC_X[hit.index],
+      oy: y - FC_Y
+    };
+    return;
+  }
+
+  // ファウンデーションからドラッグ（許容するが通常は不要）
+  if (hit.type === 'foundation') {
+    const fi = hit.index;
+    if (foundations[fi].length === 0) return;
+    const card = foundations[fi][foundations[fi].length - 1];
+    drag = {
+      cards: [{ ...card }],
+      srcType: 'foundation',
+      srcIndex: fi,
+      ox: x - FOUND_X[fi],
+      oy: y - FOUND_Y
+    };
+    return;
+  }
+
+  // カスケードからドラッグ
+  if (hit.type === 'cascade') {
+    const col = hit.col;
+    const ci = hit.cardIndex;
+    const cards = cascades[col];
+
+    // ci以降が移動可能グループか確認
+    const group = [];
+    for (let i = ci; i < cards.length; i++) group.push({ ...cards[i] });
+
+    // グループの整合性チェック（異色降順連続）
+    let validGroup = true;
+    for (let k = 1; k < group.length; k++) {
+      const prev = group[k - 1], curr = group[k];
+      if (isRed(prev.suit) === isRed(curr.suit) || prev.rank !== curr.rank + 1) {
+        validGroup = false; break;
+      }
+    }
+
+    const maxM = maxMovable(col);
+
+    if (!validGroup || group.length > maxM) {
+      // 末尾1枚のみ移動可能か確認
+      if (ci !== cards.length - 1) return;
+      drag = {
+        cards: [{ ...cards[ci] }],
+        srcType: 'cascade',
+        srcIndex: col,
+        srcCardIndex: ci,
+        ox: x - CAS_X[col],
+        oy: y - calcCascadeCardY(col, ci)
+      };
+    } else {
+      drag = {
+        cards: group,
+        srcType: 'cascade',
+        srcIndex: col,
+        srcCardIndex: ci,
+        ox: x - CAS_X[col],
+        oy: y - calcCascadeCardY(col, ci)
+      };
+    }
+    return;
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (!drag) return;
+  const { x, y } = getPos(e);
+  let dropped = false;
+
+  // ファウンデーションへのドロップ（1枚のみ）
+  if (drag.cards.length === 1) {
+    for (let i = 0; i < 4; i++) {
+      if (hitRect(x, y, FOUND_X[i], FOUND_Y, CARD_W, CARD_H)) {
+        if (canPlaceOnFoundation(drag.cards[0], i)) {
+          foundations[i].push({ ...drag.cards[0] });
+          removeDragSource();
+          moveCount++;
+          checkWin();
+          dropped = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // フリーセルへのドロップ（1枚のみ）
+  if (!dropped && drag.cards.length === 1) {
+    for (let i = 0; i < 4; i++) {
+      if (hitRect(x, y, FC_X[i], FC_Y, CARD_W, CARD_H)) {
+        if (freeCells[i] === null) {
+          freeCells[i] = { ...drag.cards[0] };
+          removeDragSource();
+          moveCount++;
+          dropped = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // カスケードへのドロップ
+  if (!dropped) {
+    for (let col = 0; col < 8; col++) {
+      if (drag.srcType === 'cascade' && drag.srcIndex === col) continue;
+      if (hitRect(x, y, CAS_X[col], CAS_Y, CARD_W, 600)) {
+        if (canPlaceOnCascade(drag.cards[0], col)) {
+          // 移動可能枚数チェック: (空フリーセル+1) * 2^(空カスケード数)
+          const emptyFC = countEmptyFreeCells();
+          const srcCol = drag.srcType === 'cascade' ? drag.srcIndex : -1;
+          const emptyC = countEmptyCascades(srcCol);
+          // ドロップ先が空の場合はその列はカウントしない（使用済み扱い）
+          const destIsEmpty = cascades[col].length === 0;
+          const effectiveEmptyC = destIsEmpty ? emptyC - 1 : emptyC;
+          const capacity = (emptyFC + 1) * Math.pow(2, Math.max(0, effectiveEmptyC));
+          if (drag.cards.length <= capacity) {
+            for (const c of drag.cards) cascades[col].push({ ...c });
+            removeDragSource();
+            moveCount++;
+            checkWin();
+            dropped = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  drag = null;
+});
+
+// ダブルクリック: ファウンデーションへ自動移動
+canvas.addEventListener('dblclick', e => {
+  const { x, y } = getPos(e);
+  const hit = hitTest(x, y);
+  if (!hit) return;
+
+  if (hit.type === 'freecell') {
+    const card = freeCells[hit.index];
+    if (!card) return;
+    const fi = findFoundationForCard(card);
+    if (fi >= 0) {
+      foundations[fi].push({ ...card });
+      freeCells[hit.index] = null;
+      moveCount++;
+      checkWin();
+    }
+    return;
+  }
+
+  if (hit.type === 'cascade') {
+    const col = hit.col;
+    const t = cascades[col];
+    if (t.length === 0) return;
+    const card = t[t.length - 1];
+    const fi = findFoundationForCard(card);
+    if (fi >= 0) {
+      foundations[fi].push({ ...card });
+      t.pop();
+      moveCount++;
+      checkWin();
+    }
+  }
+});
+
+function removeDragSource() {
+  if (!drag) return;
+  if (drag.srcType === 'freecell') {
+    freeCells[drag.srcIndex] = null;
+  } else if (drag.srcType === 'cascade') {
+    cascades[drag.srcIndex].splice(drag.srcCardIndex);
+  } else if (drag.srcType === 'foundation') {
+    foundations[drag.srcIndex].pop();
+  }
+}
+
+// ---- 起動 ----
+newGame();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
