@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>神経衰弱 | hide の部屋</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #0a0a0a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+    }
+    canvas {
+      display: block;
+      cursor: default;
+      max-width: 100%;
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="960" height="640"></canvas>
+<script>
+"use strict";
+
+// ---- カード共通関数 ----
+function createDeck(includeJoker=false) {
+  const deck = [];
+  for(let s=0;s<4;s++) for(let r=1;r<=13;r++) deck.push({suit:s,rank:r});
+  if(includeJoker) deck.push({suit:-1,rank:0});
+  return deck;
+}
+function shuffle(arr) {
+  for(let i=arr.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+  return arr;
+}
+function rankStr(r){ return ['','A','2','3','4','5','6','7','8','9','10','J','Q','K'][r]; }
+function suitStr(s){ return ['♠','♥','♦','♣'][s]; }
+function isRed(s){ return s===1||s===2; }
+
+function drawCard(ctx, card, x, y, w, h, faceUp=true) {
+  if(!faceUp){
+    ctx.fillStyle='#1a3a6a';
+    ctx.fillRect(x,y,w,h);
+    ctx.strokeStyle='#00ffff';
+    ctx.lineWidth=1;
+    ctx.strokeRect(x+1,y+1,w-2,h-2);
+    ctx.strokeStyle='rgba(0,200,200,0.3)';
+    for(let i=0;i<w;i+=6){ctx.beginPath();ctx.moveTo(x+i,y);ctx.lineTo(x,y+i);ctx.stroke();}
+    for(let i=0;i<h;i+=6){ctx.beginPath();ctx.moveTo(x+w,y+i);ctx.lineTo(x+w-i,y+h);ctx.stroke();}
+    return;
+  }
+  const radius=4;
+  ctx.beginPath();
+  ctx.moveTo(x+radius,y);
+  ctx.lineTo(x+w-radius,y);ctx.arcTo(x+w,y,x+w,y+radius,radius);
+  ctx.lineTo(x+w,y+h-radius);ctx.arcTo(x+w,y+h,x+w-radius,y+h,radius);
+  ctx.lineTo(x+radius,y+h);ctx.arcTo(x,y+h,x,y+h-radius,radius);
+  ctx.lineTo(x,y+radius);ctx.arcTo(x,y,x+radius,y,radius);
+  ctx.closePath();
+  ctx.fillStyle = card.suit===-1?'#fff9':'#f0f0f0';
+  ctx.fill();
+  ctx.strokeStyle='#999';ctx.lineWidth=0.5;ctx.stroke();
+  if(card.suit===-1){
+    ctx.fillStyle='#666';
+    ctx.font=`bold ${Math.floor(h*0.45)}px serif`;
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('🃏',x+w/2,y+h/2);
+    return;
+  }
+  const color = isRed(card.suit)?'#cc0000':'#111';
+  ctx.fillStyle=color;
+  const fs=Math.max(10,Math.floor(h*0.22));
+  ctx.font=`bold ${fs}px monospace`;
+  ctx.textAlign='left';ctx.textBaseline='top';
+  ctx.fillText(rankStr(card.rank),x+3,y+2);
+  ctx.font=`${Math.floor(fs*0.9)}px serif`;
+  ctx.fillText(suitStr(card.suit),x+3,y+2+fs);
+  ctx.save();ctx.translate(x+w,y+h);ctx.rotate(Math.PI);
+  ctx.fillStyle=color;
+  ctx.font=`bold ${fs}px monospace`;
+  ctx.textAlign='left';ctx.textBaseline='top';
+  ctx.fillText(rankStr(card.rank),3,2);
+  ctx.font=`${Math.floor(fs*0.9)}px serif`;
+  ctx.fillText(suitStr(card.suit),3,2+fs);
+  ctx.restore();
+  ctx.font=`${Math.floor(h*0.38)}px serif`;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(suitStr(card.suit),x+w/2,y+h/2);
+}
+
+function drawButton(ctx, text, x, y, w, h, hover=false, disabled=false){
+  ctx.fillStyle = disabled?'#333': hover?'#00ffff22':'#001a1a';
+  ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle = disabled?'#444': hover?'#00ffff':'#006666';
+  ctx.lineWidth=1.5;
+  ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle = disabled?'#555': hover?'#00ffff':'#aaffff';
+  ctx.font='bold 14px monospace';
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(text,x+w/2,y+h/2);
+}
+
+// ---- ゲーム定数 ----
+const BOARD_X = 10;   // グリッド左端X
+const BOARD_Y = 50;   // グリッド上端Y
+const SIDE_X  = 760;  // サイドパネルX
+const SIDE_W  = 190;  // サイドパネル幅
+
+// ---- ゲーム状態 ----
+let gameMode = 'solo'; // 'solo' | 'cpu'
+let difficulty = 24;   // 24 or 52
+let state = 'menu';    // 'menu' | 'playing'
+
+// カードグリッド
+// cells[i] = { card, faceUp, matched, owner, flipAnim, flipPhase }
+let cells = [];
+let gridCols = 0;
+let gridRows = 0;
+let cardW = 0;
+let cardH = 0;
+let gapX = 0;
+let gapY = 0;
+
+// ゲーム管理
+let playerScore = 0;
+let cpuScore = 0;
+let currentTurn = 'player'; // 'player' | 'cpu'
+let flipped = []; // 現在めくられているカードのインデックス
+let waiting = false; // 判定待ち中
+let cpuMemory = {}; // CPU記憶: key = 'suit_rank' -> [idx...]
+let gameOver = false;
+let turnMsg = '';
+
+// マウス
+let mouseX = 0;
+let mouseY = 0;
+
+// メニューボタン
+const menuBtns = {
+  modeSolo: {x:200, y:200, w:160, h:44, label:'ソロ'},
+  modeCpu:  {x:400, y:200, w:160, h:44, label:'CPU対戦'},
+  diff24:   {x:200, y:300, w:160, h:44, label:'24枚 (4×6)'},
+  diff52:   {x:400, y:300, w:160, h:44, label:'52枚 (13×4)'},
+  startBtn: {x:300, y:400, w:200, h:50, label:'スタート'},
+};
+
+// ゲーム内ボタン
+const gameBtns = {
+  backMenu: {x:760, y:580, w:190, h:36, label:'メニューへ'},
+};
+
+function inBtn(b, x, y){ return x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h; }
+
+// ---- カードキー生成 ----
+function cardKey(card){ return `${card.suit}_${card.rank}`; }
+
+// ---- ゲーム初期化 ----
+function initGame(){
+  playerScore = 0;
+  cpuScore = 0;
+  currentTurn = 'player';
+  flipped = [];
+  waiting = false;
+  cpuMemory = {};
+  gameOver = false;
+  turnMsg = '';
+
+  // デッキ作成・シャッフル
+  let deck = createDeck();
+  if(difficulty === 24){
+    // ランク1-12の各スート0,1 → 24枚(ペア12組)
+    // ♠と♥のA～Qを使う(12ペア=24枚)
+    const sub = [];
+    for(let r=1;r<=12;r++){
+      sub.push({suit:0, rank:r});
+      sub.push({suit:1, rank:r});
+    }
+    deck = shuffle(sub);
+    gridCols = 6;
+    gridRows = 4;
+    cardW = 60;
+    cardH = 85;
+    gapX = 6;
+    gapY = 8;
+  } else {
+    // 52枚(26ペア) - ♠と♥の全ランク+♦と♣の全ランク
+    // 同ランクのペア扱い: 同ランクの任意2枚がペア
+    // ここでは同ランク同スートのペアではなく、「同ランクの2枚」をペアとする
+    // 52枚 = ランク1-13×4スート → 同ランク4枚から2ペア → 26ペア
+    const sub = [];
+    for(let r=1;r<=13;r++){
+      for(let s=0;s<4;s++) sub.push({suit:s, rank:r});
+    }
+    deck = shuffle(sub);
+    gridCols = 13;
+    gridRows = 4;
+    cardW = 62;
+    cardH = 88;
+    gapX = 0;
+    gapY = 8;
+  }
+
+  cells = deck.map(card => ({
+    card,
+    faceUp: false,
+    matched: false,
+    owner: null,
+    flipAnim: 0,     // 0=裏向き 1=表向き (アニメ中は0→1)
+    flipPhase: 'none' // 'none' | 'to_face' | 'to_back'
+  }));
+}
+
+// ---- CPU AI ----
+// めくられたカードをCPU記憶に追加（50%確率）
+function cpuLearn(idx){
+  const c = cells[idx].card;
+  const key = cardKey(c);
+  if(Math.random() < 0.5){
+    if(!cpuMemory[key]) cpuMemory[key] = [];
+    if(!cpuMemory[key].includes(idx)) cpuMemory[key].push(idx);
+  }
+}
+
+function cpuRemoveFromMemory(idx){
+  for(const key in cpuMemory){
+    cpuMemory[key] = cpuMemory[key].filter(i => i !== idx);
+    if(cpuMemory[key].length === 0) delete cpuMemory[key];
+  }
+}
+
+// CPUのターン実行
+function doCpuTurn(){
+  if(state !== 'playing' || currentTurn !== 'cpu' || waiting || gameOver) return;
+
+  // まず1枚目を選ぶ
+  const unmatched = cells.map((_,i)=>i).filter(i=>!cells[i].matched && !cells[i].faceUp);
+  if(unmatched.length < 2) return;
+
+  // 記憶からペアを探す
+  let first = -1;
+  let second = -1;
+
+  for(const key in cpuMemory){
+    const idxList = cpuMemory[key].filter(i => !cells[i].matched && !cells[i].faceUp);
+    if(idxList.length >= 2){
+      first = idxList[0];
+      second = idxList[1];
+      break;
+    }
+  }
+
+  // 記憶にペアなし: ランダムで1枚目
+  if(first === -1){
+    const idx1 = unmatched[Math.floor(Math.random()*unmatched.length)];
+    first = idx1;
+    // 1枚目のカードのペアが記憶にあれば2枚目に使う
+    // (まだめくっていないのでカードは不明 → 後で処理)
+  }
+
+  waiting = true;
+  turnMsg = 'CPUのターン...';
+
+  // 1枚目をめくる
+  setTimeout(() => {
+    if(state !== 'playing') return;
+    flipCard(first);
+    cpuLearn(first);
+
+    const firstCard = cells[first].card;
+    const firstKey = cardKey(firstCard);
+
+    // 2枚目: 記憶から同ランクを探す（今めくった1枚目は除く）
+    if(second === -1){
+      const knownPair = (cpuMemory[firstKey] || []).filter(i => i !== first && !cells[i].matched && !cells[i].faceUp);
+      if(knownPair.length > 0){
+        second = knownPair[0];
+      } else {
+        // ランダム（first以外の未めくりカード）
+        const rest = unmatched.filter(i => i !== first);
+        second = rest[Math.floor(Math.random()*rest.length)];
+      }
+    }
+
+    // 2枚目をめくる
+    setTimeout(() => {
+      if(state !== 'playing') return;
+      flipCard(second);
+      cpuLearn(second);
+
+      // 判定
+      setTimeout(() => {
+        if(state !== 'playing') return;
+        checkPair(first, second, 'cpu');
+      }, 800);
+    }, 700);
+  }, 1000);
+}
+
+// ---- カードめくり ----
+function flipCard(idx){
+  if(cells[idx].faceUp || cells[idx].matched) return;
+  cells[idx].faceUp = true;
+  cells[idx].flipAnim = 0;
+  cells[idx].flipPhase = 'to_face';
+}
+
+function flipCardBack(idx){
+  if(!cells[idx].faceUp || cells[idx].matched) return;
+  cells[idx].flipAnim = 1;
+  cells[idx].flipPhase = 'to_back';
+}
+
+// ---- ペア判定 ----
+function checkPair(idx1, idx2, who){
+  const c1 = cells[idx1].card;
+  const c2 = cells[idx2].card;
+
+  // 同ランクがペア条件
+  if(c1.rank === c2.rank){
+    // ペア成立
+    cells[idx1].matched = true;
+    cells[idx2].matched = true;
+    cells[idx1].owner = who;
+    cells[idx2].owner = who;
+    cpuRemoveFromMemory(idx1);
+    cpuRemoveFromMemory(idx2);
+    if(who === 'player') playerScore++;
+    else cpuScore++;
+    turnMsg = who === 'player' ? 'ペア！ もう一度！' : 'CPU ペア！ もう一度！';
+    flipped = [];
+    waiting = false;
+    // 同じプレイヤーのターン継続
+    checkGameOver();
+    if(!gameOver && currentTurn === 'cpu'){
+      setTimeout(doCpuTurn, 500);
+    }
+  } else {
+    // ペアなし → 伏せる
+    turnMsg = 'ペアではありません';
+    setTimeout(() => {
+      if(state !== 'playing') return;
+      flipCardBack(idx1);
+      flipCardBack(idx2);
+      flipped = [];
+      waiting = false;
+      // ターン交代
+      if(gameMode === 'cpu'){
+        currentTurn = currentTurn === 'player' ? 'cpu' : 'player';
+        if(currentTurn === 'cpu'){
+          setTimeout(doCpuTurn, 500);
+        } else {
+          turnMsg = 'あなたのターン';
+        }
+      } else {
+        turnMsg = '';
+      }
+    }, 800);
+  }
+}
+
+function checkGameOver(){
+  const remaining = cells.filter(c => !c.matched).length;
+  if(remaining === 0){
+    gameOver = true;
+    if(gameMode === 'solo'){
+      turnMsg = `ゲームクリア！ ${playerScore}ペア獲得！`;
+    } else {
+      if(playerScore > cpuScore) turnMsg = `あなたの勝ち！ ${playerScore} vs ${cpuScore}`;
+      else if(playerScore < cpuScore) turnMsg = `CPUの勝ち！ ${playerScore} vs ${cpuScore}`;
+      else turnMsg = `引き分け！ ${playerScore} vs ${cpuScore}`;
+    }
+  }
+}
+
+// ---- カード位置計算 ----
+function getCellXY(idx){
+  const col = idx % gridCols;
+  const row = Math.floor(idx / gridCols);
+  const totalW = gridCols * cardW + (gridCols-1) * gapX;
+  // グリッドを左エリア(760px)内に中央配置
+  const startX = BOARD_X + Math.max(0, (750 - totalW) / 2);
+  const totalH = gridRows * cardH + (gridRows-1) * gapY;
+  const startY = BOARD_Y + Math.max(0, (580 - totalH) / 2);
+  return {
+    x: startX + col * (cardW + gapX),
+    y: startY + row * (cardH + gapY)
+  };
+}
+
+function getCellAt(mx, my){
+  for(let i=0;i<cells.length;i++){
+    const {x,y} = getCellXY(i);
+    if(mx>=x && mx<=x+cardW && my>=y && my<=y+cardH) return i;
+  }
+  return -1;
+}
+
+// ---- 描画 ----
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// アニメーション管理
+let animFrame = 0;
+
+function updateAnimations(){
+  for(const cell of cells){
+    if(cell.flipPhase === 'to_face'){
+      cell.flipAnim = Math.min(1, cell.flipAnim + 0.15);
+      if(cell.flipAnim >= 1) cell.flipPhase = 'none';
+    } else if(cell.flipPhase === 'to_back'){
+      cell.flipAnim = Math.max(0, cell.flipAnim - 0.15);
+      if(cell.flipAnim <= 0){
+        cell.faceUp = false;
+        cell.flipPhase = 'none';
+      }
+    }
+  }
+}
+
+function drawMenu(){
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0,0,960,640);
+
+  // タイトル
+  ctx.fillStyle = '#00ffff';
+  ctx.font = 'bold 40px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('神経衰弱', 480, 80);
+  ctx.fillStyle = '#9b59b6';
+  ctx.font = '18px monospace';
+  ctx.fillText('MEMORY CARD GAME', 480, 125);
+
+  // モード選択ラベル
+  ctx.fillStyle = '#aaffff';
+  ctx.font = '16px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('モード選択:', 200, 170);
+
+  drawButton(ctx, menuBtns.modeSolo.label, menuBtns.modeSolo.x, menuBtns.modeSolo.y,
+    menuBtns.modeSolo.w, menuBtns.modeSolo.h,
+    inBtn(menuBtns.modeSolo, mouseX, mouseY) || gameMode==='solo',
+    false);
+  drawButton(ctx, menuBtns.modeCpu.label, menuBtns.modeCpu.x, menuBtns.modeCpu.y,
+    menuBtns.modeCpu.w, menuBtns.modeCpu.h,
+    inBtn(menuBtns.modeCpu, mouseX, mouseY) || gameMode==='cpu',
+    false);
+
+  // 難易度選択ラベル
+  ctx.fillStyle = '#aaffff';
+  ctx.font = '16px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('難易度:', 200, 270);
+
+  drawButton(ctx, menuBtns.diff24.label, menuBtns.diff24.x, menuBtns.diff24.y,
+    menuBtns.diff24.w, menuBtns.diff24.h,
+    inBtn(menuBtns.diff24, mouseX, mouseY) || difficulty===24,
+    false);
+  drawButton(ctx, menuBtns.diff52.label, menuBtns.diff52.x, menuBtns.diff52.y,
+    menuBtns.diff52.w, menuBtns.diff52.h,
+    inBtn(menuBtns.diff52, mouseX, mouseY) || difficulty===52,
+    false);
+
+  // スタート
+  drawButton(ctx, menuBtns.startBtn.label, menuBtns.startBtn.x, menuBtns.startBtn.y,
+    menuBtns.startBtn.w, menuBtns.startBtn.h,
+    inBtn(menuBtns.startBtn, mouseX, mouseY));
+
+  // 選択状態の表示
+  ctx.fillStyle = '#ff00ff';
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`選択中: ${gameMode==='solo'?'ソロ':'CPU対戦'} / ${difficulty}枚`, 480, 360);
+}
+
+function drawGame(){
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0,0,960,640);
+
+  // テーブル背景
+  ctx.fillStyle = '#0a2a0a';
+  ctx.fillRect(BOARD_X, BOARD_Y-10, 750, 600);
+  ctx.strokeStyle = '#006600';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(BOARD_X, BOARD_Y-10, 750, 600);
+
+  // サイドパネル背景
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(SIDE_X, 0, SIDE_W, 640);
+  ctx.strokeStyle = '#9b59b6';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(SIDE_X, 0, SIDE_W, 640);
+
+  // カード描画
+  for(let i=0;i<cells.length;i++){
+    const cell = cells[i];
+    const {x,y} = getCellXY(i);
+
+    if(cell.matched){
+      // 取得済み: 半透明でオーナーカラー
+      const ownerColor = cell.owner==='player'?'rgba(0,255,136,0.25)':'rgba(255,0,255,0.25)';
+      ctx.fillStyle = ownerColor;
+      ctx.fillRect(x,y,cardW,cardH);
+      ctx.strokeStyle = cell.owner==='player'?'#00ff88':'#ff00ff';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x,y,cardW,cardH);
+      continue;
+    }
+
+    // めくりアニメーション
+    const anim = cell.flipAnim; // 0=裏 1=表
+    const phase = cell.flipPhase;
+
+    if(phase === 'to_face' || phase === 'to_back'){
+      // アニメーション中: スケールX変形
+      const scaleX = phase === 'to_face'
+        ? Math.abs(anim * 2 - 1)   // 0→1: 1→0→1
+        : Math.abs(anim * 2 - 1);
+      const cx = x + cardW / 2;
+      const drawFace = phase === 'to_face' ? (anim >= 0.5) : (anim >= 0.5);
+      const drawW = cardW * scaleX;
+      const drawX = cx - drawW / 2;
+      if(drawW > 1){
+        drawCard(ctx, cell.card, drawX, y, drawW, cardH, drawFace);
+      }
+    } else {
+      // 静止状態
+      drawCard(ctx, cell.card, x, y, cardW, cardH, cell.faceUp);
+    }
+
+    // ホバーハイライト
+    if(!waiting && currentTurn === 'player' && !gameOver){
+      if(mouseX>=x && mouseX<=x+cardW && mouseY>=y && mouseY<=y+cardH && !cell.faceUp){
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x-1, y-1, cardW+2, cardH+2);
+      }
+    }
+  }
+
+  // サイドパネル内容
+  drawSidePanel();
+
+  // メニューへボタン
+  drawButton(ctx, gameBtns.backMenu.label, gameBtns.backMenu.x, gameBtns.backMenu.y,
+    gameBtns.backMenu.w, gameBtns.backMenu.h,
+    inBtn(gameBtns.backMenu, mouseX, mouseY));
+}
+
+function drawSidePanel(){
+  const px = SIDE_X + 10;
+
+  ctx.fillStyle = '#00ffff';
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('神経衰弱', px, 15);
+
+  ctx.fillStyle = '#9b59b6';
+  ctx.font = '13px monospace';
+  ctx.fillText(gameMode==='solo'?'ソロ':'CPU対戦', px, 42);
+  ctx.fillText(`${difficulty}枚モード`, px, 60);
+
+  // 区切り線
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();ctx.moveTo(SIDE_X+5,82);ctx.lineTo(SIDE_X+SIDE_W-5,82);ctx.stroke();
+
+  // スコア
+  ctx.fillStyle = '#aaffff';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('スコア', px, 92);
+
+  ctx.fillStyle = '#00ff88';
+  ctx.font = '16px monospace';
+  ctx.fillText(`あなた: ${playerScore}ペア`, px, 114);
+
+  if(gameMode==='cpu'){
+    ctx.fillStyle = '#ff00ff';
+    ctx.fillText(`CPU:    ${cpuScore}ペア`, px, 138);
+  }
+
+  // 区切り線
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();ctx.moveTo(SIDE_X+5,168);ctx.lineTo(SIDE_X+SIDE_W-5,168);ctx.stroke();
+
+  // 残りカード
+  const remaining = cells.filter(c=>!c.matched).length;
+  ctx.fillStyle = '#aaffff';
+  ctx.font = '13px monospace';
+  ctx.fillText(`残り: ${remaining}枚`, px, 178);
+  ctx.fillText(`取得: ${cells.filter(c=>c.matched).length}枚`, px, 198);
+
+  // 区切り線
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();ctx.moveTo(SIDE_X+5,225);ctx.lineTo(SIDE_X+SIDE_W-5,225);ctx.stroke();
+
+  // ターン表示
+  ctx.fillStyle = '#aaffff';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('ターン', px, 234);
+
+  if(gameMode === 'cpu'){
+    const isCpuTurn = currentTurn === 'cpu';
+    ctx.fillStyle = isCpuTurn ? '#ff00ff' : '#00ff88';
+    ctx.font = '14px monospace';
+    ctx.fillText(isCpuTurn ? '▶ CPU' : '▶ あなた', px, 254);
+  } else {
+    ctx.fillStyle = '#00ff88';
+    ctx.font = '14px monospace';
+    ctx.fillText('▶ ソロプレイ', px, 254);
+  }
+
+  // メッセージ
+  if(turnMsg){
+    ctx.fillStyle = '#333';
+    ctx.fillRect(SIDE_X+5, 278, SIDE_W-10, 60);
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(SIDE_X+5, 278, SIDE_W-10, 60);
+
+    ctx.fillStyle = gameOver ? '#ffff00' : '#ffffff';
+    ctx.font = '13px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // 長いテキストを折り返す
+    const words = turnMsg;
+    const maxW = SIDE_W - 20;
+    wrapText(ctx, words, SIDE_X + SIDE_W/2, 308, maxW, 18);
+    ctx.textAlign = 'left';
+  }
+
+  // ゲームオーバー時: もう一度ボタン
+  if(gameOver){
+    drawButton(ctx, 'もう一度', SIDE_X+20, 355, SIDE_W-40, 38,
+      mouseX>=(SIDE_X+20) && mouseX<=(SIDE_X+SIDE_W-20) && mouseY>=355 && mouseY<=393);
+  }
+}
+
+function wrapText(ctx, text, cx, cy, maxW, lineH){
+  // 単純に日本語は文字単位で折り返し
+  let line = '';
+  let y = cy;
+  for(let i=0;i<text.length;i++){
+    const test = line + text[i];
+    if(ctx.measureText(test).width > maxW){
+      ctx.fillText(line, cx, y);
+      line = text[i];
+      y += lineH;
+    } else {
+      line = test;
+    }
+  }
+  if(line) ctx.fillText(line, cx, y);
+}
+
+// ---- メインループ ----
+function gameLoop(){
+  animFrame++;
+  updateAnimations();
+
+  if(state === 'menu'){
+    drawMenu();
+  } else {
+    drawGame();
+  }
+  requestAnimationFrame(gameLoop);
+}
+
+// ---- イベントハンドラ ----
+function getCanvasPos(e){
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / rect.width),
+    y: (e.clientY - rect.top)  * (canvas.height / rect.height)
+  };
+}
+
+canvas.addEventListener('mousemove', e => {
+  const p = getCanvasPos(e);
+  mouseX = p.x;
+  mouseY = p.y;
+
+  // カーソル変更
+  let pointer = false;
+  if(state === 'menu'){
+    for(const b of Object.values(menuBtns)){
+      if(inBtn(b, mouseX, mouseY)){ pointer = true; break; }
+    }
+  } else {
+    if(inBtn(gameBtns.backMenu, mouseX, mouseY)) pointer = true;
+    // ゲームオーバーのもう一度ボタン
+    if(gameOver && mouseX>=(SIDE_X+20) && mouseX<=(SIDE_X+SIDE_W-20) && mouseY>=355 && mouseY<=393) pointer = true;
+    // カード上
+    if(!waiting && currentTurn === 'player' && !gameOver){
+      const idx = getCellAt(mouseX, mouseY);
+      if(idx >= 0 && !cells[idx].faceUp && !cells[idx].matched) pointer = true;
+    }
+  }
+  canvas.style.cursor = pointer ? 'pointer' : 'default';
+});
+
+canvas.addEventListener('mousedown', e => {
+  const p = getCanvasPos(e);
+  const x = p.x, y = p.y;
+
+  if(state === 'menu'){
+    if(inBtn(menuBtns.modeSolo, x, y)){ gameMode = 'solo'; }
+    else if(inBtn(menuBtns.modeCpu, x, y)){ gameMode = 'cpu'; }
+    else if(inBtn(menuBtns.diff24, x, y)){ difficulty = 24; }
+    else if(inBtn(menuBtns.diff52, x, y)){ difficulty = 52; }
+    else if(inBtn(menuBtns.startBtn, x, y)){
+      initGame();
+      state = 'playing';
+      turnMsg = gameMode === 'cpu' ? 'あなたのターン' : '';
+    }
+  } else {
+    // メニューへ
+    if(inBtn(gameBtns.backMenu, x, y)){
+      state = 'menu';
+      return;
+    }
+    // ゲームオーバー: もう一度
+    if(gameOver && x>=(SIDE_X+20) && x<=(SIDE_X+SIDE_W-20) && y>=355 && y<=393){
+      initGame();
+      turnMsg = gameMode === 'cpu' ? 'あなたのターン' : '';
+      return;
+    }
+    // カードクリック
+    if(!waiting && currentTurn === 'player' && !gameOver){
+      const idx = getCellAt(x, y);
+      if(idx >= 0 && !cells[idx].faceUp && !cells[idx].matched){
+        // CPUが記憶（プレイヤーがめくったカードも50%でCPU記憶）
+        if(gameMode === 'cpu') cpuLearn(idx);
+        flipCard(idx);
+        flipped.push(idx);
+
+        if(flipped.length === 2){
+          waiting = true;
+          const [i1, i2] = flipped;
+          setTimeout(() => {
+            checkPair(i1, i2, 'player');
+          }, 800);
+        }
+      }
+    }
+  }
+});
+
+// ゲーム開始
+gameLoop();
+</script>
+</body>
+</html>
