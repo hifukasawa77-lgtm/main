@@ -5929,14 +5929,20 @@
         const timeEl = document.getElementById('home-news-time');
         if (!list) return;
         list.innerHTML = '<li class="dashboard-mini-item"><span style="color:var(--muted)">取得中…</span></li>';
-        const RSS_URL = encodeURIComponent('https://www3.nhk.or.jp/rss/news/cat0.xml');
-        const API = `https://api.rss2json.com/v1/api.json?rss_url=${RSS_URL}&count=7`;
-        try {
-          const res = await fetchWithTimeout(API, 10000);
-          if (!res.ok) throw new Error('fetch failed');
-          const data = await res.json();
-          if (data.status !== 'ok' || !data.items?.length) throw new Error('no items');
-          list.innerHTML = data.items.map(item => {
+
+        const NHK_RSS = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
+        const enc = encodeURIComponent(NHK_RSS);
+
+        function parseRSSXml(xml) {
+          const doc = new DOMParser().parseFromString(xml, 'text/xml');
+          return [...doc.querySelectorAll('item')].slice(0, 7).map(item => ({
+            title: item.querySelector('title')?.textContent?.trim() || '',
+            link: item.querySelector('link')?.textContent?.trim() || '#',
+          })).filter(i => i.title);
+        }
+
+        function renderItems(items) {
+          list.innerHTML = items.map(item => {
             const safeLink = /^https?:\/\//i.test(item.link) ? item.link : '#';
             return `<li class="dashboard-mini-item" style="padding:6px 10px;">
               <a href="${safeLink}" target="_blank" rel="noopener noreferrer"
@@ -5946,12 +5952,41 @@
             </li>`;
           }).join('');
           if (timeEl) timeEl.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'});
-        } catch(e) {
-          list.innerHTML = `<li class="dashboard-mini-item" style="flex-direction:column;gap:6px;">
-            <span style="color:var(--muted);font-size:0.8rem;">ニュースを取得できませんでした</span>
-            <a href="https://www3.nhk.or.jp/news/" target="_blank" rel="noreferrer" style="font-size:0.78rem;color:var(--blue,#0ea5e9)">NHKニュースを確認する →</a>
-          </li>`;
         }
+
+        // 1st: rss2json
+        try {
+          const res = await fetchWithTimeout(`https://api.rss2json.com/v1/api.json?rss_url=${enc}&count=7`, 8000);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.status === 'ok' && data.items?.length) { renderItems(data.items); return; }
+          }
+        } catch {}
+
+        // 2nd: allorigins raw → parse XML
+        try {
+          const res = await fetchWithTimeout(`https://api.allorigins.win/raw?url=${enc}`, 10000);
+          if (res.ok) {
+            const xml = await res.text();
+            const items = parseRSSXml(xml);
+            if (items.length) { renderItems(items); return; }
+          }
+        } catch {}
+
+        // 3rd: allorigins get → contents field
+        try {
+          const res = await fetchWithTimeout(`https://api.allorigins.win/get?url=${enc}`, 10000);
+          if (res.ok) {
+            const data = await res.json();
+            const items = parseRSSXml(data.contents || '');
+            if (items.length) { renderItems(items); return; }
+          }
+        } catch {}
+
+        list.innerHTML = `<li class="dashboard-mini-item" style="flex-direction:column;gap:6px;">
+          <span style="color:var(--muted);font-size:0.8rem;">ニュースを取得できませんでした</span>
+          <a href="https://www3.nhk.or.jp/news/" target="_blank" rel="noreferrer" style="font-size:0.78rem;color:var(--blue,#0ea5e9)">NHKニュースを確認する →</a>
+        </li>`;
       };
       setInterval(initNewsCard, 30 * 60 * 1000);
 
