@@ -5930,8 +5930,17 @@
         if (!list) return;
         list.innerHTML = '<li class="dashboard-mini-item"><span style="color:var(--muted)">取得中…</span></li>';
 
-        const NHK_RSS = 'https://www3.nhk.or.jp/rss/news/cat0.xml';
-        const enc = encodeURIComponent(NHK_RSS);
+        const NEWS_SOURCES = [
+          'https://www3.nhk.or.jp/rss/news/cat0.xml',
+          'https://b.hatena.ne.jp/hotentry.rss',
+        ];
+        const NEWS_PROXIES = [
+          u => `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(u)}&count=7`,
+          u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+          u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+          u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+          u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+        ];
 
         function parseRSSXml(xml) {
           const doc = new DOMParser().parseFromString(xml, 'text/xml');
@@ -5954,34 +5963,29 @@
           if (timeEl) timeEl.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'});
         }
 
-        // 1st: rss2json
-        try {
-          const res = await fetchWithTimeout(`https://api.rss2json.com/v1/api.json?rss_url=${enc}&count=7`, 8000);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.status === 'ok' && data.items?.length) { renderItems(data.items); return; }
+        for (const src of NEWS_SOURCES) {
+          for (const makeProxy of NEWS_PROXIES) {
+            try {
+              const url = makeProxy(src);
+              const res = await fetchWithTimeout(url, 9000);
+              if (!res.ok) continue;
+              // rss2json returns JSON; other proxies return raw XML or {contents}
+              const ct = res.headers.get('content-type') || '';
+              if (ct.includes('json') || url.includes('rss2json')) {
+                const data = await res.json();
+                // rss2json format
+                if (data.status === 'ok' && data.items?.length) { renderItems(data.items); return; }
+                // allorigins/get format
+                const items = parseRSSXml(data.contents || '');
+                if (items.length) { renderItems(items); return; }
+              } else {
+                const xml = await res.text();
+                const items = parseRSSXml(xml);
+                if (items.length) { renderItems(items); return; }
+              }
+            } catch {}
           }
-        } catch {}
-
-        // 2nd: allorigins raw → parse XML
-        try {
-          const res = await fetchWithTimeout(`https://api.allorigins.win/raw?url=${enc}`, 10000);
-          if (res.ok) {
-            const xml = await res.text();
-            const items = parseRSSXml(xml);
-            if (items.length) { renderItems(items); return; }
-          }
-        } catch {}
-
-        // 3rd: allorigins get → contents field
-        try {
-          const res = await fetchWithTimeout(`https://api.allorigins.win/get?url=${enc}`, 10000);
-          if (res.ok) {
-            const data = await res.json();
-            const items = parseRSSXml(data.contents || '');
-            if (items.length) { renderItems(items); return; }
-          }
-        } catch {}
+        }
 
         list.innerHTML = `<li class="dashboard-mini-item" style="flex-direction:column;gap:6px;">
           <span style="color:var(--muted);font-size:0.8rem;">ニュースを取得できませんでした</span>
