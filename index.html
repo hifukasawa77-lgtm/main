@@ -6064,6 +6064,35 @@
         return map;
       }
 
+      function findValueByKeyword(values, classMap, keywords, requireAll) {
+        return values.find(function(v) {
+          var allNames = ['tab','cat01','cat02','cat03'].map(function(dim) {
+            return (classMap[dim] && classMap[dim][v['@' + dim]]) || '';
+          }).join(' ');
+          return requireAll
+            ? keywords.every(function(k) { return allNames.includes(k); })
+            : keywords.some(function(k) { return allNames.includes(k); });
+        });
+      }
+
+      async function findCensusTableId(muniCd) {
+        try {
+          var url = 'https://api.e-stat.go.jp/rest/3.0/app/json/getStatsList?appId=' + E_STAT_APP_ID +
+                    '&statsNameId=00200521&cdArea=' + muniCd + '&limit=10';
+          var res = await fetch(url);
+          var data = await res.json();
+          var tables = data && data.GET_STATS_LIST && data.GET_STATS_LIST.DATALIST_INF && data.GET_STATS_LIST.DATALIST_INF.TABLE_INF;
+          var arr = Array.isArray(tables) ? tables : (tables ? [tables] : []);
+          var best = arr.find(function(t) {
+            var name = (t.STATISTICS_NAME || '') + ((t.TITLE && t.TITLE['$']) || (t.TITLE || ''));
+            return name.includes('人口') && name.includes('世帯');
+          }) || arr.find(function(t) {
+            return ((t.STATISTICS_NAME || '') + ((t.TITLE && t.TITLE['$']) || '')).includes('人口');
+          }) || arr[0];
+          return (best && best['@id']) || null;
+        } catch(e) { return null; }
+      }
+
       async function estatFetch(statsDataId, muniCd) {
         const url = `https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData?appId=${E_STAT_APP_ID}&statsDataId=${statsDataId}&cdArea=${muniCd}&metaGetFlg=Y&cntGetFlg=N&limit=500`;
         const res = await fetch(url);
@@ -6119,7 +6148,7 @@
             'https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=' + lat + '&lon=' + lng
           );
           var gsiData = await gsiRes.json();
-          muniCd = gsiData.results && gsiData.results.muniCd;
+          muniCd = String((gsiData.results && gsiData.results.muniCd) || '').padStart(5, '0');
         } catch(e) {
           statusEl.textContent = '市区町村コードの取得に失敗しました';
           ALL_STAT_IDS.forEach(function(id) { setLocalStat(id, '-'); });
@@ -6155,9 +6184,12 @@
           return;
         }
 
+        // 3.5. 国勢調査テーブルを getStatsList で動的解決（cdArea に対応するIDを取得）
+        var resolvedCensusId = await findCensusTableId(muniCd) || ESTAT_CENSUS_ID;
+
         // 4. e-Stat 並列取得（results[0]=国勢調査基本, [1]=財政, [2]=地価, [3]=外国人, [4]=昼夜間）
         var results = await Promise.allSettled([
-          ESTAT_CENSUS_ID   ? estatFetch(ESTAT_CENSUS_ID,   muniCd) : Promise.reject('ID未設定'),
+          resolvedCensusId  ? estatFetch(resolvedCensusId,  muniCd) : Promise.reject('ID未設定'),
           ESTAT_FISCAL_ID   ? estatFetch(ESTAT_FISCAL_ID,   muniCd) : Promise.reject('ID未設定'),
           ESTAT_LAND_ID     ? estatFetch(ESTAT_LAND_ID,     muniCd) : Promise.reject('ID未設定'),
           ESTAT_FOREIGN_ID  ? estatFetch(ESTAT_FOREIGN_ID,  muniCd) : Promise.reject('ID未設定'),
@@ -6165,6 +6197,13 @@
         ]);
 
         // 5. データ解析・表示
+        // エラーログ（開発者ツール Console で確認可能）
+        results.forEach(function(r, i) {
+          if (r.status === 'rejected') {
+            console.error('[地域統計] e-Stat API エラー results[' + i + ']:', r.reason);
+          }
+        });
+
         // 国勢調査基本集計（人口・人口密度・高齢化率・世帯数）
         var censusResult = results[0];
         if (censusResult.status === 'fulfilled') {
@@ -6174,33 +6213,16 @@
                      censusResult.value.GET_STATS_DATA.STATISTICAL_DATA;
             var classObjs = (sd && sd.CLASS_INF && sd.CLASS_INF.CLASS_OBJ) || [];
             var cmap = buildClassMap(classObjs);
-            var tabMap  = cmap['tab']   || {};
-            var cat1Map = cmap['cat01'] || {};
             var values  = (sd && sd.DATA_INF && sd.DATA_INF.VALUE) || [];
 
-            // 表章項目名と分類名でマッチング
-            function nameOf(v) {
-              return (tabMap[v['@tab']] || '') + ' ' + (cat1Map[v['@cat01']] || '');
-            }
-            // 人口総数: tab名に「人口」, cat01名が「総数」
-            var totalPopObj = values.find(function(v) {
-              return (tabMap[v['@tab']] || '').includes('人口') && (cat1Map[v['@cat01']] || '') === '総数';
-            });
-            // 65歳以上人口
-            var pop65Obj = values.find(function(v) {
-              var cn = cat1Map[v['@cat01']] || '';
-              return (tabMap[v['@tab']] || '').includes('人口') &&
-                     (cn.includes('65歳以上') || cn.includes('65歳') || cn === '高齢者');
-            });
-            // 面積（tab名に「面積」）
-            var areaObj = values.find(function(v) {
-              return (tabMap[v['@tab']] || '').includes('面積');
-            });
-            // 世帯数（tab名に「世帯」, cat01が「総数」または空）
-            var houseObj = values.find(function(v) {
-              return (tabMap[v['@tab']] || '').includes('世帯') &&
-                     ((cat1Map[v['@cat01']] || '') === '総数' || !(cat1Map[v['@cat01']]));
-            });
+            // 全次元（tab/cat01/cat02/cat03）のラベルを結合してキーワード検索
+            var totalPopObj = findValueByKeyword(values, cmap, ['人口','総数'], true)
+                           || findValueByKeyword(values, cmap, ['人口'], false);
+            var pop65Obj    = findValueByKeyword(values, cmap, ['65歳以上'], false)
+                           || findValueByKeyword(values, cmap, ['65歳'], false);
+            var areaObj     = findValueByKeyword(values, cmap, ['面積'], false);
+            var houseObj    = findValueByKeyword(values, cmap, ['世帯','総数'], true)
+                           || findValueByKeyword(values, cmap, ['世帯'], false);
 
             var popVal = totalPopObj ? parseInt(totalPopObj['$']).toLocaleString() + ' 人' : '-';
             setLocalStat('lst-pop', popVal);
@@ -6241,10 +6263,8 @@
             var fcmap  = buildClassMap((fsd && fsd.CLASS_INF && fsd.CLASS_INF.CLASS_OBJ) || []);
             var fcat1  = fcmap['cat01'] || {};
             var fvals  = (fsd && fsd.DATA_INF && fsd.DATA_INF.VALUE) || [];
-            // 国籍「総数」かつ「男女計（総数）」を探す
-            var foreignTotalObj = fvals.find(function(v) {
-              return (fcat1[v['@cat01']] || '').includes('総数');
-            }) || fvals[0];
+            // 全次元ラベルから「総数」を含む値を探す（男女計・国籍計の行）
+            var foreignTotalObj = findValueByKeyword(fvals, fcmap, ['総数'], false) || fvals[0];
             var foreignPop = foreignTotalObj ? parseInt(foreignTotalObj['$']) : NaN;
             // 人口総数は censusResult から取得
             var basePop = 0;
@@ -6253,11 +6273,9 @@
                         censusResult.value.GET_STATS_DATA &&
                         censusResult.value.GET_STATS_DATA.STATISTICAL_DATA;
               var bcmap = buildClassMap((bsd && bsd.CLASS_INF && bsd.CLASS_INF.CLASS_OBJ) || []);
-              var btab = bcmap['tab'] || {}, bcat = bcmap['cat01'] || {};
               var bvals = (bsd && bsd.DATA_INF && bsd.DATA_INF.VALUE) || [];
-              var bpop = bvals.find(function(v) {
-                return (btab[v['@tab']] || '').includes('人口') && (bcat[v['@cat01']] || '') === '総数';
-              });
+              var bpop = findValueByKeyword(bvals, bcmap, ['人口','総数'], true)
+                      || findValueByKeyword(bvals, bcmap, ['人口'], false);
               basePop = bpop ? parseInt(bpop['$']) : 0;
             }
             if (!isNaN(foreignPop) && foreignPop >= 0 && basePop > 0) {
@@ -6283,19 +6301,11 @@
             var dcat  = dcmap['cat01'] || {};
             var dcat2 = dcmap['cat02'] || {};
             var dvals = (dsd && dsd.DATA_INF && dsd.DATA_INF.VALUE) || [];
-            // 昼間人口（従業地・通学地ベース）と夜間人口（常住地ベース）を classMap で判定
-            var dayObj = dvals.find(function(v) {
-              var tn = dtab[v['@tab']] || '';
-              var cn = dcat[v['@cat01']] || '';
-              var c2 = dcat2[v['@cat02']] || '';
-              return tn.includes('昼間') || cn.includes('昼間') || cn.includes('従業地') || c2.includes('昼間');
-            });
-            var nightObj = dvals.find(function(v) {
-              var tn = dtab[v['@tab']] || '';
-              var cn = dcat[v['@cat01']] || '';
-              var c2 = dcat2[v['@cat02']] || '';
-              return tn.includes('夜間') || cn.includes('夜間') || cn.includes('常住地') || c2.includes('夜間');
-            });
+            // 全次元ラベルから昼間・夜間人口を探す
+            var dayObj   = findValueByKeyword(dvals, dcmap, ['昼間'], false)
+                        || findValueByKeyword(dvals, dcmap, ['従業地'], false);
+            var nightObj = findValueByKeyword(dvals, dcmap, ['夜間'], false)
+                        || findValueByKeyword(dvals, dcmap, ['常住地'], false);
             if (!dayObj && !nightObj && dvals.length >= 2) {
               dayObj   = dvals[0];
               nightObj = dvals[1];
@@ -6324,11 +6334,8 @@
             var fitab  = ficmap['tab']   || {};
             var ficat  = ficmap['cat01'] || {};
             var fivals = (fisd && fisd.DATA_INF && fisd.DATA_INF.VALUE) || [];
-            // tab名またはcat01名が「財政力指数」を含む値を探す
-            var fiscalObj = fivals.find(function(v) {
-              return (fitab[v['@tab']] || '').includes('財政力指数') ||
-                     (ficat[v['@cat01']] || '').includes('財政力指数');
-            });
+            // 全次元ラベルから「財政力指数」を含む値を探す
+            var fiscalObj = findValueByKeyword(fivals, ficmap, ['財政力指数'], false);
             var fiscalVal = fiscalObj ? parseFloat(fiscalObj['$']) : NaN;
             // 財政力指数は 0〜2 程度の小数。大きすぎる値（金額等）は弾く
             if (!isNaN(fiscalVal) && fiscalVal > 0 && fiscalVal < 10) {
