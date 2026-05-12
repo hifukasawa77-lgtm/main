@@ -6127,20 +6127,21 @@
         // 3. APIキー未設定チェック
         if (!E_STAT_APP_ID) {
           statusEl.innerHTML = '⚠️ e-Stat APIキー未設定 — <a href="https://api.e-stat.go.jp/" target="_blank" rel="noreferrer" style="color:var(--blue)">こちらで無料取得</a> してコードに設定してください';
-          ['lst-pop','lst-dens','lst-aged','lst-house','lst-foreign','lst-daynight','lst-fiscal','lst-land']
-            .forEach(function(id) { setLocalStat(id, '-'); });
+          ALL_STAT_IDS.forEach(function(id) { setLocalStat(id, '-'); });
           return;
         }
 
-        // 4. e-Stat 並列取得
+        // 4. e-Stat 並列取得（results[0]=国勢調査基本, [1]=財政, [2]=地価, [3]=外国人, [4]=昼夜間）
         var results = await Promise.allSettled([
-          ESTAT_CENSUS_ID  ? estatFetch(ESTAT_CENSUS_ID, muniCd)  : Promise.reject('ID未設定'),
-          ESTAT_FISCAL_ID  ? estatFetch(ESTAT_FISCAL_ID, muniCd)  : Promise.reject('ID未設定'),
-          ESTAT_LAND_ID    ? estatFetch(ESTAT_LAND_ID,   muniCd)  : Promise.reject('ID未設定'),
+          ESTAT_CENSUS_ID   ? estatFetch(ESTAT_CENSUS_ID,   muniCd) : Promise.reject('ID未設定'),
+          ESTAT_FISCAL_ID   ? estatFetch(ESTAT_FISCAL_ID,   muniCd) : Promise.reject('ID未設定'),
+          ESTAT_LAND_ID     ? estatFetch(ESTAT_LAND_ID,     muniCd) : Promise.reject('ID未設定'),
+          ESTAT_FOREIGN_ID  ? estatFetch(ESTAT_FOREIGN_ID,  muniCd) : Promise.reject('ID未設定'),
+          ESTAT_DAYNIGHT_ID ? estatFetch(ESTAT_DAYNIGHT_ID, muniCd) : Promise.reject('ID未設定'),
         ]);
 
         // 5. データ解析・表示
-        // 国勢調査データ解析
+        // 国勢調査基本集計（人口・人口密度・高齢化率・世帯数）
         var censusResult = results[0];
         if (censusResult.status === 'fulfilled') {
           try {
@@ -6153,6 +6154,10 @@
             var totalPopObj = values.find(function(v) { return v['@cat01'] === '010'; });
             var pop65Obj    = values.find(function(v) { return v['@cat01'] === '640' || v['@cat01'] === '013'; });
             var areaObj     = values.find(function(v) { return v['@cat01'] === 'A01'; });
+            // 世帯数: @name に「世帯」を含む値を動的探索（cat01コードは統計表による）
+            var houseObj    = values.find(function(v) {
+              return v['@name'] && (v['@name'].includes('世帯数') || v['@name'].includes('総世帯'));
+            });
 
             var popVal = totalPopObj ? parseInt(totalPopObj['$']).toLocaleString() + ' 人' : '-';
             setLocalStat('lst-pop', popVal);
@@ -6171,16 +6176,84 @@
               setLocalStat('lst-aged', '-');
             }
 
-            setLocalStat('lst-house', '-');
-            setLocalStat('lst-foreign', '-');
-            setLocalStat('lst-daynight', '-');
+            // 世帯数（基本集計から取得できた場合のみ表示）
+            if (houseObj && houseObj['$'] && parseInt(houseObj['$']) > 0) {
+              setLocalStat('lst-house', parseInt(houseObj['$']).toLocaleString() + ' 世帯');
+            } else {
+              setLocalStat('lst-house', '-');
+            }
           } catch(e) {
-            ['lst-pop','lst-dens','lst-aged','lst-house','lst-foreign','lst-daynight']
-              .forEach(function(id) { setLocalStat(id, '-'); });
+            ['lst-pop','lst-dens','lst-aged','lst-house'].forEach(function(id) { setLocalStat(id, '-'); });
           }
         } else {
-          ['lst-pop','lst-dens','lst-aged','lst-house','lst-foreign','lst-daynight']
-            .forEach(function(id) { setLocalStat(id, '-'); });
+          ['lst-pop','lst-dens','lst-aged','lst-house'].forEach(function(id) { setLocalStat(id, '-'); });
+        }
+
+        // 外国人比率（国勢調査2020 外国人 44-1 男女・国籍別人口）
+        var foreignResult = results[3];
+        if (foreignResult.status === 'fulfilled') {
+          try {
+            var fvals = (foreignResult.value &&
+                         foreignResult.value.GET_STATS_DATA &&
+                         foreignResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                         foreignResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                         foreignResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) || [];
+            // 国籍総数・両性計（最初の値、またはname/catで「総数」を探す）
+            var foreignTotalObj = fvals.find(function(v) {
+              var name = v['@name'] || '';
+              return name.includes('総数') || name.includes('合計') || v['@cat01'] === '010' || v['@cat01'] === '000';
+            }) || fvals[0];
+            var foreignPop = foreignTotalObj ? parseInt(foreignTotalObj['$']) : NaN;
+            // 人口総数はcensusデータから参照（results[0]が成功していれば）
+            var basePop = 0;
+            if (censusResult.status === 'fulfilled') {
+              var bvals = (censusResult.value &&
+                           censusResult.value.GET_STATS_DATA &&
+                           censusResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                           censusResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                           censusResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) || [];
+              var bpop = bvals.find(function(v) { return v['@cat01'] === '010'; });
+              basePop = bpop ? parseInt(bpop['$']) : 0;
+            }
+            if (!isNaN(foreignPop) && foreignPop >= 0 && basePop > 0) {
+              var foreignRate = (foreignPop / basePop * 100).toFixed(2);
+              setLocalStat('lst-foreign', foreignRate + '%', '外国人');
+            } else {
+              setLocalStat('lst-foreign', '-');
+            }
+          } catch(e) { setLocalStat('lst-foreign', '-'); }
+        } else {
+          setLocalStat('lst-foreign', '-');
+        }
+
+        // 昼夜間人口比（国勢調査2020 常住地又は従業地・通学地別人口）
+        var daynightResult = results[4];
+        if (daynightResult.status === 'fulfilled') {
+          try {
+            var dvals = (daynightResult.value &&
+                         daynightResult.value.GET_STATS_DATA &&
+                         daynightResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                         daynightResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                         daynightResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) || [];
+            // 昼間人口（従業地・通学地ベース）と夜間人口（常住地ベース）を動的探索
+            var dayObj   = dvals.find(function(v) { var n = v['@name'] || ''; return n.includes('昼間') || n.includes('従業地'); });
+            var nightObj = dvals.find(function(v) { var n = v['@name'] || ''; return n.includes('夜間') || n.includes('常住地'); });
+            // cat02等の軸が存在する場合はcat01で昼間・夜間を区別する場合もある
+            if (!dayObj && !nightObj && dvals.length >= 2) {
+              dayObj   = dvals[0];
+              nightObj = dvals[1];
+            }
+            var dayPop   = dayObj   ? parseInt(dayObj['$'])   : NaN;
+            var nightPop = nightObj ? parseInt(nightObj['$']) : NaN;
+            if (!isNaN(dayPop) && !isNaN(nightPop) && nightPop > 0) {
+              var ratio = (dayPop / nightPop * 100).toFixed(1);
+              setLocalStat('lst-daynight', ratio + '%', '昼間/夜間');
+            } else {
+              setLocalStat('lst-daynight', '-');
+            }
+          } catch(e) { setLocalStat('lst-daynight', '-'); }
+        } else {
+          setLocalStat('lst-daynight', '-');
         }
 
         // 財政力指数
