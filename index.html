@@ -883,6 +883,36 @@
       font-size: 0.74rem;
       color: var(--muted);
     }
+    /* ─── 地域統計カード ─── */
+    .local-stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      flex: 1;
+    }
+    .local-stat-item {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .local-stat-item .stat-label {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .local-stat-item .stat-value {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: var(--blue);
+      line-height: 1.2;
+    }
+    .local-stat-item .stat-sub {
+      font-size: 0.68rem;
+      color: var(--muted);
+    }
     .dash-todo-form {
       display: flex;
       gap: 8px;
@@ -2655,6 +2685,23 @@
               <li class="dashboard-mini-item"><span>読み込み中…</span></li>
             </ul>
             <div class="dash-mini-note" id="home-train-time"></div>
+          </article>
+
+          <!-- 地域統計カード -->
+          <article class="card dashboard-card reveal" id="dash-card-local-stats">
+            <h3>📍 <span id="local-stats-city">地域統計</span></h3>
+            <div class="dash-mini-note" id="local-stats-status" style="margin:0 0 6px">位置情報を取得中…</div>
+            <div class="local-stats-grid" id="local-stats-grid">
+              <div class="local-stat-item"><span class="stat-label">人口</span><span class="stat-value skeleton-bar" id="lst-pop" style="display:inline-block;width:80px;height:1rem;border-radius:6px"></span></div>
+              <div class="local-stat-item"><span class="stat-label">人口密度</span><span class="stat-value skeleton-bar" id="lst-dens" style="display:inline-block;width:80px;height:1rem;border-radius:6px"></span></div>
+              <div class="local-stat-item"><span class="stat-label">高齢化率</span><span class="stat-value skeleton-bar" id="lst-aged" style="display:inline-block;width:80px;height:1rem;border-radius:6px"></span></div>
+              <div class="local-stat-item"><span class="stat-label">世帯数</span><span class="stat-value skeleton-bar" id="lst-house" style="display:inline-block;width:80px;height:1rem;border-radius:6px"></span></div>
+              <div class="local-stat-item"><span class="stat-label">外国人比率</span><span class="stat-value skeleton-bar" id="lst-foreign" style="display:inline-block;width:80px;height:1rem;border-radius:6px"></span></div>
+              <div class="local-stat-item"><span class="stat-label">昼夜間人口比</span><span class="stat-value skeleton-bar" id="lst-daynight" style="display:inline-block;width:80px;height:1rem;border-radius:6px"></span></div>
+              <div class="local-stat-item"><span class="stat-label">財政力指数</span><span class="stat-value skeleton-bar" id="lst-fiscal" style="display:inline-block;width:80px;height:1rem;border-radius:6px"></span></div>
+              <div class="local-stat-item"><span class="stat-label">公示地価</span><span class="stat-value skeleton-bar" id="lst-land" style="display:inline-block;width:80px;height:1rem;border-radius:6px"></span></div>
+            </div>
+            <div class="dash-mini-note" id="local-stats-note">出典: e-Stat 国勢調査2020 / 地価公示 / 地方財政状況調査</div>
           </article>
 
           <!-- ポモドーロタイマー -->
@@ -5989,6 +6036,259 @@
       };
       setInterval(initNewsCard, 30 * 60 * 1000);
 
+      // ── 地域統計カード ─────────────────────────────────────────
+      const E_STAT_APP_ID = 'dfe7d54039c81455773725b9abbddb664dea032a'; // e-Stat APIキー
+
+      // e-Stat statsDataIds
+      const ESTAT_CENSUS_ID  = '0003448238'; // 国勢調査2020 市区町村別 人口等基本集計
+      const ESTAT_FOREIGN_ID = '0003445244'; // 国勢調査2020 外国人 44-1 男女・国籍別人口（市区町村）
+      const ESTAT_DAYNIGHT_ID= '0004003060'; // 国勢調査2020 時系列 常住地又は従業地・通学地別人口（昼夜間、市区町村）
+      // 財政力指数: 地方財政状況調査 00 団体の概況 市町村分 (年度次)
+      // 注意: cdArea は5桁市区町村コードでフィルタ可能だが、統計の地域コード体系が異なる場合あり
+      const ESTAT_FISCAL_ID  = '0003172920'; // 地方財政状況調査 市町村分 団体の概況（財政力指数含む）
+      // 地価公示: 調査済みだがe-StatのDB系統計ではcdAreaによる市区町村フィルタが利用不可のため設定見送り
+      // 参考: 国土交通省地価公示はe-Stat外でhttps://www.land.mlit.go.jp/ のAPIを使用する必要がある
+      const ESTAT_LAND_ID    = '';           // 地価公示（地価公示はe-Stat APIの対象外のため未設定）
+
+      // [P3] ID リスト定数（重複排除）
+      const ALL_STAT_IDS = ['lst-pop','lst-dens','lst-aged','lst-house','lst-foreign','lst-daynight','lst-fiscal','lst-land'];
+
+      async function estatFetch(statsDataId, muniCd) {
+        const url = `https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData?appId=${E_STAT_APP_ID}&statsDataId=${statsDataId}&cdArea=${muniCd}&metaGetFlg=N&cntGetFlg=N&limit=100`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`e-Stat HTTP ${res.status}`);
+        return res.json();
+      }
+
+      function setLocalStat(id, value, sub) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.className = 'stat-value';
+        el.style = '';
+        el.textContent = value;
+        if (sub) {
+          // 既存の stat-sub を削除してから追加（重複防止）
+          const existing = el.parentElement.querySelector('.stat-sub');
+          if (existing) existing.remove();
+          const s = document.createElement('span');
+          s.className = 'stat-sub';
+          s.textContent = sub;
+          el.parentElement.appendChild(s);
+        }
+      }
+
+      async function initLocalStatsCard() {
+        const statusEl = document.getElementById('local-stats-status');
+        const cityEl   = document.getElementById('local-stats-city');
+
+        if (!navigator.geolocation) {
+          statusEl.textContent = '位置情報APIが利用できません';
+          ALL_STAT_IDS.forEach(function(id) { setLocalStat(id, '-'); });
+          return;
+        }
+
+        // 1. Geolocation
+        var lat, lng;
+        try {
+          var pos = await new Promise(function(res, rej) {
+            navigator.geolocation.getCurrentPosition(res, rej, { timeout: 8000 });
+          });
+          lat = pos.coords.latitude;
+          lng = pos.coords.longitude;
+        } catch(e) {
+          statusEl.textContent = '📍 位置情報を許可してください';
+          ALL_STAT_IDS.forEach(function(id) { setLocalStat(id, '-'); });
+          return;
+        }
+
+        // 2. 国土地理院 逆ジオコーダ → muniCd
+        var muniCd, cityName;
+        try {
+          var gsiRes = await fetch(
+            'https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=' + lat + '&lon=' + lng
+          );
+          var gsiData = await gsiRes.json();
+          muniCd   = gsiData.results && gsiData.results.muniCd;
+          cityName = ((gsiData.results && gsiData.results.lv01Nm) || '') +
+                     ((gsiData.results && gsiData.results.lv02Nm) || '');
+        } catch(e) {
+          statusEl.textContent = '市区町村コードの取得に失敗しました';
+          ALL_STAT_IDS.forEach(function(id) { setLocalStat(id, '-'); });
+          return;
+        }
+
+        if (!muniCd) {
+          statusEl.textContent = '現在地の市区町村を特定できませんでした';
+          return;
+        }
+        cityEl.textContent = '📍 ' + cityName + ' の地域統計';
+        statusEl.textContent = '';
+
+        // 3. APIキー未設定チェック
+        if (!E_STAT_APP_ID) {
+          statusEl.innerHTML = '⚠️ e-Stat APIキー未設定 — <a href="https://api.e-stat.go.jp/" target="_blank" rel="noreferrer" style="color:var(--blue)">こちらで無料取得</a> してコードに設定してください';
+          ALL_STAT_IDS.forEach(function(id) { setLocalStat(id, '-'); });
+          return;
+        }
+
+        // 4. e-Stat 並列取得（results[0]=国勢調査基本, [1]=財政, [2]=地価, [3]=外国人, [4]=昼夜間）
+        var results = await Promise.allSettled([
+          ESTAT_CENSUS_ID   ? estatFetch(ESTAT_CENSUS_ID,   muniCd) : Promise.reject('ID未設定'),
+          ESTAT_FISCAL_ID   ? estatFetch(ESTAT_FISCAL_ID,   muniCd) : Promise.reject('ID未設定'),
+          ESTAT_LAND_ID     ? estatFetch(ESTAT_LAND_ID,     muniCd) : Promise.reject('ID未設定'),
+          ESTAT_FOREIGN_ID  ? estatFetch(ESTAT_FOREIGN_ID,  muniCd) : Promise.reject('ID未設定'),
+          ESTAT_DAYNIGHT_ID ? estatFetch(ESTAT_DAYNIGHT_ID, muniCd) : Promise.reject('ID未設定'),
+        ]);
+
+        // 5. データ解析・表示
+        // 国勢調査基本集計（人口・人口密度・高齢化率・世帯数）
+        var censusResult = results[0];
+        if (censusResult.status === 'fulfilled') {
+          try {
+            var values = (censusResult.value &&
+                         censusResult.value.GET_STATS_DATA &&
+                         censusResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                         censusResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                         censusResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) || [];
+
+            var totalPopObj = values.find(function(v) { return v['@cat01'] === '010'; });
+            var pop65Obj    = values.find(function(v) { return v['@cat01'] === '640' || v['@cat01'] === '013'; });
+            var areaObj     = values.find(function(v) { return v['@cat01'] === 'A01'; });
+            // 世帯数: @name に「世帯」を含む値を動的探索（cat01コードは統計表による）
+            var houseObj    = values.find(function(v) {
+              return v['@name'] && (v['@name'].includes('世帯数') || v['@name'].includes('総世帯'));
+            });
+
+            var popVal = totalPopObj ? parseInt(totalPopObj['$']).toLocaleString() + ' 人' : '-';
+            setLocalStat('lst-pop', popVal);
+
+            if (totalPopObj && areaObj) {
+              var dens = Math.round(parseInt(totalPopObj['$']) / parseFloat(areaObj['$']));
+              setLocalStat('lst-dens', dens.toLocaleString() + ' 人/km²');
+            } else {
+              setLocalStat('lst-dens', '-');
+            }
+
+            if (totalPopObj && pop65Obj) {
+              var rate = (parseInt(pop65Obj['$']) / parseInt(totalPopObj['$']) * 100).toFixed(1);
+              setLocalStat('lst-aged', rate + '%', '65歳以上');
+            } else {
+              setLocalStat('lst-aged', '-');
+            }
+
+            // 世帯数（基本集計から取得できた場合のみ表示）
+            if (houseObj && houseObj['$'] && parseInt(houseObj['$']) > 0) {
+              setLocalStat('lst-house', parseInt(houseObj['$']).toLocaleString() + ' 世帯');
+            } else {
+              setLocalStat('lst-house', '-');
+            }
+          } catch(e) {
+            ['lst-pop','lst-dens','lst-aged','lst-house'].forEach(function(id) { setLocalStat(id, '-'); });
+          }
+        } else {
+          ['lst-pop','lst-dens','lst-aged','lst-house'].forEach(function(id) { setLocalStat(id, '-'); });
+        }
+
+        // 外国人比率（国勢調査2020 外国人 44-1 男女・国籍別人口）
+        var foreignResult = results[3];
+        if (foreignResult.status === 'fulfilled') {
+          try {
+            var fvals = (foreignResult.value &&
+                         foreignResult.value.GET_STATS_DATA &&
+                         foreignResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                         foreignResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                         foreignResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) || [];
+            // 国籍総数・両性計（最初の値、またはname/catで「総数」を探す）
+            var foreignTotalObj = fvals.find(function(v) {
+              var name = v['@name'] || '';
+              return name.includes('総数') || name.includes('合計') || v['@cat01'] === '010' || v['@cat01'] === '000';
+            }) || fvals[0];
+            var foreignPop = foreignTotalObj ? parseInt(foreignTotalObj['$']) : NaN;
+            // 人口総数はcensusデータから参照（results[0]が成功していれば）
+            var basePop = 0;
+            if (censusResult.status === 'fulfilled') {
+              var bvals = (censusResult.value &&
+                           censusResult.value.GET_STATS_DATA &&
+                           censusResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                           censusResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                           censusResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) || [];
+              var bpop = bvals.find(function(v) { return v['@cat01'] === '010'; });
+              basePop = bpop ? parseInt(bpop['$']) : 0;
+            }
+            if (!isNaN(foreignPop) && foreignPop >= 0 && basePop > 0) {
+              var foreignRate = (foreignPop / basePop * 100).toFixed(2);
+              setLocalStat('lst-foreign', foreignRate + '%', '外国人');
+            } else {
+              setLocalStat('lst-foreign', '-');
+            }
+          } catch(e) { setLocalStat('lst-foreign', '-'); }
+        } else {
+          setLocalStat('lst-foreign', '-');
+        }
+
+        // 昼夜間人口比（国勢調査2020 常住地又は従業地・通学地別人口）
+        var daynightResult = results[4];
+        if (daynightResult.status === 'fulfilled') {
+          try {
+            var dvals = (daynightResult.value &&
+                         daynightResult.value.GET_STATS_DATA &&
+                         daynightResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                         daynightResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                         daynightResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE) || [];
+            // 昼間人口（従業地・通学地ベース）と夜間人口（常住地ベース）を動的探索
+            var dayObj   = dvals.find(function(v) { var n = v['@name'] || ''; return n.includes('昼間') || n.includes('従業地'); });
+            var nightObj = dvals.find(function(v) { var n = v['@name'] || ''; return n.includes('夜間') || n.includes('常住地'); });
+            // cat02等の軸が存在する場合はcat01で昼間・夜間を区別する場合もある
+            if (!dayObj && !nightObj && dvals.length >= 2) {
+              dayObj   = dvals[0];
+              nightObj = dvals[1];
+            }
+            var dayPop   = dayObj   ? parseInt(dayObj['$'])   : NaN;
+            var nightPop = nightObj ? parseInt(nightObj['$']) : NaN;
+            if (!isNaN(dayPop) && !isNaN(nightPop) && nightPop > 0) {
+              var ratio = (dayPop / nightPop * 100).toFixed(1);
+              setLocalStat('lst-daynight', ratio + '%', '昼間/夜間');
+            } else {
+              setLocalStat('lst-daynight', '-');
+            }
+          } catch(e) { setLocalStat('lst-daynight', '-'); }
+        } else {
+          setLocalStat('lst-daynight', '-');
+        }
+
+        // 財政力指数
+        var fiscalResult = results[1];
+        if (fiscalResult.status === 'fulfilled') {
+          try {
+            var fv = fiscalResult.value &&
+                     fiscalResult.value.GET_STATS_DATA &&
+                     fiscalResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                     fiscalResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                     fiscalResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE;
+            var fiscal = fv && fv[0] && fv[0]['$'];
+            setLocalStat('lst-fiscal', fiscal ? parseFloat(fiscal).toFixed(2) : '-');
+          } catch(e) { setLocalStat('lst-fiscal', '-'); }
+        } else {
+          setLocalStat('lst-fiscal', '-');
+        }
+
+        // 公示地価
+        var landResult = results[2];
+        if (landResult.status === 'fulfilled') {
+          try {
+            var lv = landResult.value &&
+                     landResult.value.GET_STATS_DATA &&
+                     landResult.value.GET_STATS_DATA.STATISTICAL_DATA &&
+                     landResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF &&
+                     landResult.value.GET_STATS_DATA.STATISTICAL_DATA.DATA_INF.VALUE;
+            var land = lv && lv[0] && lv[0]['$'];
+            setLocalStat('lst-land', land ? parseInt(land).toLocaleString() + ' 円/m²' : '-', '住宅地平均');
+          } catch(e) { setLocalStat('lst-land', '-'); }
+        } else {
+          setLocalStat('lst-land', '-');
+        }
+      }
+
       function initDashboardAPIs() {
         if (dashboardAPIsReady) return;
         dashboardAPIsReady = true;
@@ -6004,6 +6304,7 @@
           initQuakeCard(),
           initTrafficCard(),
           initNewsCard(),
+          initLocalStatsCard(),
         ]).catch(() => {});
       }
 
