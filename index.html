@@ -6231,12 +6231,24 @@
 
             // 全次元（tab/cat01/cat02/cat03）のラベルを結合してキーワード検索
             var totalPopObj = findValueByKeyword(values, cmap, ['人口','総数'], true)
-                           || findValueByKeyword(values, cmap, ['人口'], false);
+                           || findValueByKeyword(values, cmap, ['人口'], false)
+                           || findValueByKeyword(values, cmap, ['総数'], false);
             var pop65Obj    = findValueByKeyword(values, cmap, ['65歳以上'], false)
                            || findValueByKeyword(values, cmap, ['65歳'], false);
             var areaObj     = findValueByKeyword(values, cmap, ['面積'], false);
             var houseObj    = findValueByKeyword(values, cmap, ['世帯','総数'], true)
-                           || findValueByKeyword(values, cmap, ['世帯'], false);
+                           || findValueByKeyword(values, cmap, ['世帯'], false)
+                           || findValueByKeyword(values, cmap, ['一般世帯'], false);
+            console.log('[LocalStats] census tableId:', resolvedCensusId,
+                        '| values:', values.length,
+                        '| cmap dims:', Object.keys(cmap),
+                        '| pop:', totalPopObj ? totalPopObj['$'] : 'NOT FOUND',
+                        '| house:', houseObj ? houseObj['$'] : 'NOT FOUND',
+                        '| sample labels:', values.slice(0, 3).map(function(v) {
+                          return ['tab','cat01','cat02','cat03'].map(function(d) {
+                            return (cmap[d] && cmap[d][v['@'+d]]) || '';
+                          }).filter(Boolean).join('/');
+                        }));
 
             var popVal = totalPopObj ? parseInt(totalPopObj['$']).toLocaleString() + ' 人' : '-';
             setLocalStat('lst-pop', popVal);
@@ -6281,7 +6293,7 @@
             // 全次元ラベルから「総数」を含む値を探す（男女計・国籍計の行）
             var foreignTotalObj = findValueByKeyword(fvals, fcmap, ['総数'], false) || fvals[0];
             var foreignPop = foreignTotalObj ? parseInt(foreignTotalObj['$']) : NaN;
-            // 人口総数は censusResult から取得
+            // 人口総数は censusResult から取得（失敗時は外国人数の絶対値を表示）
             var basePop = 0;
             if (censusResult.status === 'fulfilled') {
               var bsd = censusResult.value &&
@@ -6289,13 +6301,18 @@
                         censusResult.value.GET_STATS_DATA.STATISTICAL_DATA;
               var bcmap = buildClassMap((bsd && bsd.CLASS_INF && bsd.CLASS_INF.CLASS_OBJ) || []);
               var bvals = (bsd && bsd.DATA_INF && bsd.DATA_INF.VALUE) || [];
+              bvals = Array.isArray(bvals) ? bvals : (bvals ? [bvals] : []);
               var bpop = findValueByKeyword(bvals, bcmap, ['人口','総数'], true)
-                      || findValueByKeyword(bvals, bcmap, ['人口'], false);
+                      || findValueByKeyword(bvals, bcmap, ['人口'], false)
+                      || findValueByKeyword(bvals, bcmap, ['総数'], false);
               basePop = bpop ? parseInt(bpop['$']) : 0;
             }
             if (!isNaN(foreignPop) && foreignPop >= 0 && basePop > 0) {
               var foreignRate = (foreignPop / basePop * 100).toFixed(2);
               setLocalStat('lst-foreign', foreignRate + '%', '外国人');
+            } else if (!isNaN(foreignPop) && foreignPop >= 0) {
+              // census 失敗時: 比率の代わりに外国人の絶対数を表示
+              setLocalStat('lst-foreign', foreignPop.toLocaleString() + ' 人', '外国人（実数）');
             } else {
               setLocalStat('lst-foreign', '-');
             }
@@ -6351,9 +6368,18 @@
             var ficat  = ficmap['cat01'] || {};
             var fivals = (fisd && fisd.DATA_INF && fisd.DATA_INF.VALUE) || [];
             fivals = Array.isArray(fivals) ? fivals : (fivals ? [fivals] : []);
-            // 全次元ラベルから「財政力指数」を含む値を探す
+            // 全次元ラベルから「財政力指数」を含む値を探す（失敗時は0〜2の小数値をフォールバック）
             var fiscalObj = findValueByKeyword(fivals, ficmap, ['財政力指数'], false);
+            if (!fiscalObj) {
+              fiscalObj = fivals.find(function(v) {
+                var n = parseFloat(v['$']);
+                return !isNaN(n) && n > 0 && n < 10;
+              }) || null;
+            }
             var fiscalVal = fiscalObj ? parseFloat(fiscalObj['$']) : NaN;
+            console.log('[LocalStats] fiscal values:', fivals.length,
+                        '| fiscalObj:', fiscalObj ? fiscalObj['$'] : 'NOT FOUND',
+                        '| sample:', fivals.slice(0, 3).map(function(v) { return v['$']; }));
             // 財政力指数は 0〜2 程度の小数。大きすぎる値（金額等）は弾く
             if (!isNaN(fiscalVal) && fiscalVal > 0 && fiscalVal < 10) {
               setLocalStat('lst-fiscal', fiscalVal.toFixed(2));
