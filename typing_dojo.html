@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Typing Dojo — hide portfolio</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+    }
+    #c {
+      display: block;
+      cursor: default;
+      border: 1px solid #00ffff;
+      box-shadow: 0 0 20px #00ffff44;
+    }
+    /* 非表示 input: フォーカス受け用 */
+    #typing-input {
+      position: absolute;
+      opacity: 0;
+      width: 1px;
+      height: 1px;
+      pointer-events: none;
+      top: 0;
+      left: 0;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="480" height="640"></canvas>
+  <input id="typing-input" type="text" inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+  <script>
+(function () {
+  'use strict';
+
+  /* ── 定数 ── */
+  const W = 480, H = 640, DANGER_Y = 515;
+
+  const LEVEL_TABLE = [
+    { score: 0,     maxEnemies: 3, speed: 0.4,  interval: 3000 },
+    { score: 500,   maxEnemies: 4, speed: 0.55, interval: 2700 },
+    { score: 1500,  maxEnemies: 5, speed: 0.7,  interval: 2400 },
+    { score: 3500,  maxEnemies: 6, speed: 0.85, interval: 2100 },
+    { score: 7000,  maxEnemies: 7, speed: 1.0,  interval: 1800 },
+    { score: 12000, maxEnemies: 8, speed: 1.2,  interval: 1500 },
+  ];
+
+  /* ── 単語辞書 ── */
+  const WORD_DB = {
+    word: {
+      lv1: ['html','css','code','loop','array','null','true','data','var','let'],
+      lv2: ['canvas','object','string','number','import','export','async','await'],
+      lv3: ['function','callback','promise','variable','interface','component'],
+      lv4: ['refactoring','middleware','inheritance','polymorphism','recursion'],
+      lv5: ['asynchronous','encapsulation','containerization','microservices'],
+    },
+    code: {
+      lv1: ['git add','git log','ls -la','cd ..','pwd','npm run'],
+      lv2: ['git commit','console.log()','npm install','git status'],
+      lv3: ['git push origin','const x = []','let i = 0','git diff HEAD'],
+      lv4: ['console.log("hello")','document.getElementById()','localStorage.getItem()'],
+      lv5: ['requestAnimationFrame(loop)','JSON.stringify(obj)','Array.from({length: 5})'],
+    },
+    romaji: {
+      lv1: [
+        {display:'ねこ',key:'neko'},{display:'いぬ',key:'inu'},{display:'さくら',key:'sakura'},
+        {display:'うみ',key:'umi'},{display:'やま',key:'yama'},{display:'はな',key:'hana'},
+        {display:'そら',key:'sora'},{display:'かぜ',key:'kaze'},{display:'つき',key:'tsuki'},
+        {display:'ほし',key:'hoshi'},
+      ],
+      lv2: [
+        {display:'プログラム',key:'puroguramu'},{display:'コンピュータ',key:'konpyuuta'},
+        {display:'キーボード',key:'kiiboodo'},{display:'インターネット',key:'intaanetto'},
+        {display:'アルゴリズム',key:'arugorizumu'},{display:'データベース',key:'deetabeesu'},
+      ],
+      lv3: [
+        {display:'じょうほうぎじゅつ',key:'jouhougizyutsu'},
+        {display:'プログラミング',key:'puroguramingu'},
+        {display:'オープンソース',key:'oopunsosu'},
+        {display:'クラウドコンピューティング',key:'kuraudokonpyuutingu'},
+      ],
+      lv4: [
+        {display:'じんこうちのう',key:'jinkoochinou'},
+        {display:'きかいがくしゅう',key:'kikaigakushuu'},
+        {display:'ふかいがくしゅう',key:'fukaigakushuu'},
+      ],
+      lv5: [
+        {display:'ぶんさんしょりシステム',key:'bunsanshoriShisutemu'},
+        {display:'りあるたいむしょり',key:'riarutaimusyori'},
+      ],
+    },
+  };
+
+  /* ── GameState ── */
+  function makeInitialState() {
+    return {
+      state: 'title',   // 'title' | 'playing' | 'gameover'
+      mode: 'word',     // 'word' | 'code' | 'romaji'
+      score: 0,
+      highScore: parseInt(localStorage.getItem('typingDojo_highScore') || '0', 10),
+      level: 1,
+      lives: 3,
+      combo: 0,
+      maxCombo: 0,
+      frame: 0,
+      enemies: [],
+      particles: [],
+      scorePopups: [],
+      inputBuffer: '',
+      activeTarget: null,
+      lastSpawnTime: 0,
+      nextEnemyId: 0,
+      bgOffset: 0,
+    };
+  }
+  let gs = makeInitialState();
+
+  /* ── Canvas ── */
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const input = document.getElementById('typing-input');
+
+  /* ── Web Audio API ── */
+  let audioCtx = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  }
+  function playSound(type) {
+    try {
+      ensureAudio();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      const presets = {
+        type:     { freq: 440,  wave: 'square',   dur: 0.05, vol: 0.08 },
+        defeat:   { freq: 880,  wave: 'sawtooth', dur: 0.15, vol: 0.15 },
+        miss:     { freq: 220,  wave: 'square',   dur: 0.1,  vol: 0.1  },
+        levelup:  { freq: 1760, wave: 'sine',     dur: 0.3,  vol: 0.15 },
+        gameover: { freq: 110,  wave: 'sawtooth', dur: 0.8,  vol: 0.2  },
+      };
+      const p = presets[type] || presets.type;
+      osc.type = p.wave;
+      osc.frequency.value = p.freq;
+      gain.gain.setValueAtTime(p.vol, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + p.dur);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + p.dur);
+    } catch (e) { /* silent fail */ }
+  }
+
+  /* ── 単語選択 ── */
+  function pickWord() {
+    const db = WORD_DB[gs.mode];
+    const lvCap = Math.min(gs.level, 5);
+    let pool = [];
+    for (let i = 1; i <= lvCap; i++) {
+      const key = 'lv' + i;
+      if (db[key]) pool = pool.concat(db[key]);
+    }
+    const used = new Set(gs.enemies.map(function (e) { return e.wordKey; }));
+    const candidates = pool.filter(function (w) {
+      const k = (typeof w === 'object') ? w.key : w;
+      return !used.has(k);
+    });
+    const src = candidates.length > 0 ? candidates : pool;
+    return src[Math.floor(Math.random() * src.length)];
+  }
+
+  function spawnEnemy() {
+    const wordData = pickWord();
+    const display = (typeof wordData === 'object') ? wordData.display : wordData;
+    const key     = (typeof wordData === 'object') ? wordData.key     : wordData;
+    const wordWidth = key.length * 10 + 40;
+    const lv = LEVEL_TABLE[Math.min(gs.level - 1, LEVEL_TABLE.length - 1)];
+    gs.enemies.push({
+      id: gs.nextEnemyId++,
+      x: Math.max(wordWidth / 2 + 10, Math.min(W - wordWidth / 2 - 10, 60 + Math.random() * (W - 120))),
+      y: 55,
+      speed: lv.speed + (Math.random() - 0.5) * 0.1,
+      word: display,
+      wordKey: key,
+      typed: 0,
+      width: wordWidth,
+      isTarget: false,
+      glowColor: '#00ffff',
+      spawnTime: Date.now(),
+    });
+  }
+
+  /* ── レベルアップ判定 ── */
+  function checkLevelUp() {
+    for (let i = LEVEL_TABLE.length - 1; i >= 0; i--) {
+      if (gs.score >= LEVEL_TABLE[i].score) {
+        const newLevel = i + 1;
+        if (newLevel > gs.level) {
+          gs.level = newLevel;
+          playSound('levelup');
+        }
+        break;
+      }
+    }
+  }
+
+  /* ── パーティクル（爆発） ── */
+  function spawnExplosion(x, y, color) {
+    for (let i = 0; i < 20; i++) {
+      gs.particles.push({
+        x: x, y: y,
+        vx: (Math.random() - 0.5) * 6,
+        vy: (Math.random() - 0.5) * 6,
+        life: 30, maxLife: 30,
+        color: color,
+        size: 2 + Math.random() * 3,
+      });
+    }
+  }
+
+  /* ── 敵撃破 ── */
+  function defeatEnemy(enemy) {
+    const elapsed = (Date.now() - enemy.spawnTime) / 1000;
+    const speedMult = elapsed < 3 ? 2.0 : elapsed < 6 ? 1.5 : 1.0;
+    const baseScore = enemy.wordKey.length * 10;
+    const comboMult = 1 + Math.min(gs.combo * 0.1, 2.0);
+    const gained = Math.ceil(baseScore * speedMult * comboMult);
+    gs.score += gained;
+    gs.combo++;
+    gs.maxCombo = Math.max(gs.maxCombo, gs.combo);
+    spawnExplosion(enemy.x, enemy.y + 18, enemy.glowColor);
+    gs.scorePopups.push({
+      x: enemy.x, y: enemy.y,
+      text: '+' + gained,
+      life: 60, maxLife: 60,
+    });
+    gs.enemies = gs.enemies.filter(function (e) { return e.id !== enemy.id; });
+    checkLevelUp();
+    playSound('defeat');
+    if (gs.score > gs.highScore) {
+      gs.highScore = gs.score;
+      localStorage.setItem('typingDojo_highScore', String(gs.highScore));
+    }
+  }
+
+  /* ── マッチ判定 ── */
+  function checkMatch() {
+    if (gs.activeTarget) {
+      const expected = gs.activeTarget.wordKey.slice(0, gs.inputBuffer.length);
+      if (gs.inputBuffer === expected) {
+        gs.activeTarget.typed = gs.inputBuffer.length;
+        if (gs.inputBuffer.length === gs.activeTarget.wordKey.length) {
+          defeatEnemy(gs.activeTarget);
+          gs.inputBuffer = '';
+          gs.activeTarget = null;
+        }
+      } else {
+        // ミス: コンボリセット
+        gs.combo = 0;
+        gs.activeTarget.isTarget = false;
+        gs.activeTarget.glowColor = '#00ffff';
+        gs.activeTarget.typed = 0;
+        gs.activeTarget = null;
+        gs.inputBuffer = '';
+        playSound('miss');
+      }
+      return;
+    }
+    // 新たなターゲット探索
+    for (let i = 0; i < gs.enemies.length; i++) {
+      const enemy = gs.enemies[i];
+      if (enemy.wordKey.startsWith(gs.inputBuffer)) {
+        gs.activeTarget = enemy;
+        enemy.isTarget = true;
+        enemy.glowColor = '#ff00ff';
+        enemy.typed = gs.inputBuffer.length;
+        if (gs.inputBuffer.length === enemy.wordKey.length) {
+          defeatEnemy(enemy);
+          gs.inputBuffer = '';
+          gs.activeTarget = null;
+        }
+        return;
+      }
+    }
+    // どれにもマッチしない
+    gs.inputBuffer = '';
+    gs.combo = 0;
+  }
+
+  /* ── キー入力 ── */
+  document.addEventListener('keydown', function (e) {
+    if (gs.state === 'gameover') {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); restartGame(); }
+      return;
+    }
+    if (gs.state === 'title') return;
+
+    if (e.key === 'Escape') { gs.state = 'title'; return; }
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      gs.inputBuffer = gs.inputBuffer.slice(0, -1);
+      if (gs.inputBuffer.length === 0 && gs.activeTarget) {
+        gs.activeTarget.isTarget = false;
+        gs.activeTarget.glowColor = '#00ffff';
+        gs.activeTarget.typed = 0;
+        gs.activeTarget = null;
+      }
+      return;
+    }
+    if (e.key.length !== 1) return;
+    e.preventDefault();
+    gs.inputBuffer += e.key;
+    checkMatch();
+  });
+
+  /* ── ゲーム再スタート ── */
+  function restartGame() {
+    const highScore = gs.highScore;
+    const mode = gs.mode;
+    gs = makeInitialState();
+    gs.highScore = highScore;
+    gs.mode = mode;
+    gs.state = 'playing';
+    gs.lastSpawnTime = performance.now() - 99999; // 即スポーン
+    input.focus();
+  }
+
+  /* ── ゲーム開始 ── */
+  function startGame(mode) {
+    const highScore = gs.highScore;
+    gs = makeInitialState();
+    gs.highScore = highScore;
+    gs.mode = mode;
+    gs.state = 'playing';
+    gs.lastSpawnTime = performance.now() - 99999;
+    input.focus();
+    ensureAudio();
+  }
+
+  /* ── 背景描画（流れる縦ライン） ── */
+  function drawBg(ctx, offset) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,255,255,0.04)';
+    ctx.lineWidth = 1;
+    const spacing = W / 8;
+    for (let i = 0; i <= 8; i++) {
+      const x = i * spacing;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+    }
+    // 流れる横ライン
+    ctx.strokeStyle = 'rgba(0,255,255,0.06)';
+    const lineSpacing = 40;
+    const off = offset % lineSpacing;
+    for (let y = -lineSpacing + off; y < H; y += lineSpacing) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* ── DANGER LINE ── */
+  function drawDangerLine(ctx) {
+    ctx.save();
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = '#ff2200';
+    ctx.strokeStyle = '#ff2200';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, DANGER_Y);
+    ctx.lineTo(W, DANGER_Y);
+    ctx.stroke();
+    ctx.font = 'bold 10px Courier New';
+    ctx.fillStyle = '#ff2200';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('DANGER', W - 6, DANGER_Y - 2);
+    ctx.restore();
+  }
+
+  /* ── 敵描画 ── */
+  function drawEnemy(ctx, enemy) {
+    const cx = enemy.x;
+    const cy = enemy.y + 18;
+    const w = enemy.width / 2;
+    const h = 18;
+    const color = enemy.glowColor;
+
+    ctx.save();
+    ctx.shadowBlur = enemy.isTarget ? 15 : 5;
+    ctx.shadowColor = color;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = enemy.isTarget ? 'rgba(255,0,255,0.2)' : 'rgba(0,255,255,0.1)';
+    ctx.beginPath();
+    ctx.moveTo(cx - w + 8, cy - h);
+    ctx.lineTo(cx + w - 8, cy - h);
+    ctx.lineTo(cx + w,     cy);
+    ctx.lineTo(cx + w - 8, cy + h);
+    ctx.lineTo(cx - w + 8, cy + h);
+    ctx.lineTo(cx - w,     cy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // 単語テキスト描画
+    const wordKey = enemy.wordKey;
+    const typed = enemy.typed;
+    const fontSize = 14;
+    ctx.font = fontSize + 'px Courier New';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const totalWidth = ctx.measureText(wordKey).width;
+    let startX = cx - totalWidth / 2;
+
+    // 打ち済み
+    if (typed > 0) {
+      ctx.save();
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = '#00ffff';
+      ctx.fillStyle = '#00ffff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(wordKey.slice(0, typed), startX, cy);
+      startX += ctx.measureText(wordKey.slice(0, typed)).width;
+      ctx.restore();
+    }
+
+    // 次の1文字（bold, 白）
+    if (typed < wordKey.length) {
+      ctx.save();
+      ctx.font = 'bold ' + fontSize + 'px Courier New';
+      ctx.shadowBlur = 4;
+      ctx.shadowColor = '#ffffff';
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(wordKey[typed], startX, cy);
+      startX += ctx.measureText(wordKey[typed]).width;
+      ctx.restore();
+    }
+
+    // 残り文字
+    if (typed + 1 < wordKey.length) {
+      ctx.save();
+      ctx.font = fontSize + 'px Courier New';
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(wordKey.slice(typed + 1), startX, cy);
+      ctx.restore();
+    }
+
+    // romajiモードで表示文字列（かな）を六角形上部に表示
+    if (gs.mode === 'romaji' && enemy.word !== enemy.wordKey) {
+      ctx.save();
+      ctx.font = '11px Courier New';
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(enemy.word, cx, cy - h + 6);
+      ctx.restore();
+    }
+  }
+
+  /* ── HUD ── */
+  function drawHUD(ctx) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillRect(0, 0, W, 50);
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, 50);
+    ctx.lineTo(W, 50);
+    ctx.stroke();
+
+    // スコア
+    ctx.font = 'bold 14px Courier New';
+    ctx.fillStyle = '#00ffff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const scoreStr = 'SCORE: ' + String(gs.score).padStart(6, '0');
+    ctx.fillText(scoreStr, 10, 20);
+
+    // レベル（中央）
+    ctx.font = '14px Courier New';
+    ctx.fillStyle = '#ff00ff';
+    ctx.textAlign = 'center';
+    ctx.fillText('LV:' + String(gs.level).padStart(2, '0'), 240, 20);
+
+    // ライフ（右）
+    ctx.font = '16px Courier New';
+    ctx.fillStyle = '#ff2200';
+    ctx.textAlign = 'right';
+    let hearts = '';
+    for (let i = 0; i < gs.lives; i++) hearts += '♥';
+    ctx.fillText(hearts, 470, 20);
+
+    // コンボ
+    ctx.font = '12px Courier New';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = gs.combo > 0 ? '#ff00ff' : '#444444';
+    ctx.fillText('COMBO: x' + gs.combo, 10, 40);
+
+    // モード表示
+    ctx.font = '11px Courier New';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.textAlign = 'right';
+    ctx.fillText(gs.mode.toUpperCase(), 470, 40);
+
+    ctx.restore();
+  }
+
+  /* ── 入力バー ── */
+  function drawInputBar(ctx) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,10,0.85)';
+    ctx.fillRect(0, 550, W, 90);
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, 550);
+    ctx.lineTo(W, 550);
+    ctx.stroke();
+
+    // プロンプト ">"
+    ctx.font = '18px Courier New';
+    ctx.fillStyle = '#00ffff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('>', 16, 580);
+
+    // 入力バッファ
+    const buf = gs.inputBuffer;
+    if (buf.length > 0) {
+      ctx.save();
+      if (gs.activeTarget !== null) {
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#ff00ff';
+        ctx.fillStyle = '#ff00ff';
+      } else {
+        ctx.fillStyle = '#888888';
+      }
+      ctx.font = '18px Courier New';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(buf, 36, 580);
+      ctx.restore();
+    }
+
+    // カーソル点滅
+    if (gs.frame % 60 < 30) {
+      ctx.font = '18px Courier New';
+      ctx.fillStyle = '#00ffff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const bufWidth = buf.length > 0 ? ctx.measureText(buf).width : 0;
+      ctx.fillText('|', 36 + bufWidth, 580);
+    }
+
+    // 操作ヒント
+    ctx.font = '11px Courier New';
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('ESC: タイトルへ戻る  |  BACKSPACE: 1文字削除', 240, 620);
+
+    ctx.restore();
+  }
+
+  /* ── パーティクル描画 ── */
+  function drawParticles(ctx) {
+    for (const p of gs.particles) {
+      const alpha = p.life / p.maxLife;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = p.color;
+      ctx.shadowBlur = 4;
+      ctx.shadowColor = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  /* ── スコアポップアップ描画 ── */
+  function drawScorePopups(ctx) {
+    for (const sp of gs.scorePopups) {
+      const alpha = sp.life / sp.maxLife;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.font = 'bold 14px Courier New';
+      ctx.fillStyle = '#ffff00';
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = '#ffff00';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(sp.text, sp.x, sp.y);
+      ctx.restore();
+    }
+  }
+
+  /* ── メイン描画 ── */
+  function render(ctx) {
+    // 1. 背景
+    drawBg(ctx, gs.bgOffset);
+    // 2. DANGER LINE
+    drawDangerLine(ctx);
+    // 3. 敵
+    for (const enemy of gs.enemies) drawEnemy(ctx, enemy);
+    // 4. パーティクル
+    drawParticles(ctx);
+    // 5. スコアポップアップ
+    drawScorePopups(ctx);
+    // 6. HUD
+    drawHUD(ctx);
+    // 7. 入力バー
+    drawInputBar(ctx);
+  }
+
+  /* ── タイトル画面 ── */
+  // ボタン定義（タイトル画面用、canvas座標）
+  const MODE_BUTTONS = [
+    { mode: 'word',   label: 'WORD',   x: 60,  y: 265, w: 110, h: 40 },
+    { mode: 'code',   label: 'CODE',   x: 185, y: 265, w: 110, h: 40 },
+    { mode: 'romaji', label: 'ROMAJI', x: 310, y: 265, w: 110, h: 40 },
+  ];
+  const START_BUTTON = { x: 140, y: 355, w: 200, h: 50 };
+  const GAMEOVER_RETRY_BTN = { x: 80,  y: 405, w: 140, h: 44 };
+  const GAMEOVER_TITLE_BTN = { x: 260, y: 405, w: 140, h: 44 };
+
+  function renderTitle(ctx, timestamp) {
+    drawBg(ctx, timestamp * 0.03);
+
+    // タイトルテキスト
+    ctx.save();
+    ctx.font = 'bold 48px Courier New';
+    ctx.fillStyle = '#00ffff';
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = '#00ffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TYPING DOJO', W / 2, 160);
+    ctx.restore();
+
+    ctx.save();
+    ctx.font = '16px Courier New';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TYPE TO DESTROY / 打って壊せ', W / 2, 200);
+    ctx.restore();
+
+    // モード選択ボタン
+    ctx.save();
+    ctx.font = '13px Courier New';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const btn of MODE_BUTTONS) {
+      const selected = gs.mode === btn.mode;
+      ctx.shadowBlur = selected ? 12 : 4;
+      ctx.shadowColor = selected ? '#ff00ff' : '#00ffff';
+      ctx.strokeStyle = selected ? '#ff00ff' : '#00ffff';
+      ctx.fillStyle = selected ? 'rgba(255,0,255,0.2)' : 'rgba(0,255,255,0.1)';
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+      ctx.strokeRect(btn.x, btn.y, btn.w, btn.h);
+      ctx.fillStyle = selected ? '#ff00ff' : '#00ffff';
+      ctx.fillText(btn.label + ' MODE', btn.x + btn.w / 2, btn.y + btn.h / 2);
+    }
+    ctx.restore();
+
+    // START ボタン
+    ctx.save();
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = '#ff00ff';
+    ctx.strokeStyle = '#ff00ff';
+    ctx.fillStyle = 'rgba(255,0,255,0.3)';
+    ctx.lineWidth = 2;
+    ctx.fillRect(START_BUTTON.x, START_BUTTON.y, START_BUTTON.w, START_BUTTON.h);
+    ctx.strokeRect(START_BUTTON.x, START_BUTTON.y, START_BUTTON.w, START_BUTTON.h);
+    ctx.font = 'bold 24px Courier New';
+    ctx.fillStyle = '#ff00ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('START', START_BUTTON.x + START_BUTTON.w / 2, START_BUTTON.y + START_BUTTON.h / 2);
+    ctx.restore();
+
+    // ベストスコア
+    ctx.save();
+    ctx.font = '14px Courier New';
+    ctx.fillStyle = '#ffcc00';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('BEST: ' + String(gs.highScore).padStart(6, '0'), W / 2, 445);
+    ctx.restore();
+
+    // 操作説明
+    ctx.save();
+    ctx.font = '12px Courier New';
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('ESC: タイトルへ戻る  |  BACKSPACE: 1文字削除', W / 2, 490);
+    ctx.restore();
+  }
+
+  /* ── ゲームオーバー画面 ── */
+  function renderGameOver(ctx) {
+    // ゲームフィールドを先に描画してからオーバーレイ
+    render(ctx);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+
+    // GAME OVER
+    ctx.save();
+    ctx.font = 'bold 56px Courier New';
+    ctx.fillStyle = '#ff2200';
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = '#ff2200';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('GAME OVER', W / 2, 200);
+    ctx.restore();
+
+    // スコア
+    ctx.save();
+    ctx.font = '22px Courier New';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('SCORE: ' + String(gs.score).padStart(6, '0'), W / 2, 280);
+    ctx.restore();
+
+    // ベストスコア
+    ctx.save();
+    ctx.font = '18px Courier New';
+    ctx.fillStyle = '#ffcc00';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const isNewRecord = gs.score > 0 && gs.score >= gs.highScore;
+    const bestText = 'BEST: ' + String(gs.highScore).padStart(6, '0') + (isNewRecord ? '  NEW RECORD!' : '');
+    ctx.fillText(bestText, W / 2, 315);
+    ctx.restore();
+
+    // MAX COMBO
+    ctx.save();
+    ctx.font = '16px Courier New';
+    ctx.fillStyle = '#ff00ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('MAX COMBO: ' + gs.maxCombo, W / 2, 350);
+    ctx.restore();
+
+    // RETRY ボタン
+    ctx.save();
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#00ffff';
+    ctx.strokeStyle = '#00ffff';
+    ctx.fillStyle = 'rgba(0,255,255,0.1)';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(GAMEOVER_RETRY_BTN.x, GAMEOVER_RETRY_BTN.y, GAMEOVER_RETRY_BTN.w, GAMEOVER_RETRY_BTN.h);
+    ctx.strokeRect(GAMEOVER_RETRY_BTN.x, GAMEOVER_RETRY_BTN.y, GAMEOVER_RETRY_BTN.w, GAMEOVER_RETRY_BTN.h);
+    ctx.font = 'bold 18px Courier New';
+    ctx.fillStyle = '#00ffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('RETRY', GAMEOVER_RETRY_BTN.x + GAMEOVER_RETRY_BTN.w / 2, GAMEOVER_RETRY_BTN.y + GAMEOVER_RETRY_BTN.h / 2);
+    ctx.restore();
+
+    // TITLE ボタン
+    ctx.save();
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#ff00ff';
+    ctx.strokeStyle = '#ff00ff';
+    ctx.fillStyle = 'rgba(255,0,255,0.1)';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(GAMEOVER_TITLE_BTN.x, GAMEOVER_TITLE_BTN.y, GAMEOVER_TITLE_BTN.w, GAMEOVER_TITLE_BTN.h);
+    ctx.strokeRect(GAMEOVER_TITLE_BTN.x, GAMEOVER_TITLE_BTN.y, GAMEOVER_TITLE_BTN.w, GAMEOVER_TITLE_BTN.h);
+    ctx.font = 'bold 18px Courier New';
+    ctx.fillStyle = '#ff00ff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TITLE', GAMEOVER_TITLE_BTN.x + GAMEOVER_TITLE_BTN.w / 2, GAMEOVER_TITLE_BTN.y + GAMEOVER_TITLE_BTN.h / 2);
+    ctx.restore();
+
+    // ヒント
+    ctx.save();
+    ctx.font = '12px Courier New';
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('ENTER / SPACE で RETRY', W / 2, 490);
+    ctx.restore();
+  }
+
+  /* ── Canvas クリックイベント ── */
+  function getCanvasPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const scaleY = H / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top)  * scaleY,
+    };
+  }
+
+  function inRect(px, py, rect) {
+    return px >= rect.x && px <= rect.x + rect.w &&
+           py >= rect.y && py <= rect.y + rect.h;
+  }
+
+  canvas.addEventListener('click', function (e) {
+    const pos = getCanvasPos(e);
+    ensureAudio();
+
+    if (gs.state === 'title') {
+      // モードボタン
+      for (const btn of MODE_BUTTONS) {
+        if (inRect(pos.x, pos.y, { x: btn.x, y: btn.y, w: btn.w, h: btn.h })) {
+          gs.mode = btn.mode;
+          return;
+        }
+      }
+      // STARTボタン
+      if (inRect(pos.x, pos.y, START_BUTTON)) {
+        startGame(gs.mode);
+        return;
+      }
+    }
+
+    if (gs.state === 'gameover') {
+      if (inRect(pos.x, pos.y, GAMEOVER_RETRY_BTN)) {
+        restartGame();
+        return;
+      }
+      if (inRect(pos.x, pos.y, GAMEOVER_TITLE_BTN)) {
+        gs.state = 'title';
+        return;
+      }
+    }
+  });
+
+  /* ── ゲームループ ── */
+  function gameLoop(timestamp) {
+    requestAnimationFrame(gameLoop);
+    ctx.clearRect(0, 0, W, H);
+
+    if (gs.state === 'title') {
+      renderTitle(ctx, timestamp);
+      return;
+    }
+    if (gs.state === 'gameover') {
+      gs.frame++;
+      // パーティクルも更新し続ける（見た目のため）
+      for (const p of gs.particles) { p.x += p.vx; p.y += p.vy; p.vx *= 0.95; p.vy *= 0.95; p.life--; }
+      gs.particles = gs.particles.filter(function (p) { return p.life > 0; });
+      renderGameOver(ctx);
+      return;
+    }
+
+    // === playing ===
+    gs.frame++;
+    gs.bgOffset += 0.5;
+
+    // 敵スポーン
+    const lv = LEVEL_TABLE[Math.min(gs.level - 1, LEVEL_TABLE.length - 1)];
+    if (timestamp - gs.lastSpawnTime > lv.interval && gs.enemies.length < lv.maxEnemies) {
+      spawnEnemy();
+      gs.lastSpawnTime = timestamp;
+    }
+
+    // 敵移動・DANGER LINE判定
+    const enemiesToRemove = [];
+    for (const e of gs.enemies) {
+      e.y += e.speed;
+      if (e.y > DANGER_Y) {
+        enemiesToRemove.push(e.id);
+        gs.lives--;
+        gs.combo = 0;
+        if (gs.activeTarget && gs.activeTarget.id === e.id) {
+          gs.activeTarget = null;
+          gs.inputBuffer = '';
+        }
+        playSound('miss');
+        if (gs.lives <= 0) {
+          gs.state = 'gameover';
+          if (gs.score > gs.highScore) {
+            gs.highScore = gs.score;
+            localStorage.setItem('typingDojo_highScore', String(gs.highScore));
+          }
+          playSound('gameover');
+        }
+      }
+    }
+    if (enemiesToRemove.length > 0) {
+      const removeSet = new Set(enemiesToRemove);
+      gs.enemies = gs.enemies.filter(function (e) { return !removeSet.has(e.id); });
+    }
+
+    // パーティクル更新
+    for (const p of gs.particles) {
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.95; p.vy *= 0.95;
+      p.life--;
+    }
+    gs.particles = gs.particles.filter(function (p) { return p.life > 0; });
+
+    // スコアポップアップ更新
+    for (const sp of gs.scorePopups) { sp.y -= 1; sp.life--; }
+    gs.scorePopups = gs.scorePopups.filter(function (sp) { return sp.life > 0; });
+
+    render(ctx);
+  }
+
+  /* ── 起動 ── */
+  requestAnimationFrame(gameLoop);
+
+}());
+  </script>
+</body>
+</html>
