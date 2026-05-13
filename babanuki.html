@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ババ抜き - Card Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0a0a0a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+  }
+  canvas {
+    display: block;
+    cursor: default;
+    width: 100%;
+    height: auto;
+    touch-action: manipulation;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="480" height="760"></canvas>
+<script>
+'use strict';
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ---- Card Utilities ----
+function createDeck(includeJoker = false) {
+  const deck = [];
+  for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) deck.push({ suit: s, rank: r });
+  if (includeJoker) deck.push({ suit: -1, rank: 0 });
+  return deck;
+}
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+function rankStr(r) { return ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'][r]; }
+function suitStr(s) { return ['♠', '♥', '♦', '♣'][s]; }
+function isRed(s) { return s === 1 || s === 2; }
+
+// ---- SVGカード画像プリロード ----
+const CARD_SUITS = ['spade','heart','diamond','club'];
+const CARD_RANKS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+const cardImages = {};
+let cardImagesReady = false;
+function preloadCardImages(callback) {
+  let loaded = 0;
+  const total = 52 + 2;
+  function onLoad() { loaded++; if(loaded >= total) { cardImagesReady = true; if(callback) callback(); } }
+  CARD_SUITS.forEach(suit => {
+    CARD_RANKS.forEach(rank => {
+      const img = new Image();
+      img.onload = onLoad; img.onerror = onLoad;
+      img.src = 'assets/cards/' + suit + '_' + rank + '.svg';
+      cardImages[suit + '_' + rank] = img;
+    });
+  });
+  const back = new Image(); back.onload = onLoad; back.onerror = onLoad;
+  back.src = 'assets/cards/back.svg'; cardImages['back'] = back;
+  const joker = new Image(); joker.onload = onLoad; joker.onerror = onLoad;
+  joker.src = 'assets/cards/joker.svg'; cardImages['joker'] = joker;
+}
+function getCardImage(card) {
+  if(card.suit === -1) return cardImages['joker'];
+  return cardImages[CARD_SUITS[card.suit] + '_' + CARD_RANKS[card.rank - 1]];
+}
+
+function drawCardFallback(ctx, card, x, y, w, h) {
+  const radius = 4;
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y); ctx.lineTo(x + w - radius, y); ctx.arcTo(x + w, y, x + w, y + radius, radius);
+  ctx.lineTo(x + w, y + h - radius); ctx.arcTo(x + w, y + h, x + w - radius, y + h, radius);
+  ctx.lineTo(x + radius, y + h); ctx.arcTo(x, y + h, x, y + h - radius, radius);
+  ctx.lineTo(x, y + radius); ctx.arcTo(x, y, x + radius, y, radius);
+  ctx.closePath();
+  ctx.fillStyle = card.suit === -1 ? '#fff9' : '#f0f0f0'; ctx.fill();
+  ctx.strokeStyle = '#999'; ctx.lineWidth = 0.5; ctx.stroke();
+  if (card.suit === -1) {
+    ctx.fillStyle = '#666'; ctx.font = `bold ${Math.floor(h * 0.45)}px serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🃏', x + w / 2, y + h / 2); return;
+  }
+  const color = isRed(card.suit) ? '#cc0000' : '#111';
+  const fs = Math.max(10, Math.floor(h * 0.22));
+  ctx.fillStyle = color; ctx.font = `bold ${fs}px monospace`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(rankStr(card.rank), x + 3, y + 2);
+  ctx.font = `${Math.floor(fs * 0.9)}px serif`; ctx.fillText(suitStr(card.suit), x + 3, y + 2 + fs);
+  ctx.save(); ctx.translate(x + w, y + h); ctx.rotate(Math.PI);
+  ctx.fillStyle = color; ctx.font = `bold ${fs}px monospace`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(rankStr(card.rank), 3, 2); ctx.font = `${Math.floor(fs * 0.9)}px serif`; ctx.fillText(suitStr(card.suit), 3, 2 + fs);
+  ctx.restore();
+  ctx.font = `${Math.floor(h * 0.38)}px serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = color; ctx.fillText(suitStr(card.suit), x + w / 2, y + h / 2);
+}
+function drawCard(ctx, card, x, y, w, h, faceUp = true) {
+  if (!faceUp) {
+    const back = cardImages['back'];
+    if(back && back.complete && back.naturalWidth > 0){
+      ctx.drawImage(back, x, y, w, h);
+    } else {
+      ctx.fillStyle = '#1a3a6a'; ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 1; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      ctx.strokeStyle = 'rgba(0,200,200,0.3)';
+      for (let i = 0; i < w; i += 6) { ctx.beginPath(); ctx.moveTo(x + i, y); ctx.lineTo(x, y + i); ctx.stroke(); }
+      for (let i = 0; i < h; i += 6) { ctx.beginPath(); ctx.moveTo(x + w, y + i); ctx.lineTo(x + w - i, y + h); ctx.stroke(); }
+    }
+    return;
+  }
+  const img = getCardImage(card);
+  if(img && img.complete && img.naturalWidth > 0){
+    ctx.drawImage(img, x, y, w, h);
+  } else {
+    drawCardFallback(ctx, card, x, y, w, h);
+  }
+}
+
+function drawButton(ctx, text, x, y, w, h, hover = false, disabled = false) {
+  ctx.fillStyle = disabled ? '#333' : hover ? '#00ffff22' : '#001a1a'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = disabled ? '#444' : hover ? '#00ffff' : '#006666'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = disabled ? '#555' : hover ? '#00ffff' : '#aaffff';
+  ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + w / 2, y + h / 2);
+}
+
+// ---- Game State ----
+const CARD_W = 50, CARD_H = 70;
+const PLAYERS = 4; // 0=player, 1=CPU左, 2=CPU上, 3=CPU右
+
+let hands = [];        // hands[i] = array of cards
+let currentTurn = 0;   // 誰のターン
+let finishedOrder = []; // 上がり順
+let gameOver = false;
+let message = '';
+let subMessage = '';
+let hoverCpuCardIndex = -1; // CPU1の選択可能カードにホバー中
+let animation = null;       // アニメーション状態
+let cpuTimerActive = false;
+let mouseX = 0, mouseY = 0;
+let btnRestart = { x: 155, y: 700, w: 170, h: 44 };
+
+// ---- ペア除去 ----
+function removePairs(hand) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < hand.length; i++) {
+      for (let j = i + 1; j < hand.length; j++) {
+        if (hand[i].suit !== -1 && hand[j].suit !== -1 && hand[i].rank === hand[j].rank) {
+          hand.splice(j, 1);
+          hand.splice(i, 1);
+          changed = true;
+          break;
+        }
+      }
+      if (changed) break;
+    }
+  }
+}
+
+// ---- 初期化 ----
+function initGame() {
+  const deck = shuffle(createDeck(true));
+  hands = [[], [], [], []];
+  for (let i = 0; i < deck.length; i++) hands[i % 4].push(deck[i]);
+  for (let i = 0; i < 4; i++) removePairs(hands[i]);
+  finishedOrder = [];
+  gameOver = false;
+  animation = null;
+  cpuTimerActive = false;
+  hoverCpuCardIndex = -1;
+
+  // 初期上がりチェック
+  for (let i = 0; i < 4; i++) {
+    if (hands[i].length === 0) finishedOrder.push(i);
+  }
+
+  // 最初のターン: プレイヤー(0)から
+  currentTurn = 0;
+  advanceToNextActivePlayer();
+  updateMessage();
+}
+
+function isActive(player) {
+  return hands[player].length > 0 && !finishedOrder.includes(player);
+}
+
+function advanceToNextActivePlayer() {
+  // 全員上がり済みチェック
+  const activePlayers = [0, 1, 2, 3].filter(p => !finishedOrder.includes(p));
+  if (activePlayers.length <= 1) {
+    if (activePlayers.length === 1) finishedOrder.push(activePlayers[0]);
+    gameOver = true;
+    updateMessage();
+    return;
+  }
+  // currentTurn はすでに設定されているはずだが、非アクティブなら次へ
+  let tries = 0;
+  while (!isActive(currentTurn) && tries < 4) {
+    currentTurn = (currentTurn + 1) % 4;
+    tries++;
+  }
+}
+
+function updateMessage() {
+  if (gameOver) {
+    message = 'ゲーム終了！ Game Over';
+    subMessage = '';
+    return;
+  }
+  const names = ['プレイヤー', 'CPU1', 'CPU2', 'CPU3'];
+  if (currentTurn === 0) {
+    message = '⬅ CPU1の手札から1枚引いてください';
+    subMessage = 'あなたのターン / Your Turn';
+  } else {
+    message = `${names[currentTurn]}のターン...`;
+    subMessage = '';
+  }
+}
+
+// ---- CPU ターン処理 ----
+function doCpuTurn() {
+  if (!isActive(currentTurn) || currentTurn === 0) return;
+  // 右隣(= (currentTurn+3)%4 = 前のプレイヤー)から1枚引く
+  // ババ抜きルール: 各プレイヤーは左隣から引く
+  // player0 → 左隣はCPU1(1), CPU1の左隣はCPU2(2), ...
+  // 左隣: (currentTurn + 1) % 4 から引く
+  const targetPlayer = (currentTurn + 1) % 4;
+  if (!isActive(targetPlayer) || hands[targetPlayer].length === 0) {
+    // スキップ
+    nextTurn();
+    return;
+  }
+  const targetHand = hands[targetPlayer];
+  const pickedIndex = Math.floor(Math.random() * targetHand.length);
+  const pickedCard = targetHand.splice(pickedIndex, 1)[0];
+  hands[currentTurn].push(pickedCard);
+  removePairs(hands[currentTurn]);
+
+  checkFinished(currentTurn);
+  checkFinished(targetPlayer);
+  nextTurn();
+}
+
+function checkFinished(player) {
+  if (hands[player].length === 0 && !finishedOrder.includes(player)) {
+    finishedOrder.push(player);
+  }
+}
+
+function nextTurn() {
+  // ゲーム終了チェック
+  const activePlayers = [0, 1, 2, 3].filter(p => !finishedOrder.includes(p));
+  if (activePlayers.length <= 1) {
+    if (activePlayers.length === 1) {
+      if (!finishedOrder.includes(activePlayers[0])) finishedOrder.push(activePlayers[0]);
+    }
+    gameOver = true;
+    updateMessage();
+    return;
+  }
+  currentTurn = (currentTurn + 1) % 4;
+  // スキップ処理: 上がり済みや手札なしはスキップ
+  let tries = 0;
+  while ((!isActive(currentTurn) || finishedOrder.includes(currentTurn)) && tries < 4) {
+    currentTurn = (currentTurn + 1) % 4;
+    tries++;
+  }
+  cpuTimerActive = false;
+  updateMessage();
+  // CPU ターンなら遅延実行
+  if (currentTurn !== 0 && !gameOver) {
+    cpuTimerActive = true;
+    setTimeout(() => {
+      cpuTimerActive = false;
+      doCpuTurn();
+    }, 1500);
+  }
+}
+
+// ---- プレイヤーがCPU1から引く ----
+function playerDraw(cpuCardIndex) {
+  if (currentTurn !== 0 || gameOver || animation) return;
+  const cpu1Hand = hands[1];
+  if (cpuCardIndex < 0 || cpuCardIndex >= cpu1Hand.length) return;
+
+  const card = cpu1Hand.splice(cpuCardIndex, 1)[0];
+  hands[0].push(card);
+  removePairs(hands[0]);
+
+  checkFinished(0);
+  checkFinished(1);
+  nextTurn();
+}
+
+// ---- レイアウト計算 ----
+// CPU1(左): x=20, カードを縦に並べる（裏向き）
+function getCpu1CardRects() {
+  const rects = [];
+  const count = hands[1].length;
+  if (count === 0) return rects;
+  const startY = Math.max(120, 330 - count * 22);
+  for (let i = 0; i < count; i++) {
+    rects.push({ x: 20, y: startY + i * 22, w: CARD_W, h: CARD_H });
+  }
+  return rects;
+}
+
+// CPU2(上): y=20, カードを横に並べる
+function getCpu2CardRects() {
+  const rects = [];
+  const count = hands[2].length;
+  if (count === 0) return rects;
+  const totalW = count * (CARD_W - 10) + 10;
+  const startX = (480 - totalW) / 2;
+  for (let i = 0; i < count; i++) {
+    rects.push({ x: startX + i * (CARD_W - 10), y: 20, w: CARD_W, h: CARD_H });
+  }
+  return rects;
+}
+
+// CPU3(右): x=890, カードを縦に並べる
+function getCpu3CardRects() {
+  const rects = [];
+  const count = hands[3].length;
+  if (count === 0) return rects;
+  const startY = Math.max(120, 330 - count * 22);
+  for (let i = 0; i < count; i++) {
+    rects.push({ x: 420, y: startY + i * 22, w: CARD_W, h: CARD_H });
+  }
+  return rects;
+}
+
+// プレイヤー手札: y=500
+function getPlayerCardRects() {
+  const rects = [];
+  const hand = hands[0];
+  const count = hand.length;
+  if (count === 0) return rects;
+  const gap = Math.min(CARD_W + 4, Math.floor((440) / count));
+  const totalW = (count - 1) * gap + CARD_W;
+  const startX = (480 - totalW) / 2;
+  for (let i = 0; i < count; i++) {
+    rects.push({ x: startX + i * gap, y: 630, w: CARD_W, h: CARD_H });
+  }
+  return rects;
+}
+
+// ---- 描画 ----
+function drawBackground() {
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, 480, 760);
+  // テーブル背景
+  ctx.fillStyle = '#0a2a0a';
+  ctx.beginPath();
+  ctx.ellipse(240, 340, 225, 260, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#1a4a1a';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function drawPlayerLabels() {
+  const names = ['あなた / You', 'CPU 1', 'CPU 2', 'CPU 3'];
+  const colors = ['#00ffff', '#ff00ff', '#9b59b6', '#ffaa00'];
+  const positions = [
+    { x: 240, y: 618 },
+    { x: 45, y: 108 },
+    { x: 240, y: 14 },
+    { x: 435, y: 108 }
+  ];
+  const aligns = ['center', 'center', 'center', 'center'];
+
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = colors[i];
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = aligns[i];
+    ctx.textBaseline = 'top';
+    ctx.fillText(names[i], positions[i].x, positions[i].y);
+
+    // カード枚数
+    if (!finishedOrder.includes(i)) {
+      ctx.fillStyle = '#aaa';
+      ctx.font = '11px monospace';
+      ctx.fillText(`${hands[i].length}枚`, positions[i].x, positions[i].y + 14);
+    } else {
+      const rank = finishedOrder.indexOf(i) + 1;
+      ctx.fillStyle = rank === 1 ? '#ffdd00' : '#aaa';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText(rank === finishedOrder.length ? '負け！' : `${rank}位 上がり！`, positions[i].x, positions[i].y + 14);
+    }
+  }
+}
+
+function drawCpu1Cards() {
+  const rects = getCpu1CardRects();
+  const isTarget = currentTurn === 0 && !gameOver && !cpuTimerActive;
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (isTarget && i === hoverCpuCardIndex) {
+      // ハイライト
+      ctx.shadowColor = '#00ffff';
+      ctx.shadowBlur = 12;
+      drawCard(ctx, hands[1][i], r.x - 5, r.y, r.w, r.h, false);
+      ctx.shadowBlur = 0;
+    } else {
+      drawCard(ctx, hands[1][i], r.x, r.y, r.w, r.h, false);
+    }
+  }
+  // ターゲット表示
+  if (isTarget && hands[1].length > 0) {
+    ctx.fillStyle = '#00ffff44';
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('← クリックして引く', 45, 430);
+  }
+}
+
+function drawCpu2Cards() {
+  const rects = getCpu2CardRects();
+  for (let i = 0; i < rects.length; i++) {
+    drawCard(ctx, hands[2][i], rects[i].x, rects[i].y, rects[i].w, rects[i].h, false);
+  }
+}
+
+function drawCpu3Cards() {
+  const rects = getCpu3CardRects();
+  for (let i = 0; i < rects.length; i++) {
+    drawCard(ctx, hands[3][i], rects[i].x, rects[i].y, rects[i].w, rects[i].h, false);
+  }
+}
+
+function drawPlayerCards() {
+  const rects = getPlayerCardRects();
+  for (let i = 0; i < rects.length; i++) {
+    drawCard(ctx, hands[0][i], rects[i].x, rects[i].y, rects[i].w, rects[i].h, true);
+  }
+}
+
+function drawMessage() {
+  // メッセージエリア
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(20, 300, 440, 70);
+  ctx.strokeStyle = '#00ffff33';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(20, 300, 440, 70);
+
+  ctx.fillStyle = '#00ffff';
+  ctx.font = 'bold 15px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(message, 240, 320);
+
+  if (subMessage) {
+    ctx.fillStyle = '#aaffff';
+    ctx.font = '13px monospace';
+    ctx.fillText(subMessage, 240, 345);
+  }
+}
+
+function drawFinishOrder() {
+  if (finishedOrder.length === 0) return;
+  const names = ['プレイヤー', 'CPU1', 'CPU2', 'CPU3'];
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(100, 380, 280, 100);
+  ctx.strokeStyle = '#9b59b6';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(100, 380, 280, 100);
+
+  ctx.fillStyle = '#9b59b6';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('上がり順 / Results', 240, 385);
+
+  for (let i = 0; i < finishedOrder.length; i++) {
+    const p = finishedOrder[i];
+    const isLast = i === finishedOrder.length - 1 && gameOver;
+    ctx.fillStyle = isLast ? '#ff00ff' : i === 0 ? '#ffdd00' : '#aaa';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(`${i + 1}位: ${names[p]}${isLast ? ' 👺 ババ抜き負け！' : ''}`, 240, 400 + i * 18);
+  }
+}
+
+function drawGameOverScreen() {
+  if (!gameOver) return;
+  const loser = finishedOrder[finishedOrder.length - 1];
+  const names = ['あなた', 'CPU1', 'CPU2', 'CPU3'];
+
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  ctx.fillRect(20, 200, 440, 200);
+  ctx.strokeStyle = '#ff00ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, 200, 440, 200);
+
+  ctx.fillStyle = '#ff00ff';
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('ゲーム終了！ Game Over', 240, 218);
+
+  const names2 = ['プレイヤー', 'CPU1', 'CPU2', 'CPU3'];
+  for (let i = 0; i < finishedOrder.length; i++) {
+    const p = finishedOrder[i];
+    const isLast = i === finishedOrder.length - 1;
+    ctx.fillStyle = isLast ? '#ff0066' : i === 0 ? '#ffdd00' : '#aaa';
+    ctx.font = `bold ${isLast ? 16 : 13}px monospace`;
+    ctx.fillText(`${i + 1}位: ${names2[p]}${isLast ? '  ← ババ！' : ''}`, 240, 248 + i * 22);
+  }
+
+  drawButton(ctx, 'もう一度 / Play Again', btnRestart.x, btnRestart.y, btnRestart.w, btnRestart.h,
+    isHover(btnRestart));
+}
+
+function isHover(btn) {
+  return mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h;
+}
+
+// ---- アニメーション（シンプル・未使用だが構造保持）----
+// メインループ
+function gameLoop() {
+  drawBackground();
+  drawPlayerLabels();
+  drawCpu2Cards();
+  drawCpu1Cards();
+  drawCpu3Cards();
+  drawPlayerCards();
+  if (!gameOver) {
+    drawMessage();
+    drawFinishOrder();
+  } else {
+    drawFinishOrder();
+    drawGameOverScreen();
+  }
+  requestAnimationFrame(gameLoop);
+}
+
+// ---- マウスイベント ----
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / canvas.offsetWidth),
+    y: (e.clientY - rect.top) * (canvas.height / canvas.offsetHeight)
+  };
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  const pos = getCanvasPos(e);
+  mouseX = pos.x;
+  mouseY = pos.y;
+
+  hoverCpuCardIndex = -1;
+  if (currentTurn === 0 && !gameOver && !cpuTimerActive) {
+    const rects = getCpu1CardRects();
+    for (let i = rects.length - 1; i >= 0; i--) {
+      const r = rects[i];
+      if (pos.x >= r.x - 5 && pos.x <= r.x + r.w + 5 && pos.y >= r.y && pos.y <= r.y + r.h) {
+        hoverCpuCardIndex = i;
+        canvas.style.cursor = 'pointer';
+        return;
+      }
+    }
+  }
+
+  // リスタートボタン
+  if (isHover(btnRestart) && gameOver) {
+    canvas.style.cursor = 'pointer';
+    return;
+  }
+  canvas.style.cursor = 'default';
+});
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const t = e.touches[0];
+  canvas.dispatchEvent(new MouseEvent('click', { clientX: t.clientX, clientY: t.clientY }));
+}, { passive: false });
+
+canvas.addEventListener('click', (e) => {
+  const pos = getCanvasPos(e);
+  mouseX = pos.x;
+  mouseY = pos.y;
+
+  if (gameOver) {
+    if (isHover(btnRestart)) initGame();
+    return;
+  }
+
+  if (currentTurn === 0 && !cpuTimerActive) {
+    const rects = getCpu1CardRects();
+    for (let i = rects.length - 1; i >= 0; i--) {
+      const r = rects[i];
+      if (pos.x >= r.x - 5 && pos.x <= r.x + r.w + 5 && pos.y >= r.y && pos.y <= r.y + r.h) {
+        playerDraw(i);
+        return;
+      }
+    }
+  }
+});
+
+// ---- 開始 ----
+initGame();
+preloadCardImages(() => { /* 画像ロード完了 */ });
+gameLoop();
+
+(function fitCanvas(){
+  const cw = canvas.width, ch = canvas.height;
+  function resize(){
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const s = Math.min(vw / cw, vh / ch);
+    const sw = Math.floor(cw * s);
+    const sh = Math.floor(ch * s);
+    canvas.style.width  = sw + 'px';
+    canvas.style.height = sh + 'px';
+    canvas.style.marginTop = Math.max(0, Math.floor((vh - sh) / 2)) + 'px';
+  }
+  window.addEventListener('resize', resize);
+  resize();
+})();
+</script>
+</body>
+</html>
