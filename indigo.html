@@ -478,7 +478,15 @@ function placeTile(q, r, tile) {
     }
   });
 
+  const animSteps = collectPropagateSteps();
   propagateGems();
+
+  if (animSteps.length > 0) {
+    startGemAnimation(animSteps, () => { G.aiThinking = false; endTurn(); });
+  } else {
+    G.aiThinking = false;
+    endTurn();
+  }
   return true;
 }
 
@@ -529,6 +537,101 @@ function propagateGems() {
   }
 }
 
+// ─── Gem animation ───────────────────────────────────────────
+const ANIM = { active: false, perGem: {}, onDone: null };
+
+function collectPropagateSteps() {
+  const steps = [];
+  const visited = new Set();
+  const gemsCopy = G.gems.map(g => ({...g}));
+  const queue = gemsCopy.filter(g => g.entryEdge !== null);
+  let head = 0;
+  while (head < queue.length) {
+    const gem = queue[head++];
+    if (!gemsCopy.includes(gem)) continue;
+    const cell = G.grid.get(`${gem.q},${gem.r}`);
+    if (!cell || !cell.tile) continue;
+    const key = `${gem.id},${gem.q},${gem.r},${gem.entryEdge}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    const exitEdge = getExitEdge(cell.tile.paths, gem.entryEdge);
+    if (exitEdge === null) continue;
+    const nb = hexNeighbor(gem.q, gem.r, exitEdge);
+    if (!isOnBoard(nb.q, nb.r)) {
+      const gw = findGateway(gem.q, gem.r, exitEdge);
+      steps.push({ gemId: gem.id, gemType: gem.type, gemPoints: gem.points,
+        fromQ: gem.q, fromR: gem.r, entryEdge: gem.entryEdge, exitEdge,
+        scored: !!gw, removed: !gw });
+      gemsCopy.splice(gemsCopy.indexOf(gem), 1);
+      continue;
+    }
+    steps.push({ gemId: gem.id, gemType: gem.type, gemPoints: gem.points,
+      fromQ: gem.q, fromR: gem.r, entryEdge: gem.entryEdge, exitEdge,
+      scored: false, removed: false });
+    gem.q = nb.q; gem.r = nb.r; gem.entryEdge = oppEdge(exitEdge);
+    const nbCell = G.grid.get(`${nb.q},${nb.r}`);
+    if (nbCell && nbCell.tile) queue.push(gem);
+  }
+  return steps;
+}
+
+function startGemAnimation(steps, onDone) {
+  ANIM.active = true;
+  ANIM.onDone = onDone;
+  ANIM.perGem = {};
+  for (const s of steps) {
+    if (!ANIM.perGem[s.gemId]) {
+      ANIM.perGem[s.gemId] = { type: s.gemType, points: s.gemPoints,
+        steps: [], stepIdx: 0, t: 0, pos: null, visible: true, done: false };
+    }
+    ANIM.perGem[s.gemId].steps.push(s);
+  }
+  const dist = HEX_SIZE * 0.82;
+  for (const ga of Object.values(ANIM.perGem)) {
+    const s0 = ga.steps[0];
+    const {x, y} = hexToPixel(s0.fromQ, s0.fromR, HEX_SIZE, ox(), oy());
+    ga.pos = edgePt(x, y, s0.entryEdge, dist);
+  }
+  const STEP_MS = 300;
+  let lastTs = null;
+  function frame(ts) {
+    if (!ANIM.active) return;
+    const dt = lastTs === null ? 16 : Math.min(ts - lastTs, 60);
+    lastTs = ts;
+    let anyActive = false;
+    for (const ga of Object.values(ANIM.perGem)) {
+      if (ga.done) continue;
+      anyActive = true;
+      const step = ga.steps[ga.stepIdx];
+      const {x, y} = hexToPixel(step.fromQ, step.fromR, HEX_SIZE, ox(), oy());
+      const p1 = edgePt(x, y, step.entryEdge, dist);
+      const p2 = edgePt(x, y, step.exitEdge, dist);
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      const tb = 0.35;
+      const cp = { x: x*tb + mx*(1-tb), y: y*tb + my*(1-tb) };
+      ga.t += dt / STEP_MS;
+      const t = Math.min(ga.t, 1), u = 1 - t;
+      ga.pos = {
+        x: u*u*p1.x + 2*u*t*cp.x + t*t*p2.x,
+        y: u*u*p1.y + 2*u*t*cp.y + t*t*p2.y,
+      };
+      if (ga.t >= 1) {
+        ga.stepIdx++;
+        ga.t = 0;
+        if (ga.stepIdx >= ga.steps.length) {
+          const last = ga.steps[ga.steps.length - 1];
+          if (last.scored || last.removed) ga.visible = false;
+          ga.done = true;
+        }
+      }
+    }
+    draw();
+    if (!anyActive) { ANIM.active = false; ANIM.onDone(); return; }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
 function scoreGem(gem, gw) {
   const owners = gatewayOwners(gw);
   owners.forEach(pid => {
@@ -574,10 +677,11 @@ function aiTurn() {
   if (move) {
     G.currentTile = makeTile(G.currentTile.type, move.rot);
     placeTile(move.q, move.r, G.currentTile);
-    draw();
+    // endTurn called by placeTile via animation callback
+  } else {
+    G.aiThinking = false;
+    endTurn();
   }
-  G.aiThinking = false;
-  endTurn();
 }
 
 function aiPickMove() {
@@ -709,13 +813,13 @@ function draw() {
   drawCells();
   drawGateways();
   drawGems();
-  if (G.hoverHex && !G.aiThinking && G.phase === 'PLAYING' && !G.players[G.currentPlayer].isAI) {
+  if (G.hoverHex && !G.aiThinking && !ANIM.active && G.phase === 'PLAYING' && !G.players[G.currentPlayer].isAI) {
     drawHover();
   }
 }
 
 function drawBg() {
-  ctx.fillStyle = '#0a0a18';
+  ctx.fillStyle = '#06061a';
   ctx.fillRect(0,0,canvas.width,canvas.height);
 }
 
@@ -728,10 +832,10 @@ function drawCells() {
     // Hex background
     ctx.beginPath();
     hexPath(ctx, x, y, HEX_SIZE * 0.95);
-    ctx.fillStyle = 'rgba(20,20,40,0.85)';
+    ctx.fillStyle = 'rgba(28,32,68,0.92)';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(99,102,241,0.22)';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(130,145,220,0.65)';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
 
     if (cell.tile) drawTilePaths(x, y, cell.tile, 1);
@@ -766,7 +870,7 @@ function drawTilePaths(cx, cy, tile, alpha) {
     const cpy = cy * t + my * (1-t);
 
     // Outer glow
-    ctx.strokeStyle = 'rgba(6,182,212,0.25)';
+    ctx.strokeStyle = 'rgba(6,182,212,0.45)';
     ctx.lineWidth = 9;
     ctx.beginPath();
     ctx.moveTo(p1.x, p1.y);
@@ -818,40 +922,50 @@ function drawGateways() {
   });
 }
 
+function drawGemAt(x, y, type, points) {
+  const cfg = GEM_CONFIG[type];
+  const grad = ctx.createRadialGradient(x, y, 0, x, y, 18);
+  grad.addColorStop(0, cfg.glow);
+  grad.addColorStop(1, 'transparent');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(x, y, 18, 0, Math.PI*2);
+  ctx.fill();
+  const s = 9;
+  ctx.beginPath();
+  ctx.moveTo(x, y-s);
+  ctx.lineTo(x+s*0.8, y);
+  ctx.lineTo(x, y+s);
+  ctx.lineTo(x-s*0.8, y);
+  ctx.closePath();
+  ctx.fillStyle = cfg.color;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 7px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(points, x, y);
+}
+
 function drawGems() {
+  if (ANIM.active) {
+    for (const [id, ga] of Object.entries(ANIM.perGem)) {
+      if (!ga.visible || !ga.pos) continue;
+      drawGemAt(ga.pos.x, ga.pos.y, ga.type, ga.points);
+    }
+    G.gems.forEach(gem => {
+      if (ANIM.perGem[gem.id]) return;
+      const {x, y} = hexToPixel(gem.q, gem.r, HEX_SIZE, ox(), oy());
+      drawGemAt(x, y, gem.type, gem.points);
+    });
+    return;
+  }
   G.gems.forEach(gem => {
     const {x, y} = hexToPixel(gem.q, gem.r, HEX_SIZE, ox(), oy());
-    const cfg = GEM_CONFIG[gem.type];
-
-    // Glow
-    const grad = ctx.createRadialGradient(x, y, 0, x, y, 18);
-    grad.addColorStop(0, cfg.glow);
-    grad.addColorStop(1, 'transparent');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(x, y, 18, 0, Math.PI*2);
-    ctx.fill();
-
-    // Diamond shape
-    const s = 9;
-    ctx.beginPath();
-    ctx.moveTo(x,    y-s);
-    ctx.lineTo(x+s*0.8, y);
-    ctx.lineTo(x,    y+s);
-    ctx.lineTo(x-s*0.8, y);
-    ctx.closePath();
-    ctx.fillStyle = cfg.color;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Point label
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 7px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(cfg.points, x, y);
+    drawGemAt(x, y, gem.type, gem.points);
   });
 }
 
@@ -894,9 +1008,9 @@ function drawPreview() {
   const cx = 60, cy = 60, sz = 40;
   // Hex bg
   hexPathOn(pctx, cx, cy, sz*0.95);
-  pctx.fillStyle = 'rgba(30,30,60,0.9)';
+  pctx.fillStyle = 'rgba(28,32,68,0.92)';
   pctx.fill();
-  pctx.strokeStyle = 'rgba(99,102,241,0.5)';
+  pctx.strokeStyle = 'rgba(130,145,220,0.65)';
   pctx.lineWidth = 1.5;
   pctx.stroke();
 
@@ -940,7 +1054,7 @@ function hexPathOn(c, cx, cy, size) {
 
 // ─── Input ────────────────────────────────────────────────────
 canvas.addEventListener('mousemove', e => {
-  if (G.phase !== 'PLAYING' || G.aiThinking) return;
+  if (G.phase !== 'PLAYING' || G.aiThinking || ANIM.active) return;
   const rect = canvas.getBoundingClientRect();
   const sx = canvas.width / rect.width;
   const sy = canvas.height / rect.height;
@@ -961,7 +1075,7 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 canvas.addEventListener('click', e => {
-  if (G.phase !== 'PLAYING' || G.aiThinking || G.players[G.currentPlayer].isAI) return;
+  if (G.phase !== 'PLAYING' || G.aiThinking || ANIM.active || G.players[G.currentPlayer].isAI) return;
   const rect = canvas.getBoundingClientRect();
   const sx = canvas.width / rect.width;
   const sy = canvas.height / rect.height;
@@ -973,8 +1087,6 @@ canvas.addEventListener('click', e => {
   if (!cell || cell.tile || !G.currentTile) return;
 
   placeTile(h.q, h.r, G.currentTile);
-  draw();
-  endTurn();
 });
 
 canvas.addEventListener('wheel', e => {
@@ -1005,7 +1117,7 @@ document.addEventListener('keydown', e => {
 
 // Touch support: tap to place
 canvas.addEventListener('touchend', e => {
-  if (G.phase !== 'PLAYING' || G.aiThinking || G.players[G.currentPlayer].isAI) return;
+  if (G.phase !== 'PLAYING' || G.aiThinking || ANIM.active || G.players[G.currentPlayer].isAI) return;
   e.preventDefault();
   const t = e.changedTouches[0];
   const rect = canvas.getBoundingClientRect();
@@ -1018,8 +1130,6 @@ canvas.addEventListener('touchend', e => {
   const cell = G.grid.get(`${h.q},${h.r}`);
   if (!cell || cell.tile || !G.currentTile) return;
   placeTile(h.q, h.r, G.currentTile);
-  draw();
-  endTurn();
 }, {passive:false});
 
 // ─── Bootstrap ────────────────────────────────────────────────
