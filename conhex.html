@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ConHex（コンヘックス） | Connection Board Game</title>
+<meta name="description" content="穴に石を置いてセルを獲得し、自分の辺同士をつなげる抽象ボードゲーム ConHex をCPUと対戦できます。">
+<style>
+  :root {
+    --bg: #f2eadc;
+    --panel: rgba(255, 252, 244, 0.92);
+    --ink: #283025;
+    --muted: #707568;
+    --line: #a98c62;
+    --cell: #f1f1ed;
+    --player: #d9b617;
+    --player-dark: #bd9b00;
+    --cpu: #e04d3f;
+    --cpu-dark: #bb342b;
+    --accent: #7d8f58;
+    --shadow: 0 18px 48px rgba(70, 51, 29, 0.18);
+    --radius: 8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 12% 12%, rgba(125, 143, 88, 0.18), transparent 28%),
+      radial-gradient(circle at 88% 24%, rgba(173, 99, 71, 0.12), transparent 26%),
+      linear-gradient(145deg, #fff8eb 0%, var(--bg) 58%, #e5d7bf 100%);
+    color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  header {
+    width: min(1120px, calc(100% - 28px));
+    margin: 0 auto;
+    padding: 18px 0 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .brand {
+    color: var(--ink);
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+  }
+
+  .back-link {
+    color: var(--player);
+    border: 1px solid rgba(65, 111, 140, 0.32);
+    border-radius: 999px;
+    padding: 7px 13px;
+    background: rgba(255, 255, 255, 0.48);
+    text-decoration: none;
+    font-size: 0.86rem;
+    font-weight: 800;
+  }
+
+  main {
+    width: min(1120px, calc(100% - 28px));
+    margin: 0 auto;
+    padding: 10px 0 34px;
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: end;
+    margin-bottom: 16px;
+  }
+
+  .eyebrow {
+    color: var(--accent);
+    font-size: 0.78rem;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+  }
+
+  h1 {
+    font-size: clamp(1.85rem, 4vw, 3.25rem);
+    line-height: 1.08;
+    letter-spacing: 0;
+  }
+
+  .hero p {
+    color: var(--muted);
+    max-width: 720px;
+    line-height: 1.75;
+    margin-top: 10px;
+  }
+
+  .score-strip {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(112px, 1fr));
+    gap: 10px;
+    min-width: 380px;
+    width: 100%;
+  }
+
+  .score-box {
+    background: var(--panel);
+    border: 1px solid rgba(132, 104, 64, 0.22);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    box-shadow: 0 8px 20px rgba(72, 52, 30, 0.08);
+  }
+
+  .score-label {
+    color: var(--muted);
+    font-size: 0.74rem;
+    font-weight: 900;
+    margin-bottom: 4px;
+  }
+
+  .score-value {
+    font-size: 1.35rem;
+    font-weight: 900;
+  }
+
+  .player-value { color: var(--player); }
+  .cpu-value { color: var(--cpu); }
+
+  .game-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 292px;
+    gap: 18px;
+    align-items: start;
+  }
+
+  .board-panel,
+  .side-panel {
+    min-width: 0;
+    background: var(--panel);
+    border: 1px solid rgba(132, 104, 64, 0.24);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+
+  .board-panel {
+    padding: 18px;
+    overflow: hidden;
+  }
+
+  #gameCanvas {
+    width: 100%;
+    max-width: 100%;
+    aspect-ratio: 1 / 0.78;
+    display: block;
+    border-radius: var(--radius);
+    background:
+      linear-gradient(90deg, rgba(91, 67, 35, 0.07) 1px, transparent 1px),
+      linear-gradient(0deg, rgba(91, 67, 35, 0.07) 1px, transparent 1px),
+      #fff8e8;
+    background-size: 32px 32px;
+    cursor: pointer;
+    touch-action: none;
+  }
+
+  .side-panel {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .status {
+    min-height: 88px;
+    border: 1px solid rgba(125, 143, 88, 0.28);
+    border-radius: var(--radius);
+    background: rgba(125, 143, 88, 0.10);
+    padding: 13px 14px;
+    line-height: 1.55;
+    font-weight: 800;
+  }
+
+  .legend {
+    display: grid;
+    gap: 8px;
+  }
+
+  .legend span {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 0.84rem;
+    font-weight: 800;
+  }
+
+  .swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+  }
+
+  .swatch.player { background: var(--player); }
+  .swatch.cpu { background: var(--cpu); }
+
+  .controls {
+    display: grid;
+    gap: 10px;
+  }
+
+  label {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 900;
+  }
+
+  select,
+  button {
+    width: 100%;
+    border-radius: var(--radius);
+    font: inherit;
+  }
+
+  select {
+    border: 1px solid rgba(132, 104, 64, 0.30);
+    background: #fffaf0;
+    color: var(--ink);
+    padding: 10px 12px;
+    font-weight: 800;
+  }
+
+  .btn {
+    border: 0;
+    padding: 11px 14px;
+    background: var(--player);
+    color: #fff;
+    font-weight: 900;
+    cursor: pointer;
+    transition: transform 0.15s, filter 0.15s;
+  }
+
+  .btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
+  .btn.secondary { background: #82623b; }
+
+  .rules {
+    color: var(--muted);
+    font-size: 0.86rem;
+    line-height: 1.75;
+  }
+
+  .rules strong { color: var(--ink); }
+
+  @media (max-width: 880px) {
+    .hero,
+    .game-shell {
+      grid-template-columns: 1fr;
+    }
+
+    .hero > *,
+    .game-shell > * {
+      min-width: 0;
+    }
+
+    .score-strip {
+      min-width: 0;
+    }
+  }
+
+  @media (max-width: 520px) {
+    header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .score-strip {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .score-box:last-child {
+      grid-column: 1 / -1;
+    }
+
+    .board-panel,
+    .side-panel {
+      padding: 12px;
+    }
+
+    #gameCanvas {
+      width: calc(100vw - 54px);
+    }
+  }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">hide の部屋</a>
+  <a class="back-link" href="index.html#works">ゲーム一覧へ戻る / Back</a>
+</header>
+
+<main>
+  <section class="hero">
+    <div>
+      <div class="eyebrow">Connection Game / Canvas API</div>
+      <h1>ConHex<br>コンヘックス</h1>
+      <p>穴に石を置き、周囲の半数以上を取ったセルを自分の色にします。あなたは左と右、CPUは上と下を、獲得したセルの連なりでつなげると勝利です。</p>
+    </div>
+    <div class="score-strip" aria-live="polite">
+      <div class="score-box">
+        <div class="score-label">あなた / You</div>
+        <div class="score-value player-value" id="playerCount">0</div>
+      </div>
+      <div class="score-box">
+        <div class="score-label">CPU</div>
+        <div class="score-value cpu-value" id="cpuCount">0</div>
+      </div>
+      <div class="score-box">
+        <div class="score-label">空き穴 / Open</div>
+        <div class="score-value" id="openCount">0</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="game-shell">
+    <div class="board-panel">
+      <canvas id="gameCanvas" width="860" height="672" aria-label="ConHex の盤面"></canvas>
+    </div>
+
+    <aside class="side-panel">
+      <div class="status" id="statusText">あなたの番です。空いている穴を選んでください。</div>
+      <div class="legend" aria-label="色の説明">
+        <span><i class="swatch player"></i>あなた: 左 ↔ 右</span>
+        <span><i class="swatch cpu"></i>CPU: 上 ↕ 下</span>
+      </div>
+      <div class="controls">
+        <label for="difficultySelect">CPU難易度 / CPU Level</label>
+        <select id="difficultySelect">
+          <option value="easy">Easy</option>
+          <option value="normal" selected>Normal</option>
+          <option value="hard">Hard</option>
+        </select>
+        <button class="btn" id="newGameBtn">新しいゲーム / New Game</button>
+        <button class="btn secondary" id="hintBtn">ヒント / Hint</button>
+      </div>
+      <p class="rules"><strong>ルール:</strong> 石は穴に置きます。セル周囲の半数以上を先に取ったプレイヤーがそのセルを獲得し、獲得セルの道で対辺をつなげます。</p>
+    </aside>
+  </section>
+</main>
+
+<script>
+'use strict';
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const playerCountEl = document.getElementById('playerCount');
+const cpuCountEl = document.getElementById('cpuCount');
+const openCountEl = document.getElementById('openCount');
+const statusText = document.getElementById('statusText');
+const difficultySelect = document.getElementById('difficultySelect');
+const newGameBtn = document.getElementById('newGameBtn');
+const hintBtn = document.getElementById('hintBtn');
+
+const EMPTY = 0;
+const PLAYER = 1;
+const CPU = 2;
+const GRID_ROWS = 7;
+const GRID_COLS = 10;
+const REMOVED_HOLE = '3,5';
+const EXCLUDED_CELLS = new Set(['0,0', '0,8', '5,0', '5,8', '0,1', '5,7', '1,8', '4,0', '2,4']);
+const COLORS = {
+  board: '#a9aaa7',
+  line: 'rgba(255,255,255,0.72)',
+  hole: '#e9e9e5',
+  holeStroke: '#c8c8c1',
+  player: '#d9b617',
+  playerDark: '#bd9b00',
+  playerSoft: 'rgba(217, 182, 23, 0.34)',
+  cpu: '#e04d3f',
+  cpuDark: '#bb342b',
+  cpuSoft: 'rgba(224, 77, 63, 0.34)',
+  hint: '#7d8f58',
+  text: '#283025'
+};
+
+let cells = [];
+let holes = [];
+let holeOwners = [];
+let cellOwners = [];
+let current = PLAYER;
+let gameOver = false;
+let cpuThinking = false;
+let hintHole = null;
+
+function buildBoard() {
+  holes = [];
+  const keyToId = new Map();
+  const left = 108;
+  const top = 90;
+  const width = 650;
+  const height = 480;
+  const gapX = width / (GRID_COLS - 1);
+  const gapY = height / (GRID_ROWS - 1);
+
+  for (let r = 0; r < GRID_ROWS; r++) {
+    for (let c = 0; c < GRID_COLS; c++) {
+      const key = r + ',' + c;
+      if (key === REMOVED_HOLE) continue;
+      const id = holes.length;
+      const wobbleX = (r % 2 ? 7 : 0) + (c === 0 || c === GRID_COLS - 1 ? 0 : ((r + c) % 3 - 1) * 2);
+      const wobbleY = ((r * 2 + c) % 3 - 1) * 2;
+      keyToId.set(key, id);
+      holes.push({
+        id,
+        key,
+        row: r,
+        col: c,
+        x: left + c * gapX + wobbleX,
+        y: top + r * gapY + wobbleY,
+        cells: []
+      });
+    }
+  }
+
+  cells = [];
+  for (let r = 0; r < GRID_ROWS - 1; r++) {
+    for (let c = 0; c < GRID_COLS - 1; c++) {
+      const key = r + ',' + c;
+      const cornerKeys = [r + ',' + c, r + ',' + (c + 1), (r + 1) + ',' + (c + 1), (r + 1) + ',' + c];
+      if (EXCLUDED_CELLS.has(key) || cornerKeys.some(k => !keyToId.has(k))) continue;
+      const holeIds = cornerKeys.map(k => keyToId.get(k));
+      const points = holeIds.map(id => ({ x: holes[id].x, y: holes[id].y }));
+      const center = points.reduce((p, n) => ({ x: p.x + n.x / 4, y: p.y + n.y / 4 }), { x: 0, y: 0 });
+      const id = cells.length;
+      for (const holeId of holeIds) holes[holeId].cells.push(id);
+      cells.push({
+        id,
+        row: r,
+        col: c,
+        x: center.x,
+        y: center.y,
+        holes: holeIds,
+        points,
+        neighbors: [],
+        top: r === 0,
+        bottom: r === GRID_ROWS - 2,
+        left: c === 0,
+        right: c === GRID_COLS - 2
+      });
+    }
+  }
+
+  for (let a = 0; a < cells.length; a++) {
+    for (let b = a + 1; b < cells.length; b++) {
+      const shared = cells[a].holes.filter(id => cells[b].holes.includes(id)).length;
+      if (shared >= 2) {
+        cells[a].neighbors.push(b);
+        cells[b].neighbors.push(a);
+      }
+    }
+  }
+}
+
+function resetGame() {
+  buildBoard();
+  holeOwners = Array.from({ length: holes.length }, () => EMPTY);
+  cellOwners = Array.from({ length: cells.length }, () => EMPTY);
+  current = PLAYER;
+  gameOver = false;
+  cpuThinking = false;
+  hintHole = null;
+  setStatus('あなたの番です。空いている穴を選んでください。');
+  updateCounts();
+  draw();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#fff8e8';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawBoardBase();
+  drawGoalBands();
+
+  const connected = connectedCells();
+  for (const cell of cells) {
+    const owner = cellOwners[cell.id];
+    const isConnected = connected.has(cell.id);
+    ctx.beginPath();
+    cell.points.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = COLORS.line;
+    ctx.stroke();
+    if (owner !== EMPTY) drawCellMarker(cell, owner, isConnected);
+  }
+
+  for (const hole of holes) {
+    const owner = holeOwners[hole.id];
+    const isHint = hintHole === hole.id && owner === EMPTY;
+    ctx.beginPath();
+    ctx.arc(hole.x, hole.y, isHint ? 9 : 6.5, 0, Math.PI * 2);
+    ctx.fillStyle = owner === PLAYER ? COLORS.player : owner === CPU ? COLORS.cpu : isHint ? COLORS.hint : COLORS.hole;
+    ctx.fill();
+    ctx.lineWidth = isHint ? 3 : 2;
+    ctx.strokeStyle = isHint ? COLORS.hint : COLORS.holeStroke;
+    ctx.stroke();
+  }
+}
+
+function drawBoardBase() {
+  ctx.save();
+  ctx.fillStyle = COLORS.board;
+  roundRect(80, 56, 700, 560, 8);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawCellMarker(cell, owner, isConnected) {
+  const w = isConnected ? 48 : 42;
+  const h = isConnected ? 20 : 17;
+  const angle = ((cell.row + cell.col) % 4 === 0 ? -28 : (cell.row + cell.col) % 4 === 1 ? 0 : (cell.row + cell.col) % 4 === 2 ? 27 : 90) * Math.PI / 180;
+  ctx.save();
+  ctx.translate(cell.x, cell.y);
+  ctx.rotate(angle);
+  ctx.fillStyle = owner === PLAYER ? (isConnected ? COLORS.playerDark : COLORS.player) : (isConnected ? COLORS.cpuDark : COLORS.cpu);
+  ctx.globalAlpha = isConnected ? 0.98 : 0.9;
+  roundRect(-w / 2, -h / 2, w, h, 4);
+  ctx.fill();
+  ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawGoalBands() {
+  const top = cells.filter(c => c.top);
+  const bottom = cells.filter(c => c.bottom);
+  const left = cells.filter(c => c.left);
+  const right = cells.filter(c => c.right);
+
+  ctx.save();
+  ctx.globalAlpha = 0.42;
+  ctx.lineWidth = 12;
+  ctx.lineCap = 'round';
+
+  drawBand(top, COLORS.cpu, 0, -33);
+  drawBand(bottom, COLORS.cpu, 0, 33);
+  drawBand(left, COLORS.player, -33, 0);
+  drawBand(right, COLORS.player, 33, 0);
+  ctx.restore();
+}
+
+function drawBand(list, color, dx, dy) {
+  if (!list.length) return;
+  const sorted = list.slice().sort((a, b) => dx ? a.y - b.y : a.x - b.x);
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(sorted[0].x + dx, sorted[0].y + dy);
+  for (const cell of sorted.slice(1)) ctx.lineTo(cell.x + dx, cell.y + dy);
+  ctx.stroke();
+}
+
+function setStatus(text) {
+  statusText.textContent = text;
+}
+
+function updateCounts() {
+  let player = 0;
+  let cpu = 0;
+  let open = 0;
+  for (const owner of cellOwners) {
+    if (owner === PLAYER) player++;
+    else if (owner === CPU) cpu++;
+  }
+  for (const owner of holeOwners) {
+    if (owner === EMPTY) open++;
+  }
+  playerCountEl.textContent = player;
+  cpuCountEl.textContent = cpu;
+  openCountEl.textContent = open;
+}
+
+function claimCells(player) {
+  let gained = 0;
+  for (const cell of cells) {
+    if (cellOwners[cell.id] !== EMPTY) continue;
+    const owned = cell.holes.filter(id => holeOwners[id] === player).length;
+    if (owned >= Math.ceil(cell.holes.length / 2)) {
+      cellOwners[cell.id] = player;
+      gained++;
+    }
+  }
+  return gained;
+}
+
+function connectedCells() {
+  const connected = new Set();
+  const seen = new Set();
+  for (const cell of cells) {
+    const owner = cellOwners[cell.id];
+    if (owner === EMPTY || seen.has(cell.id)) continue;
+    const group = [];
+    const queue = [cell.id];
+    while (queue.length) {
+      const id = queue.shift();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      group.push(id);
+      for (const n of cells[id].neighbors) {
+        if (!seen.has(n) && cellOwners[n] === owner) queue.push(n);
+      }
+    }
+    if (group.length >= 2) {
+      for (const id of group) connected.add(id);
+    }
+  }
+  return connected;
+}
+
+function hasWon(player) {
+  const starts = cells.filter(cell => cellOwners[cell.id] === player && (player === PLAYER ? cell.left : cell.top)).map(cell => cell.id);
+  const queue = starts.slice();
+  const seen = new Set();
+  while (queue.length) {
+    const id = queue.shift();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const cell = cells[id];
+    if (player === PLAYER && cell.right) return true;
+    if (player === CPU && cell.bottom) return true;
+    for (const n of cell.neighbors) {
+      if (!seen.has(n) && cellOwners[n] === player) queue.push(n);
+    }
+  }
+  return false;
+}
+
+function placeHole(holeId, player) {
+  if (gameOver || holeOwners[holeId] !== EMPTY) return false;
+  hintHole = null;
+  holeOwners[holeId] = player;
+  const gained = claimCells(player);
+  updateCounts();
+  draw();
+
+  if (hasWon(player)) {
+    gameOver = true;
+    cpuThinking = false;
+    setStatus(player === PLAYER ? 'あなたの勝ちです。左と右がつながりました。' : 'CPUの勝ちです。上と下がつながりました。');
+    return true;
+  }
+
+  current = player === PLAYER ? CPU : PLAYER;
+  if (gained > 0) {
+    setStatus(player === PLAYER ? `セルを${gained}個獲得しました。CPUの番です。` : `CPUがセルを${gained}個獲得しました。あなたの番です。`);
+  } else {
+    setStatus(current === PLAYER ? 'あなたの番です。空いている穴を選んでください。' : 'CPUが考えています...');
+  }
+  if (current === CPU) scheduleCpu();
+  return true;
+}
+
+function availableHoles() {
+  return holes.filter(hole => holeOwners[hole.id] === EMPTY).map(hole => hole.id);
+}
+
+function pointerToHole(event) {
+  const rect = canvas.getBoundingClientRect();
+  const src = event.touches ? event.touches[0] : event;
+  const x = (src.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (src.clientY - rect.top) * (canvas.height / rect.height);
+  let best = null;
+  let bestDist = Infinity;
+  for (const id of availableHoles()) {
+    const hole = holes[id];
+    const dist = Math.hypot(x - hole.x, y - hole.y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = id;
+    }
+  }
+  return bestDist <= 17 ? best : null;
+}
+
+function chooseCpuMove() {
+  const moves = availableHoles();
+  if (!moves.length) return null;
+  const winning = moves.find(id => moveWouldWin(id, CPU));
+  if (winning !== undefined) return winning;
+  const block = moves.find(id => moveWouldWin(id, PLAYER));
+  if (block !== undefined && difficultySelect.value !== 'easy') return block;
+
+  if (difficultySelect.value === 'easy') return moves[Math.floor(Math.random() * moves.length)];
+
+  const scored = moves.map(id => ({
+    id,
+    score: moveScore(id, CPU) - moveScore(id, PLAYER) * (difficultySelect.value === 'hard' ? 0.75 : 0.45)
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  const poolSize = difficultySelect.value === 'hard' ? 2 : 6;
+  const pool = scored.slice(0, Math.min(poolSize, scored.length));
+  return pool[Math.floor(Math.random() * pool.length)].id;
+}
+
+function moveWouldWin(holeId, player) {
+  const prevHole = holeOwners[holeId];
+  const prevOwners = cellOwners.slice();
+  holeOwners[holeId] = player;
+  claimCells(player);
+  const won = hasWon(player);
+  holeOwners[holeId] = prevHole;
+  cellOwners = prevOwners;
+  return won;
+}
+
+function moveScore(holeId, player) {
+  const hole = holes[holeId];
+  let score = 0;
+  for (const cellId of hole.cells) {
+    if (cellOwners[cellId] !== EMPTY) continue;
+    const cell = cells[cellId];
+    const own = cell.holes.filter(id => holeOwners[id] === player).length + 1;
+    const need = Math.ceil(cell.holes.length / 2);
+    if (own >= need) score += 18;
+    else score += own * 2.4;
+    for (const n of cell.neighbors) {
+      if (cellOwners[n] === player) score += 4.6;
+    }
+    if (player === CPU && (cell.top || cell.bottom)) score += 1.8;
+    if (player === PLAYER && (cell.left || cell.right)) score += 1.8;
+  }
+  const centerX = canvas.width / 2;
+  const centerY = canvas.height / 2;
+  score += 3.5 - Math.hypot(hole.x - centerX, hole.y - centerY) / 130;
+  return score + Math.random() * 0.7;
+}
+
+function scheduleCpu() {
+  if (gameOver || cpuThinking) return;
+  cpuThinking = true;
+  window.setTimeout(() => {
+    cpuThinking = false;
+    if (gameOver || current !== CPU) return;
+    const move = chooseCpuMove();
+    if (move !== null) placeHole(move, CPU);
+  }, 520);
+}
+
+function showHint() {
+  if (gameOver || current !== PLAYER || cpuThinking) return;
+  const win = availableHoles().find(id => moveWouldWin(id, PLAYER));
+  const block = availableHoles().find(id => moveWouldWin(id, CPU));
+  if (win !== undefined) {
+    hintHole = win;
+    setStatus('ヒント: 勝ちにつながる穴があります。緑の穴を選びましょう。');
+  } else if (block !== undefined) {
+    hintHole = block;
+    setStatus('ヒント: CPUの接続を止められる穴があります。緑の穴でブロックできます。');
+  } else {
+    const scored = availableHoles().map(id => ({ id, score: moveScore(id, PLAYER) - moveScore(id, CPU) * 0.55 }));
+    scored.sort((a, b) => b.score - a.score);
+    hintHole = scored[0]?.id ?? null;
+    setStatus('ヒント: 緑の穴がセル獲得や接続を伸ばしやすい手です。');
+  }
+  draw();
+}
+
+canvas.addEventListener('click', event => {
+  if (gameOver || cpuThinking || current !== PLAYER) return;
+  const hole = pointerToHole(event);
+  if (hole !== null) placeHole(hole, PLAYER);
+});
+
+canvas.addEventListener('touchstart', event => {
+  event.preventDefault();
+  if (gameOver || cpuThinking || current !== PLAYER) return;
+  const hole = pointerToHole(event);
+  if (hole !== null) placeHole(hole, PLAYER);
+}, { passive: false });
+
+canvas.addEventListener('mousemove', event => {
+  if (gameOver || cpuThinking || current !== PLAYER) {
+    canvas.style.cursor = 'default';
+    return;
+  }
+  canvas.style.cursor = pointerToHole(event) !== null ? 'pointer' : 'default';
+});
+
+newGameBtn.addEventListener('click', resetGame);
+hintBtn.addEventListener('click', showHint);
+difficultySelect.addEventListener('change', resetGame);
+
+resetGame();
+</script>
+</body>
+</html>
