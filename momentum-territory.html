@@ -388,6 +388,9 @@ let cpuCooldown = 1.1;
 let playerCooldown = 0;
 let decayRate = 0.018;
 let totalTime = 90;
+let fills = [];
+let playerCombo = 0;
+let comboTimer = 0;
 
 function resetGame() {
   const mode = modeSelect.value;
@@ -406,6 +409,9 @@ function resetGame() {
   gameOver = false;
   cpuCooldown = 1.1;
   playerCooldown = 0;
+  fills = [];
+  playerCombo = 0;
+  comboTimer = 0;
   setStatus('フィールドをドラッグして方向と強さを決め、離すと弾を射出します。');
   pauseBtn.textContent = '一時停止 / Pause';
   updateScore();
@@ -429,7 +435,9 @@ function spawnBullet(owner, x, y, vx, vy) {
     vy,
     life: 5.2,
     radius: 7.5,
-    mass: 1
+    mass: 1,
+    path: [{ x, y }],
+    lastSample: 0
   });
   return true;
 }
@@ -438,6 +446,10 @@ function update(dt) {
   if (paused || gameOver) return;
   elapsed += dt;
   playerCooldown = Math.max(0, playerCooldown - dt);
+  if (comboTimer > 0) {
+    comboTimer -= dt;
+    if (comboTimer <= 0) playerCombo = 0;
+  }
   cpuCooldown -= dt;
   if (cpuCooldown <= 0) {
     cpuShoot();
@@ -449,6 +461,11 @@ function update(dt) {
   }
   trails = trails.filter(t => t.power > 0.04);
 
+  for (const fill of fills) {
+    fill.power -= decayRate * 0.4 * dt;
+  }
+  fills = fills.filter(f => f.power > 0.04);
+
   for (const bullet of bullets) {
     bullet.px = bullet.x;
     bullet.py = bullet.y;
@@ -459,12 +476,14 @@ function update(dt) {
     bullet.life -= dt;
 
     if (bullet.x < 24 || bullet.x > canvas.width - 24) {
-      bullet.vx *= -0.82;
+      bullet.vx *= -1.1;
       bullet.x = Math.max(24, Math.min(canvas.width - 24, bullet.x));
+      spawnWallSpark(bullet.x, bullet.y, bullet.owner);
     }
     if (bullet.y < 24 || bullet.y > canvas.height - 24) {
-      bullet.vy *= -0.82;
+      bullet.vy *= -1.1;
       bullet.y = Math.max(24, Math.min(canvas.height - 24, bullet.y));
+      spawnWallSpark(bullet.x, bullet.y, bullet.owner);
     }
 
     const dist = Math.hypot(bullet.x - bullet.px, bullet.y - bullet.py);
@@ -478,6 +497,13 @@ function update(dt) {
         power: 1,
         width: 9 + Math.min(10, Math.hypot(bullet.vx, bullet.vy) / 55)
       });
+    }
+
+    bullet.lastSample += dt;
+    if (bullet.lastSample > 0.07) {
+      bullet.path.push({ x: bullet.x, y: bullet.y });
+      bullet.lastSample = 0;
+      if (bullet.path.length >= 14) checkLoop(bullet);
     }
 
     collideWithTrails(bullet);
@@ -507,11 +533,20 @@ function collideWithTrails(bullet) {
     const d = distanceToSegment(bullet.x, bullet.y, trail.x1, trail.y1, trail.x2, trail.y2);
     if (d > bullet.radius + trail.width * 0.45) continue;
     const speed = Math.hypot(bullet.vx, bullet.vy);
-    trail.power -= 0.34 + speed / 950;
+    if (bullet.owner === PLAYER) {
+      playerCombo++;
+      comboTimer = 2.2;
+      const comboMult = 1 + (playerCombo - 1) * 0.35;
+      trail.power -= (0.34 + speed / 950) * comboMult;
+      const comboMsg = playerCombo >= 2 ? `  ${playerCombo}x COMBO!` : '';
+      setStatus(`相手ラインに衝突。進路を削りました。${comboMsg}`);
+    } else {
+      trail.power -= 0.34 + speed / 950;
+      setStatus('CPUがあなたのラインを削りました。');
+    }
     bullet.vx *= 0.58;
     bullet.vy *= 0.58;
     makeImpact(bullet.x, bullet.y, bullet.owner);
-    setStatus(bullet.owner === PLAYER ? '相手ラインに衝突。進路を削りました。' : 'CPUがあなたのラインを削りました。');
   }
 }
 
@@ -522,6 +557,50 @@ function distanceToSegment(px, py, ax, ay, bx, by) {
   let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function checkLoop(bullet) {
+  const path = bullet.path;
+  const last = path[path.length - 1];
+  for (let i = 0; i < path.length - 13; i++) {
+    const d = Math.hypot(last.x - path[i].x, last.y - path[i].y);
+    if (d < 42) {
+      const loopPts = path.slice(i);
+      const area = polygonArea(loopPts);
+      if (area > 2000) {
+        fills.push({
+          owner: bullet.owner,
+          points: loopPts.map(p => ({ x: p.x, y: p.y })),
+          power: 1,
+          area
+        });
+        bullet.path = [{ x: last.x, y: last.y }];
+        const bonus = Math.round(area / 120);
+        if (bullet.owner === PLAYER) {
+          setStatus(`ループ閉鎖！陣地ボーナス +${bonus}`);
+        }
+      }
+      break;
+    }
+  }
+}
+
+function polygonArea(pts) {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    a += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+  }
+  return Math.abs(a) / 2;
+}
+
+function spawnWallSpark(x, y, owner) {
+  const color = owner === PLAYER ? COLORS.player : COLORS.cpu;
+  particles.push({ x, y, vx: 0, vy: 0, color: '#fffaf0', life: 0.18, maxLife: 0.18, r: 0, ring: true });
+  for (let i = 0; i < 9; i++) {
+    const a = Math.random() * Math.PI * 2;
+    particles.push({ x, y, vx: Math.cos(a) * (40 + Math.random() * 80), vy: Math.sin(a) * (40 + Math.random() * 80), color, life: 0.25 + Math.random() * 0.2, r: 2 + Math.random() * 3 });
+  }
 }
 
 function makeImpact(x, y, owner) {
@@ -569,6 +648,11 @@ function territoryScore() {
     if (trail.owner === PLAYER) p += value;
     else c += value;
   }
+  for (const fill of fills) {
+    const value = fill.area * 0.15 * fill.power;
+    if (fill.owner === PLAYER) p += value;
+    else c += value;
+  }
   const total = Math.max(1, p + c);
   return { player: Math.round(p / total * 100), cpu: Math.round(c / total * 100) };
 }
@@ -583,10 +667,12 @@ function updateScore() {
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawArena();
+  drawFills();
   drawTrails();
   drawBases();
   drawBullets();
   drawParticles();
+  drawCombo();
   drawAim();
   if (gameOver) drawGameOver();
 }
@@ -626,6 +712,40 @@ function drawGameOver() {
   ctx.font = '600 13px Segoe UI, sans-serif';
   ctx.fillText('「新しいゲーム」でリスタート / Click New Game', cx, cy + 62);
 
+  ctx.restore();
+}
+
+function drawFills() {
+  for (const fill of fills) {
+    if (fill.points.length < 3) continue;
+    const color = fill.owner === PLAYER ? COLORS.player : COLORS.cpu;
+    ctx.save();
+    ctx.globalAlpha = Math.min(0.48, fill.power * 0.55);
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.moveTo(fill.points[0].x, fill.points[0].y);
+    for (let i = 1; i < fill.points.length; i++) {
+      ctx.lineTo(fill.points[i].x, fill.points[i].y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawCombo() {
+  if (playerCombo < 2) return;
+  const size = Math.min(42, 26 + playerCombo * 4);
+  ctx.save();
+  ctx.font = `900 ${size}px Segoe UI, sans-serif`;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'top';
+  ctx.shadowColor = COLORS.player;
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = COLORS.player;
+  ctx.fillText(`${playerCombo}x COMBO`, canvas.width - 26, 26);
   ctx.restore();
 }
 
