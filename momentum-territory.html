@@ -526,10 +526,15 @@ function distanceToSegment(px, py, ax, ay, bx, by) {
 
 function makeImpact(x, y, owner) {
   const color = owner === PLAYER ? COLORS.player : COLORS.cpu;
-  for (let i = 0; i < 12; i++) {
+  const altColor = owner === PLAYER ? COLORS.cpu : COLORS.player;
+  // Shockwave ring
+  particles.push({ x, y, vx: 0, vy: 0, color: '#fffaf0', life: 0.25, maxLife: 0.25, r: 0, ring: true });
+  // Sparks
+  for (let i = 0; i < 22; i++) {
     const a = Math.random() * Math.PI * 2;
-    const s = 25 + Math.random() * 90;
-    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, color, life: 0.35 + Math.random() * 0.35 });
+    const s = 50 + Math.random() * 170;
+    const sparkColor = Math.random() < 0.72 ? color : (Math.random() < 0.5 ? altColor : '#fffaf0');
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, color: sparkColor, life: 0.45 + Math.random() * 0.5, r: 2 + Math.random() * 5 });
   }
 }
 
@@ -583,6 +588,45 @@ function draw() {
   drawBullets();
   drawParticles();
   drawAim();
+  if (gameOver) drawGameOver();
+}
+
+function drawGameOver() {
+  const scores = territoryScore();
+  const playerWon = scores.player > scores.cpu;
+  const isDraw = scores.player === scores.cpu;
+  const winColor = isDraw ? COLORS.accent : playerWon ? COLORS.player : COLORS.cpu;
+  const winText = isDraw ? 'DRAW' : playerWon ? 'YOU WIN' : 'CPU WINS';
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(41, 48, 39, 0.66)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const w = 380, h = 214;
+  ctx.shadowColor = winColor;
+  ctx.shadowBlur = 36;
+  ctx.fillStyle = 'rgba(255, 250, 240, 0.97)';
+  roundRect(cx - w / 2, cy - h / 2, w, h, 14);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = winColor;
+  ctx.font = '900 54px Segoe UI, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(winText, cx, cy - 38);
+
+  ctx.fillStyle = COLORS.ink;
+  ctx.font = '700 24px Segoe UI, sans-serif';
+  ctx.fillText(`${scores.player}%  vs  ${scores.cpu}%`, cx, cy + 16);
+
+  ctx.fillStyle = '#707568';
+  ctx.font = '600 13px Segoe UI, sans-serif';
+  ctx.fillText('「新しいゲーム」でリスタート / Click New Game', cx, cy + 62);
+
+  ctx.restore();
 }
 
 function drawArena() {
@@ -616,6 +660,8 @@ function drawTrails() {
     ctx.lineCap = 'round';
     ctx.lineWidth = trail.width;
     ctx.strokeStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6 + trail.power * 14;
     ctx.beginPath();
     ctx.moveTo(trail.x1, trail.y1);
     ctx.lineTo(trail.x2, trail.y2);
@@ -625,17 +671,32 @@ function drawTrails() {
 }
 
 function drawBases() {
+  const now = performance.now() / 1000;
   for (const base of bases) {
     const color = base.owner === PLAYER ? COLORS.player : COLORS.cpu;
+    const onCooldown = base.owner === PLAYER && playerCooldown > 0;
+    const pulse = Math.sin(now * 3.2 + (base.owner === PLAYER ? 0 : Math.PI)) * 0.5 + 0.5;
     ctx.save();
-    ctx.fillStyle = base.owner === PLAYER ? 'rgba(63,115,93,0.18)' : 'rgba(182,99,69,0.18)';
-    ctx.beginPath();
-    ctx.arc(base.x, base.y, base.r + 16, 0, Math.PI * 2);
-    ctx.fill();
+    // Outer pulse ring
+    ctx.globalAlpha = onCooldown ? 0.07 : 0.20 * pulse;
     ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(base.x, base.y, base.r + 16 + pulse * 10, 0, Math.PI * 2);
+    ctx.fill();
+    // Inner halo
+    ctx.globalAlpha = onCooldown ? 0.13 : 0.28;
+    ctx.beginPath();
+    ctx.arc(base.x, base.y, base.r + 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // Base circle with glow
+    ctx.shadowColor = color;
+    ctx.shadowBlur = onCooldown ? 5 : 14 + pulse * 10;
+    ctx.fillStyle = onCooldown ? '#82623b' : color;
     ctx.beginPath();
     ctx.arc(base.x, base.y, base.r, 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowBlur = 0;
     ctx.fillStyle = '#fffaf0';
     ctx.font = '900 16px Segoe UI, sans-serif';
     ctx.textAlign = 'center';
@@ -647,26 +708,48 @@ function drawBases() {
 
 function drawBullets() {
   for (const bullet of bullets) {
-    const color = bullet.owner === PLAYER ? COLORS.playerDark : COLORS.cpuDark;
-    ctx.fillStyle = color;
+    const color = bullet.owner === PLAYER ? COLORS.player : COLORS.cpu;
+    const darkColor = bullet.owner === PLAYER ? COLORS.playerDark : COLORS.cpuDark;
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = darkColor;
     ctx.beginPath();
     ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowBlur = 0;
     ctx.strokeStyle = 'rgba(255,255,255,0.9)';
     ctx.lineWidth = 2;
     ctx.stroke();
+    ctx.restore();
   }
 }
 
 function drawParticles() {
   for (const p of particles) {
-    ctx.globalAlpha = Math.max(0, p.life);
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.save();
+    if (p.ring) {
+      const progress = 1 - p.life / p.maxLife;
+      const ringR = 4 + progress * 34;
+      ctx.globalAlpha = Math.max(0, p.life / p.maxLife * 0.9);
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 2));
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 7;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r || 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
-  ctx.globalAlpha = 1;
 }
 
 function drawAim() {
