@@ -339,6 +339,12 @@
           <option value="slow">Slow Decay</option>
           <option value="rush">Rush</option>
         </select>
+        <label for="diffSelect">難易度 / Difficulty</label>
+        <select id="diffSelect">
+          <option value="normal" selected>Normal</option>
+          <option value="easy">Easy</option>
+          <option value="hard">Hard</option>
+        </select>
         <button class="btn" id="newGameBtn">新しいゲーム / New Game</button>
         <button class="btn secondary" id="pauseBtn">一時停止 / Pause</button>
       </div>
@@ -359,6 +365,7 @@ const statusText = document.getElementById('statusText');
 const modeSelect = document.getElementById('modeSelect');
 const newGameBtn = document.getElementById('newGameBtn');
 const pauseBtn = document.getElementById('pauseBtn');
+const diffSelect = document.getElementById('diffSelect');
 
 const PLAYER = 'player';
 const CPU = 'cpu';
@@ -391,6 +398,10 @@ let totalTime = 90;
 let fills = [];
 let playerCombo = 0;
 let comboTimer = 0;
+let powerups = [];
+let powerupSpawn = 9;
+let activeEffect = null;
+let effectTimer = 0;
 
 function resetGame() {
   const mode = modeSelect.value;
@@ -412,6 +423,10 @@ function resetGame() {
   fills = [];
   playerCombo = 0;
   comboTimer = 0;
+  powerups = [];
+  powerupSpawn = 9;
+  activeEffect = null;
+  effectTimer = 0;
   setStatus('フィールドをドラッグして方向と強さを決め、離すと弾を射出します。');
   pauseBtn.textContent = '一時停止 / Pause';
   updateScore();
@@ -453,7 +468,8 @@ function update(dt) {
   cpuCooldown -= dt;
   if (cpuCooldown <= 0) {
     cpuShoot();
-    cpuCooldown = 1.15 + Math.random() * 0.7;
+    const diff = diffSelect.value;
+    cpuCooldown = diff === 'hard' ? 0.85 + Math.random() * 0.5 : diff === 'easy' ? 1.8 + Math.random() * 0.9 : 1.15 + Math.random() * 0.7;
   }
 
   for (const trail of trails) {
@@ -465,6 +481,18 @@ function update(dt) {
     fill.power -= decayRate * 0.4 * dt;
   }
   fills = fills.filter(f => f.power > 0.04);
+
+  powerupSpawn -= dt;
+  if (powerupSpawn <= 0) {
+    spawnPowerup();
+    powerupSpawn = 8 + Math.random() * 6;
+  }
+  for (const pu of powerups) pu.life -= dt;
+  powerups = powerups.filter(pu => pu.life > 0);
+  if (effectTimer > 0) {
+    effectTimer -= dt;
+    if (effectTimer <= 0) activeEffect = null;
+  }
 
   for (const bullet of bullets) {
     bullet.px = bullet.x;
@@ -486,8 +514,19 @@ function update(dt) {
       spawnWallSpark(bullet.x, bullet.y, bullet.owner);
     }
 
+    if (bullet.owner === PLAYER) {
+      for (let i = powerups.length - 1; i >= 0; i--) {
+        if (Math.hypot(bullet.x - powerups[i].x, bullet.y - powerups[i].y) < 22) {
+          activatePowerup(powerups[i].type, powerups[i].x, powerups[i].y);
+          powerups.splice(i, 1);
+        }
+      }
+    }
+
     const dist = Math.hypot(bullet.x - bullet.px, bullet.y - bullet.py);
     if (dist > 2) {
+      let trailWidth = 9 + Math.min(10, Math.hypot(bullet.vx, bullet.vy) / 55);
+      if (bullet.owner === PLAYER && activeEffect === 'wide') trailWidth *= 1.8;
       trails.push({
         owner: bullet.owner,
         x1: bullet.px,
@@ -495,7 +534,7 @@ function update(dt) {
         x2: bullet.x,
         y2: bullet.y,
         power: 1,
-        width: 9 + Math.min(10, Math.hypot(bullet.vx, bullet.vy) / 55)
+        width: trailWidth
       });
     }
 
@@ -618,18 +657,36 @@ function makeImpact(x, y, owner) {
 }
 
 function cpuShoot() {
+  const diff = diffSelect.value;
   const target = chooseCpuTarget();
   const base = bases.find(b => b.owner === CPU);
-  const dx = target.x - base.x;
-  const dy = target.y - base.y;
+  let dx = target.x - base.x;
+  let dy = target.y - base.y;
   const len = Math.hypot(dx, dy) || 1;
+  if (diff === 'easy') {
+    const jitter = (Math.random() - 0.5) * 0.65;
+    const angle = Math.atan2(dy, dx) + jitter;
+    dx = Math.cos(angle);
+    dy = Math.sin(angle);
+  } else {
+    dx /= len;
+    dy /= len;
+  }
   const power = 270 + Math.random() * 120;
-  spawnBullet(CPU, base.x, base.y, dx / len * power, dy / len * power);
+  spawnBullet(CPU, base.x, base.y, dx * power, dy * power);
 }
 
 function chooseCpuTarget() {
+  const diff = diffSelect.value;
   const playerTrails = trails.filter(t => t.owner === PLAYER && t.power > 0.35);
-  if (playerTrails.length && Math.random() < 0.68) {
+  if (diff === 'hard') {
+    if (playerTrails.length && Math.random() < 0.88) {
+      const best = playerTrails.reduce((a, b) => b.power > a.power ? b : a);
+      return { x: (best.x1 + best.x2) / 2, y: (best.y1 + best.y2) / 2 };
+    }
+    return { x: 90 + Math.random() * 280, y: 60 + Math.random() * (canvas.height - 120) };
+  }
+  if (playerTrails.length && Math.random() < (diff === 'easy' ? 0.42 : 0.68)) {
     const t = playerTrails[Math.floor(Math.random() * playerTrails.length)];
     return { x: (t.x1 + t.x2) / 2, y: (t.y1 + t.y2) / 2 };
   }
@@ -667,12 +724,15 @@ function updateScore() {
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawArena();
+  drawHeatmap();
   drawFills();
   drawTrails();
   drawBases();
+  drawPowerups();
   drawBullets();
   drawParticles();
   drawCombo();
+  drawActiveEffect();
   drawAim();
   if (gameOver) drawGameOver();
 }
@@ -712,6 +772,92 @@ function drawGameOver() {
   ctx.font = '600 13px Segoe UI, sans-serif';
   ctx.fillText('「新しいゲーム」でリスタート / Click New Game', cx, cy + 62);
 
+  ctx.restore();
+}
+
+function spawnPowerup() {
+  const types = ['wide', 'reload', 'boost'];
+  const type = types[Math.floor(Math.random() * types.length)];
+  powerups.push({
+    x: 200 + Math.random() * (canvas.width - 400),
+    y: 70 + Math.random() * (canvas.height - 140),
+    type,
+    life: 12 + Math.random() * 6
+  });
+}
+
+function activatePowerup(type, x, y) {
+  makeImpact(x, y, PLAYER);
+  if (type === 'reload') {
+    playerCooldown = Math.max(0, playerCooldown - 0.55);
+    setStatus('パワーアップ！クールダウン短縮');
+  } else {
+    activeEffect = type;
+    effectTimer = 6;
+    const names = { wide: 'ワイドショット (6s)', boost: 'パワーブースト (6s)' };
+    setStatus(`パワーアップ！${names[type]}`);
+  }
+}
+
+function drawPowerups() {
+  const now = performance.now() / 1000;
+  const labels = { wide: 'W', reload: 'R', boost: '↑' };
+  const colors = { wide: '#8b7a51', reload: '#3f735d', boost: '#b66345' };
+  for (const pu of powerups) {
+    const pulse = Math.sin(now * 4.5) * 0.5 + 0.5;
+    const color = colors[pu.type];
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10 + pulse * 10;
+    ctx.globalAlpha = 0.82 + pulse * 0.18;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(pu.x, pu.y, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#fffaf0';
+    ctx.font = '900 13px Segoe UI, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(labels[pu.type], pu.x, pu.y);
+    ctx.restore();
+  }
+}
+
+function drawHeatmap() {
+  for (const trail of trails) {
+    const color = trail.owner === PLAYER ? COLORS.player : COLORS.cpu;
+    ctx.save();
+    ctx.globalAlpha = Math.min(0.07, trail.power * 0.09);
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 64;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(trail.x1, trail.y1);
+    ctx.lineTo(trail.x2, trail.y2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawActiveEffect() {
+  if (!activeEffect || effectTimer <= 0) return;
+  const names = { wide: 'WIDE', boost: 'BOOST' };
+  const ratio = effectTimer / 6;
+  ctx.save();
+  ctx.font = '900 15px Segoe UI, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = COLORS.player;
+  ctx.shadowColor = COLORS.player;
+  ctx.shadowBlur = 10;
+  ctx.fillText(`⚡ ${names[activeEffect]}  ${Math.ceil(effectTimer)}s`, 26, 26);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(63,115,93,0.20)';
+  ctx.fillRect(26, 46, 130, 5);
+  ctx.fillStyle = COLORS.player;
+  ctx.fillRect(26, 46, 130 * ratio, 5);
   ctx.restore();
 }
 
@@ -875,19 +1021,71 @@ function drawParticles() {
 function drawAim() {
   if (!aim) return;
   const base = bases.find(b => b.owner === PLAYER);
+  const dx = mouse.x - base.x;
+  const dy = mouse.y - base.y;
+  const len = Math.hypot(dx, dy) || 1;
+  let power = Math.min(430, Math.max(120, len * 1.25));
+  if (activeEffect === 'boost') power = Math.min(530, power + 110);
+  const powerRatio = power / 530;
+  const nx = dx / len;
+  const ny = dy / len;
+
   ctx.save();
-  ctx.strokeStyle = COLORS.playerDark;
+
+  // Power arc around base
+  ctx.strokeStyle = COLORS.player;
   ctx.lineWidth = 3;
-  ctx.setLineDash([8, 8]);
+  ctx.globalAlpha = 0.55;
+  ctx.shadowColor = COLORS.player;
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(base.x, base.y, base.r + 14, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * powerRatio);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+
+  // Trajectory prediction dots
+  let px = base.x, py = base.y;
+  let pvx = nx * power, pvy = ny * power;
+  const friction = Math.pow(0.994, 0.1 / 0.016);
+  for (let t = 0.1; t < 2.2; t += 0.1) {
+    px += pvx * 0.1;
+    py += pvy * 0.1;
+    pvx *= friction;
+    pvy *= friction;
+    if (px < 24 || px > canvas.width - 24 || py < 24 || py > canvas.height - 24) break;
+    ctx.globalAlpha = Math.max(0, 0.65 - t * 0.28);
+    ctx.fillStyle = COLORS.player;
+    ctx.beginPath();
+    ctx.arc(px, py, 3.5 - t * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Dashed direction line
+  ctx.strokeStyle = COLORS.playerDark;
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = COLORS.player;
+  ctx.shadowBlur = 6;
+  ctx.setLineDash([7, 7]);
   ctx.beginPath();
   ctx.moveTo(base.x, base.y);
   ctx.lineTo(mouse.x, mouse.y);
   ctx.stroke();
   ctx.setLineDash([]);
+  ctx.shadowBlur = 0;
+
+  // Arrowhead
+  const al = 14;
+  const angle = Math.atan2(dy, dx);
   ctx.fillStyle = COLORS.playerDark;
   ctx.beginPath();
-  ctx.arc(mouse.x, mouse.y, 6, 0, Math.PI * 2);
+  ctx.moveTo(mouse.x, mouse.y);
+  ctx.lineTo(mouse.x - al * Math.cos(angle - 0.42), mouse.y - al * Math.sin(angle - 0.42));
+  ctx.lineTo(mouse.x - al * Math.cos(angle + 0.42), mouse.y - al * Math.sin(angle + 0.42));
+  ctx.closePath();
   ctx.fill();
+
   ctx.restore();
 }
 
@@ -930,7 +1128,8 @@ function releaseAim(event) {
   const dx = mouse.x - base.x;
   const dy = mouse.y - base.y;
   const len = Math.hypot(dx, dy) || 1;
-  const power = Math.min(430, Math.max(120, len * 1.25));
+  let power = Math.min(430, Math.max(120, len * 1.25));
+  if (activeEffect === 'boost') power = Math.min(530, power + 110);
   if (spawnBullet(PLAYER, base.x, base.y, dx / len * power, dy / len * power)) {
     playerCooldown = 0.65;
     setStatus('射出しました。軌跡が薄れる前にルートを重ねると維持できます。');
