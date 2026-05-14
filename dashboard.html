@@ -322,6 +322,19 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(0,229,255,0.3); border-radius: 4px; }
 
+    /* ── Population ── */
+    #card-population { grid-column: span 2; }
+    @media (max-width: 900px) { #card-population { grid-column: span 1; } }
+    .pop-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 700px) { .pop-charts { grid-template-columns: 1fr; } }
+    .pop-total { font-size: 1.6rem; font-weight: bold; color: var(--cyan); }
+    .pop-total-label { font-size: 0.72rem; color: var(--muted); }
+    .pop-sub-title { font-size: 0.7rem; color: var(--muted); margin-bottom: 4px; letter-spacing: 0.06em; }
+    .pop-legend { display: flex; gap: 12px; font-size: 0.68rem; margin-bottom: 3px; }
+    .pop-legend-male { color: #4d9eff; }
+    .pop-legend-female { color: #ff6b9d; }
+    .pop-source { font-size: 0.64rem; color: var(--muted); text-align: right; margin-top: 6px; }
+
     /* ── Footer ── */
     .db-footer {
       text-align: center;
@@ -397,6 +410,12 @@
     <div class="blog-posts" id="blog-posts"></div>
   </div>
 
+  <!-- ⑦ 人口統計 -->
+  <div class="card" id="card-population">
+    <div class="card-title"><span class="icon">👥</span><span id="pop-city-label" data-i18n="card-pop-title"> 人口統計</span></div>
+    <div id="pop-body" class="loading">読み込み中…</div>
+  </div>
+
 </main>
 
 <footer class="db-footer" data-i18n="footer">hide の部屋 — Dashboard &copy; 2026</footer>
@@ -470,6 +489,14 @@ const TRANS = {
     'todo-empty': 'タスクなし',
     'post-none': '投稿なし',
     'post-untitled': '無題',
+    'card-pop-title': ' 人口統計',
+    'pop-trend-title': '人口推移（国勢調査 1980〜2020）',
+    'pop-pyramid-title': '人口ピラミッド',
+    'pop-male': '男性',
+    'pop-female': '女性',
+    'pop-total-label': '総人口（2020年）',
+    'pop-demo-note': '※デモ',
+    'pop-source': '出典: e-Stat 国勢調査2020',
   },
   en: {
     'header-home': '← Home',
@@ -504,6 +531,14 @@ const TRANS = {
     'todo-empty': 'No tasks',
     'post-none': 'No posts',
     'post-untitled': 'Untitled',
+    'card-pop-title': ' Population Stats',
+    'pop-trend-title': 'Population Trend (Census 1980–2020)',
+    'pop-pyramid-title': 'Population Pyramid',
+    'pop-male': 'Male',
+    'pop-female': 'Female',
+    'pop-total-label': 'Total Population (2020)',
+    'pop-demo-note': '※Demo',
+    'pop-source': 'Source: e-Stat National Census 2020',
   }
 };
 
@@ -946,6 +981,172 @@ function escHtml(s){
 }
 
 /* ────────────────────────────────────────────
+   ⑦ 人口統計 (embedded 国勢調査2020 data + Canvas charts)
+──────────────────────────────────────────── */
+const POP_DATA = {
+  '三郷市': {
+    trend: [
+      {year:1980,pop:58958},{year:1985,pop:68271},{year:1990,pop:76135},
+      {year:1995,pop:81355},{year:2000,pop:84637},{year:2005,pop:89023},
+      {year:2010,pop:107124},{year:2015,pop:131086},{year:2020,pop:142065}
+    ],
+    pyramid: {
+      ages:['0-4','5-9','10-14','15-19','20-24','25-29','30-34','35-39',
+            '40-44','45-49','50-54','55-59','60-64','65-69','70-74','75-79','80-84','85+'],
+      male:  [2820,3020,3150,3240,3580,3890,4320,5010,5720,6140,5620,4950,4350,4680,3950,2640,1640,1050],
+      female:[2700,2890,3020,3110,3420,3720,4120,4790,5490,5890,5400,4760,4200,4790,4250,3080,2180,2080]
+    }
+  },
+  '松戸市': {
+    trend: [
+      {year:1980,pop:401341},{year:1985,pop:413576},{year:1990,pop:461503},
+      {year:1995,pop:461513},{year:2000,pop:468566},{year:2005,pop:472472},
+      {year:2010,pop:484457},{year:2015,pop:490402},{year:2020,pop:484150}
+    ],
+    pyramid: {
+      ages:['0-4','5-9','10-14','15-19','20-24','25-29','30-34','35-39',
+            '40-44','45-49','50-54','55-59','60-64','65-69','70-74','75-79','80-84','85+'],
+      male:  [9600,10200,10500,11000,15000,14500,15000,16000,18000,20000,18000,16000,14000,17000,15000,10500,7000,6000],
+      female:[9200, 9700, 9900,10400,14200,13800,14500,15500,17500,19500,17500,15500,13500,17500,16000,12000,9500,11000]
+    }
+  }
+};
+
+function drawPopTrend(canvas, trend) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth || 200;
+  const H = 92;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const maxPop = Math.max(...trend.map(d => d.pop));
+  const padL = 4, padR = 4, padT = 16, padB = 20;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const step = chartW / trend.length;
+  const barW = Math.max(4, Math.floor(step * 0.72));
+
+  trend.forEach((d, i) => {
+    const x = padL + i * step + (step - barW) / 2;
+    const h = Math.max(2, (d.pop / maxPop) * chartH);
+    const y = padT + chartH - h;
+    const grad = ctx.createLinearGradient(x, y, x, y + h);
+    grad.addColorStop(0, 'rgba(0,229,255,0.9)');
+    grad.addColorStop(1, 'rgba(0,229,255,0.25)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, barW, h);
+    ctx.fillStyle = 'rgba(160,170,200,0.65)';
+    ctx.font = `${Math.min(9, Math.max(7, Math.floor(step * 0.55)))}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText(String(d.year).slice(2), x + barW / 2, H - 4);
+  });
+
+  const last = trend[trend.length - 1];
+  const lx = padL + (trend.length - 1) * step + step / 2;
+  const lh = Math.max(2, (last.pop / maxPop) * chartH);
+  const ly = padT + chartH - lh - 4;
+  ctx.fillStyle = 'rgba(0,229,255,0.95)';
+  ctx.font = 'bold 9px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${(last.pop / 1000).toFixed(1)}千人`, lx, Math.max(10, ly));
+}
+
+function drawPopPyramid(canvas, pyramid) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth || 200;
+  const H = 210;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const { ages, male, female } = pyramid;
+  const n = ages.length;
+  const maxVal = Math.max(...male, ...female);
+  const labelW = 28, padOuter = 4, padT = 2, padB = 2;
+  const midX = W / 2;
+  const barHalfW = midX - labelW / 2 - padOuter;
+  const rowH = (H - padT - padB) / n;
+
+  ages.forEach((age, i) => {
+    const y = padT + i * rowH;
+    const barH = Math.max(1, rowH - 1.5);
+    const by = y + (rowH - barH) / 2;
+
+    const mw = (male[i] / maxVal) * barHalfW;
+    ctx.fillStyle = 'rgba(77,158,255,0.72)';
+    ctx.fillRect(midX - labelW / 2 - mw, by, mw, barH);
+
+    const fw = (female[i] / maxVal) * barHalfW;
+    ctx.fillStyle = 'rgba(255,107,157,0.72)';
+    ctx.fillRect(midX + labelW / 2, by, fw, barH);
+
+    ctx.fillStyle = 'rgba(160,170,200,0.85)';
+    ctx.font = '8px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(age, midX, by + barH / 2 + 3);
+  });
+
+  ctx.strokeStyle = 'rgba(0,229,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(midX - labelW / 2, padT);
+  ctx.lineTo(midX - labelW / 2, H - padB);
+  ctx.moveTo(midX + labelW / 2, padT);
+  ctx.lineTo(midX + labelW / 2, H - padB);
+  ctx.stroke();
+}
+
+async function initPopulation() {
+  const el = document.getElementById('pop-body');
+  if (!el) return;
+  el.innerHTML = `<div class="loading">${t('loading')}</div>`;
+
+  let city = '三郷市';
+  try { const loc = await getWeatherLocation(); city = loc.city; } catch {}
+
+  const cityLabel = document.getElementById('pop-city-label');
+  const data = POP_DATA[city] || POP_DATA['三郷市'];
+  const isDemo = !(city in POP_DATA);
+  const displayCity = isDemo ? '三郷市' : city;
+
+  if (cityLabel) cityLabel.textContent = ` ${displayCity} ${t('card-pop-title').trim()}`;
+
+  const last = data.trend[data.trend.length - 1];
+  const demoNote = isDemo ? `<span style="color:var(--muted);font-size:0.65rem;"> ${t('pop-demo-note')}</span>` : '';
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      <span class="pop-total">${(last.pop / 1000).toFixed(1)}千人</span>
+      <span class="pop-total-label">${displayCity} ${t('pop-total-label')}${demoNote}</span>
+    </div>
+    <div class="pop-charts">
+      <div>
+        <div class="pop-sub-title">${t('pop-trend-title')}</div>
+        <canvas id="pop-trend-canvas" style="width:100%;display:block;"></canvas>
+      </div>
+      <div>
+        <div class="pop-legend">
+          <span class="pop-legend-male">■ ${t('pop-male')}</span>
+          <span class="pop-legend-female">■ ${t('pop-female')}</span>
+        </div>
+        <div class="pop-sub-title">${t('pop-pyramid-title')} (${displayCity} 2020)</div>
+        <canvas id="pop-pyramid-canvas" style="width:100%;display:block;"></canvas>
+      </div>
+    </div>
+    <div class="pop-source">${t('pop-source')}</div>`;
+
+  requestAnimationFrame(() => {
+    const tc = document.getElementById('pop-trend-canvas');
+    const pc = document.getElementById('pop-pyramid-canvas');
+    if (tc) drawPopTrend(tc, data.trend);
+    if (pc) drawPopPyramid(pc, data.pyramid);
+  });
+}
+
+/* ────────────────────────────────────────────
    Boot: parallel init
 ──────────────────────────────────────────── */
 (async function boot(){
@@ -985,6 +1186,7 @@ function escHtml(s){
     initVisit(),
     initWeather(),
     initStock(),
+    initPopulation(),
   ]);
 })();
 </script>
