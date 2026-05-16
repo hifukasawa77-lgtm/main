@@ -9523,6 +9523,41 @@
         }
       };
 
+      // ── Gemini API 設定 ──────────────────────────────────────
+      // Google AI Studio (https://aistudio.google.com/) で無料取得
+      const GEMINI_API_KEY = ''; // ← ここに API キーを設定
+      const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent';
+      const GEMINI_SYSTEM = `あなたは「hideのポートフォリオサイト」の案内エージェントです。
+hideは埼玉県三郷市在住のWebエンジニアで、Claude AIと共同で23本のブラウザゲーム・AIツールを開発しています。
+このサイトではゲーム紹介・三郷市情報・AI開発の話題を扱っています。
+返答は日本語で2〜3文以内に簡潔にまとめてください。雑談や一般的な質問にも気軽に答えてください。
+ゲームの遊び方・おすすめ・AIについての質問が多いです。`;
+
+      async function askGemini(userText, historyTurns) {
+        if (!GEMINI_API_KEY) throw new Error('no-key');
+        const contents = [];
+        // 直近4ターン分の会話履歴を付与
+        for (const m of (historyTurns || []).slice(-4)) {
+          contents.push({ role: m.role === 'user' ? 'user' : 'model',
+                          parts: [{ text: m.text }] });
+        }
+        contents.push({ role: 'user', parts: [{ text: userText }] });
+        const res = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents,
+            system_instruction: { parts: [{ text: GEMINI_SYSTEM }] },
+            generationConfig: { maxOutputTokens: 280, temperature: 0.8 }
+          })
+        });
+        if (!res.ok) throw new Error('gemini-http-' + res.status);
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error('gemini-empty');
+        return text.trim();
+      }
+
       // ── Utilities ────────────────────────────────────────────
       function normalize(s) {
         return (s || '').toLowerCase()
@@ -10195,7 +10230,7 @@
           return;
         }
 
-        // ④ fallback — 類似サジェスト表示
+        // ④ fallback — 類似サジェスト or Gemini AI
         State.lastIntent = null;
         State.save();
         const sug = suggestFromText(text, State.lang);
@@ -10205,6 +10240,19 @@
             : "I didn't quite get that 🙏 Did you mean one of these?";
           await botSay(msg);
           renderChips(sug);
+        } else if (GEMINI_API_KEY) {
+          // Gemini API で自由回答
+          setTyping(true);
+          try {
+            const reply = await askGemini(text, State.history);
+            setTyping(false);
+            await botSay(reply);
+            renderChips(defaultChips());
+          } catch (e) {
+            setTyping(false);
+            await botSay(t('agent-fallback'));
+            renderChips(defaultChips());
+          }
         } else {
           await botSay(t('agent-fallback'));
           renderChips(defaultChips());
