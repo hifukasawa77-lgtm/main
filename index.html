@@ -9099,7 +9099,8 @@
           clear:     [['リセット',2.5],['履歴',2],['クリア',2],['消して',1.5],['やり直し',2]],
           lang_en:   [['英語で',2.5],['in english',3],['english please',3]],
           lang_ja:   [['日本語で',2.5],['in japanese',3],['にほんごで',2.5]],
-          more:      [['もっと',2.5],['他には',2],['他に',1.5],['次',1.5]]
+          more:      [['もっと',2.5],['他には',2],['他に',1.5],['次',1.5]],
+          stock:     [['株価',2.5],['株式',2],['株',1.5],['上場',1.5],['終値',2],['時価',1.5]]
         },
         en: {
           forex:     [['usd',2.5],['jpy',2.5],['usd/jpy',3],['forex',2.5],['exchange',2],['rate',1.5],['yen',1.5]],
@@ -9120,7 +9121,8 @@
           clear:     [['reset',2.5],['clear history',3],['clear',1.5],['start over',2]],
           lang_en:   [['in english',3],['english please',3]],
           lang_ja:   [['in japanese',3],['日本語で',2.5]],
-          more:      [['more',2.5],['next',2],['others',1.5]]
+          more:      [['more',2.5],['next',2],['others',1.5]],
+          stock:     [['stock price',3],['stock',2.5],['share price',2.5],['share',2],['listed',1.5],['quote',1.5]]
         }
       };
 
@@ -9235,6 +9237,90 @@
         return best;
       }
 
+      // ── Stock company detection ─────────────────────────────
+      function detectStock(text) {
+        const nt = normalize(text);
+        if (!nt) return null;
+        for (const alias of STOCK_ALIASES) {
+          for (const key of alias.keys) {
+            if (nt.includes(normalize(key))) return alias;
+          }
+        }
+        return null;
+      }
+
+      // ── Fallback suggestion (④) ──────────────────────────────
+      const INTENT_CHIP_LABELS = {
+        ja: {
+          forex:     '💴 ドル円教えて',
+          weather:   '☀️ 三郷市の天気',
+          listGames: '🎮 ゲーム一覧が見たい',
+          recommend: '✨ おすすめゲームは？',
+          stock:     '📈 株価を調べる',
+          about:     '👤 hideについて教えて',
+          blog:      '📝 ブログを見たい',
+          hobby:     '🎯 趣味を教えて',
+          contact:   '📬 連絡先を知りたい',
+        },
+        en: {
+          forex:     '💴 USD/JPY rate',
+          weather:   '☀️ Misato weather',
+          listGames: '🎮 List all games',
+          recommend: '✨ Recommend a game',
+          stock:     '📈 Check a stock',
+          about:     '👤 About hide',
+          blog:      '📝 Read the blog',
+          hobby:     '🎯 What are your hobbies?',
+          contact:   '📬 How to contact?',
+        }
+      };
+
+      function suggestFromText(text, lang) {
+        const nt = normalize(text);
+        const suggestions = [];
+
+        // 1. Partial game title match
+        for (const g of GAMES) {
+          const titles = [g.title && g.title.ja, g.title && g.title.en].filter(Boolean).map(normalize);
+          if (titles.some(ti => ti.length >= 2 && (nt.includes(ti.slice(0, 2)) || ti.includes(nt.slice(0, 2))))) {
+            const label = (lang === 'en' ? g.title.en : g.title.ja) || g.title.ja || '';
+            if (label) suggestions.push({ label, query: label });
+            if (suggestions.length >= 2) break;
+          }
+        }
+
+        // 2. Partial stock name match
+        if (suggestions.length < 3) {
+          const hit = detectStock(text);
+          if (hit) {
+            const q = lang === 'en' ? hit.name + ' stock' : hit.name + 'の株価';
+            suggestions.push({ label: '📈 ' + (lang === 'en' ? hit.name + ' stock?' : hit.name + 'の株価？'), query: q });
+          }
+        }
+
+        // 3. Weak intent matches
+        if (suggestions.length < 3) {
+          const dict = INTENT_DICT[lang] || INTENT_DICT.ja;
+          const labels = INTENT_CHIP_LABELS[lang] || INTENT_CHIP_LABELS.ja;
+          const scores = {};
+          for (const intent in dict) {
+            let s = 0;
+            for (const [kw, w] of dict[intent]) {
+              if (nt.includes(normalize(kw))) s += w;
+            }
+            if (s > 0) scores[intent] = s;
+          }
+          const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+          for (const [intentName] of sorted) {
+            if (labels[intentName] && suggestions.length < 3) {
+              suggestions.push({ label: labels[intentName], query: labels[intentName].replace(/^[^\s]+\s/, '') });
+            }
+          }
+        }
+
+        return suggestions.slice(0, 3);
+      }
+
       // ── i18n helper ─────────────────────────────────────────
       function t(key) {
         try {
@@ -9275,16 +9361,42 @@
         }
       }
 
+      // ⑤ 時間帯連動クイックチップ
+      function getTimeChips() {
+        const h = new Date().getHours();
+        const isJa = State.lang === 'ja';
+        if (h >= 6 && h < 12) {
+          // 朝：天気・為替・ゲーム
+          return isJa
+            ? [{ text: '☀️ 今日の天気', q: '三郷市の天気' }, { text: '💴 ドル円教えて', q: 'ドル円教えて' }, { text: '🎮 ゲーム何ある？', q: 'ゲーム何ある？' }]
+            : [{ text: '☀️ Misato weather', q: 'Misato weather' }, { text: '💴 USD/JPY rate', q: 'USD/JPY rate' }, { text: '🎮 What games?', q: 'What games are here?' }];
+        } else if (h >= 12 && h < 17) {
+          // 昼：ゲーム・おすすめ・株価
+          return isJa
+            ? [{ text: '🎮 ゲーム何ある？', q: 'ゲーム何ある？' }, { text: '✨ おすすめは？', q: 'おすすめは？' }, { text: '📈 株価を調べる', q: 'トヨタの株価' }]
+            : [{ text: '🎮 What games?', q: 'What games are here?' }, { text: '✨ Recommend one', q: 'Recommend one' }, { text: '📈 Check a stock', q: 'Toyota stock' }];
+        } else if (h >= 17 && h < 21) {
+          // 夕方：為替・株価・おすすめ
+          return isJa
+            ? [{ text: '💴 ドル円教えて', q: 'ドル円教えて' }, { text: '📈 ソニーの株価', q: 'ソニーの株価' }, { text: '✨ おすすめゲームは？', q: 'おすすめは？' }]
+            : [{ text: '💴 USD/JPY rate', q: 'USD/JPY rate' }, { text: '📈 Sony stock', q: 'Sony stock' }, { text: '✨ Recommend a game', q: 'Recommend one' }];
+        } else {
+          // 夜（21〜5時）：暇つぶし・おすすめ・ゲーム一覧
+          return isJa
+            ? [{ text: '🎮 暇つぶしゲームは？', q: 'ゲーム何ある？' }, { text: '✨ おすすめは？', q: 'おすすめは？' }, { text: '💴 ドル円教えて', q: 'ドル円教えて' }]
+            : [{ text: '🎮 Kill some time', q: 'What games are here?' }, { text: '✨ Recommend one', q: 'Recommend one' }, { text: '💴 USD/JPY rate', q: 'USD/JPY rate' }];
+        }
+      }
+
       function renderQuickActions() {
         if (!quickEl) return;
         quickEl.innerHTML = '';
-        const labels = ['agent-quick-1','agent-quick-2','agent-quick-3','agent-quick-4'];
-        labels.forEach(key => {
+        getTimeChips().forEach(chip => {
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'agent-chip';
-          btn.textContent = t(key);
-          btn.addEventListener('click', () => handleQuery(t(key)));
+          btn.textContent = chip.text;
+          btn.addEventListener('click', () => handleQuery(chip.q));
           quickEl.appendChild(btn);
         });
       }
@@ -9519,6 +9631,39 @@
         return card;
       }
 
+      function buildStockCard(quote, name, symbol) {
+        const card = document.createElement('div');
+        card.className = 'tool-card';
+        const change = quote.price - quote.prev;
+        const pct = quote.prev ? (change / quote.prev) * 100 : 0;
+        const up = change >= 0;
+        const sign = up ? '+' : '';
+        const changeColor = up ? '#34d399' : '#f87171';
+        const arrow = up ? '▲' : '▼';
+        const title = document.createElement('div');
+        title.className = 'tool-card-title';
+        title.textContent = '📈 ' + name + ' (' + symbol + ')';
+        const body = document.createElement('div');
+        body.className = 'tool-card-body';
+        const big = document.createElement('div');
+        big.className = 'big';
+        big.textContent = '¥' + Math.round(quote.price).toLocaleString('ja-JP');
+        const sub = document.createElement('div');
+        sub.style.color = changeColor;
+        sub.style.fontSize = '0.9rem';
+        sub.style.fontWeight = '600';
+        sub.textContent = arrow + ' ' + sign + change.toFixed(1) + ' (' + sign + pct.toFixed(2) + '%)';
+        body.appendChild(big);
+        body.appendChild(sub);
+        const meta = document.createElement('div');
+        meta.className = 'tool-card-meta';
+        meta.textContent = State.lang === 'ja' ? '出典: Yahoo Finance / リアルタイムではありません' : 'source: Yahoo Finance / not real-time';
+        card.appendChild(title);
+        card.appendChild(body);
+        card.appendChild(meta);
+        return card;
+      }
+
       function scrollToSection(sec) {
         const el = document.getElementById(sec);
         if (!el) return false;
@@ -9573,6 +9718,15 @@
           return;
         }
 
+        // ③ stock match（銘柄名が含まれる場合は直接取得）
+        const stockHit = detectStock(text);
+        if (stockHit) {
+          State.lastIntent = 'stock';
+          State.save();
+          await runStock(stockHit);
+          return;
+        }
+
         // Section navigation has high priority for unambiguous matches
         const sec = detectSection(text, State.lang);
         const intent = intent0;
@@ -9604,11 +9758,20 @@
           return;
         }
 
-        // fallback
+        // ④ fallback — 類似サジェスト表示
         State.lastIntent = null;
         State.save();
-        await botSay(t('agent-fallback'));
-        renderChips(defaultChips());
+        const sug = suggestFromText(text, State.lang);
+        if (sug.length > 0) {
+          const msg = State.lang === 'ja'
+            ? 'うまく理解できませんでした 🙏 もしかしてこちらですか？'
+            : "I didn't quite get that 🙏 Did you mean one of these?";
+          await botSay(msg);
+          renderChips(sug);
+        } else {
+          await botSay(t('agent-fallback'));
+          renderChips(defaultChips());
+        }
       }
 
       function borderlineChips(intentName) {
@@ -9645,6 +9808,7 @@
           case 'greet':     return runKb('greet', { chips: defaultChips() });
           case 'thanks':    return runKb('thanks');
           case 'more':      return runMore();
+          case 'stock':     return runStockGeneric();
           default:          await botSay(t('agent-fallback')); renderChips(defaultChips());
         }
       }
@@ -9748,6 +9912,44 @@
         const chips = [];
         if (remaining > 0) chips.push({ label: t('agent-more'), action: () => runMore() });
         chips.push({ label: t('agent-quick-2'), query: t('agent-quick-2') });
+        renderChips(chips);
+      }
+
+      // ③ 株価インテント
+      async function runStock(match) {
+        setTyping(true);
+        try {
+          const quote = await fetchStock(match.symbol);
+          setTyping(false);
+          const { bubble } = renderMessage('agent', '');
+          const intro = State.lang === 'ja'
+            ? '「' + match.name + '」の株価はこちらです 📈'
+            : 'Here\'s the latest quote for ' + match.name + ' 📈';
+          await typeInto(bubble, intro);
+          State.push({ id: uid(), role: 'agent', text: intro, ts: Date.now() });
+          messagesEl.appendChild(buildStockCard(quote, match.name, match.symbol));
+          scrollToBottom();
+          renderChips([
+            { label: State.lang === 'ja' ? '📊 ダッシュボードへ' : '📊 Dashboard', action: () => { scrollToSection('dashboard'); setOpen(false); } },
+            { label: State.lang === 'ja' ? '💴 ドル円も見る' : '💴 USD/JPY too', query: State.lang === 'ja' ? 'ドル円教えて' : 'USD/JPY rate' }
+          ]);
+        } catch (e) {
+          setTyping(false);
+          await botSay(t('agent-tool-error'));
+          renderChips([{ label: t('agent-action-retry'), action: () => runStock(match) }]);
+        }
+      }
+
+      // 銘柄未指定の stock インテント（例示チップを表示）
+      async function runStockGeneric() {
+        const isJa = State.lang === 'ja';
+        const msg = isJa
+          ? '調べたい銘柄を教えてください 📈 例：「ソニーの株価」「任天堂の株価」'
+          : 'Which company? e.g. "Sony stock", "Nintendo stock" 📈';
+        await botSay(msg);
+        const chips = isJa
+          ? [{ label: 'ソニーの株価', query: 'ソニーの株価' }, { label: '任天堂の株価', query: '任天堂の株価' }, { label: 'トヨタの株価', query: 'トヨタの株価' }]
+          : [{ label: 'Sony stock', query: 'Sony stock' }, { label: 'Nintendo stock', query: 'Nintendo stock' }, { label: 'Toyota stock', query: 'Toyota stock' }];
         renderChips(chips);
       }
 
