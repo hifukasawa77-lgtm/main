@@ -165,7 +165,8 @@
       gap: 4px;
       flex-wrap: wrap;
     }
-    .site-nav a {
+    .site-nav a,
+    .site-nav button.nav-locate-btn {
       padding: 8px 14px;
       border-radius: 999px;
       color: var(--muted);
@@ -173,9 +174,22 @@
       font-weight: 500;
       transition: background 0.2s, color 0.2s;
     }
-    .site-nav a:hover {
+    .site-nav button.nav-locate-btn {
+      border: 1px solid rgba(14,165,233,0.18);
+      background: rgba(14,165,233,0.08);
+      color: var(--blue);
+      cursor: pointer;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .site-nav a:hover,
+    .site-nav button.nav-locate-btn:hover {
       background: var(--orange-soft);
       color: var(--orange);
+    }
+    .site-nav button.nav-locate-btn:disabled {
+      cursor: wait;
+      opacity: 0.72;
     }
     .lang-btn {
       margin-left: 6px;
@@ -629,6 +643,51 @@
     /* ─── Population Pyramid ─── */
     .local-pyr-card { grid-column: 1 / -1; padding: 24px 28px; }
     #local-pyr-canvas { width: 100%; height: 360px; display: block; }
+
+    /* ─── Households ─── */
+    .household-card {
+      background: linear-gradient(180deg, rgba(16,185,129,0.16), rgba(45,212,191,0.12)), #fff;
+      border-color: rgba(16,185,129,0.2);
+    }
+    .household-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 3px solid rgba(16,185,129,0.28);
+      padding-bottom: 8px;
+    }
+    .household-icon { font-size: 1.65rem; }
+    .household-kpi {
+      display: flex;
+      align-items: baseline;
+      justify-content: flex-end;
+      gap: 7px;
+      color: #047857;
+      font-weight: 900;
+      line-height: 1;
+    }
+    .household-kpi strong {
+      font-size: clamp(1.9rem, 5vw, 2.45rem);
+      letter-spacing: 0;
+    }
+    .household-kpi span {
+      font-size: 0.82rem;
+      font-weight: 800;
+    }
+    .household-meta {
+      text-align: right;
+      color: #047857;
+      font-size: 0.9rem;
+      font-weight: 800;
+    }
+    #home-household-chart {
+      width: 100%;
+      height: 130px;
+      display: block;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.66);
+      border: 1px solid rgba(16,185,129,0.12);
+    }
 
     /* ─── Event Calendar ─── */
     .local-event-card { grid-column: 1 / -1; padding: 28px 32px; }
@@ -2452,6 +2511,7 @@
         <a href="#works" data-i18n="nav-works">ゲーム</a>
         <a href="slides.html" data-i18n="nav-slides">📑 AI解説</a>
         <a href="learn.html" data-i18n="nav-learn">📚 学習</a>
+        <button class="nav-locate-btn" id="dashboard-locate-btn" type="button" data-i18n="nav-locate">📍 現在地</button>
         <button class="lang-btn" id="lang-toggle-btn" aria-label="言語切替">EN</button>
       </nav>
     </div>
@@ -3066,6 +3126,21 @@
               <a href="https://www.shutoko.co.jp/use/traffic-info/" target="_blank" rel="noreferrer"
                 style="font-size:0.7rem;padding:3px 8px;border-radius:20px;background:rgba(0,200,255,0.12);color:var(--accent-cyan);border:1px solid rgba(0,200,255,0.3);text-decoration:none">首都高 →</a>
             </div>
+          </article>
+
+          <article class="card dashboard-card household-card reveal" id="dash-card-household">
+            <h3 class="household-head">
+              <span class="household-icon">👨‍👩‍👧</span>
+              <span id="home-household-title" data-i18n="household-card-title">世帯数</span>
+            </h3>
+            <div class="dashboard-sub" id="home-household-label">世帯数（総数）</div>
+            <div class="household-kpi">
+              <strong id="home-household-kpi">--</strong>
+              <span>【世帯】</span>
+            </div>
+            <div class="household-meta" id="home-household-meta">三郷市　2020年</div>
+            <canvas id="home-household-chart"></canvas>
+            <div class="dash-mini-note" id="home-household-time">統計ダッシュボードAPIから取得中…</div>
           </article>
 
           <article class="card dashboard-card reveal" id="dash-card-updates">
@@ -3936,10 +4011,10 @@
         99: ['⛈', '激しい雷雨'],
       };
 
-      function fetchWithTimeout(url, timeoutMs) {
+      function fetchWithTimeout(url, timeoutMs, options) {
         const ctrl = new AbortController();
         const id = setTimeout(() => ctrl.abort(), timeoutMs || 7000);
-        return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(id));
+        return fetch(url, Object.assign({}, options || {}, { signal: ctrl.signal })).finally(() => clearTimeout(id));
       }
 
       function fmtNum(n, digits) {
@@ -4139,16 +4214,46 @@
         ctx.fillText(`${Math.round(minT)}°`, pad.left - 2, pad.top + cH);
       }
 
-      // ── 位置情報から市区町村を取得（Nominatim逆ジオコーダ使用）──
-      // セキュリティ方針: enableHighAccuracy:false で市区町村レベルの精度のみ取得、
+      // ── 現在地 → 市区町村コード/名称（国土地理院 + 統計ダッシュボードAPI）──
       // 座標は小数点2桁（約1km精度）に丸めてキャッシュ。
-      const WEATHER_LOC_KEY = 'weather-loc-v1';
-      const WEATHER_LOC_TTL = 30 * 60 * 1000; // 30分
+      const DASHBOARD_LOC_KEY = 'dashboard-location-v2';
+      const DASHBOARD_LOC_TTL = 30 * 60 * 1000; // 30分
 
-      async function getWeatherLocation() {
+      function extractStatRegionName(data) {
+        const objs = data?.GET_META_REGION_INF?.METADATA_INF?.CLASS_INF?.CLASS_OBJ;
+        const arr = Array.isArray(objs) ? objs : (objs ? [objs] : []);
+        for (const obj of arr) {
+          const cls = obj?.CLASS;
+          const rows = Array.isArray(cls) ? cls : (cls ? [cls] : []);
+          const active = rows.find(row => row?.['@name']);
+          if (active) {
+            return {
+              city: active['@name'],
+              prefecture: obj?.['@name'] || '',
+              level: active['@level'] || ''
+            };
+          }
+        }
+        return { city: '', prefecture: '', level: '' };
+      }
+
+      async function getRegionNameFromCode(muniCd) {
+        const url = 'https://dashboard.e-stat.go.jp/api/1.0/Json/getRegionInfo?Lang=JP&RegionCode=' + encodeURIComponent(muniCd);
+        const data = await fetchWithTimeout(url, 7000).then(r => {
+          if (!r.ok) throw new Error('region-info');
+          return r.json();
+        });
+        return extractStatRegionName(data);
+      }
+
+      async function detectDashboardArea(forceRefresh) {
+        if (forceRefresh) {
+          try { localStorage.removeItem(DASHBOARD_LOC_KEY); } catch {}
+        }
         try {
-          const c = JSON.parse(localStorage.getItem(WEATHER_LOC_KEY) || 'null');
-          if (c && Date.now() - c.ts < WEATHER_LOC_TTL) return c;
+          const c = JSON.parse(localStorage.getItem(DASHBOARD_LOC_KEY) || 'null');
+          if (!forceRefresh && c && Date.now() - c.ts < DASHBOARD_LOC_TTL
+              && c.city && /^\d{5}$/.test(String(c.muniCd || ''))) return c;
         } catch {}
         const pos = await new Promise((resolve, reject) =>
           navigator.geolocation
@@ -4158,15 +4263,28 @@
             : reject(new Error('unsupported'))
         );
         const { latitude: lat, longitude: lon } = pos.coords;
-        const nom = await fetchWithTimeout(
-          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=ja`,
+        const gsiData = await fetchWithTimeout(
+          `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lon}`,
           6000
         ).then(r => r.json());
-        const addr = nom?.address || {};
-        const city = addr.city || addr.town || addr.village || addr.county || '現在地';
-        const result = { lat: Math.round(lat * 100) / 100, lon: Math.round(lon * 100) / 100, city, ts: Date.now() };
-        try { localStorage.setItem(WEATHER_LOC_KEY, JSON.stringify(result)); } catch {}
+        const muniCd = String(gsiData?.results?.muniCd || '').trim();
+        if (!/^\d{5}$/.test(muniCd)) throw new Error('gsi-no-muni');
+        const region = await getRegionNameFromCode(muniCd);
+        const city = region.city || `エリア${muniCd}`;
+        const result = {
+          lat: Math.round(lat * 100) / 100,
+          lon: Math.round(lon * 100) / 100,
+          muniCd,
+          city,
+          prefecture: region.prefecture || '',
+          ts: Date.now()
+        };
+        try { localStorage.setItem(DASHBOARD_LOC_KEY, JSON.stringify(result)); } catch {}
         return result;
+      }
+
+      async function getWeatherLocation() {
+        return detectDashboardArea(false);
       }
 
       async function initWeatherCard() {
@@ -5696,43 +5814,16 @@
       // ── 位置情報 → 市区町村コード（国土地理院逆ジオコーダ）──────
       const GAS_AREA_CACHE_KEY = 'gas-area-cache-v1';
 
-      async function detectGasArea() {
+      async function detectGasArea(forceDetect) {
         // 1時間キャッシュ（muniCd の形式も検証してから使用）
         try {
           const c = JSON.parse(localStorage.getItem(GAS_AREA_CACHE_KEY) || 'null');
-          if (c && Date.now() - c.ts < 60 * 60 * 1000
+          if (!forceDetect && c && Date.now() - c.ts < 60 * 60 * 1000
               && /^\d{5,6}$/.test(c.muniCd || '')) return c;
         } catch (e) { /* ignore */ }
 
-        // 位置情報取得
-        const pos = await new Promise((resolve, reject) => {
-          if (!navigator.geolocation) return reject(new Error('no-geolocation'));
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            timeout: 12000, maximumAge: 300000, enableHighAccuracy: false,
-          });
-        });
-
-        const { latitude: lat, longitude: lon } = pos.coords;
-
-        // 国土地理院 逆ジオコーダのみ使用（muniCd と市区町村名を取得）
-        // ※ 第三者サービスへの座標送信を避けるため Nominatim は使わない
-        const gsiData = await fetchWithTimeout(
-          `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${lat}&lon=${lon}`,
-          6000
-        ).then(r => r.json());
-
-        const results = gsiData?.results || {};
-        const muniCd = String(results.muniCd || '').trim();
-        // muniCd は必ず5〜6桁の数字（JIS市区町村コード）
-        if (!muniCd || !/^\d{5,6}$/.test(muniCd)) throw new Error('gsi-no-muni');
-
-        // 市区町村名は gogo.gs HTML から後で確定する。ここでは仮称のみ設定
-        // lv01Nm は大字・町丁目名（例: 栄一丁目）なので市区町村名でなければ使わない
-        const rawNm = String(results.lv01Nm || '').trim();
-        const cityName = /[市区町村]$/.test(rawNm) ? rawNm : `エリア${muniCd}`;
-
-        // 座標は保存しない（プライバシー配慮）
-        const result = { muniCd, cityName, ts: Date.now() };
+        const loc = await detectDashboardArea(forceDetect);
+        const result = { muniCd: loc.muniCd, cityName: loc.city, ts: Date.now() };
         try { localStorage.setItem(GAS_AREA_CACHE_KEY, JSON.stringify(result)); } catch (e) { /* ignore */ }
         return result;
       }
@@ -5835,7 +5926,7 @@
           if (forceDetect) {
             try { localStorage.removeItem(GAS_AREA_CACHE_KEY); } catch (e) { /* ignore */ }
           }
-          const area = await detectGasArea();
+          const area = await detectGasArea(forceDetect);
           muniCd   = area.muniCd;
           cityName = area.cityName;
           if (statusEl) statusEl.textContent = `📍 ${cityName} の価格を表示中`;
@@ -6952,7 +7043,7 @@
         }
         if (timeEl) timeEl.textContent = '地図を読み込み中…';
 
-        (async () => {
+        return (async () => {
           let lat = 35.9185, lon = 139.7775, city = '三郷市';
           try {
             const loc = await getWeatherLocation();
@@ -6962,6 +7053,223 @@
           if (timeEl) timeEl.textContent = '© JARTIC — ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 現在';
           window.initJarticCanvasMap(lat, lon);
         })();
+      }
+
+      // ─── 人口・世帯数（統計ダッシュボードAPI）────────────────
+      const STAT_DASH_BASE = 'https://dashboard.e-stat.go.jp/api/1.0/Json/getData';
+      const STAT_IND_POP_TOTAL = '0201010000000010000';
+      const STAT_IND_HOUSEHOLDS = '0202000000000010000';
+      const DEMO_CACHE_KEY = 'dashboard-demographics-v1';
+      const DEFAULT_AREA = { lat: 35.83, lon: 139.87, muniCd: '11237', city: '三郷市', prefecture: '埼玉県' };
+      const PYR_AGE_CODES = [
+        ['0〜4', '0010'], ['5〜9', '0020'], ['10〜14', '0030'], ['15〜19', '0040'],
+        ['20〜24', '0050'], ['25〜29', '0060'], ['30〜34', '0070'], ['35〜39', '0080'],
+        ['40〜44', '0090'], ['45〜49', '0100'], ['50〜54', '0110'], ['55〜59', '0120'],
+        ['60〜64', '0130'], ['65〜69', '0140'], ['70〜74', '0150'], ['75〜79', '0160'],
+        ['80〜84', '0170'], ['85〜89', '0180'], ['90〜94', '0190'], ['95〜99', '0200'],
+        ['100以上', '1000']
+      ];
+
+      async function getDashboardAreaOrDefault(forceDetect) {
+        try {
+          return await detectDashboardArea(forceDetect);
+        } catch (e) {
+          return Object.assign({ ts: Date.now(), fallback: true }, DEFAULT_AREA);
+        }
+      }
+
+      function statValueRows(data) {
+        const obj = data?.GET_STATS?.STATISTICAL_DATA?.DATA_INF?.DATA_OBJ || [];
+        return (Array.isArray(obj) ? obj : [obj])
+          .map(row => row?.VALUE)
+          .filter(Boolean);
+      }
+
+      function statRegionName(data) {
+        const objs = data?.GET_STATS?.STATISTICAL_DATA?.CLASS_INF?.CLASS_OBJ;
+        const arr = Array.isArray(objs) ? objs : (objs ? [objs] : []);
+        const regionObj = arr.find(o => o?.['@id'] === 'regionCode');
+        const cls = regionObj?.CLASS;
+        const row = Array.isArray(cls) ? cls[0] : cls;
+        return row?.['@name'] || '';
+      }
+
+      async function fetchStatData(params, timeoutMs) {
+        const qs = new URLSearchParams(Object.assign({
+          Lang: 'JP',
+          Cycle: '3',
+          RegionalRank: '4',
+          IsSeasonalAdjustment: '1',
+          MetaGetFlg: 'Y'
+        }, params));
+        const res = await fetchWithTimeout(STAT_DASH_BASE + '?' + qs.toString(), timeoutMs || 9000);
+        if (!res.ok) throw new Error('stat-http-' + res.status);
+        const data = await res.json();
+        const status = data?.GET_STATS?.RESULT?.status;
+        if (status && status !== '0') throw new Error(data?.GET_STATS?.RESULT?.errorMsg || 'stat-error');
+        return data;
+      }
+
+      async function fetchStatSeries(indicatorCode, muniCd, timeParams) {
+        const data = await fetchStatData(Object.assign({
+          IndicatorCode: indicatorCode,
+          RegionCode: muniCd
+        }, timeParams || {}), 9000);
+        const values = statValueRows(data).map(v => ({
+          year: Number(String(v['@time'] || '').slice(0, 4)),
+          value: Number(v.$)
+        })).filter(v => Number.isFinite(v.year) && Number.isFinite(v.value))
+          .sort((a, b) => a.year - b.year);
+        return { values, regionName: statRegionName(data) };
+      }
+
+      async function fetchPyramidGroups(muniCd) {
+        const codes = [];
+        PYR_AGE_CODES.forEach(age => {
+          codes.push('020101012000001' + age[1]);
+          codes.push('020101022000001' + age[1]);
+        });
+        const batches = [];
+        for (let i = 0; i < codes.length; i += 5) batches.push(codes.slice(i, i + 5));
+        const rows = [];
+        for (const batch of batches) {
+          const data = await fetchStatData({
+            IndicatorCode: batch.join(','),
+            RegionCode: muniCd,
+            Time: '2020CY00',
+            MetaGetFlg: 'N'
+          }, 10000);
+          rows.push(...statValueRows(data));
+        }
+        const map = new Map(rows.map(v => [v['@indicator'], Number(v.$ || 0)]));
+        return PYR_AGE_CODES.map(age => {
+          const male = map.get('020101012000001' + age[1]) || 0;
+          const female = map.get('020101022000001' + age[1]) || 0;
+          return [age[0], male, female];
+        }).reverse();
+      }
+
+      function drawHouseholdChart(trend) {
+        const canvas = document.getElementById('home-household-chart');
+        if (!canvas || !trend?.length) return;
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.offsetWidth || 300;
+        const H = 130;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, W, H);
+
+        const pad = { top: 12, right: 12, bottom: 22, left: 34 };
+        const cW = W - pad.left - pad.right;
+        const cH = H - pad.top - pad.bottom;
+        const max = Math.max(...trend.map(d => d.value));
+        const top = Math.ceil(max / 10000) * 10000;
+        const step = cW / trend.length;
+        const barW = Math.max(10, step * 0.68);
+
+        [0, top / 2, top].forEach(v => {
+          const y = pad.top + cH * (1 - v / top);
+          ctx.beginPath();
+          ctx.strokeStyle = 'rgba(4,120,87,0.16)';
+          ctx.moveTo(pad.left, y);
+          ctx.lineTo(pad.left + cW, y);
+          ctx.stroke();
+          ctx.fillStyle = '#064e3b';
+          ctx.font = '10px Consolas, monospace';
+          ctx.textAlign = 'right';
+          ctx.fillText(Math.round(v / 1000), pad.left - 5, y + 3);
+        });
+
+        trend.forEach((d, i) => {
+          const x = pad.left + i * step + (step - barW) / 2;
+          const h = Math.max(2, cH * d.value / top);
+          const y = pad.top + cH - h;
+          ctx.fillStyle = i === trend.length - 1 ? '#4f46e5' : '#4338ca';
+          ctx.fillRect(x, y, barW, h);
+          ctx.strokeStyle = 'rgba(30,64,175,0.65)';
+          ctx.strokeRect(x, y, barW, h);
+        });
+
+        ctx.fillStyle = '#111827';
+        ctx.font = '10px Consolas, monospace';
+        ctx.textAlign = 'center';
+        const first = trend[0], mid = trend[Math.floor(trend.length / 2)], last = trend[trend.length - 1];
+        [[first, 0], [mid, Math.floor(trend.length / 2)], [last, trend.length - 1]].forEach(([d, i]) => {
+          const x = pad.left + i * step + step / 2;
+          ctx.fillText(d.year, x, H - 5);
+        });
+      }
+
+      function renderHouseholds(area, households) {
+        const title = document.getElementById('home-household-title');
+        const label = document.getElementById('home-household-label');
+        const kpi = document.getElementById('home-household-kpi');
+        const meta = document.getElementById('home-household-meta');
+        const time = document.getElementById('home-household-time');
+        const last = households?.[households.length - 1];
+        if (title) title.textContent = `${area.city} 世帯数`;
+        if (label) label.textContent = '世帯数（総数）';
+        if (kpi) kpi.textContent = last ? last.value.toLocaleString('ja-JP') : '--';
+        if (meta) meta.textContent = `${area.city}　${last?.year || 2020}年`;
+        if (time) time.textContent = '統計ダッシュボードAPI / 国勢調査';
+        drawHouseholdChart(households);
+      }
+
+      async function initDemographicsCard(forceDetect) {
+        const area = await getDashboardAreaOrDefault(forceDetect);
+        const popTitle = document.querySelector('#local-pop-canvas')?.closest('.local-pop-card')?.querySelector('.local-pop-title');
+        const popSub = document.querySelector('#local-pop-canvas')?.closest('.local-pop-card')?.querySelector('.local-pop-sub');
+        const pyrTitle = document.querySelector('#local-pyr-canvas')?.closest('.local-pyr-card')?.querySelector('.local-pop-title');
+        const pyrSub = document.querySelector('#local-pyr-canvas')?.closest('.local-pyr-card')?.querySelector('.local-pop-sub');
+        if (popTitle) popTitle.textContent = `${area.city} 人口推移`;
+        if (popSub) popSub.textContent = '総人口（国勢調査 1980〜2020）';
+        if (pyrTitle) pyrTitle.textContent = `${area.city} 人口ピラミッド`;
+        if (pyrSub) pyrSub.textContent = `${area.prefecture || ''}${area.city} 2020年（国勢調査）`;
+
+        try {
+          const [popResult, householdResult, groups] = await Promise.all([
+            fetchStatSeries(STAT_IND_POP_TOTAL, area.muniCd, { TimeFrom: '1980CY00', TimeTo: '2020CY00' }),
+            fetchStatSeries(STAT_IND_HOUSEHOLDS, area.muniCd, { TimeFrom: '1980CY00', TimeTo: '2020CY00' }),
+            fetchPyramidGroups(area.muniCd)
+          ]);
+          if (popResult.regionName && popResult.regionName !== area.city) area.city = popResult.regionName;
+          renderHouseholds(area, householdResult.values);
+          try {
+            localStorage.setItem(DEMO_CACHE_KEY, JSON.stringify({
+              ts: Date.now(),
+              area,
+              popTrend: popResult.values,
+              households: householdResult.values,
+              pyramid: groups
+            }));
+          } catch {}
+          if (window.updateLocalPopulationTrend) {
+            window.updateLocalPopulationTrend(area.city, popResult.values);
+          } else {
+            window.pendingLocalPopulationTrend = { city: area.city, trend: popResult.values };
+          }
+          if (window.updateLocalPyramidChart) {
+            window.updateLocalPyramidChart(area.city, area.prefecture, groups);
+          } else {
+            window.pendingLocalPyramid = { city: area.city, prefecture: area.prefecture, groups };
+          }
+        } catch (e) {
+          try {
+            const cached = JSON.parse(localStorage.getItem(DEMO_CACHE_KEY) || 'null');
+            if (cached?.popTrend?.length && cached?.households?.length && cached?.pyramid?.length) {
+              renderHouseholds(cached.area, cached.households);
+              window.updateLocalPopulationTrend?.(cached.area.city, cached.popTrend);
+              window.updateLocalPyramidChart?.(cached.area.city, cached.area.prefecture, cached.pyramid);
+              const time = document.getElementById('home-household-time');
+              if (time) time.textContent = '統計データ取得失敗 — キャッシュを表示中';
+              return;
+            }
+          } catch {}
+          const time = document.getElementById('home-household-time');
+          if (time) time.textContent = '世帯数の取得に失敗しました';
+        }
       }
 
       // ─── 世界時計 ──────────────────────────────────────────────
@@ -7013,6 +7321,41 @@
 
       // API 系はダッシュボードが視野に入るまで遅延ロード
       let dashboardAPIsReady = false;
+
+      async function refreshLocationDashboards(forceDetect) {
+        const btn = document.getElementById('dashboard-locate-btn');
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = '取得中…';
+        }
+        try {
+          if (forceDetect) {
+            try {
+              localStorage.removeItem(DASHBOARD_LOC_KEY);
+              localStorage.removeItem(GAS_AREA_CACHE_KEY);
+            } catch {}
+            try { await detectDashboardArea(true); } catch {}
+          }
+          await Promise.allSettled([
+            initWeatherCard(),
+            initGasCard(false),
+            initTrafficCard(),
+            initDemographicsCard(false)
+          ]);
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = localStorage.getItem('site-lang') === 'en' ? '📍 Locate' : '📍 現在地';
+          }
+        }
+      }
+
+      document.getElementById('dashboard-locate-btn')?.addEventListener('click', () => {
+        if (!dashboardAPIsReady) {
+          initDashboardAPIs();
+        }
+        refreshLocationDashboards(true);
+      });
 
       window.initNewsCard = async function initNewsCard() {
         const list = document.getElementById('home-news-list');
@@ -7088,19 +7431,23 @@
       function initDashboardAPIs() {
         if (dashboardAPIsReady) return;
         dashboardAPIsReady = true;
-        Promise.allSettled([
-          initVisitCard(),
-          initWeatherCard(),
-          initFxCard(),
-          initStockCard(),
-          renderCustomStocks(),
-          renderCompareChart(),
-          initGasCard(),
-          initTrainCard(),
-          initQuakeCard(),
-          initTrafficCard(),
-          initNewsCard(),
-        ]).catch(() => {});
+        (async () => {
+          try { await detectDashboardArea(false); } catch {}
+          await Promise.allSettled([
+            initVisitCard(),
+            initWeatherCard(),
+            initFxCard(),
+            initStockCard(),
+            renderCustomStocks(),
+            renderCompareChart(),
+            initGasCard(),
+            initDemographicsCard(),
+            initTrainCard(),
+            initQuakeCard(),
+            initTrafficCard(),
+            initNewsCard(),
+          ]);
+        })().catch(() => {});
       }
 
       const dashboardSection = document.getElementById('dashboard');
@@ -7242,19 +7589,74 @@
   <script>
     // 三郷市 人口推移グラフ
     (function () {
-      const DATA = [
-        { year: 1980, pop: 98.1 },
-        { year: 1985, pop: 110.0 },
-        { year: 1990, pop: 122.4 },
-        { year: 1995, pop: 129.5 },
-        { year: 2000, pop: 129.9 },
-        { year: 2005, pop: 130.7 },
-        { year: 2010, pop: 132.9 },
-        { year: 2015, pop: 136.7 },
-        { year: 2020, pop: 142.1 },
+      let DATA = [
+        { year: 1980, pop: 98223 },
+        { year: 1985, pop: 107964 },
+        { year: 1990, pop: 128376 },
+        { year: 1995, pop: 133600 },
+        { year: 2000, pop: 131047 },
+        { year: 2005, pop: 128278 },
+        { year: 2010, pop: 131415 },
+        { year: 2015, pop: 136521 },
+        { year: 2020, pop: 142145 },
       ];
 
-      function draw() {
+      function formatPopulation(pop) {
+        return Math.round(pop).toLocaleString('ja-JP') + '人';
+      }
+
+      function nicePopScale(maxPeople) {
+        const maxThousands = Math.max(1, maxPeople / 1000);
+        const step = maxThousands <= 80 ? 20 : maxThousands <= 160 ? 40 : maxThousands <= 400 ? 100 : 200;
+        return Math.ceil(maxThousands / step) * step;
+      }
+
+      function drawTooltip(ctx, W, H, x, y, lines) {
+        ctx.save();
+        ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+        const padX = 9;
+        const padY = 7;
+        const lineH = 16;
+        const tw = Math.max.apply(null, lines.map(function (line) {
+          return ctx.measureText(line).width;
+        })) + padX * 2;
+        const th = lineH * lines.length + padY * 2 - 3;
+        let tx = x + 12;
+        let ty = y - th - 12;
+        if (tx + tw > W - 6) tx = x - tw - 12;
+        if (tx < 6) tx = 6;
+        if (ty < 6) ty = y + 14;
+        if (ty + th > H - 6) ty = H - th - 6;
+
+        ctx.fillStyle = 'rgba(6, 12, 24, 0.92)';
+        ctx.strokeStyle = 'rgba(0, 229, 255, 0.42)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(tx, ty, tw, th, 8);
+        } else {
+          const r = 8;
+          ctx.moveTo(tx + r, ty);
+          ctx.lineTo(tx + tw - r, ty);
+          ctx.quadraticCurveTo(tx + tw, ty, tx + tw, ty + r);
+          ctx.lineTo(tx + tw, ty + th - r);
+          ctx.quadraticCurveTo(tx + tw, ty + th, tx + tw - r, ty + th);
+          ctx.lineTo(tx + r, ty + th);
+          ctx.quadraticCurveTo(tx, ty + th, tx, ty + th - r);
+          ctx.lineTo(tx, ty + r);
+          ctx.quadraticCurveTo(tx, ty, tx + r, ty);
+        }
+        ctx.fill();
+        ctx.stroke();
+
+        lines.forEach(function (line, i) {
+          ctx.fillStyle = i === 0 ? '#eaf7ff' : 'rgba(210,225,240,0.92)';
+          ctx.fillText(line, tx + padX, ty + padY + 11 + i * lineH);
+        });
+        ctx.restore();
+      }
+
+      function draw(hoverIndex, pointer) {
         const canvas = document.getElementById('local-pop-canvas');
         if (!canvas) return;
         const dpr = window.devicePixelRatio || 1;
@@ -7269,13 +7671,15 @@
         const cW = W - pad.left - pad.right;
         const cH = H - pad.top - pad.bottom;
         const n = DATA.length;
-        const maxPop = 160;
+        const maxPop = nicePopScale(Math.max.apply(null, DATA.map(d => d.pop)));
         const barGap = cW / n;
         const barW = barGap * 0.65;
+        const hitAreas = [];
 
         ctx.clearRect(0, 0, W, H);
 
-        [0, 40, 80, 120, 160].forEach(function (v) {
+        const scaleStep = maxPop / 4;
+        [0, scaleStep, scaleStep * 2, scaleStep * 3, maxPop].forEach(function (v) {
           const y = pad.top + cH * (1 - v / maxPop);
           ctx.beginPath();
           ctx.strokeStyle = 'rgba(0,229,255,0.12)';
@@ -7286,14 +7690,15 @@
           ctx.fillStyle = 'rgba(176,192,210,0.7)';
           ctx.font = '9px Consolas, monospace';
           ctx.textAlign = 'right';
-          ctx.fillText(v, pad.left - 4, y + 4);
+          ctx.fillText(Math.round(v), pad.left - 4, y + 4);
         });
 
         DATA.forEach(function (d, i) {
           const x = pad.left + i * barGap + (barGap - barW) / 2;
-          const barH = cH * (d.pop / maxPop);
+          const barH = cH * ((d.pop / 1000) / maxPop);
           const y = pad.top + cH - barH;
           const isLast = i === n - 1;
+          const isHover = i === hoverIndex;
 
           const grad = ctx.createLinearGradient(0, y, 0, y + barH);
           grad.addColorStop(0, isLast ? 'rgba(0,229,255,1)' : 'rgba(0,180,255,0.85)');
@@ -7302,6 +7707,24 @@
           ctx.beginPath();
           ctx.rect(x, y, barW, barH);
           ctx.fill();
+          if (isHover) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(234,247,255,0.95)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x - 1, y - 1, barW + 2, barH + 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.12)';
+            ctx.fillRect(x, y, barW, barH);
+            ctx.restore();
+          }
+          hitAreas.push({
+            index: i,
+            x: x,
+            y: y,
+            w: barW,
+            h: barH,
+            labelX: x + barW / 2,
+            labelY: y
+          });
 
           ctx.fillStyle = 'rgba(176,192,210,0.85)';
           ctx.font = '8px Consolas, monospace';
@@ -7311,19 +7734,76 @@
 
         const last = DATA[n - 1];
         const lx = pad.left + (n - 1) * barGap + barGap / 2;
-        const ly = pad.top + cH * (1 - last.pop / maxPop) - 4;
+        const ly = pad.top + cH * (1 - (last.pop / 1000) / maxPop) - 4;
         ctx.fillStyle = '#00e5ff';
         ctx.font = 'bold 9px Consolas, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(last.pop.toFixed(1) + '千人', lx, ly);
+        ctx.fillText((last.pop / 1000).toFixed(1) + '千人', lx, ly);
+
+        canvas._popHitAreas = hitAreas;
+        if (hoverIndex != null && hitAreas[hoverIndex]) {
+          const d = DATA[hoverIndex];
+          const pos = pointer || { x: hitAreas[hoverIndex].labelX, y: hitAreas[hoverIndex].labelY };
+          ctx.textAlign = 'left';
+          drawTooltip(ctx, W, H, pos.x, pos.y, [
+            d.year + '年',
+            formatPopulation(d.pop)
+          ]);
+        }
       }
 
+      function setupHover() {
+        const canvas = document.getElementById('local-pop-canvas');
+        if (!canvas || canvas._popHoverReady) return;
+        canvas._popHoverReady = true;
+        canvas.addEventListener('mousemove', function (ev) {
+          const rect = canvas.getBoundingClientRect();
+          const pointer = {
+            x: ev.clientX - rect.left,
+            y: ev.clientY - rect.top
+          };
+          const areas = canvas._popHitAreas || [];
+          const hit = areas.find(function (a) {
+            return pointer.x >= a.x && pointer.x <= a.x + a.w && pointer.y >= a.y && pointer.y <= a.y + a.h;
+          });
+          canvas.style.cursor = hit ? 'pointer' : 'default';
+          draw(hit ? hit.index : null, pointer);
+        });
+        canvas.addEventListener('mouseleave', function () {
+          canvas.style.cursor = 'default';
+          draw();
+        });
+      }
+
+      window.updateLocalPopulationTrend = function (city, trend) {
+        if (Array.isArray(trend) && trend.length) {
+          DATA = trend.map(d => ({ year: Number(d.year), pop: Number(d.value ?? d.pop) }))
+            .filter(d => Number.isFinite(d.year) && Number.isFinite(d.pop));
+        }
+        const card = document.getElementById('local-pop-canvas')?.closest('.local-pop-card');
+        const title = card?.querySelector('.local-pop-title');
+        if (title && city) title.textContent = `${city} 人口推移`;
+        draw();
+      };
+
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', draw);
+        document.addEventListener('DOMContentLoaded', function () {
+          draw();
+          setupHover();
+          if (window.pendingLocalPopulationTrend) {
+            window.updateLocalPopulationTrend(window.pendingLocalPopulationTrend.city, window.pendingLocalPopulationTrend.trend);
+            window.pendingLocalPopulationTrend = null;
+          }
+        });
       } else {
         draw();
+        setupHover();
+        if (window.pendingLocalPopulationTrend) {
+          window.updateLocalPopulationTrend(window.pendingLocalPopulationTrend.city, window.pendingLocalPopulationTrend.trend);
+          window.pendingLocalPopulationTrend = null;
+        }
       }
-      window.addEventListener('resize', draw);
+      window.addEventListener('resize', function () { draw(); });
     })();
   </script>
 
@@ -7331,7 +7811,7 @@
     // 三郷市 人口ピラミッド（e-Stat 国勢調査2020 推計値）
     (function () {
       // [age-label, male, female]  単位: 人
-      const GROUPS = [
+      let GROUPS = [
         ['100以上',    40,   200],
         ['95〜99',    180,   550],
         ['90〜94',    500,  1300],
@@ -7355,7 +7835,56 @@
         ['0〜4',    2300,  2200],
       ];
 
-      function draw() {
+      function formatPeople(value) {
+        return value.toLocaleString('ja-JP') + '人';
+      }
+
+      function drawTooltip(ctx, W, H, x, y, lines) {
+        ctx.save();
+        ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+        const padX = 9;
+        const padY = 7;
+        const lineH = 16;
+        const tw = Math.max.apply(null, lines.map(function (line) {
+          return ctx.measureText(line).width;
+        })) + padX * 2;
+        const th = lineH * lines.length + padY * 2 - 3;
+        let tx = x + 12;
+        let ty = y - th - 12;
+        if (tx + tw > W - 6) tx = x - tw - 12;
+        if (tx < 6) tx = 6;
+        if (ty < 6) ty = y + 14;
+        if (ty + th > H - 6) ty = H - th - 6;
+
+        ctx.fillStyle = 'rgba(6, 12, 24, 0.92)';
+        ctx.strokeStyle = 'rgba(0, 229, 255, 0.42)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(tx, ty, tw, th, 8);
+        } else {
+          const r = 8;
+          ctx.moveTo(tx + r, ty);
+          ctx.lineTo(tx + tw - r, ty);
+          ctx.quadraticCurveTo(tx + tw, ty, tx + tw, ty + r);
+          ctx.lineTo(tx + tw, ty + th - r);
+          ctx.quadraticCurveTo(tx + tw, ty + th, tx + tw - r, ty + th);
+          ctx.lineTo(tx + r, ty + th);
+          ctx.quadraticCurveTo(tx, ty + th, tx, ty + th - r);
+          ctx.lineTo(tx, ty + r);
+          ctx.quadraticCurveTo(tx, ty, tx + r, ty);
+        }
+        ctx.fill();
+        ctx.stroke();
+
+        lines.forEach(function (line, i) {
+          ctx.fillStyle = i === 0 ? '#eaf7ff' : 'rgba(210,225,240,0.92)';
+          ctx.fillText(line, tx + padX, ty + padY + 11 + i * lineH);
+        });
+        ctx.restore();
+      }
+
+      function draw(hoverIndex, pointer) {
         const canvas = document.getElementById('local-pyr-canvas');
         if (!canvas) return;
         const dpr = window.devicePixelRatio || 1;
@@ -7373,8 +7902,11 @@
         const cH = H - padTop - padBot;
         const rowH = cH / n;
         const halfW = (W - labelW - padLeft - padRight) / 2;
-        const maxVal = 6000;
+        const rawMax = Math.max.apply(null, GROUPS.flatMap(g => [Number(g[1]) || 0, Number(g[2]) || 0]));
+        const maxStep = rawMax <= 6000 ? 2000 : rawMax <= 20000 ? 5000 : rawMax <= 60000 ? 10000 : 25000;
+        const maxVal = Math.max(maxStep, Math.ceil(rawMax / maxStep) * maxStep);
         const cx = padLeft + halfW;
+        const hitAreas = [];
 
         // legend
         ctx.fillStyle = 'rgba(100,160,255,0.9)';
@@ -7390,7 +7922,7 @@
         ctx.fillText('女性', cx + labelW + 40, 17);
 
         // scale lines
-        [0, 2000, 4000, 6000].forEach(function (v) {
+        [0, maxVal / 3, maxVal * 2 / 3, maxVal].forEach(function (v) {
           const xM = cx - (v / maxVal) * halfW;
           const xF = cx + labelW + (v / maxVal) * halfW;
           [xM, xF].forEach(function (x) {
@@ -7405,8 +7937,8 @@
             ctx.fillStyle = 'rgba(176,192,210,0.55)';
             ctx.font = '8px Consolas, monospace';
             ctx.textAlign = 'center';
-            ctx.fillText(v, xM, padTop + cH + 14);
-            ctx.fillText(v, xF, padTop + cH + 14);
+            ctx.fillText(Math.round(v), xM, padTop + cH + 14);
+            ctx.fillText(Math.round(v), xF, padTop + cH + 14);
           }
         });
 
@@ -7416,6 +7948,7 @@
           const y = padTop + i * rowH;
           const bH = rowH * 0.72;
           const by = y + (rowH - bH) / 2;
+          const isHover = i === hoverIndex;
 
           // male (left)
           const mW = (male / maxVal) * halfW;
@@ -7432,6 +7965,24 @@
           gradF.addColorStop(1, 'rgba(255,80,150,0.75)');
           ctx.fillStyle = gradF;
           ctx.fillRect(cx + labelW, by, fW, bH);
+          if (isHover) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(234,247,255,0.9)';
+            ctx.lineWidth = 1.3;
+            ctx.strokeRect(cx - mW - 1, by - 1, mW + 1, bH + 2);
+            ctx.strokeRect(cx + labelW, by - 1, fW + 1, bH + 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.10)';
+            ctx.fillRect(cx - mW, by, mW, bH);
+            ctx.fillRect(cx + labelW, by, fW, bH);
+            ctx.restore();
+          }
+          hitAreas.push({
+            index: i,
+            x: cx - mW,
+            y: by,
+            w: mW + labelW + fW,
+            h: bH
+          });
 
           // age label
           ctx.fillStyle = 'rgba(176,192,210,0.85)';
@@ -7451,14 +8002,77 @@
         ctx.moveTo(cx + labelW, padTop);
         ctx.lineTo(cx + labelW, padTop + cH);
         ctx.stroke();
+
+        canvas._pyrHitAreas = hitAreas;
+        if (hoverIndex != null && GROUPS[hoverIndex]) {
+          const group = GROUPS[hoverIndex];
+          const pos = pointer || {
+            x: cx + labelW / 2,
+            y: hitAreas[hoverIndex].y
+          };
+          ctx.textAlign = 'left';
+          drawTooltip(ctx, W, H, pos.x, pos.y, [
+            group[0] + '歳',
+            '男性 ' + formatPeople(group[1]),
+            '女性 ' + formatPeople(group[2]),
+            '合計 ' + formatPeople(group[1] + group[2])
+          ]);
+        }
       }
 
+      function setupHover() {
+        const canvas = document.getElementById('local-pyr-canvas');
+        if (!canvas || canvas._pyrHoverReady) return;
+        canvas._pyrHoverReady = true;
+        canvas.addEventListener('mousemove', function (ev) {
+          const rect = canvas.getBoundingClientRect();
+          const pointer = {
+            x: ev.clientX - rect.left,
+            y: ev.clientY - rect.top
+          };
+          const areas = canvas._pyrHitAreas || [];
+          const hit = areas.find(function (a) {
+            return pointer.x >= a.x && pointer.x <= a.x + a.w && pointer.y >= a.y && pointer.y <= a.y + a.h;
+          });
+          canvas.style.cursor = hit ? 'pointer' : 'default';
+          draw(hit ? hit.index : null, pointer);
+        });
+        canvas.addEventListener('mouseleave', function () {
+          canvas.style.cursor = 'default';
+          draw();
+        });
+      }
+
+      window.updateLocalPyramidChart = function (city, prefecture, groups) {
+        if (Array.isArray(groups) && groups.length) {
+          GROUPS = groups.map(g => [String(g[0]), Number(g[1]) || 0, Number(g[2]) || 0]);
+        }
+        const card = document.getElementById('local-pyr-canvas')?.closest('.local-pyr-card');
+        const title = card?.querySelector('.local-pop-title');
+        const sub = card?.querySelector('.local-pop-sub');
+        if (title && city) title.textContent = `${city} 人口ピラミッド`;
+        if (sub && city) sub.textContent = `${prefecture || ''}${city} 2020年（国勢調査）`;
+        draw();
+      };
+
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', draw);
+        document.addEventListener('DOMContentLoaded', function () {
+          draw();
+          setupHover();
+          if (window.pendingLocalPyramid) {
+            window.updateLocalPyramidChart(window.pendingLocalPyramid.city, window.pendingLocalPyramid.prefecture, window.pendingLocalPyramid.groups);
+            window.pendingLocalPyramid = null;
+          }
+        });
       } else {
         draw();
+        setupHover();
+        if (window.pendingLocalPyramid) {
+          window.updateLocalPyramidChart(window.pendingLocalPyramid.city, window.pendingLocalPyramid.prefecture, window.pendingLocalPyramid.groups);
+          window.pendingLocalPyramid = null;
+        }
       }
-      window.addEventListener('resize', draw);
+      window.addEventListener('resize', function () { draw(); });
     })();
   </script>
 
@@ -7519,6 +8133,7 @@
           'footer-copy': '© 2025 hide — 三郷市からのんびり発信中 🏠',
           'nav-slides': '📑 AI解説',
           'nav-learn': '📚 学習',
+          'nav-locate': '📍 現在地',
           'local-hero-h3': '三郷市ってどんなとこ？',
           'local-hero-p': '埼玉県の南東端、東京・千葉に隣接するコンパクトな市。江戸川と中川に挟まれた水辺の町で、東京都心まで電車で約20〜30分とアクセス抜群。ららぽーとやコストコがあり、ショッピングも充実しています。静かで暮らしやすく、個人的に気に入っています。',
           'spot-lala-name': 'ららぽーと新三郷',
@@ -7599,6 +8214,7 @@
           'dash-gas-monthly': '月毎',
           'dash-gas-6month': '6ヶ月',
           'home-traffic-title': '🚦 交通情報（現在地周辺）',
+          'household-card-title': '世帯数',
           'dash-updates-title': '📰 更新履歴',
           'dash-todo-title': '✅ TODO / メモ',
           'dash-todo-input-ph': 'タスクを追加…',
@@ -7731,6 +8347,7 @@
           'footer-copy': '© 2025 hide — Sharing casually from Misato 🏠',
           'nav-slides': '📑 AI Slides',
           'nav-learn': '📚 Learn',
+          'nav-locate': '📍 Locate',
           'local-hero-h3': 'What\'s Misato Like?',
           'local-hero-p': 'A compact city on the southeast edge of Saitama, right next to Tokyo and Chiba. Nestled between the Edogawa and Nakagawa rivers, it\'s about 20–30 min by train to central Tokyo. With LaLaport and Costco nearby, shopping is great. Quiet and easy to live in — I love it here.',
           'spot-lala-name': 'LaLaport Shin-Misato',
@@ -7811,6 +8428,7 @@
           'dash-gas-monthly': 'Monthly',
           'dash-gas-6month': '6 Months',
           'home-traffic-title': '🚦 Traffic (Near You)',
+          'household-card-title': 'Households',
           'dash-updates-title': '📰 Update Log',
           'dash-todo-title': '✅ TODO / Notes',
           'dash-todo-input-ph': 'Add a task…',
