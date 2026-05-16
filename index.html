@@ -8978,6 +8978,9 @@
 
     #agent-panel {
       position: fixed; bottom: 28px; right: 28px; z-index: 9998;
+    }
+    #agent-panel.open { z-index: 10000; } /* FAB(9999)より前面に */
+    #agent-panel {
       width: 380px; height: 640px; max-height: calc(100vh - 56px);
       display: none; flex-direction: column;
       background: var(--agent-bg, rgba(15, 15, 25, 0.96));
@@ -10351,39 +10354,85 @@
 
       // ③ 株価インテント
       // Yahoo Finance 失敗時に Stooq CSV へフォールバックする株価取得
+      // Stooq CSV をパースして { price, prev } を返す
+      function parseStooqCsv(text) {
+        // フォーマット: Symbol,Date,Close （f=sd2c）
+        // ヘッダー行を除いた最初の2行を使用
+        const rows = text.trim().split('\n')
+          .map(l => l.trim())
+          .filter(l => l && !/^Symbol/i.test(l));
+        if (!rows.length) return null;
+        const price = parseFloat(rows[0].split(',')[2]);
+        if (!isFinite(price) || price <= 0) return null;
+        const prevRaw = rows.length > 1 ? parseFloat(rows[1].split(',')[2]) : price;
+        const prev = isFinite(prevRaw) && prevRaw > 0 ? prevRaw : price;
+        return { price, prev };
+      }
+
+      async function fetchStooqCsv(stooqSym) {
+        // Symbol,Date,Close のシンプルフォーマット・直近2日分
+        const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSym)}&f=sd2c&i=d`;
+        const proxies = [
+          url,                                                        // 直接 (CORSが通れば最速)
+          `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+          `https://corsproxy.io/?${encodeURIComponent(url)}`,
+          `https://api.codetabs.com/v1/proxy?quest=${url}`,
+        ];
+        for (const pUrl of proxies) {
+          try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 12000);
+            const res = await fetch(pUrl, { signal: ctrl.signal });
+            clearTimeout(timer);
+            if (!res.ok) continue;
+            const text = await res.text();
+            const parsed = parseStooqCsv(text);
+            if (parsed) return parsed;
+          } catch (e) { continue; }
+        }
+        return null;
+      }
+
       async function fetchStockForAgent(symbol) {
-        // 1. まず既存の fetchStock（Yahoo Finance + プロキシ + キャッシュ）を試す
+        // 1. 既存の fetchStock（Yahoo Finance + キャッシュ）
         try {
           const data = await fetchStock(symbol);
           if (data) return data;
         } catch (e) { /* fall through */ }
 
-        // 2. Stooq CSV フォールバック（日本株: 7203.T → 7203.jp）
-        const stooqSym = symbol.endsWith('.T')
-          ? symbol.replace('.T', '.jp')
+        // 2. Stooq CSV（.T → .jp、直接 + 複数プロキシ）
+        const stooqSym = /\.T$/i.test(symbol)
+          ? symbol.replace(/\.T$/i, '.jp')
           : symbol.toLowerCase();
-        const csvUrl = `https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&h&e=csv`;
-        const proxyUrls = [
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(csvUrl)}`,
-          `https://corsproxy.io/?${encodeURIComponent(csvUrl)}`,
-          `https://api.codetabs.com/v1/proxy?quest=${csvUrl}`,
-        ];
-        for (const pUrl of proxyUrls) {
-          try {
-            const res = await fetchWithTimeout(pUrl, 10000);
-            if (!res.ok) continue;
-            const text = await res.text();
-            const rows = text.trim().split('\n').filter(l => l.trim() && !/^Symbol/i.test(l));
-            if (!rows.length) continue;
-            const cols = rows[0].split(',');
-            const price = parseFloat(cols[6]);
-            if (!isFinite(price) || price <= 0) continue;
-            const prevRaw = rows.length > 1 ? parseFloat(rows[1].split(',')[6]) : price;
-            const prev = isFinite(prevRaw) && prevRaw > 0 ? prevRaw : price;
-            return { price, prev };
-          } catch (e) { continue; }
-        }
+        const result = await fetchStooqCsv(stooqSym);
+        if (result) return result;
+
         throw new Error('all-sources-failed');
+      }
+
+      // データ取得不可時に外部リンクカードを表示
+      function buildStockLinkCard(match) {
+        const card = document.createElement('div');
+        card.className = 'tool-card';
+        const title = document.createElement('div');
+        title.className = 'tool-card-title';
+        title.textContent = '📈 ' + match.name + ' (' + match.symbol + ')';
+        const body = document.createElement('div');
+        body.className = 'tool-card-body';
+        const link = document.createElement('a');
+        link.href = 'https://finance.yahoo.co.jp/quote/' + encodeURIComponent(match.symbol);
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.style.cssText = 'color:#06b6d4;font-size:0.9rem;';
+        link.textContent = State.lang === 'ja' ? 'Yahoo!ファイナンスで確認する →' : 'View on Yahoo Finance →';
+        body.appendChild(link);
+        const meta = document.createElement('div');
+        meta.className = 'tool-card-meta';
+        meta.textContent = State.lang === 'ja' ? 'リアルタイムデータの取得に失敗しました' : 'Real-time data unavailable';
+        card.appendChild(title);
+        card.appendChild(body);
+        card.appendChild(meta);
+        return card;
       }
 
       async function runStock(match) {
@@ -10405,7 +10454,12 @@
           ]);
         } catch (e) {
           setTyping(false);
-          await botSay(t('agent-tool-error'));
+          const msg = State.lang === 'ja'
+            ? '現在リアルタイムデータを取得できません。外部サイトでご確認ください。'
+            : 'Unable to fetch real-time data. Please check an external source.';
+          await botSay(msg);
+          messagesEl.appendChild(buildStockLinkCard(match));
+          scrollToBottom();
           renderChips([{ label: t('agent-action-retry'), action: () => runStock(match) }]);
         }
       }
