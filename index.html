@@ -9917,10 +9917,46 @@
       }
 
       // ③ 株価インテント
+      // Yahoo Finance 失敗時に Stooq CSV へフォールバックする株価取得
+      async function fetchStockForAgent(symbol) {
+        // 1. まず既存の fetchStock（Yahoo Finance + プロキシ + キャッシュ）を試す
+        try {
+          const data = await fetchStock(symbol);
+          if (data) return data;
+        } catch (e) { /* fall through */ }
+
+        // 2. Stooq CSV フォールバック（日本株: 7203.T → 7203.jp）
+        const stooqSym = symbol.endsWith('.T')
+          ? symbol.replace('.T', '.jp')
+          : symbol.toLowerCase();
+        const csvUrl = `https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&h&e=csv`;
+        const proxyUrls = [
+          `https://api.allorigins.win/raw?url=${encodeURIComponent(csvUrl)}`,
+          `https://corsproxy.io/?${encodeURIComponent(csvUrl)}`,
+          `https://api.codetabs.com/v1/proxy?quest=${csvUrl}`,
+        ];
+        for (const pUrl of proxyUrls) {
+          try {
+            const res = await fetchWithTimeout(pUrl, 10000);
+            if (!res.ok) continue;
+            const text = await res.text();
+            const rows = text.trim().split('\n').filter(l => l.trim() && !/^Symbol/i.test(l));
+            if (!rows.length) continue;
+            const cols = rows[0].split(',');
+            const price = parseFloat(cols[6]);
+            if (!isFinite(price) || price <= 0) continue;
+            const prevRaw = rows.length > 1 ? parseFloat(rows[1].split(',')[6]) : price;
+            const prev = isFinite(prevRaw) && prevRaw > 0 ? prevRaw : price;
+            return { price, prev };
+          } catch (e) { continue; }
+        }
+        throw new Error('all-sources-failed');
+      }
+
       async function runStock(match) {
         setTyping(true);
         try {
-          const quote = await fetchStock(match.symbol);
+          const quote = await fetchStockForAgent(match.symbol);
           setTyping(false);
           const { bubble } = renderMessage('agent', '');
           const intro = State.lang === 'ja'
