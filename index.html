@@ -1107,6 +1107,17 @@
       grid-column: auto;
     }
     .dashboard-card:hover { border-color: var(--blue); }
+    .dashboard-card[draggable="true"] { cursor: grab; user-select: none; }
+    .dashboard-card.card-dragging { opacity: 0.35; cursor: grabbing !important; }
+    .dashboard-card.card-dragover { outline: 2px dashed var(--blue); outline-offset: 3px; }
+    .dashboard-theme-swatches { display: flex; gap: 5px; align-items: center; margin-left: 4px; }
+    .dashboard-theme-swatch {
+      width: 18px; height: 18px; border-radius: 50%;
+      border: 2.5px solid transparent; cursor: pointer;
+      transition: transform 0.15s, border-color 0.15s;
+      flex-shrink: 0; padding: 0;
+    }
+    .dashboard-theme-swatch.active { border-color: var(--text); transform: scale(1.25); }
     .traffic-map-wrap {
       border-radius: 8px;
       border: 1px solid rgba(0,200,255,0.13);
@@ -3191,6 +3202,7 @@
         <div class="dashboard-toolbar">
           <button class="dashboard-layout-btn" id="dashboard-layout-toggle" type="button" aria-expanded="false" aria-controls="dashboard-layout-panel" data-i18n="dash-layout-toggle">表示・並び替え</button>
           <button class="dashboard-layout-btn" id="dashboard-layout-reset" type="button" data-i18n="dash-layout-reset">初期配置に戻す</button>
+          <div class="dashboard-theme-swatches" id="dashboard-theme-swatches" title="テーマ色を変更"></div>
         </div>
         <div class="dashboard-layout-panel" id="dashboard-layout-panel" aria-hidden="true">
           <div class="dashboard-layout-panel-head">
@@ -8269,6 +8281,98 @@
 
         window.addEventListener('site-lang-change', renderPanel);
         renderPanel();
+      })();
+
+      // ── テーマカラー ──────────────────────────────────────────
+      (function initDashboardTheme() {
+        const THEME_KEY = 'home-dashboard-theme';
+        const THEMES = [
+          { id: 'sky',    label: 'スカイ',   color: '#0ea5e9', vars: { '--blue':'#0ea5e9', '--blue-soft':'rgba(14,165,233,0.12)',   '--bg':'#fffbf5', '--surface-warm':'#fff3e6', '--line':'rgba(28,25,23,0.08)' }},
+          { id: 'purple', label: 'パープル', color: '#a855f7', vars: { '--blue':'#a855f7', '--blue-soft':'rgba(168,85,247,0.12)',  '--bg':'#faf5ff', '--surface-warm':'#f3e8ff', '--line':'rgba(88,28,135,0.1)' }},
+          { id: 'green',  label: 'グリーン', color: '#22c55e', vars: { '--blue':'#22c55e', '--blue-soft':'rgba(34,197,94,0.12)',    '--bg':'#f0fdf4', '--surface-warm':'#dcfce7', '--line':'rgba(20,83,45,0.1)' }},
+          { id: 'orange', label: 'オレンジ', color: '#f97316', vars: { '--blue':'#f97316', '--blue-soft':'rgba(249,115,22,0.12)',   '--bg':'#fff7ed', '--surface-warm':'#ffedd5', '--line':'rgba(124,45,18,0.1)' }},
+          { id: 'rose',   label: 'ローズ',   color: '#f43f5e', vars: { '--blue':'#f43f5e', '--blue-soft':'rgba(244,63,94,0.12)',    '--bg':'#fff1f2', '--surface-warm':'#ffe4e6', '--line':'rgba(136,19,55,0.1)' }},
+        ];
+
+        const container = document.getElementById('dashboard-theme-swatches');
+        if (!container) return;
+
+        function applyTheme(id) {
+          const theme = THEMES.find(t => t.id === id) || THEMES[0];
+          const root = document.documentElement;
+          Object.entries(theme.vars).forEach(([k, v]) => root.style.setProperty(k, v));
+          container.querySelectorAll('.dashboard-theme-swatch').forEach(el =>
+            el.classList.toggle('active', el.dataset.themeId === theme.id)
+          );
+          try { localStorage.setItem(THEME_KEY, theme.id); } catch {}
+        }
+
+        container.innerHTML = THEMES.map(t =>
+          `<button class="dashboard-theme-swatch" data-theme-id="${t.id}" title="${t.label}"
+            style="background:${t.color}" aria-label="テーマ: ${t.label}" type="button"></button>`
+        ).join('');
+
+        container.addEventListener('click', e => {
+          const btn = e.target.closest('.dashboard-theme-swatch');
+          if (btn) applyTheme(btn.dataset.themeId);
+        });
+
+        const saved = (() => { try { return localStorage.getItem(THEME_KEY); } catch { return null; } })();
+        applyTheme(saved || 'sky');
+      })();
+
+      // ── カードドラッグ＆ドロップ ──────────────────────────────
+      (function initCardDragDrop() {
+        const grid = document.getElementById('dashboard-grid');
+        if (!grid) return;
+
+        let dragSrc = null;
+
+        function makeDraggable() {
+          grid.querySelectorAll('.dashboard-card').forEach(card => card.setAttribute('draggable', 'true'));
+        }
+        makeDraggable();
+        new MutationObserver(makeDraggable).observe(grid, { childList: true });
+
+        grid.addEventListener('dragstart', e => {
+          const card = e.target.closest('.dashboard-card');
+          if (!card) return;
+          dragSrc = card;
+          e.dataTransfer.effectAllowed = 'move';
+          setTimeout(() => card.classList.add('card-dragging'), 0);
+        });
+
+        grid.addEventListener('dragend', () => {
+          grid.querySelectorAll('.dashboard-card').forEach(c => c.classList.remove('card-dragging', 'card-dragover'));
+          dragSrc = null;
+          saveDragOrder();
+        });
+
+        grid.addEventListener('dragover', e => {
+          e.preventDefault();
+          const card = e.target.closest('.dashboard-card');
+          if (!card || card === dragSrc || !dragSrc) return;
+          grid.querySelectorAll('.dashboard-card').forEach(c => c.classList.remove('card-dragover'));
+          card.classList.add('card-dragover');
+          const rect = card.getBoundingClientRect();
+          if (e.clientY < rect.top + rect.height / 2) grid.insertBefore(dragSrc, card);
+          else grid.insertBefore(dragSrc, card.nextSibling);
+        });
+
+        grid.addEventListener('drop', e => {
+          e.preventDefault();
+          grid.querySelectorAll('.dashboard-card').forEach(c => c.classList.remove('card-dragover', 'card-dragging'));
+          saveDragOrder();
+        });
+
+        function saveDragOrder() {
+          const order = [...grid.querySelectorAll('.dashboard-card')].map(c => c.id).filter(Boolean);
+          try {
+            const existing = JSON.parse(localStorage.getItem('home-dashboard-layout-v1') || '{}');
+            existing.order = order;
+            localStorage.setItem('home-dashboard-layout-v1', JSON.stringify(existing));
+          } catch {}
+        }
       })();
 
       // API 系はダッシュボードが視野に入るまで遅延ロード
