@@ -73,9 +73,13 @@ class _BattleScreenState extends State<BattleScreen> {
   }
 
   static const _emojis = {
-    'apple': '🍎', 'carrot': '🥕', 'cucumber': '🥒', 'potato': '🥔',
-    'tomato': '🍅', 'lemon': '🍋', 'watermelon': '🍉', 'broccoli': '🥦',
-    'radish': '🍠', 'orange': '🍊',
+    'garlic':'🧄','cherry':'🍒','blueberry':'🫐','grapes':'🍇','strawberry':'🍓',
+    'kiwi':'🥝','lemon':'🍋','lime':'🟢','peach':'🍑','pepper':'🫑',
+    'carrot':'🥕','plum':'🔴','onion':'🧅','orange':'🍊','tomato':'🍅',
+    'fig':'🟣','pear':'🍐','cucumber':'🥒','mango':'🥭','banana':'🍌',
+    'apple':'🍎','potato':'🥔','sweetpotato':'🍠','eggplant':'🍆','corn':'🌽',
+    'pomelo':'🌕','pineapple':'🍍','daikon':'🥖','broccoli':'🥦',
+    'coconut':'🥥','cabbage':'🥬','watermelon':'🍉',
   };
 
   @override
