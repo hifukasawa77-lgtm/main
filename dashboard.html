@@ -934,22 +934,44 @@ let suggestSelected = '';
 async function searchYahooFinance(q) {
   const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&lang=ja-JP&region=JP&quotesCount=10&newsCount=0`;
   const enc = encodeURIComponent(url);
+
+  const tryFetch = async (proxyUrl, isJson) => {
+    const res = await fetchWithTimeout(proxyUrl, {}, 7000);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = isJson ? String((await res.json())?.contents || '') : await res.text();
+    const data = JSON.parse(text);
+    const quotes = (data.finance?.result?.[0]?.quotes || []).filter(item => item.quoteType === 'EQUITY');
+    if (!quotes.length) throw new Error('empty');
+    return quotes;
+  };
+
   try {
-    const res = await fetchWithTimeout(`https://api.allorigins.win/get?url=${enc}`, {}, 7000);
-    if (!res.ok) throw new Error();
-    const json = await res.json();
-    const data = JSON.parse(json.contents);
-    return (data.finance?.result?.[0]?.quotes || []).filter(q => q.quoteType === 'EQUITY');
+    return await Promise.any([
+      tryFetch(`https://thingproxy.freeboard.io/fetch/${url}`, false),
+      tryFetch(`https://api.allorigins.win/get?url=${enc}`, true),
+      tryFetch(`https://api.allorigins.win/raw?url=${enc}`, false),
+    ]);
   } catch {
     return [];
   }
+}
+
+function showStockAddError(msg) {
+  const el = document.getElementById('custom-stock-list');
+  if (!el) return;
+  const err = document.createElement('div');
+  err.className = 'stock-suggest-msg';
+  err.style.cssText = 'color:var(--magenta);padding:6px 0;';
+  err.textContent = msg;
+  el.prepend(err);
+  setTimeout(() => err.remove(), 4000);
 }
 
 function renderSuggestions(items) {
   const list = document.getElementById('stock-suggest-list');
   if (!list) return;
   if (!items.length) {
-    list.innerHTML = `<div class="stock-suggest-msg">該当なし</div>`;
+    list.innerHTML = `<div class="stock-suggest-msg">該当なし（ティッカー例：6762.T）</div>`;
     list.style.display = 'block';
     return;
   }
@@ -983,22 +1005,30 @@ async function addStockFromInput() {
   let symbol = suggestSelected;
   let name = val;
 
-  if (!symbol) {
-    if (/^\d{4}$/.test(val)) {
-      symbol = val + '.T';
-      name = val;
-    } else if (/^\d{4}\.T$/i.test(val)) {
-      symbol = val.toUpperCase();
-      name = val.replace(/\.T$/i, '');
-    } else {
-      const results = await searchYahooFinance(val);
-      if (results.length > 0) {
-        symbol = results[0].symbol;
-        name = results[0].longname || results[0].shortname || symbol;
-      } else {
+  const btn = document.getElementById('stock-add-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '検索中…'; }
+
+  try {
+    if (!symbol) {
+      if (/^\d{4}$/.test(val)) {
+        symbol = val + '.T';
+        name = val;
+      } else if (/^\d{4}\.T$/i.test(val)) {
         symbol = val.toUpperCase();
+        name = val.replace(/\.T$/i, '');
+      } else {
+        const results = await searchYahooFinance(val);
+        if (results.length > 0) {
+          symbol = results[0].symbol;
+          name = results[0].longname || results[0].shortname || symbol;
+        } else {
+          showStockAddError('銘柄が見つかりませんでした（会社名またはティッカーを確認）');
+          return;
+        }
       }
     }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '追加'; }
   }
 
   if (customTickers.some(t => t.symbol === symbol)) {
