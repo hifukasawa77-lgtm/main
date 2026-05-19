@@ -4997,7 +4997,6 @@
         canvas.width = W;
         canvas.height = H;
         const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, W, H);
 
         if (!seriesList.length) return;
 
@@ -5005,11 +5004,8 @@
         const cW = W - pad.left - pad.right;
         const cH = H - pad.top - pad.bottom;
 
-        // 全時刻の範囲
         const allTs = seriesList.flatMap(s => s.norm.map(p => p.t));
         const tMin = Math.min(...allTs), tMax = Math.max(...allTs);
-
-        // Y軸範囲（全シリーズの騰落率）
         const allVals = seriesList.flatMap(s => s.norm.map(p => p.v));
         const vMin = Math.min(...allVals), vMax = Math.max(...allVals);
         const vPad = (vMax - vMin) * 0.08 || 2;
@@ -5018,60 +5014,147 @@
         const xOf = t => pad.left + ((t - tMin) / (tMax - tMin || 1)) * cW;
         const yOf = v => pad.top + (1 - (v - lo) / (hi - lo)) * cH;
 
-        // グリッド・ゼロライン
-        ctx.strokeStyle = 'rgba(150,150,180,0.18)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 4]);
-        [0.25, 0.5, 0.75].forEach(t => {
-          const y = pad.top + t * cH;
-          ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
-        });
-        if (lo < 0 && hi > 0) {
-          ctx.strokeStyle = 'rgba(180,180,200,0.45)';
-          ctx.lineWidth = 1;
-          const y0 = yOf(0);
-          ctx.beginPath(); ctx.moveTo(pad.left, y0); ctx.lineTo(pad.left + cW, y0); ctx.stroke();
+        function closestPt(norm, hoverT) {
+          return norm.reduce((a, b) => Math.abs(b.t - hoverT) < Math.abs(a.t - hoverT) ? b : a);
         }
-        ctx.setLineDash([]);
 
-        // Y軸ラベル
-        ctx.fillStyle = 'rgba(120,130,150,0.85)';
-        ctx.font = '8px sans-serif';
-        ctx.textAlign = 'right';
-        [lo + (hi - lo) * 0.1, lo + (hi - lo) * 0.9].forEach(v => {
-          ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(0) + '%', pad.left - 2, yOf(v) + 3);
-        });
+        function drawBase(hoverT) {
+          ctx.clearRect(0, 0, W, H);
 
-        // X軸ラベル（両端）
-        ctx.fillStyle = 'rgba(120,130,150,0.7)';
-        ctx.textAlign = 'left';
-        ctx.fillText(new Date(tMin).getFullYear(), pad.left, H - 3);
-        ctx.textAlign = 'right';
-        ctx.fillText(new Date(tMax).getFullYear(), pad.left + cW, H - 3);
-
-        // 各指数の折れ線
-        seriesList.forEach(s => {
-          if (s.norm.length < 2) return;
-          ctx.beginPath();
-          s.norm.forEach((p, i) => {
-            if (i === 0) ctx.moveTo(xOf(p.t), yOf(p.v));
-            else ctx.lineTo(xOf(p.t), yOf(p.v));
+          // グリッド・ゼロライン
+          ctx.strokeStyle = 'rgba(150,150,180,0.18)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 4]);
+          [0.25, 0.5, 0.75].forEach(t => {
+            const y = pad.top + t * cH;
+            ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cW, y); ctx.stroke();
           });
-          ctx.strokeStyle = s.color;
-          ctx.lineWidth = 1.6;
-          ctx.shadowColor = s.color;
-          ctx.shadowBlur = 4;
-          ctx.stroke();
-          ctx.shadowBlur = 0;
+          if (lo < 0 && hi > 0) {
+            ctx.strokeStyle = 'rgba(180,180,200,0.45)';
+            ctx.lineWidth = 1;
+            const y0 = yOf(0);
+            ctx.beginPath(); ctx.moveTo(pad.left, y0); ctx.lineTo(pad.left + cW, y0); ctx.stroke();
+          }
+          ctx.setLineDash([]);
 
-          // 末端ラベル
-          const last = s.norm[s.norm.length - 1];
-          const sign = last.v >= 0 ? '+' : '';
-          ctx.fillStyle = s.color;
-          ctx.font = 'bold 7.5px sans-serif';
+          // Y軸ラベル
+          ctx.fillStyle = 'rgba(120,130,150,0.85)';
+          ctx.font = '8px sans-serif';
+          ctx.textAlign = 'right';
+          [lo + (hi - lo) * 0.1, lo + (hi - lo) * 0.9].forEach(v => {
+            ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(0) + '%', pad.left - 2, yOf(v) + 3);
+          });
+
+          // X軸ラベル（両端）
+          ctx.fillStyle = 'rgba(120,130,150,0.7)';
           ctx.textAlign = 'left';
-          ctx.fillText(`${sign}${last.v.toFixed(0)}%`, Math.min(xOf(last.t) + 2, W - 28), yOf(last.v) + 3);
-        });
+          ctx.fillText(new Date(tMin).getFullYear(), pad.left, H - 3);
+          ctx.textAlign = 'right';
+          ctx.fillText(new Date(tMax).getFullYear(), pad.left + cW, H - 3);
+
+          // ホバー縦線
+          if (hoverT != null) {
+            const hx = xOf(hoverT);
+            ctx.save();
+            ctx.strokeStyle = 'rgba(200,200,230,0.5)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath(); ctx.moveTo(hx, pad.top); ctx.lineTo(hx, pad.top + cH); ctx.stroke();
+            ctx.restore();
+          }
+
+          // 各指数の折れ線
+          seriesList.forEach(s => {
+            if (s.norm.length < 2) return;
+            ctx.beginPath();
+            s.norm.forEach((p, i) => {
+              if (i === 0) ctx.moveTo(xOf(p.t), yOf(p.v));
+              else ctx.lineTo(xOf(p.t), yOf(p.v));
+            });
+            ctx.strokeStyle = s.color;
+            ctx.lineWidth = 1.6;
+            ctx.shadowColor = s.color;
+            ctx.shadowBlur = 4;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            if (hoverT != null) {
+              // ホバー点
+              const pt = closestPt(s.norm, hoverT);
+              ctx.beginPath();
+              ctx.arc(xOf(pt.t), yOf(pt.v), 3, 0, Math.PI * 2);
+              ctx.fillStyle = s.color;
+              ctx.fill();
+            } else {
+              // 末端ラベル
+              const last = s.norm[s.norm.length - 1];
+              const sign = last.v >= 0 ? '+' : '';
+              ctx.fillStyle = s.color;
+              ctx.font = 'bold 7.5px sans-serif';
+              ctx.textAlign = 'left';
+              ctx.fillText(`${sign}${last.v.toFixed(0)}%`, Math.min(xOf(last.t) + 2, W - 28), yOf(last.v) + 3);
+            }
+          });
+        }
+
+        drawBase(null);
+
+        let tip = document.getElementById('stock-hover-tip');
+        if (!tip) {
+          tip = document.createElement('div');
+          tip.id = 'stock-hover-tip';
+          document.body.appendChild(tip);
+        }
+
+        canvas._hoverCleanup?.();
+
+        function getXY(e) {
+          return e.touches ? [e.touches[0].clientX, e.touches[0].clientY] : [e.clientX, e.clientY];
+        }
+
+        function onMove(e) {
+          const rect = canvas.getBoundingClientRect();
+          const [cx, cy] = getXY(e);
+          const hoverT = tMin + ((cx - rect.left - pad.left) / cW) * (tMax - tMin);
+
+          drawBase(hoverT);
+
+          const refPt = closestPt(seriesList[0].norm, hoverT);
+          const d = new Date(refPt.t);
+          const ds = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+
+          const rows = seriesList.map(s => {
+            const pt = closestPt(s.norm, hoverT);
+            const sign = pt.v >= 0 ? '+' : '';
+            const cls = pt.v >= 0 ? 'sht-hi' : 'sht-lo';
+            return `<div><span style="color:${s.color}">■</span> ${escHtml(s.name)}: <b class="${cls}">${sign}${pt.v.toFixed(1)}%</b></div>`;
+          }).join('');
+
+          tip.innerHTML = `<div class="sht-date">${ds}</div>${rows}`;
+
+          const tipW = 160;
+          const left = cx + 14 + tipW > window.innerWidth ? cx - tipW - 14 : cx + 14;
+          tip.style.left = left + 'px';
+          tip.style.top = Math.max(8, cy - 90) + 'px';
+          tip.style.display = 'block';
+        }
+
+        function onLeave() {
+          drawBase(null);
+          if (tip) tip.style.display = 'none';
+        }
+
+        canvas.addEventListener('mousemove', onMove);
+        canvas.addEventListener('mouseleave', onLeave);
+        canvas.addEventListener('touchmove', onMove, { passive: true });
+        canvas.addEventListener('touchend', onLeave);
+
+        canvas._hoverCleanup = () => {
+          canvas.removeEventListener('mousemove', onMove);
+          canvas.removeEventListener('mouseleave', onLeave);
+          canvas.removeEventListener('touchmove', onMove);
+          canvas.removeEventListener('touchend', onLeave);
+        };
       }
 
       async function renderCompareChart() {
