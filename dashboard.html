@@ -187,6 +187,78 @@
     .down { color: var(--magenta); }
     .stock-time { font-size: 0.68rem; color: var(--muted); margin-top: 4px; text-align: right; }
 
+    /* ── Custom Stock Search ── */
+    .stock-add-section { margin-top: 12px; border-top: 1px solid rgba(0,229,255,0.1); padding-top: 12px; }
+    .stock-search-row { display: flex; gap: 6px; position: relative; }
+    .stock-search-row input {
+      flex: 1;
+      background: rgba(0,229,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 6px 10px;
+      font-size: 0.78rem;
+      font-family: inherit;
+      outline: none;
+    }
+    .stock-search-row input:focus { border-color: var(--cyan); }
+    .stock-suggest-list {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      background: rgba(10,12,25,0.98);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      z-index: 300;
+      max-height: 200px;
+      overflow-y: auto;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .stock-suggest-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid rgba(0,229,255,0.05);
+      transition: background 0.1s;
+    }
+    .stock-suggest-item:last-child { border-bottom: none; }
+    .stock-suggest-item:hover { background: rgba(0,229,255,0.1); }
+    .stock-suggest-ticker { color: var(--cyan); font-weight: bold; white-space: nowrap; min-width: 58px; }
+    .stock-suggest-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    .stock-suggest-exch { color: var(--muted); font-size: 0.68rem; white-space: nowrap; }
+    .stock-suggest-msg { padding: 10px 12px; color: var(--muted); font-size: 0.78rem; text-align: center; }
+    .custom-stock-list { margin-top: 6px; }
+    .custom-stock-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 0;
+      border-bottom: 1px solid rgba(0,229,255,0.06);
+      gap: 6px;
+    }
+    .custom-stock-item:last-child { border-bottom: none; }
+    .custom-stock-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .custom-stock-name { color: var(--text); font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .custom-stock-ticker { color: var(--muted); font-size: 0.68rem; }
+    .btn-del-sm {
+      background: rgba(255,0,204,0.1);
+      color: var(--magenta);
+      border: 1px solid rgba(255,0,204,0.25);
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.2s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .btn-del-sm:hover { background: rgba(255,0,204,0.22); }
+
     /* ── Game Score ── */
     .score-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: 180px; }
     .score-item {
@@ -376,6 +448,14 @@
   <div class="card" id="card-stock">
     <div class="card-title"><span class="icon">📈</span><span data-i18n="card-stock-title"> 株価指数</span></div>
     <div id="stock-body" class="loading">読み込み中…</div>
+    <div class="stock-add-section">
+      <div class="stock-search-row">
+        <input type="text" id="stock-search-input" placeholder="会社名 or ティッカー（例：トヨタ / AAPL / 6501）" maxlength="60" autocomplete="off">
+        <button class="btn-add" id="stock-add-btn" onclick="addStockFromInput()">追加</button>
+        <div id="stock-suggest-list" class="stock-suggest-list" style="display:none;"></div>
+      </div>
+      <div id="custom-stock-list" class="custom-stock-list"></div>
+    </div>
   </div>
 
   <!-- ④ ゲームスコア -->
@@ -839,6 +919,194 @@ async function initStock(){
 }
 
 /* ────────────────────────────────────────────
+   ③-B カスタム株追加（東証プライム・米株対応）
+──────────────────────────────────────────── */
+let customTickers = JSON.parse(localStorage.getItem('dashboard-custom-stocks') || '[]');
+// [{symbol:'6501.T', name:'日立製作所'}]
+
+function saveCustomTickers() {
+  localStorage.setItem('dashboard-custom-stocks', JSON.stringify(customTickers));
+}
+
+let suggestTimer = null;
+let suggestSelected = '';
+
+async function searchYahooFinance(q) {
+  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&lang=ja-JP&region=JP&quotesCount=10&newsCount=0`;
+  const enc = encodeURIComponent(url);
+  try {
+    const res = await fetchWithTimeout(`https://api.allorigins.win/get?url=${enc}`, {}, 7000);
+    if (!res.ok) throw new Error();
+    const json = await res.json();
+    const data = JSON.parse(json.contents);
+    return (data.finance?.result?.[0]?.quotes || []).filter(q => q.quoteType === 'EQUITY');
+  } catch {
+    return [];
+  }
+}
+
+function renderSuggestions(items) {
+  const list = document.getElementById('stock-suggest-list');
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = `<div class="stock-suggest-msg">該当なし</div>`;
+    list.style.display = 'block';
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const name = item.longname || item.shortname || item.symbol;
+    return `<div class="stock-suggest-item"
+      data-symbol="${escHtml(item.symbol)}"
+      data-name="${escHtml(name)}">
+      <span class="stock-suggest-ticker">${escHtml(item.symbol)}</span>
+      <span class="stock-suggest-name">${escHtml(name)}</span>
+      <span class="stock-suggest-exch">${escHtml(item.exchange || '')}</span>
+    </div>`;
+  }).join('');
+  list.style.display = 'block';
+}
+
+function selectSuggest(symbol, name) {
+  suggestSelected = symbol;
+  const input = document.getElementById('stock-search-input');
+  if (input) input.value = name || symbol;
+  const list = document.getElementById('stock-suggest-list');
+  if (list) list.style.display = 'none';
+}
+
+async function addStockFromInput() {
+  const input = document.getElementById('stock-search-input');
+  if (!input) return;
+  const val = input.value.trim();
+  if (!val) return;
+
+  let symbol = suggestSelected;
+  let name = val;
+
+  if (!symbol) {
+    if (/^\d{4}$/.test(val)) {
+      symbol = val + '.T';
+      name = val;
+    } else if (/^\d{4}\.T$/i.test(val)) {
+      symbol = val.toUpperCase();
+      name = val.replace(/\.T$/i, '');
+    } else {
+      const results = await searchYahooFinance(val);
+      if (results.length > 0) {
+        symbol = results[0].symbol;
+        name = results[0].longname || results[0].shortname || symbol;
+      } else {
+        symbol = val.toUpperCase();
+      }
+    }
+  }
+
+  if (customTickers.some(t => t.symbol === symbol)) {
+    input.value = '';
+    suggestSelected = '';
+    document.getElementById('stock-suggest-list').style.display = 'none';
+    return;
+  }
+
+  customTickers.push({ symbol, name });
+  saveCustomTickers();
+  input.value = '';
+  suggestSelected = '';
+  document.getElementById('stock-suggest-list').style.display = 'none';
+  await renderCustomStocks();
+}
+
+function removeCustomStock(symbol) {
+  customTickers = customTickers.filter(t => t.symbol !== symbol);
+  saveCustomTickers();
+  renderCustomStocks();
+}
+
+async function renderCustomStocks() {
+  const el = document.getElementById('custom-stock-list');
+  if (!el) return;
+  if (!customTickers.length) { el.innerHTML = ''; return; }
+
+  el.innerHTML = `<div class="stock-suggest-msg">${t('stock-fetching')}</div>`;
+  const results = await Promise.allSettled(customTickers.map(ct => fetchStock(ct.symbol)));
+
+  el.innerHTML = results.map((r, i) => {
+    const ct = customTickers[i];
+    const delBtn = `<button class="btn-del-sm" onclick="removeCustomStock('${escHtml(ct.symbol)}')">削除</button>`;
+    if (r.status === 'fulfilled') {
+      const { price, prev } = r.value;
+      const chg = price - prev;
+      const pct = (chg / prev) * 100;
+      const cls = chg >= 0 ? 'up' : 'down';
+      const sign = chg >= 0 ? '+' : '';
+      return `<div class="custom-stock-item">
+        <div class="custom-stock-info">
+          <span class="custom-stock-name">${escHtml(ct.name)}</span>
+          <span class="custom-stock-ticker">${escHtml(ct.symbol)}</span>
+        </div>
+        <span class="stock-val ${cls}" style="font-size:0.88rem;">${fmtNum(price)}</span>
+        <span class="stock-change ${cls}">${sign}${fmtNum(chg)} (${sign}${pct.toFixed(2)}%)</span>
+        ${delBtn}
+      </div>`;
+    } else {
+      return `<div class="custom-stock-item">
+        <div class="custom-stock-info">
+          <span class="custom-stock-name">${escHtml(ct.name)}</span>
+          <span class="custom-stock-ticker">${escHtml(ct.symbol)}</span>
+        </div>
+        <span class="down" style="font-size:0.75rem;">${t('stock-fail')}</span>
+        ${delBtn}
+      </div>`;
+    }
+  }).join('');
+}
+
+function initCustomStocks() {
+  renderCustomStocks();
+
+  const input = document.getElementById('stock-search-input');
+  if (!input) return;
+
+  input.addEventListener('input', () => {
+    suggestSelected = '';
+    const q = input.value.trim();
+    const list = document.getElementById('stock-suggest-list');
+    if (!q) { if (list) list.style.display = 'none'; return; }
+    clearTimeout(suggestTimer);
+    if (list) {
+      list.innerHTML = `<div class="stock-suggest-msg">検索中…</div>`;
+      list.style.display = 'block';
+    }
+    suggestTimer = setTimeout(async () => renderSuggestions(await searchYahooFinance(q)), 350);
+  });
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') addStockFromInput();
+    if (e.key === 'Escape') {
+      const list = document.getElementById('stock-suggest-list');
+      if (list) list.style.display = 'none';
+    }
+  });
+
+  // サジェスト選択（data属性経由でXSS回避）
+  const suggestList = document.getElementById('stock-suggest-list');
+  if (suggestList) {
+    suggestList.addEventListener('click', e => {
+      const item = e.target.closest('[data-symbol]');
+      if (!item) return;
+      selectSuggest(item.dataset.symbol, item.dataset.name);
+    });
+  }
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#card-stock')) {
+      const list = document.getElementById('stock-suggest-list');
+      if (list) list.style.display = 'none';
+    }
+  });
+}
+
+/* ────────────────────────────────────────────
    ④ ゲームスコア (localStorage fruit-bowl-v2)
 ──────────────────────────────────────────── */
 function initScore(){
@@ -1180,6 +1448,7 @@ async function initPopulation() {
   initScore();
   renderTodos();
   renderPosts();
+  initCustomStocks();
 
   // Async widgets — run in parallel, errors isolated
   await Promise.allSettled([
