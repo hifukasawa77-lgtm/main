@@ -3197,7 +3197,7 @@
         <div class="sec-header reveal">
           <div class="sec-label" data-i18n="sec-label-dashboard">Dashboard</div>
           <h2 class="sec-title" data-i18n="sec-title-dashboard">📊 ホームダッシュボード</h2>
-          <p class="sec-desc" data-i18n="sec-desc-dashboard">アクセス数・更新履歴・TODO/メモ・予定カレンダー・天気・円相場・株価・三郷市ガソリン相場・周辺交通情報をまとめて確認できます。</p>
+          <p class="sec-desc" id="dash-desc-dynamic" data-i18n="sec-desc-dashboard">アクセス数・更新履歴・TODO/メモ・予定カレンダー・天気・円相場・株価・三郷市ガソリン相場・周辺交通情報をまとめて確認できます。</p>
         </div>
         <div class="dashboard-toolbar">
           <button class="dashboard-layout-btn" id="dashboard-layout-toggle" type="button" aria-expanded="false" aria-controls="dashboard-layout-panel" data-i18n="dash-layout-toggle">表示・並び替え</button>
@@ -4638,6 +4638,7 @@
         } catch {}
         const titleEl = document.getElementById('home-weather-city-title');
         if (titleEl) titleEl.textContent = `🌤 ${city}の天気`;
+        window.dispatchEvent(new CustomEvent('dashboard-location-updated', { detail: { city } }));
 
         const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
           + '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,wind_direction_10m,uv_index,surface_pressure'
@@ -8222,6 +8223,7 @@
               </div>
             `;
           }).join('');
+          window.dispatchEvent(new Event('dashboard-layout-changed'));
         }
 
         function updateConfig(mutator) {
@@ -8373,6 +8375,72 @@
             localStorage.setItem('home-dashboard-layout-v1', JSON.stringify(existing));
           } catch {}
         }
+      })();
+
+      // ── ダッシュボード説明文 動的更新 ─────────────────────────
+      (function initDashboardDesc() {
+        const CARD_LABELS = {
+          'dash-card-visit':      { ja: 'アクセス数',        en: 'Site Visits' },
+          'dash-card-weather':    { ja: '天気',              en: 'Weather' },
+          'dash-card-fx':         { ja: '円相場',            en: 'Yen Rate' },
+          'dash-card-stock':      { ja: '株価指数',          en: 'Stock Index' },
+          'dash-card-gas':        { ja: 'ガソリン相場',      en: 'Gasoline Price' },
+          'dash-card-traffic':    { ja: '交通情報',          en: 'Traffic' },
+          'dash-card-household':  { ja: '世帯数',            en: 'Households' },
+          'dash-card-updates':    { ja: '更新履歴',          en: 'Update Log' },
+          'dash-card-todo':       { ja: 'TODO・メモ',        en: 'TODO/Notes' },
+          'dash-card-calendar':   { ja: '予定カレンダー',    en: 'Calendar' },
+          'dash-card-train':      { ja: '電車遅延情報',      en: 'Train Delays' },
+          'dash-card-population': { ja: '人口推移',          en: 'Population Trend' },
+          'dash-card-pyramid':    { ja: '人口ピラミッド',    en: 'Population Pyramid' },
+          'dash-card-pomodoro':   { ja: 'ポモドーロタイマー', en: 'Pomodoro Timer' },
+          'dash-card-quake':      { ja: '地震・防災情報',    en: 'Earthquake Info' },
+          'dash-card-worldclock': { ja: '世界時計',          en: 'World Clock' },
+          'dash-card-news':       { ja: '最新ニュース',      en: 'Latest News' },
+          'dash-card-quicklinks': { ja: 'よく使うリンク',    en: 'Quick Links' },
+        };
+        const ALL_IDS = Object.keys(CARD_LABELS);
+
+        function getLang() { return localStorage.getItem('site-lang') === 'en' ? 'en' : 'ja'; }
+
+        function getCity() {
+          try {
+            const loc = JSON.parse(localStorage.getItem('dashboard-location-v2') || 'null');
+            return loc?.city || '三郷市';
+          } catch { return '三郷市'; }
+        }
+
+        function update(overrideCity) {
+          const el = document.getElementById('dash-desc-dynamic');
+          if (!el) return;
+          const lang = getLang();
+          let order = [...ALL_IDS], hidden = [];
+          try {
+            const cfg = JSON.parse(localStorage.getItem('home-dashboard-layout-v1') || '{}');
+            if (Array.isArray(cfg.order)) {
+              const saved = cfg.order.filter(id => ALL_IDS.includes(id));
+              order = [...saved, ...ALL_IDS.filter(id => !saved.includes(id))];
+            }
+            if (Array.isArray(cfg.hidden)) hidden = cfg.hidden.filter(id => ALL_IDS.includes(id));
+          } catch {}
+
+          const labels = order
+            .filter(id => !hidden.includes(id) && document.getElementById(id))
+            .map(id => CARD_LABELS[id]?.[lang] || id);
+
+          const city = overrideCity || getCity();
+          el.removeAttribute('data-i18n'); // 静的翻訳キーを外す
+          if (lang === 'en') {
+            el.textContent = `${city} — ${labels.join(' · ')}`;
+          } else {
+            el.textContent = `${city} ／ ${labels.join('・')}`;
+          }
+        }
+
+        window.addEventListener('dashboard-layout-changed', () => update());
+        window.addEventListener('dashboard-location-updated', e => update(e.detail?.city));
+        window.addEventListener('site-lang-change', () => update());
+        setTimeout(update, 200);
       })();
 
       // API 系はダッシュボードが視野に入るまで遅延ロード
