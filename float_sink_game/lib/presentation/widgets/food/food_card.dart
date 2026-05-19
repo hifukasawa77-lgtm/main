@@ -8,16 +8,13 @@ class FoodCard extends StatelessWidget {
   const FoodCard({super.key, required this.food, this.dimmed = false});
 
   static const _emojis = {
-    'apple': '🍎',
-    'carrot': '🥕',
-    'cucumber': '🥒',
-    'potato': '🥔',
-    'tomato': '🍅',
-    'lemon': '🍋',
-    'watermelon': '🍉',
-    'broccoli': '🥦',
-    'radish': '🍠',
-    'orange': '🍊',
+    'garlic':'🧄','cherry':'🍒','blueberry':'🫐','grapes':'🍇','strawberry':'🍓',
+    'kiwi':'🥝','lemon':'🍋','lime':'🟢','peach':'🍑','pepper':'🫑',
+    'carrot':'🥕','plum':'🔴','onion':'🧅','orange':'🍊','tomato':'🍅',
+    'fig':'🟣','pear':'🍐','cucumber':'🥒','mango':'🥭','banana':'🍌',
+    'apple':'🍎','potato':'🥔','sweetpotato':'🍠','eggplant':'🍆','corn':'🌽',
+    'pomelo':'🌕','pineapple':'🍍','daikon':'🥖','broccoli':'🥦',
+    'coconut':'🥥','cabbage':'🥬','watermelon':'🍉',
   };
 
   @override
@@ -30,29 +27,21 @@ class FoodCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: const Color(0xFF1E2A3A),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-              color: const Color(0xFF2196F3).withOpacity(0.4)),
+          border: Border.all(color: const Color(0xFF2196F3).withOpacity(0.4)),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(_emojis[food.id] ?? '🍴',
-                style: const TextStyle(fontSize: 28)),
-            const SizedBox(height: 4),
-            Text(
-              food.nameJa,
-              style: const TextStyle(color: Colors.white, fontSize: 10),
-              textAlign: TextAlign.center,
-            ),
-            Text(
-              'ρ=${food.density.toStringAsFixed(2)}',
-              style: TextStyle(
-                color: food.floats
-                    ? Colors.lightBlueAccent
-                    : Colors.redAccent,
-                fontSize: 9,
-              ),
-            ),
+            Text(_emojis[food.id] ?? '🍴', style: const TextStyle(fontSize: 26)),
+            const SizedBox(height: 2),
+            Text(food.nameJa,
+                style: const TextStyle(color: Colors.white, fontSize: 9),
+                textAlign: TextAlign.center),
+            Text('${food.volume}L',
+                style: TextStyle(
+                  color: food.floats ? Colors.lightBlueAccent : Colors.redAccent,
+                  fontSize: 9, fontWeight: FontWeight.bold,
+                )),
           ],
         ),
       ),

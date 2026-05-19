@@ -63,4 +63,34 @@ class LocalStorage {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('sounds_enabled', v);
   }
+
+  Future<int> getTotalScore() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('total_score') ?? 0;
+  }
+
+  Future<void> setTotalScore(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('total_score', v);
+  }
+
+  Future<int> getMaxLevelCleared() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('max_level_cleared') ?? 0;
+  }
+
+  Future<void> setMaxLevelCleared(int v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('max_level_cleared', v);
+  }
+
+  Future<String> getHighScoresJson() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('high_scores') ?? '[]';
+  }
+
+  Future<void> setHighScoresJson(String json) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('high_scores', json);
+  }
 }

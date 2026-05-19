@@ -1,13 +1,12 @@
 import 'dart:math';
-import 'physics_body.dart';
 
 class Ripple {
   final double x;
   final DateTime startTime;
   double radius = 0.0;
   double opacity = 1.0;
-  static const double maxRadius = 80.0;
-  static const double duration = 1.2;
+  static const double maxRadius = 60.0;
+  static const double duration = 1.0;
 
   Ripple({required this.x, required this.startTime});
 
@@ -23,41 +22,63 @@ class Ripple {
 }
 
 class WaterSimulation {
-  final double tankWidth;
-  final double tankHeight;
-  double tankBottom;
-  double baseWaterHeight;
-  double surfaceY;
-  double waterLevelPercent;
+  final int capacity;
+  int waterVol;
+  double sinkerVol;
+  double floaterSubVol;
   List<Ripple> ripples = [];
 
-  WaterSimulation({required this.tankWidth, required this.tankHeight})
-      : tankBottom = tankHeight,
-        baseWaterHeight = tankHeight * 0.45,
-        surfaceY = tankHeight - tankHeight * 0.45,
-        waterLevelPercent = 0.45;
+  final double tankHeight;
+  final double tankWidth;
 
-  void addFood(PhysicsBody body) {
-    final submergedVolume = body.food.radius * body.food.radius * pi * body.submergedRatio;
-    final rise = submergedVolume / tankWidth;
-    baseWaterHeight = (baseWaterHeight + rise).clamp(0.0, tankHeight);
-    surfaceY = tankBottom - baseWaterHeight;
-    waterLevelPercent = baseWaterHeight / tankHeight;
-    ripples.add(Ripple(x: body.x, startTime: DateTime.now()));
+  WaterSimulation({
+    required this.capacity,
+    required this.waterVol,
+    required this.tankHeight,
+    required this.tankWidth,
+  }) : sinkerVol = 0.0,
+       floaterSubVol = 0.0;
+
+  double get fillPercent =>
+      ((waterVol + sinkerVol) / capacity).clamp(0.0, 1.0);
+
+  double get totalVolPercent =>
+      ((sinkerVol + floaterSubVol) / capacity).clamp(0.0, 1.0);
+
+  double get surfaceY => tankHeight * (1.0 - fillPercent);
+
+  double get waterLevelPercent => fillPercent;
+
+  bool get isDanger => totalVolPercent >= 0.80;
+
+  bool get isOverflow => totalVolPercent >= 1.0;
+
+  void addSinker(double vol) {
+    sinkerVol += vol;
+    ripples.add(Ripple(x: tankWidth / 2, startTime: DateTime.now()));
   }
 
-  void removeFood(PhysicsBody body) {
-    final submergedVolume = body.food.radius * body.food.radius * pi * body.submergedRatio;
-    final drop = submergedVolume / tankWidth;
-    baseWaterHeight = (baseWaterHeight - drop).clamp(0.0, tankHeight);
-    surfaceY = tankBottom - baseWaterHeight;
-    waterLevelPercent = baseWaterHeight / tankHeight;
+  void addFloater(double displaceVol) {
+    floaterSubVol += displaceVol;
+    ripples.add(Ripple(x: tankWidth / 2, startTime: DateTime.now()));
+  }
+
+  void removeSinker(double vol) {
+    sinkerVol = (sinkerVol - vol).clamp(0.0, double.infinity);
+  }
+
+  void removeFloater(double displaceVol) {
+    floaterSubVol = (floaterSubVol - displaceVol).clamp(0.0, double.infinity);
+  }
+
+  void reset({required int newCapacity, required int newWaterVol}) {
+    sinkerVol = 0.0;
+    floaterSubVol = 0.0;
+    ripples.clear();
   }
 
   void updateRipples(double dt) {
     ripples.removeWhere((r) => r.isExpired);
-    for (final r in ripples) {
-      r.update(dt);
-    }
+    for (final r in ripples) r.update(dt);
   }
 }

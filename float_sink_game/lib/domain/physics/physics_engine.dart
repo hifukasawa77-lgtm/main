@@ -2,49 +2,47 @@ import 'physics_body.dart';
 import 'water_simulation.dart';
 
 class PhysicsEngine {
-  static const double waterDensity = 1.0;
-  static const double gravity = 9.8;
-  static const double damping = 0.85;
+  static const double gravity = 980.0;
+  static const double damping = 0.6;
   static const double frameTime = 1.0 / 60;
-
-  double calculateNetForce(PhysicsBody body, double waterSurfaceY) {
-    final bodyTop = body.y - body.food.radius;
-    final bodyBottom = body.y + body.food.radius;
-
-    if (bodyTop >= waterSurfaceY) {
-      body.submergedRatio = 0.0;
-    } else if (bodyBottom <= waterSurfaceY) {
-      body.submergedRatio = 1.0;
-    } else {
-      body.submergedRatio = ((waterSurfaceY - bodyTop) / (body.food.radius * 2)).clamp(0.0, 1.0);
-    }
-
-    final buoyancy = waterDensity * body.food.density * body.submergedRatio * body.food.radius;
-    final gravityForce = body.food.density * body.food.radius;
-    return buoyancy - gravityForce;
-  }
 
   void step(List<PhysicsBody> bodies, WaterSimulation water) {
     for (final body in bodies) {
       if (body.isSettled) continue;
 
-      final netForce = calculateNetForce(body, water.surfaceY);
-      body.velocityY -= netForce * frameTime * gravity;
-      body.velocityY *= damping;
-      body.y += body.velocityY;
+      final waterSurfaceY = water.surfaceY;
+      final bodyBottom = body.y + body.food.radius;
 
-      if (body.y + body.food.radius >= water.tankBottom) {
-        body.y = water.tankBottom - body.food.radius;
-        body.velocityY = 0.0;
-        if (body.food.density >= waterDensity) {
-          body.isSettled = true;
-          body.isFloating = false;
+      if (bodyBottom < waterSurfaceY) {
+        body.velocityY += gravity * frameTime;
+        body.y += body.velocityY * frameTime;
+      } else {
+        if (body.food.floats) {
+          body.velocityY -= gravity * frameTime * 0.8;
+          body.velocityY *= 0.85;
+          body.y += body.velocityY * frameTime;
+
+          final targetY = waterSurfaceY - body.food.radius * 0.3;
+          if (body.y < targetY && body.velocityY.abs() < 5) {
+            body.y = targetY;
+            body.velocityY = 0;
+            body.isSettled = true;
+            body.isFloating = true;
+          }
+          if (body.y < targetY) body.y = targetY;
+        } else {
+          body.velocityY += gravity * frameTime * 0.3;
+          body.velocityY *= 0.92;
+          body.y += body.velocityY * frameTime;
+
+          final bottom = water.tankHeight - body.food.radius;
+          if (body.y >= bottom) {
+            body.y = bottom;
+            body.velocityY = 0;
+            body.isSettled = true;
+            body.isFloating = false;
+          }
         }
-      }
-
-      if (body.velocityY.abs() < 0.2 && body.submergedRatio > 0.0) {
-        body.isSettled = true;
-        body.isFloating = body.food.density < waterDensity;
       }
     }
   }

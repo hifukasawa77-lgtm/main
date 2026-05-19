@@ -2,9 +2,9 @@ class FoodItem {
   final String id;
   final String nameJa;
   final double density;
-  final double volume;
+  final int volume;
+  final int tier;
   final double radius;
-  final String imagePath;
   final bool floats;
   final String descJa;
 
@@ -13,21 +13,22 @@ class FoodItem {
     required this.nameJa,
     required this.density,
     required this.volume,
+    required this.tier,
     required this.radius,
-    required this.imagePath,
     required this.floats,
     required this.descJa,
   });
 
   double get mass => density * volume;
+  double get displaceVolume => floats ? volume * density : volume.toDouble();
 
   factory FoodItem.fromJson(Map<String, dynamic> json) => FoodItem(
     id: json['id'] as String,
     nameJa: json['nameJa'] as String,
     density: (json['density'] as num).toDouble(),
-    volume: (json['volume'] as num).toDouble(),
+    volume: json['volume'] as int,
+    tier: json['tier'] as int,
     radius: (json['radius'] as num).toDouble(),
-    imagePath: json['imagePath'] as String,
     floats: json['floats'] as bool,
     descJa: json['descJa'] as String,
   );
@@ -37,9 +38,14 @@ class FoodItem {
     'nameJa': nameJa,
     'density': density,
     'volume': volume,
+    'tier': tier,
     'radius': radius,
-    'imagePath': imagePath,
     'floats': floats,
     'descJa': descJa,
   };
+}
+
+double foodRadius(int volume) {
+  final t = (volume - 2) / (25 - 2);
+  return (0.85 + t * 3.6) * 16;
 }
