@@ -729,6 +729,8 @@ async function initVisit(){
 // 座標は小数点2桁（約1km精度）に丸めてキャッシュ。Google等の第三者サービスへは送信しない。
 const WEATHER_LOC_KEY = 'weather-loc-v1';
 const WEATHER_LOC_TTL = 30 * 60 * 1000; // 30分
+// e-Stat API (無料登録: https://api.e-stat.go.jp/api/key/)
+const ESTAT_APP_ID = 'dfe7d54039c81455773725b9abbddb664dea032a';
 
 async function getWeatherLocation() {
   try {
@@ -750,7 +752,8 @@ async function getWeatherLocation() {
   const lv01Nm = String(gsi?.results?.lv01Nm || '').trim();
   const mCity = lv01Nm.match(/^([^\s　]*?[市区町村])/);
   const city = mCity ? mCity[1] : (lv01Nm || '現在地');
-  const result = { lat: Math.round(lat * 100) / 100, lon: Math.round(lon * 100) / 100, city, ts: Date.now() };
+  const muniCd = String(gsi?.results?.muniCd || '').trim();
+  const result = { lat: Math.round(lat * 100) / 100, lon: Math.round(lon * 100) / 100, city, muniCd, ts: Date.now() };
   try { localStorage.setItem(WEATHER_LOC_KEY, JSON.stringify(result)); } catch {}
   return result;
 }
@@ -1441,6 +1444,19 @@ const POP_DATA = {
       male:  [9600,10200,10500,11000,15000,14500,15000,16000,18000,20000,18000,16000,14000,17000,15000,10500,7000,6000],
       female:[9200, 9700, 9900,10400,14200,13800,14500,15500,17500,19500,17500,15500,13500,17500,16000,12000,9500,11000]
     }
+  },
+  '港区': {
+    trend: [
+      {year:1980,pop:179891},{year:1985,pop:170026},{year:1990,pop:166826},
+      {year:1995,pop:146718},{year:2000,pop:152561},{year:2005,pop:193441},
+      {year:2010,pop:205131},{year:2015,pop:243283},{year:2020,pop:258943}
+    ],
+    pyramid: {
+      ages:['0-4','5-9','10-14','15-19','20-24','25-29','30-34','35-39',
+            '40-44','45-49','50-54','55-59','60-64','65-69','70-74','75-79','80-84','85+'],
+      male:  [5200,5400,4800,5000,7500,9500,11000,11500,11000,12000,9500,7500,6000,6000,5500,4000,2500,2500],
+      female:[5000,5100,4600,4900,7200,9000,10500,11000,10500,11500,9000,7200,5800,6000,5800,4500,3500,5000]
+    }
   }
 };
 
@@ -1531,28 +1547,175 @@ function drawPopPyramid(canvas, pyramid) {
   ctx.stroke();
 }
 
+/* e-Stat API から市区町村の人口データを取得し POP_DATA に追加する */
+async function fetchEstatPopData(muniCd, cityName) {
+  if (!ESTAT_APP_ID || !muniCd) return null;
+  const cd = String(muniCd).padStart(5, '0');
+  const base = 'https://api.e-stat.go.jp/rest/3.0/app/json';
+  try {
+    // 令和2年国勢調査 statsDataId を動的に検索
+    const listRes = await fetchWithTimeout(
+      `${base}/getStatsList?appId=${ESTAT_APP_ID}&searchKind=1&statsCode=00200521&surveyYears=2020&limit=30`,
+      {}, 8000
+    );
+    if (!listRes.ok) throw new Error('getStatsList ' + listRes.status);
+    const listJson = await listRes.json();
+    const infos = listJson?.GET_STATS_LIST?.DATALIST_INF?.TABLE_INF;
+    const arr = Array.isArray(infos) ? infos : infos ? [infos] : [];
+    // 市区町村レベルの人口等基本集計を優先
+    const tbl = arr.find(t =>
+      String(t.STATISTICS_NAME || '').includes('人口等基本集計') &&
+      String(t.COLLECT_AREA || '').includes('市区町村')
+    ) || arr.find(t => String(t.STATISTICS_NAME || '').includes('人口等基本集計')) || arr[0];
+    if (!tbl) throw new Error('no stats table found');
+    const statsDataId = tbl['@id'];
+
+    // 市区町村のデータ取得（総人口・性別・年齢別）
+    const dataRes = await fetchWithTimeout(
+      `${base}/getStatsData?appId=${ESTAT_APP_ID}&statsDataId=${statsDataId}&cdArea=${cd}&limit=500`,
+      {}, 12000
+    );
+    if (!dataRes.ok) throw new Error('getStatsData ' + dataRes.status);
+    const dataJson = await dataRes.json();
+
+    const sd = dataJson?.GET_STATS_DATA?.STATISTICAL_DATA;
+    const values = [].concat(sd?.DATA_INF?.VALUE || []);
+    if (values.length === 0) throw new Error('no values');
+
+    // カテゴリ定義を解析して総人口コードを特定
+    const classObjs = [].concat(sd?.CLASS_INF?.CLASS_OBJ || []);
+    let totalCode = null;
+    for (const obj of classObjs) {
+      const classes = [].concat(obj?.CLASS || []);
+      const total = classes.find(c => /^(総数|合計|total)$/i.test(String(c['@name'] || '')));
+      if (total) { totalCode = { key: `@${obj['@id']}`, val: total['@code'] }; break; }
+    }
+
+    // 総人口（2020年）
+    const popVal = values.find(v =>
+      !totalCode || v[totalCode.key] === totalCode.val
+    );
+    const pop2020 = popVal ? parseInt(String(popVal['$']).replace(/,/g, ''), 10) : 0;
+    if (!pop2020 || isNaN(pop2020)) throw new Error('pop parse failed');
+
+    const trend = [{ year: 2020, pop: pop2020 }];
+
+    // 性別×年齢別データでピラミッド構築を試みる
+    let pyramid = null;
+    try {
+      const AGE_LABELS = ['0-4','5-9','10-14','15-19','20-24','25-29','30-34','35-39',
+                          '40-44','45-49','50-54','55-59','60-64','65-69','70-74','75-79','80-84','85+'];
+      const maleVals = [], femaleVals = [];
+      // 性別コードを推定（名称から判定）
+      for (const obj of classObjs) {
+        const classes = [].concat(obj?.CLASS || []);
+        const maleC = classes.find(c => /^男$/.test(String(c['@name'] || '')));
+        const femaleC = classes.find(c => /^女$/.test(String(c['@name'] || '')));
+        if (maleC && femaleC) {
+          const sexKey = `@${obj['@id']}`;
+          const ageObj = classObjs.find(o => o['@id'] !== obj['@id'] &&
+            [].concat(o?.CLASS || []).some(c => /歳/.test(String(c['@name'] || ''))));
+          if (!ageObj) break;
+          const ageKey = `@${ageObj['@id']}`;
+          const ageClasses = [].concat(ageObj?.CLASS || [])
+            .filter(c => /\d/.test(String(c['@name'] || '')))
+            .slice(0, 18);
+          for (const ac of ageClasses) {
+            const mv = values.find(v => v[sexKey] === maleC['@code'] && v[ageKey] === ac['@code']);
+            const fv = values.find(v => v[sexKey] === femaleC['@code'] && v[ageKey] === ac['@code']);
+            maleVals.push(mv ? parseInt(String(mv['$']).replace(/,/g, ''), 10) || 0 : 0);
+            femaleVals.push(fv ? parseInt(String(fv['$']).replace(/,/g, ''), 10) || 0 : 0);
+          }
+          if (maleVals.length === 18) {
+            pyramid = { ages: AGE_LABELS, male: maleVals, female: femaleVals };
+          }
+          break;
+        }
+      }
+    } catch (_) {}
+
+    POP_DATA[cityName] = { trend, pyramid };
+    return POP_DATA[cityName];
+  } catch (e) {
+    console.warn('[e-Stat]', e.message || e);
+    return null;
+  }
+}
+
+function renderPopulation(el, cityLabel, city, data, fetched) {
+  const last = data.trend[data.trend.length - 1];
+  const note = fetched
+    ? `<span style="color:var(--muted);font-size:0.65rem;"> ※e-Stat取得</span>`
+    : '';
+  if (cityLabel) cityLabel.textContent = ` ${city} ${t('card-pop-title').trim()}`;
+  const hasPyramid = data.pyramid != null;
+  el.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      <span class="pop-total">${(last.pop / 1000).toFixed(1)}千人</span>
+      <span class="pop-total-label">${city} ${t('pop-total-label')}${note}</span>
+    </div>
+    <div class="pop-charts">
+      <div>
+        <div class="pop-sub-title">${t('pop-trend-title')}</div>
+        <canvas id="pop-trend-canvas" style="width:100%;display:block;"></canvas>
+      </div>
+      <div>
+        ${hasPyramid ? `<div class="pop-legend">
+          <span class="pop-legend-male">■ ${t('pop-male')}</span>
+          <span class="pop-legend-female">■ ${t('pop-female')}</span>
+        </div>
+        <div class="pop-sub-title">${t('pop-pyramid-title')} (${city} 2020)</div>
+        <canvas id="pop-pyramid-canvas" style="width:100%;display:block;"></canvas>` : ''}
+      </div>
+    </div>
+    <div class="pop-source">${t('pop-source')}</div>`;
+  requestAnimationFrame(() => {
+    const tc = document.getElementById('pop-trend-canvas');
+    const pc = document.getElementById('pop-pyramid-canvas');
+    if (tc) drawPopTrend(tc, data.trend);
+    if (pc && hasPyramid) drawPopPyramid(pc, data.pyramid);
+  });
+}
+
 async function initPopulation() {
   const el = document.getElementById('pop-body');
   if (!el) return;
   el.innerHTML = `<div class="loading">${t('loading')}</div>`;
 
-  let city = '三郷市';
-  try { const loc = await getWeatherLocation(); city = loc.city; } catch {}
+  let city = '三郷市', muniCd = '';
+  try {
+    const loc = await getWeatherLocation();
+    city = loc.city;
+    muniCd = loc.muniCd || '';
+  } catch {}
 
   const cityLabel = document.getElementById('pop-city-label');
-  const data = POP_DATA[city] || POP_DATA['三郷市'];
-  const isDemo = !(city in POP_DATA);
-  const displayCity = isDemo ? '三郷市' : city;
 
-  if (cityLabel) cityLabel.textContent = ` ${displayCity} ${t('card-pop-title').trim()}`;
+  if (city in POP_DATA) {
+    // 既知データを即表示
+    renderPopulation(el, cityLabel, city, POP_DATA[city], false);
+    return;
+  }
 
-  const last = data.trend[data.trend.length - 1];
-  const demoNote = isDemo ? `<span style="color:var(--muted);font-size:0.65rem;"> ${t('pop-demo-note')}</span>` : '';
+  // 未知の市区町村: e-Stat API で取得を試みる
+  if (cityLabel) cityLabel.textContent = ` ${city} ${t('card-pop-title').trim()}`;
+  el.innerHTML = `<div class="loading">${city} のデータを取得中…</div>`;
 
+  const fetched = await fetchEstatPopData(muniCd, city);
+  if (fetched) {
+    renderPopulation(el, cityLabel, city, fetched, true);
+    return;
+  }
+
+  // 取得失敗: 三郷市デモ表示
+  const demoNote = `<span style="color:var(--muted);font-size:0.65rem;"> ${t('pop-demo-note')}</span>`;
+  const demoData = POP_DATA['三郷市'];
+  if (cityLabel) cityLabel.textContent = ` 三郷市 ${t('card-pop-title').trim()}`;
+  const last = demoData.trend[demoData.trend.length - 1];
   el.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
       <span class="pop-total">${(last.pop / 1000).toFixed(1)}千人</span>
-      <span class="pop-total-label">${displayCity} ${t('pop-total-label')}${demoNote}</span>
+      <span class="pop-total-label">三郷市 ${t('pop-total-label')}${demoNote}</span>
     </div>
     <div class="pop-charts">
       <div>
@@ -1564,17 +1727,16 @@ async function initPopulation() {
           <span class="pop-legend-male">■ ${t('pop-male')}</span>
           <span class="pop-legend-female">■ ${t('pop-female')}</span>
         </div>
-        <div class="pop-sub-title">${t('pop-pyramid-title')} (${displayCity} 2020)</div>
+        <div class="pop-sub-title">${t('pop-pyramid-title')} (三郷市 2020)</div>
         <canvas id="pop-pyramid-canvas" style="width:100%;display:block;"></canvas>
       </div>
     </div>
     <div class="pop-source">${t('pop-source')}</div>`;
-
   requestAnimationFrame(() => {
     const tc = document.getElementById('pop-trend-canvas');
     const pc = document.getElementById('pop-pyramid-canvas');
-    if (tc) drawPopTrend(tc, data.trend);
-    if (pc) drawPopPyramid(pc, data.pyramid);
+    if (tc) drawPopTrend(tc, demoData.trend);
+    if (pc) drawPopPyramid(pc, demoData.pyramid);
   });
 }
 
