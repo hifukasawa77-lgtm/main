@@ -1459,6 +1459,8 @@
     .whr-time { font-size: 0.62rem; color: var(--muted); font-weight: 600; }
     .whr-desc { font-size: 0.58rem; color: var(--muted); text-align: center; line-height: 1.2; }
     .whr-temp { font-size: 0.72rem; font-weight: 700; color: var(--blue); }
+    .whr-pop  { font-size: 0.58rem; color: #60a5fa; }
+    .whr-rain { font-size: 0.58rem; color: #38bdf8; font-weight: 700; }
     #home-weather-tempchart {
       display: block;
       width: 100%;
@@ -4606,21 +4608,110 @@
           </div>`;
       }
 
-      function renderHourlyStrip(hours, temps, weatherCodes, nowHour) {
+      const YAHOO_APP_ID = 'dmVyPTIwMjUwNyZpZD12bXoyaUZtcmxCJmhhc2g9T1dFek5HWmtNV1F4T1RjMVlqYzNNdw';
+
+      function jmaCodeToPair(code) {
+        const n = parseInt(code || '');
+        if (isNaN(n)) return null;
+        if (n >= 400) return ['snow', '雪'];
+        if (n >= 300) {
+          if (n === 328 || n === 329 || n >= 360) return ['thunderstorms-rain', '雷雨'];
+          return ['rain', '雨'];
+        }
+        if (n >= 200) {
+          if ([202, 203, 205, 206, 207, 212, 215, 217].includes(n)) return ['rain', 'くもり一時雨'];
+          if (n === 201 || n === 210) return ['partly-cloudy-day', 'くもり時々晴'];
+          if (n === 209) return ['fog', '霧'];
+          return ['cloudy', 'くもり'];
+        }
+        if (n >= 100) {
+          if ([112, 113, 114, 115].includes(n)) return ['rain', '晴れのち雨'];
+          if ([110, 111].includes(n)) return ['partly-cloudy-day', '晴れのちくもり'];
+          if ([101, 102].includes(n)) return ['partly-cloudy-day', '晴れ時々くもり'];
+          return ['clear-day', '晴れ'];
+        }
+        return null;
+      }
+
+      async function fetchJMAForecast(lat, lon) {
+        const isSaitama = lat >= 35.6 && lat <= 36.4 && lon >= 138.7 && lon <= 140.2;
+        if (!isSaitama) return null;
+        try {
+          const res = await fetchWithTimeout('https://www.jma.go.jp/bosai/forecast/data/forecast/110000.json', 8000);
+          if (!res.ok) return null;
+          const data = await res.json();
+          const ts0 = data[0]?.timeSeries?.[0];
+          const ts1 = data[0]?.timeSeries?.[1];
+          const wArea = ts0?.areas?.find(a => a.area.code === '11010') || ts0?.areas?.[0];
+          const pArea = ts1?.areas?.find(a => a.area.code === '11010') || ts1?.areas?.[0];
+          if (!wArea) return null;
+          const popMap = {};
+          if (ts1?.timeDefines && pArea?.pops) {
+            ts1.timeDefines.forEach((t, i) => {
+              const h = new Date(t).getHours();
+              const v = parseInt(pArea.pops[i] || '');
+              if (!isNaN(v)) popMap[h] = v;
+            });
+          }
+          return {
+            code: wArea.weatherCodes?.[0],
+            text: (wArea.weathers?.[0] || '').replace(/　/g, ' ').trim(),
+            popMap,
+          };
+        } catch { return null; }
+      }
+
+      async function fetchYahooRainfall(lat, lon) {
+        try {
+          const url = 'https://map.yahooapis.jp/weather/V1/place?coordinates=' + lon + ',' + lat
+            + '&output=json&appid=' + YAHOO_APP_ID + '&interval=10';
+          const res = await fetchWithTimeout(url, 8000);
+          if (!res.ok) return null;
+          const data = await res.json();
+          return data?.Feature?.[0]?.Property?.WeatherList?.Weather || null;
+        } catch { return null; }
+      }
+
+      function renderHourlyStrip(hours, temps, weatherCodes, nowHour, popMap, yahooRain) {
         const strip = document.getElementById('home-weather-hourly-strip');
         if (!strip) return;
+
+        // Yahoo! 降水量を時刻→mm/hのマップに変換
+        const yahooByHour = {};
+        if (yahooRain) {
+          yahooRain.forEach(function(w) {
+            const s = String(w.Date || '');
+            if (s.length < 12) return;
+            const h = parseInt(s.slice(8, 10));
+            if (!isNaN(h) && w.Rainfall > 0) yahooByHour[h] = w.Rainfall;
+          });
+        }
+
         const slots = [];
         for (let i = 0; i < hours.length; i++) {
           if (hours[i] % 3 !== 0) continue;
           const code = weatherCodes?.[i];
           const pair = weatherMap[code != null ? code : -1] || ['cloudy', '不明'];
           const isNow = hours[i] === nowHour || (nowHour > hours[i] && nowHour < (hours[i + 3] || 24));
+
+          // JMA降水確率（6時間枠に対応する時刻を検索）
+          let pop = null;
+          if (popMap) {
+            const popKey = [0, 6, 12, 18].find(h => hours[i] >= h && hours[i] < h + 6);
+            if (popKey != null && popMap[popKey] != null) pop = popMap[popKey];
+          }
+
+          // Yahoo!実測雨量
+          const rain = yahooByHour[hours[i]];
+
           slots.push(
             '<div class="whr-slot" style="' + (isNow ? 'border-color:var(--blue);' : '') + '">'
             + '<div class="whr-time">' + hours[i] + '時</div>'
             + weatherImg(pair[0], 26)
             + '<div class="whr-desc">' + escHtml(pair[1]) + '</div>'
             + '<div class="whr-temp">' + Math.round(temps[i]) + '°</div>'
+            + (pop != null ? '<div class="whr-pop">雨' + pop + '%</div>' : '')
+            + (rain > 0 ? '<div class="whr-rain">' + rain + 'mm</div>' : '')
             + '</div>'
           );
         }
@@ -4959,27 +5050,40 @@
         if (titleEl) titleEl.textContent = `${city}の天気`;
         window.dispatchEvent(new CustomEvent('dashboard-location-updated', { detail: { city } }));
 
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
+        const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
           + '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,wind_direction_10m,uv_index,surface_pressure'
           + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
           + '&hourly=temperature_2m,relative_humidity_2m,weather_code'
           + '&timezone=Asia%2FTokyo&forecast_days=7&models=jma_seamless';
         try {
-          const res = await fetchWithTimeout(url, 8000);
-          if (!res.ok) throw new Error('weather');
-          const data = await res.json();
+          // Open-Meteo・JMA・Yahoo!を並列取得
+          const [omRes, jmaData, yahooRain] = await Promise.all([
+            fetchWithTimeout(omUrl, 8000),
+            fetchJMAForecast(lat, lon),
+            fetchYahooRainfall(lat, lon),
+          ]);
+          if (!omRes.ok) throw new Error('weather');
+          const data = await omRes.json();
           const code = data.current.weather_code;
           const temp = Math.round(data.current.temperature_2m);
           const humidity = Math.round(data.current.relative_humidity_2m);
           const windSpeed = Number(data.current.wind_speed_10m || 0);
           const windDir = Number(data.current.wind_direction_10m ?? 0);
           const uvIndex = Number(data.current.uv_index ?? 0);
-          const pressure = Math.round(data.current.surface_pressure ?? 0);
-          const pair = weatherMap[code] || ['cloudy', '不明'];
+
+          // アイコン・天気テキスト: JMA優先、フォールバックでOpen-Meteo
+          const jmaPair = jmaData?.code ? jmaCodeToPair(jmaData.code) : null;
+          const pair = jmaPair || weatherMap[code] || ['cloudy', '不明'];
+          const weatherText = jmaData?.text || pair[1];
+
           weatherKpi.innerHTML = `${weatherImg(pair[0], 72)}<span style="vertical-align:middle;margin-left:8px">${temp}°C</span>`;
           const windDirNames = ['北', '北北東', '北東', '東北東', '東', '東南東', '南東', '南南東', '南', '南南西', '南西', '西南西', '西', '西北西', '北西', '北北西'];
           const windDirLabel = windDirNames[Math.round(windDir / 22.5) % 16];
-          weatherSub.textContent = `${pair[1]} / 湿度 ${humidity}% / 風速 ${fmtNum(windSpeed, 1)}m/s / ${windDirLabel}から`;
+
+          // Yahoo!現在雨量
+          const nowRainEntry = yahooRain?.find(w => w.Type === 'observation');
+          const rainStr = (nowRainEntry?.Rainfall > 0) ? ` / 雨量 ${nowRainEntry.Rainfall}mm/h` : '';
+          weatherSub.textContent = `${weatherText} / 湿度 ${humidity}% / 風速 ${fmtNum(windSpeed, 1)}m/s / ${windDirLabel}から${rainStr}`;
 
           const tomorrowCode = data.daily?.weather_code?.[1];
           const tomorrowMax = data.daily?.temperature_2m_max?.[1];
@@ -5015,12 +5119,13 @@
             const hourHumidities = (data.hourly.relative_humidity_2m || []).slice(idx, idx + 24);
             const hourWeatherCodes = (data.hourly.weather_code || []).slice(idx, idx + 24);
             const hourLabels = data.hourly.time.slice(idx, idx + 24).map(t => parseInt(t.slice(11, 13)));
-            renderHourlyStrip(hourLabels, hourTemps, hourWeatherCodes, nowHour);
+            renderHourlyStrip(hourLabels, hourTemps, hourWeatherCodes, nowHour, jmaData?.popMap, yahooRain);
             drawTempChart('home-weather-tempchart', hourLabels, hourTemps, nowHour, hourHumidities, hourWeatherCodes);
           }
 
           document.getElementById('home-weather-visuals').style.display = '';
-          weatherTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+          const srcLabel = jmaData ? '気象庁+Yahoo!' : 'Open-Meteo';
+          weatherTime.textContent = `更新: ${new Date().toLocaleTimeString('ja-JP')} (${srcLabel})`;
         } catch (e) {
           weatherKpi.textContent = '取得失敗';
           weatherSub.textContent = '時間をおいて再読み込みしてください。';
