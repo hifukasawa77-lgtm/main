@@ -86,3 +86,20 @@ House correction: the first generated object sheet included house parts for comp
   - row 3: wooden bridge, stone bridge/pavement, snowfield
 
 Prompt summary: original retro top-down fantasy adventure terrain tiles in a classic 8-bit/16-bit action RPG mood, covering grassland, desert, rocky mountain, wetland, poison swamp, river, wooden bridge, stone bridge, and snowfield, with no copyrighted Zelda/Nintendo art or symbols.
+
+## GPT Image 2 World Map Rebuild Plan (Fahren Kingdom)
+
+- Files:
+  - `world-map-fahren-badon-25x25.prompt.md` - GPT Image 2.0 prompt spec for regenerating the field map
+  - `world-map-fahren-badon-25x25-layout.txt` - 25x25 logical layout draft (biome/landmark planning)
+- Created: 2026-05-22
+- Purpose: Recreate the field map around the Fahren Kingdom vs Demon King Badon invasion setting while keeping a non-cyberpunk dark fantasy style.
+- Integration target: output image path `assets/zelda-like/world-map-fahren-badon-25x25.svg`.
+
+## Fahren Kingdom Field Map (25x25)
+
+- File:
+  - `world-map-fahren-badon-25x25.svg` - generated 25x25 field map art for the Fahren Kingdom invasion setting
+- Created: 2026-05-22
+- Purpose: In-game world map texture used by `game.html` for ZELDA QUEST field rendering.
+- Notes: Original non-cyberpunk dark-fantasy look with cyan/purple accents and clear 25x25 grid readability.
