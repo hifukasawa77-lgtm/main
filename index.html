@@ -12978,40 +12978,69 @@
       {intRank:'16',strTeam:'ヴァンラーレ八戸',intPlayed:'30',intWin:'4',intLoss:'20',intDraw:'6',intPoints:'18',strTeamBadge:''}
     ];
 
-    const ESPN_SOCCER = 'https://site.api.espn.com/apis/v2/sports/soccer';
     const ESPN_SLUGS = { j1: 'jpn.1', j2: 'jpn.2', j3: 'jpn.3' };
+    // ESPN公開API: site/v2形式を優先、次にv2形式を試す
+    const ESPN_URLS = [
+      'https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/standings',
+      'https://site.api.espn.com/apis/v2/sports/soccer/{slug}/standings',
+      'https://sports.core.api.espn.com/v2/sports/soccer/leagues/{slug}/seasons/2026/types/2/groups/1/standings/0'
+    ];
+
+    function parseESPNEntries(data) {
+      // 複数のレスポンス構造に対応
+      let entries = data.standings?.entries;
+      if (!entries?.length && data.children) {
+        for (const child of data.children) {
+          entries = child.standings?.entries;
+          if (entries?.length) break;
+          if (child.children) {
+            for (const gc of child.children) {
+              entries = gc.standings?.entries;
+              if (entries?.length) break;
+            }
+          }
+          if (entries?.length) break;
+        }
+      }
+      // Core APIのitemsフォーマット
+      if (!entries?.length && data.items) entries = data.items;
+      return entries || [];
+    }
 
     async function fetchESPNStandings(sport) {
       const slug = ESPN_SLUGS[sport];
       if (!slug) return null;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 7000);
-      try {
-        const r = await fetch(ESPN_SOCCER + '/' + slug + '/standings', { signal: ctrl.signal });
-        if (!r.ok) return null;
-        const data = await r.json();
-        let entries = data.standings?.entries;
-        if (!entries) {
-          for (const child of (data.children || [])) {
-            if (child.standings?.entries?.length) { entries = child.standings.entries; break; }
-          }
+      for (const urlTpl of ESPN_URLS) {
+        const url = urlTpl.replace(/{slug}/g, slug);
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 7000);
+        try {
+          const r = await fetch(url, { signal: ctrl.signal });
+          clearTimeout(timer);
+          if (!r.ok) { console.warn('[ESPN standings]', r.status, url); continue; }
+          const data = await r.json();
+          const entries = parseESPNEntries(data);
+          if (!entries.length) { console.warn('[ESPN standings] no entries:', url); continue; }
+          return entries.map((entry, idx) => {
+            const sm = {};
+            (entry.stats || []).forEach(s => { sm[s.name] = s.displayValue; });
+            return {
+              intRank: sm.rank || String(idx + 1),
+              strTeam: entry.team?.displayName || entry.team?.shortDisplayName || '',
+              intPlayed: sm.gamesPlayed || sm.played || '0',
+              intWin: sm.wins || '0',
+              intLoss: sm.losses || '0',
+              intDraw: sm.ties || sm.draws || '0',
+              intPoints: sm.points || '0',
+              strTeamBadge: entry.team?.logos?.[0]?.href || ''
+            };
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          console.warn('[ESPN standings] error:', url, e.message);
         }
-        if (!entries?.length) return null;
-        return entries.map((entry, idx) => {
-          const sm = {};
-          (entry.stats || []).forEach(s => { sm[s.name] = s.displayValue; });
-          return {
-            intRank: sm.rank || String(idx + 1),
-            strTeam: entry.team?.displayName || entry.team?.shortDisplayName || '',
-            intPlayed: sm.gamesPlayed || sm.played || '0',
-            intWin: sm.wins || '0',
-            intLoss: sm.losses || '0',
-            intDraw: sm.ties || sm.draws || '0',
-            intPoints: sm.points || '0',
-            strTeamBadge: entry.team?.logos?.[0]?.href || ''
-          };
-        });
-      } catch (e) { return null; } finally { clearTimeout(timer); }
+      }
+      return null;
     }
 
     const _loaded = {};
@@ -13026,6 +13055,18 @@
       } finally {
         clearTimeout(timer);
       }
+    }
+
+    // GitHub Actionsが毎日更新するローカルキャッシュから取得
+    async function fetchLocalStandings(sport) {
+      try {
+        const r = await fetch('/data/standings.json?_=' + Math.floor(Date.now() / 86400000));
+        if (!r.ok) return null;
+        const data = await r.json();
+        const rows = data[sport];
+        if (!Array.isArray(rows) || rows.length < 10) return null;
+        return rows;
+      } catch (e) { return null; }
     }
 
     function teamJP(name, sport) {
@@ -13181,43 +13222,48 @@
       showSkeleton('sports-' + sport + '-results');
       showSkeleton('sports-' + sport + '-upcoming');
 
-      // J-league: ESPN (順位表) + TheSportsDB (試合結果) を並行フェッチ
+      // J-league: ローカルキャッシュ優先 → ESPN API → デモ / TheSportsDB (試合結果)
       const fetchList = [
-        isJLeague ? fetchESPNStandings(sport) : sportsFetch('/lookuptable.php?l=' + lg.id + '&s=' + lg.season),
         sportsFetch('/eventspastleague.php?id=' + lg.id),
         sportsFetch('/eventsnextleague.php?id=' + lg.id)
       ];
-      const results = await Promise.allSettled(fetchList);
-
-      // 順位表
-      const standRes = results[0];
+      const [evtPastRes, evtNextRes] = await Promise.allSettled(fetchList);
+      // 順位表は直列: ローカル → ESPN → デモ
       let standRows = null, isFallback = false;
       const FALLBACK_MAP = { npb: NPB_FALLBACK, j1: J1_FALLBACK, j2: J2_FALLBACK, j3: J3_FALLBACK };
       const JP_MAPS = { npb: NPB_JP, j1: J1_JP, j2: J2_JP, j3: J3_JP };
+      // resultsを後続コードに合わせてエイリアス
+      const results = [null, evtPastRes, evtNextRes];
 
       if (isJLeague) {
-        // ESPN APIが成功し十分なチーム数があればリアルタイム表示
-        const espnRows = standRes.status === 'fulfilled' ? standRes.value : null;
-        if (espnRows && espnRows.length >= 10) {
-          standRows = espnRows;
-        } else {
+        // 1. GitHub Actionsが更新するローカルキャッシュを最優先
+        standRows = await fetchLocalStandings(sport);
+        // 2. ローカルがなければESPN API直接
+        if (!standRows) standRows = await fetchESPNStandings(sport);
+        // 3. どちらも失敗ならデモ
+        if (!standRows) {
           standRows = FALLBACK_MAP[sport] || J1_FALLBACK;
           isFallback = true;
         }
       } else {
         // NPB: TheSportsDB
-        if (standRes.status === 'fulfilled' && standRes.value && standRes.value.table && standRes.value.table.length) {
-          const rows = standRes.value.table;
-          const jpMap = JP_MAPS[sport] || {};
-          const knownCount = rows.filter(r => jpMap[r.strTeam]).length;
-          if (knownCount === 0 && Object.keys(jpMap).length > 0) {
-            standRows = FALLBACK_MAP[sport] || J1_FALLBACK;
-            isFallback = true;
+        try {
+          const tsdb = await sportsFetch('/lookuptable.php?l=' + lg.id + '&s=' + lg.season);
+          if (tsdb && tsdb.table && tsdb.table.length) {
+            const jpMap = JP_MAPS[sport] || {};
+            const knownCount = tsdb.table.filter(r => jpMap[r.strTeam]).length;
+            if (knownCount === 0 && Object.keys(jpMap).length > 0) {
+              standRows = FALLBACK_MAP[sport] || NPB_FALLBACK;
+              isFallback = true;
+            } else {
+              standRows = tsdb.table;
+            }
           } else {
-            standRows = rows;
+            standRows = FALLBACK_MAP[sport] || NPB_FALLBACK;
+            isFallback = true;
           }
-        } else {
-          standRows = FALLBACK_MAP[sport] || J1_FALLBACK;
+        } catch (e) {
+          standRows = FALLBACK_MAP[sport] || NPB_FALLBACK;
           isFallback = true;
         }
       }
