@@ -29,6 +29,7 @@ Current `zelda_like.html` uses lightweight original Canvas pixel art for the liv
   - `player/gpt-image-2-hero-sheet.png` - local transparent PNG processed from the source
 - Generator: GPT Image 2
 - Created: 2026-05-19
+- Updated: 2026-05-24
 - Purpose: Original protagonist sprite sheet for `zelda_like.html`
 - Layout: 4 rows by 3 columns; rows are down, left, right, up; columns are step, idle, step
 
@@ -41,6 +42,7 @@ Prompt summary: original top-down fantasy adventure hero sprite sheet, classic 8
   - `enemies/gpt-image-2-enemy-sheet.png` - local transparent PNG processed from the source
 - Generator: GPT Image 2
 - Created: 2026-05-19
+- Updated: 2026-05-24
 - Purpose: Original enemy sprite sheet for `zelda_like.html`
 - Layout: 5 rows by 2 columns
   - row 1: red pebble-spitter enemy, two frames
@@ -51,6 +53,23 @@ Prompt summary: original top-down fantasy adventure hero sprite sheet, classic 8
 
 Prompt summary: original retro top-down enemy sprite sheet preserving gameplay roles from the current game, no copyrighted Zelda/Nintendo enemy likenesses, flat chroma-key background.
 
+## GPT Image 2 NPC Sprite
+
+- Files:
+  - `npcs/gpt-image-2-npc-sheet-source.png` - original generated sheet with chroma-key background
+  - `npcs/gpt-image-2-npc-sheet.png` - local transparent PNG processed from the source
+- Generator: GPT Image 2
+- Created: 2026-05-24
+- Purpose: Original NPC sprite sheet for `zelda_like.html`
+- Layout: 5 rows by 2 columns
+  - row 1: human villager man, two frames
+  - row 2: elven villager woman, two frames
+  - row 3: traveling merchant, two frames
+  - row 4: village dog, two frames
+  - row 5: village chicken, two frames
+
+Prompt summary: original retro top-down NPC sprite sheet for Fahren Kingdom villagers, merchant, and village creatures, no copyrighted Zelda/Nintendo likenesses, flat chroma-key background.
+
 ## GPT Image 2 Object Sprite
 
 - Files:
@@ -58,8 +77,11 @@ Prompt summary: original retro top-down enemy sprite sheet preserving gameplay r
   - `objects/gpt-image-2-object-sheet.png` - local transparent PNG processed from the source
   - `objects/gpt-image-2-house-full-source.png` - original generated complete house object with chroma-key background
   - `objects/gpt-image-2-house-full.png` - local transparent PNG processed from the complete house source
+  - `objects/gpt-image-2-town-wall-source.png` - original generated castle wall tile with chroma-key background
+  - `objects/gpt-image-2-town-wall.png` - local transparent PNG processed from the castle wall source
 - Generator: GPT Image 2
 - Created: 2026-05-19
+- Updated: 2026-05-24
 - Purpose: Original environment object sprite sheet for `zelda_like.html`
 - Layout: 5 rows by 5 columns
   - row 1: house roof top-left, roof top-middle, roof top-right, wooden wall-left, wooden door
@@ -70,7 +92,7 @@ Prompt summary: original retro top-down enemy sprite sheet preserving gameplay r
 
 Prompt summary: original retro top-down object sprite sheet for houses, fences, mailbox, trees, rocks, bushes, and biome obstacles, no copyrighted Zelda/Nintendo object likenesses, flat chroma-key background.
 
-House correction: the first generated object sheet included house parts for compatibility with the old tile renderer. A separate complete house object was generated afterward and is now used by `zelda_like.html` as `sprites.house_full`, drawn once at 3x3 tile size.
+House correction: the first generated object sheet included house parts for compatibility with the old tile renderer. A separate complete house object was generated afterward and is now used by `zelda_like.html` as `sprites.house_full`, drawn once at 3x3 tile size. A separate castle wall tile is used by `zelda_like.html` as `sprites.wall_town` for solid royal-capital walls.
 
 ## GPT Image 2 Terrain Sprite
 
@@ -79,6 +101,7 @@ House correction: the first generated object sheet included house parts for comp
   - `terrain/gpt-image-2-terrain-sheet.png` - local terrain sheet used by the game
 - Generator: GPT Image 2
 - Created: 2026-05-19
+- Updated: 2026-05-24
 - Purpose: Original field terrain tiles for `zelda_like.html`
 - Layout: 3 rows by 3 columns
   - row 1: grassland, desert, rocky mountain

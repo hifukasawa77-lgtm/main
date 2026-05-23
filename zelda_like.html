@@ -767,6 +767,74 @@
                 });
             }
 
+            function sliceNpcSheet(imgSrc, size) {
+                return new Promise(resolve => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const cols = 2;
+                        const rows = 5;
+                        const cellW = img.width / cols;
+                        const cellH = img.height / rows;
+                        const frameMap = [
+                            ['npc_man_1', 'npc_man_2'],
+                            ['npc_woman_1', 'npc_woman_2'],
+                            ['merchant', 'merchant_2'],
+                            ['npc_dog_1', 'npc_dog_2'],
+                            ['npc_chicken_1', 'npc_chicken_2']
+                        ];
+                        const output = {};
+
+                        frameMap.forEach((rowFrames, row) => {
+                            rowFrames.forEach((name, col) => {
+                                const crop = document.createElement('canvas');
+                                crop.width = cellW;
+                                crop.height = cellH;
+                                const cctx = crop.getContext('2d');
+                                cctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, cellW, cellH);
+
+                                const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
+                                const data = imageData.data;
+                                let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
+                                for (let y = 0; y < crop.height; y++) {
+                                    for (let x = 0; x < crop.width; x++) {
+                                        const alpha = data[(y * crop.width + x) * 4 + 3];
+                                        if (alpha > 12) {
+                                            minX = Math.min(minX, x);
+                                            minY = Math.min(minY, y);
+                                            maxX = Math.max(maxX, x);
+                                            maxY = Math.max(maxY, y);
+                                        }
+                                    }
+                                }
+
+                                const frame = document.createElement('canvas');
+                                frame.width = size;
+                                frame.height = size;
+                                const fctx = frame.getContext('2d');
+                                fctx.imageSmoothingEnabled = false;
+
+                                if (maxX > minX && maxY > minY) {
+                                    const srcW = maxX - minX + 1;
+                                    const srcH = maxY - minY + 1;
+                                    const scale = Math.min((size - 1) / srcW, (size - 1) / srcH);
+                                    const dstW = Math.max(1, Math.round(srcW * scale));
+                                    const dstH = Math.max(1, Math.round(srcH * scale));
+                                    const dstX = Math.floor((size - dstW) / 2);
+                                    const dstY = Math.floor((size - dstH) / 2);
+                                    fctx.drawImage(crop, minX, minY, srcW, srcH, dstX, dstY, dstW, dstH);
+                                }
+                                output[name] = frame;
+                            });
+                        });
+
+                        output.npc_dog = output.npc_dog_1;
+                        output.npc_chicken = output.npc_chicken_1;
+                        resolve(output);
+                    };
+                    img.src = imgSrc;
+                });
+            }
+
             function sliceObjectSheet(imgSrc, size) {
                 return new Promise(resolve => {
                     const img = new Image();
@@ -898,6 +966,9 @@
             sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-sheet.png', 20).then(frames => {
                 Object.assign(sprites, frames);
             });
+            sliceNpcSheet('assets/zelda-like/npcs/gpt-image-2-npc-sheet.png', 20).then(frames => {
+                Object.assign(sprites, frames);
+            });
             sliceObjectSheet('assets/zelda-like/objects/gpt-image-2-object-sheet.png', 16).then(frames => {
                 Object.assign(sprites, frames);
             });
@@ -910,6 +981,9 @@
             });
             loadSingleObject('assets/zelda-like/objects/gpt-image-2-house-full.png', 48, 48).then(frame => {
                 sprites.house_full = frame;
+            });
+            loadSingleObject('assets/zelda-like/objects/gpt-image-2-town-wall.png', 16, 16).then(frame => {
+                sprites.wall_town = frame;
             });
         }
         applyAIGraphics();
@@ -1936,10 +2010,6 @@
                 for (let c = 0; c < SCREEN_COLS; c++) {
                     const tile = roomData.tiles[r][c];
 
-                    if ((biome === 'grassland' || biome === 'forest') && tile === 0 && (r === 5 || r === 6)) {
-                        const bridgeSprite = c >= 7 && c <= 8 ? sprites.terrain_wood_bridge : sprites.terrain_river;
-                        drawTerrainSprite(layerCtx, bridgeSprite, c, r);
-                    }
                     if (biome === 'lake' && tile === 0) {
                         drawTerrainSprite(layerCtx, sprites.terrain_wood_bridge || sprites.terrain_river, c, r);
                     }
@@ -1969,6 +2039,10 @@
         }
 
         function drawTownWallTile(x, y) {
+            if (sprites.wall_town) {
+                ctx.drawImage(sprites.wall_town, x, y, TILE, TILE);
+                return;
+            }
             ctx.fillStyle = '#4f565c';
             ctx.fillRect(x, y, TILE, TILE);
             ctx.fillStyle = '#8d969b';
@@ -2184,6 +2258,61 @@
             mountain: '山岳'
         };
 
+        function drawFieldMinimap(x, y, w, h) {
+            ctx.fillStyle = '#0d0d20';
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeStyle = '#d8a038';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x, y, w, h);
+
+            const mapSize = 56;
+            const cell = mapSize / WORLD_SIZE;
+            const mapX = x + Math.floor((w - mapSize) / 2);
+            const mapY = y + Math.floor((h - mapSize) / 2);
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(mapX, mapY, mapSize, mapSize);
+            ctx.clip();
+
+            if (fahrenWorldMapReady) {
+                ctx.imageSmoothingEnabled = true;
+                ctx.drawImage(fahrenWorldMapImage, mapX, mapY, mapSize, mapSize);
+            } else {
+                const fallbackColors = {
+                    F: '#1f6b38',
+                    M: '#777b7e',
+                    O: '#4a3735',
+                    D: '#d7ae5b',
+                    W: '#526b48',
+                    L: '#267aa2',
+                    C: '#d8d0bd',
+                    V: '#b68b4a',
+                    X: '#6d5270',
+                    P: '#72aa37'
+                };
+                for (let r = 0; r < WORLD_SIZE; r++) {
+                    for (let c = 0; c < WORLD_SIZE; c++) {
+                        ctx.fillStyle = fallbackColors[FAHREN_LAYOUT[r][c]] || fallbackColors.P;
+                        ctx.fillRect(mapX + c * cell, mapY + r * cell, Math.ceil(cell), Math.ceil(cell));
+                    }
+                }
+            }
+
+            const currentCol = currentRoomX - WORLD_MIN;
+            const currentRow = currentRoomY - WORLD_MIN;
+            const px = mapX + currentCol * cell + cell / 2;
+            const py = mapY + currentRow * cell + cell / 2;
+            ctx.fillStyle = '#ff1c1c';
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+        }
+
         function drawUI() {
             // UI background with gradient
             const uiGrad = ctx.createLinearGradient(0,0,0,UI_OFFSET);
@@ -2206,32 +2335,8 @@
             ctx.fillStyle = '#b8f818';
             ctx.fillText('x' + rupees, 20, 32);
 
-            // Inventory panel
-            ctx.fillStyle = '#0d0d20';
-            ctx.fillRect(78, 2, 86, 60);
-            ctx.strokeStyle = '#d8a038'; ctx.lineWidth = 1;
-            ctx.strokeRect(78, 2, 86, 60);
-            
-            let sx = 80, sy = 6;
-            const items4 = [
-                {key:'bomb', lbl:'1', ico:'ico_bomb', val:()=>inventory.bombs>0, cnt:()=>`x${inventory.bombs}`},
-                {key:'bow', lbl:'2', ico:'ico_bow', val:()=>equipment.bow, cnt:()=>`x${inventory.arrows}`},
-                {key:'candle', lbl:'3', ico:'ico_candle', val:()=>equipment.candle, cnt:()=>''},
-                {key:'potion', lbl:'4', ico:'ico_potion', val:()=>inventory.potions>0, cnt:()=>`x${inventory.potions}`}
-            ];
-            items4.forEach((it,idx) => {
-                const row = Math.floor(idx/2), col = idx%2;
-                const ix = sx + col*42, iy = sy + row*28;
-                const active = activeItem===it.key;
-                ctx.fillStyle = active ? '#302010' : '#0a0a18';
-                ctx.fillRect(ix, iy, 40, 26);
-                if(active){ctx.strokeStyle='#fc9838';ctx.strokeRect(ix,iy,40,26);}
-                ctx.fillStyle = active ? '#fcd8a8' : '#888';
-                ctx.fillText(it.lbl+':', ix+2, iy+9);
-                if(it.val()) ctx.drawImage(sprites[it.ico], ix+12, iy+2, 12, 12);
-                ctx.fillStyle = active ? '#fff' : '#666';
-                ctx.fillText(it.cnt(), ix+12, iy+22);
-            });
+            // Whole-field minimap
+            drawFieldMinimap(78, 2, 86, 60);
 
             // Life
             ctx.fillStyle = '#d82800';
