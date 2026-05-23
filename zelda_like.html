@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Retro Adventure RPG - The Town & Items</title>
+    <title>Fahren Kingdom Quest - Retro Adventure RPG</title>
     <style>
         body {
             background-color: #111;
@@ -57,16 +57,16 @@
 </head>
 <body>
 
-    <h1>Retro Adventure : The Infinite Quest</h1>
+    <h1>Fahren Kingdom Quest / ファーレン王国クエスト</h1>
     
     <div id="game-container">
         <canvas id="gameCanvas" width="256" height="240"></canvas>
     </div>
 
     <div class="instructions">
-        <p>移動: <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | 剣/会話: <kbd>Space</kbd> または <kbd>Z</kbd> | アイテム使用: <kbd>Shift</kbd> または <kbd>X</kbd></p>
-        <p>アイテム切替: <kbd>1</kbd> 爆弾 <kbd>2</kbd> 弓矢 <kbd>3</kbd> 蝋燭 <kbd>4</kbd> 回復薬</p>
-        <p style="color: #fcd8a8;">中央に「街（3x3）」が出現！住人と話し、お金を貯めて店でアイテムを買い揃えよう！</p>
+        <p>移動 / Move: <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | 剣・会話 / Sword・Talk: <kbd>Space</kbd> or <kbd>Z</kbd> | アイテム / Item: <kbd>Shift</kbd> or <kbd>X</kbd></p>
+        <p>アイテム切替 / Select: <kbd>1</kbd> 爆弾 <kbd>2</kbd> 弓矢 <kbd>3</kbd> ろうそく <kbd>4</kbd> 回復薬</p>
+        <p style="color: #fcd8a8;">人間、エルフ、ドワーフが共存するファーレン王国を25×25画面のフィールドとして探索します。</p>
     </div>
 
     <script>
@@ -287,8 +287,10 @@
         const BIOME_BG = {
             town: '#78b028',
             grassland: '#78b028',
+            forest: '#1f5c32',
             desert: '#fcd8a8',
             volcano: '#505050',
+            lake: '#1f6f98',
             swamp: '#485830',
             snow: '#f8f8f8',
             mountain: '#888888'
@@ -912,6 +914,14 @@
         }
         applyAIGraphics();
 
+        const fahrenWorldMapImage = new Image();
+        let fahrenWorldMapReady = false;
+        fahrenWorldMapImage.onload = () => {
+            fahrenWorldMapReady = true;
+            terrainGraphicsVersion++;
+        };
+        fahrenWorldMapImage.src = 'assets/zelda-like/world-map-fahren-25x25.png';
+
         // --- CONSTANTS ---
         const TILE = 16;
         const SCREEN_COLS = 16;
@@ -965,17 +975,122 @@
         }
 
         // --- WORLD GENERATION ---
-        function getBiome(rx, ry) {
-            if (Math.abs(rx) <= 1 && Math.abs(ry) <= 1) return 'town';
-            if (Math.abs(rx) <= 4 && Math.abs(ry) <= 4) return 'grassland';
-            if (rx <= 0 && ry <= 0) return 'snow';
-            if (rx > 0 && ry <= 0) {
-                if (rx >= 6 && ry <= -6) return 'volcano';
-                return 'mountain';
+        const WORLD_SIZE = 25;
+        const WORLD_MIN = -12;
+        const WORLD_MAX = 12;
+        const START_ROOM_X = -4;
+        const START_ROOM_Y = 0;
+        const FAHREN_LAYOUT = [
+            'FFFFFFFFPPPPMMMMMMMMOOOOO',
+            'FFFFFFFPPPPPMMMMMMMOOOOOO',
+            'FFFFFFPPPPPPMMMMMMMOOOOOO',
+            'FFFFFPPPPPPPMMMMMMMOOOOOO',
+            'FFFFPPPVPPPPPMMMMMOOOOOOO',
+            'FFFPPPPPPPPPPMMMMMOOOOOOO',
+            'FFPPPPPPPPPPPMMMMMMOOOOOO',
+            'FPPPPPPPPPPPPMMMMMLLLOOOO',
+            'DPPPPPVPPPPPPMMMMLLLLLOOO',
+            'DDPPPPPPPPPPPMMMMLLLLLOOO',
+            'DDDPPPPPFFPPPMMMMMLLLLLLO',
+            'DDDPPPFFFFPPPMMMLLLLLLLOO',
+            'DDDPPPPCCCPPMMMLLLLLLLLOO',
+            'DDDPPPFFFFPPPMMMLLLLLLWWW',
+            'DDDPPPPFFFFPPMMMLLLLLLWWW',
+            'DDDPPPPPPPPPMMMWWWWWWWWWW',
+            'DDDPPPVPPPPPMMWWWWWWWWWWW',
+            'DDDPPPPPPPPPMMWWWXWWWWWWW',
+            'DDPPPPPPPPPPMMWWWWWWWWWWW',
+            'DPPPPPPPPFFPMMWWWWWWWWWWW',
+            'DPPPPPPPFFFFMMWWWWWWWWWWW',
+            'DPPPPPVPPFFPMMWWWWWWWWWWW',
+            'DPPPPPPPPPPPMMWWWWWWWWWWW',
+            'DPPPPPPPPPPPMMMMWWWWWWWWW',
+            'DDDDDPPPPPMMMMMMMWWWWWWWW'
+        ];
+        const BIOME_BY_CODE = {
+            P: 'grassland',
+            F: 'forest',
+            M: 'mountain',
+            O: 'volcano',
+            D: 'desert',
+            W: 'swamp',
+            L: 'lake',
+            C: 'town',
+            V: 'town',
+            X: 'swamp'
+        };
+        const CAPITAL_ROOM_TEMPLATE = [
+            '#######==#######',
+            '#.....#==#.....#',
+            '#.###.#==#.###.#',
+            '#.....#==#.....#',
+            '======#==#======',
+            '================',
+            '======#==#======',
+            '#.....#==#.....#',
+            '#.###.====.###.#',
+            '#.....#==#.....#',
+            '#######==#######'
+        ];
+
+        function templateCharToTile(ch) {
+            if (ch === '#') return 1;
+            if (ch === '=') return 3;
+            return 0;
+        }
+
+        function buildTemplateTiles(template) {
+            return template.map(row => row.split('').map(templateCharToTile));
+        }
+
+        function placeHouse(tiles, left, top) {
+            for (let r = 0; r < 3; r++) {
+                for (let c = 0; c < 3; c++) {
+                    tiles[top + r][left + c] = 20 + r * 3 + c;
+                }
             }
-            if (rx <= 0 && ry > 0) return 'desert';
-            if (rx > 0 && ry > 0) return 'swamp';
-            return 'grassland';
+        }
+
+        function createVillageTiles() {
+            const tiles = buildTemplateTiles([
+                '#######==#######',
+                '#......==......#',
+                '#......==......#',
+                '#......==......#',
+                '======....======',
+                '================',
+                '======....======',
+                '#......==......#',
+                '#......==......#',
+                '#......==......#',
+                '#######==#######'
+            ]);
+            placeHouse(tiles, 2, 1);
+            placeHouse(tiles, 11, 1);
+            placeHouse(tiles, 2, 7);
+            tiles[7][11] = 43;
+            tiles[7][12] = 43;
+            tiles[8][12] = 42;
+            return tiles;
+        }
+
+        function createTownTiles(rx, ry) {
+            const settlementCode = getWorldCode(rx, ry);
+            if (settlementCode === 'C') return buildTemplateTiles(CAPITAL_ROOM_TEMPLATE);
+            return createVillageTiles();
+        }
+
+        function isInsideWorld(rx, ry) {
+            return rx >= WORLD_MIN && rx <= WORLD_MAX && ry >= WORLD_MIN && ry <= WORLD_MAX;
+        }
+
+        function getWorldCode(rx, ry) {
+            if (!isInsideWorld(rx, ry)) return 'M';
+            return FAHREN_LAYOUT[ry - WORLD_MIN][rx - WORLD_MIN];
+        }
+
+        function getBiome(rx, ry) {
+            return BIOME_BY_CODE[getWorldCode(rx, ry)] || 'grassland';
         }
 
         const worldMap = {};
@@ -984,79 +1099,20 @@
         function generateRoom(rx, ry) {
             const biome = getBiome(rx, ry);
             let tiles = [];
+            const townTiles = biome === 'town' ? createTownTiles(rx, ry) : null;
             
             for(let r = 0; r < SCREEN_ROWS; r++) {
                 let row = [];
                 for(let c = 0; c < SCREEN_COLS; c++) {
                     let isEdge = (r === 0 || r === SCREEN_ROWS-1 || c === 0 || c === SCREEN_COLS-1);
                     let isDoor = false;
-                    if (r === 0 && c >= 7 && c <= 8 && ry > -12) isDoor = true;
-                    if (r === SCREEN_ROWS-1 && c >= 7 && c <= 8 && ry < 12) isDoor = true;
-                    if (c === 0 && r >= 4 && r <= 6 && rx > -12) isDoor = true;
-                    if (c === SCREEN_COLS-1 && r >= 4 && r <= 6 && rx < 12) isDoor = true;
+                    if (r === 0 && c >= 7 && c <= 8 && ry > WORLD_MIN) isDoor = true;
+                    if (r === SCREEN_ROWS-1 && c >= 7 && c <= 8 && ry < WORLD_MAX) isDoor = true;
+                    if (c === 0 && r >= 4 && r <= 6 && rx > WORLD_MIN) isDoor = true;
+                    if (c === SCREEN_COLS-1 && r >= 4 && r <= 6 && rx < WORLD_MAX) isDoor = true;
                     
                     if (biome === 'town') {
-                        if (isEdge && !isDoor) {
-                            row.push(1); // Boundary tree
-                        } else if (isEdge && isDoor) {
-                            row.push(3); // Pavement
-                        } else {
-                            // Basic town layout
-                            let hasH1 = false, hasH2 = false, hasH3 = false, hasH4 = false;
-                            if (rx === -1 && ry === -1) { hasH1 = true; }
-                            else if (rx === 1 && ry === -1) { hasH2 = true; }
-                            else if (rx === -1 && ry === 1) { hasH3 = true; }
-                            else if (rx === 1 && ry === 1) { hasH4 = true; }
-                            else if (rx === -1 && ry === 0) { hasH1 = true; hasH3 = true; }
-                            else if (rx === 1 && ry === 0) { hasH2 = true; hasH4 = true; }
-                            else if (rx === 0 && ry === -1) { hasH1 = true; hasH2 = true; }
-                            else if (rx === 0 && ry === 1) { hasH3 = true; hasH4 = true; }
-                            
-                            let isHouse1 = hasH1 && (c >= 2 && c <= 4 && r >= 1 && r <= 3);
-                            let isHouse2 = hasH2 && (c >= 11 && c <= 13 && r >= 1 && r <= 3);
-                            let isHouse3 = hasH3 && (c >= 2 && c <= 4 && r >= 7 && r <= 9);
-                            let isHouse4 = hasH4 && (c >= 11 && c <= 13 && r >= 7 && r <= 9);
-                            let isHouse = isHouse1 || isHouse2 || isHouse3 || isHouse4;
-                            
-                            let isPath = (c >= 6 && c <= 9) || (r >= 4 && r <= 6);
-                            
-                            if (isHouse) {
-                                let hr = r >= 7 ? r - 6 : r;
-                                let hc = c >= 11 ? c - 11 : c - 2;
-                                row.push(20 + (hr - 1) * 3 + hc);
-                            } else if (isPath) {
-                                row.push(3); // Pavement
-                            } else {
-                                let tile = 0;
-                                if (hasH1 && tile === 0) {
-                                    if ((r === 1 || r === 2 || r === 3) && (c === 1 || c === 5)) tile = 41;
-                                    else if (r === 0 && c >= 1 && c <= 5) tile = 40;
-                                    else if (r === 3 && c === 4) tile = 42;
-                                }
-                                if (hasH2 && tile === 0) {
-                                    if ((r === 1 || r === 2 || r === 3) && (c === 10 || c === 14)) tile = 41;
-                                    else if (r === 0 && c >= 10 && c <= 14) tile = 40;
-                                    else if (r === 3 && c === 11) tile = 42;
-                                }
-                                if (hasH3 && tile === 0) {
-                                    if ((r === 7 || r === 8 || r === 9) && (c === 1 || c === 5)) tile = 41;
-                                    else if (r === 10 && c >= 1 && c <= 5) tile = 40;
-                                    else if (r === 7 && c === 4) tile = 42;
-                                }
-                                if (hasH4 && tile === 0) {
-                                    if ((r === 7 || r === 8 || r === 9) && (c === 10 || c === 14)) tile = 41;
-                                    else if (r === 10 && c >= 10 && c <= 14) tile = 40;
-                                    else if (r === 7 && c === 11) tile = 42;
-                                }
-                                
-                                if (tile !== 0) {
-                                    row.push(tile);
-                                } else {
-                                    if (Math.random() < 0.2) row.push(43);
-                                    else row.push(0);
-                                }
-                            }
-                        }
+                        row.push(townTiles[r][c]);
                     } else {
                         if (isEdge && !isDoor) {
                             row.push(1);
@@ -1072,6 +1128,23 @@
                                     else if (rand < 0.3) row.push(2); 
                                     else if (rand < 0.7) row.push(4); 
                                     else row.push(0);                 
+                                }
+                            } else if (biome === 'lake') {
+                                if (isPath) row.push((c >= 7 && c <= 8) || (r >= 4 && r <= 6) ? 0 : 2);
+                                else {
+                                    let rand = Math.random();
+                                    if (rand < 0.72) row.push(2);
+                                    else if (rand < 0.88) row.push(0);
+                                    else row.push(1);
+                                }
+                            } else if (biome === 'forest') {
+                                if (isPath) row.push(0);
+                                else {
+                                    let rand = Math.random();
+                                    if (rand < 0.22) row.push(1);
+                                    else if (rand < 0.34) row.push(43);
+                                    else if (rand < 0.46) row.push(2);
+                                    else row.push(0);
                                 }
                             } else {
                                 if (isPath) row.push(0);
@@ -1113,7 +1186,18 @@
             if (biome === 'town') {
                 // Spawn NPCs
                 let npcs = [];
-                if (rx === 0 && ry === 0) {
+                const settlementCode = getWorldCode(rx, ry);
+                if (settlementCode === 'C') {
+                    npcs.push(new NPC(8*TILE, 3*TILE, rx, ry, 'merchant', 'weapon'));
+                    npcs.push(new NPC(12*TILE, 6*TILE, rx, ry, 'merchant', 'armor'));
+                    npcs.push(new NPC(4*TILE, 7*TILE, rx, ry, 'merchant', 'item'));
+                    npcs.push(new NPC(7*TILE, 6*TILE, rx, ry, 'man', 'ここはファーレン王国の王都。人間、エルフ、ドワーフが交易する中心地だ。'));
+                    npcs.push(new NPC(10*TILE, 4*TILE, rx, ry, 'woman', '北西はエルフの森、東はドワーフの山、南東は湿原と大きな湖よ。'));
+                } else if (settlementCode === 'V') {
+                    npcs.push(new NPC(8*TILE, 3*TILE, rx, ry, 'merchant', Math.random() < 0.5 ? 'item' : 'weapon'));
+                    npcs.push(new NPC(5*TILE, 6*TILE, rx, ry, 'man', '旅人よ、道は王都へ続く。砂漠、森、山、湿原で敵の気配が強まっている。'));
+                    npcs.push(new NPC(12*TILE, 7*TILE, rx, ry, 'woman', '湖のほとりでは水辺の魔物に気をつけて。'));
+                } else if (rx === 0 && ry === 0) {
                     npcs.push(new NPC(8*TILE, 5*TILE, rx, ry, 'man', 'ここは はじまりのまち です。'));
                     npcs.push(new NPC(12*TILE, 6*TILE, rx, ry, 'woman', 'まもの には きをつけて！'));
                     npcs.push(new NPC(4*TILE, 7*TILE, rx, ry, 'dog', 'ワン！ワン！'));
@@ -1131,7 +1215,7 @@
                     npcs.push(new NPC((4+Math.random()*8)*TILE, (4+Math.random()*4)*TILE, rx, ry, Math.random() < 0.5 ? 'man':'woman', 'こんにちは！'));
                     if (Math.random() < 0.5) npcs.push(new NPC((2+Math.random()*12)*TILE, (2+Math.random()*8)*TILE, rx, ry, 'chicken', 'ココッ！'));
                 }
-                return { biome: biome, tiles: tiles, npcs: npcs };
+                return { biome: biome, worldX: rx, worldY: ry, tiles: tiles, npcs: npcs };
             }
 
             // Spawn Enemies for other biomes
@@ -1143,15 +1227,17 @@
                 let type = 'octorok';
                 let rand = Math.random();
                 if (biome === 'grassland') { type = rand < 0.4 ? 'moblin' : 'octorok'; } 
+                else if (biome === 'forest') { type = rand < 0.5 ? 'moblin' : 'bat'; }
                 else if (biome === 'desert') { type = 'worm'; } 
                 else if (biome === 'mountain') { type = rand < 0.4 ? 'bat' : 'spider'; } 
                 else if (biome === 'volcano') { type = rand < 0.5 ? 'bat' : 'moblin'; } 
+                else if (biome === 'lake') { type = rand < 0.7 ? 'octorok' : 'bat'; }
                 else if (biome === 'swamp') { type = rand < 0.4 ? 'moblin' : (rand < 0.7 ? 'bat' : 'octorok'); } 
                 else if (biome === 'snow') { type = 'spider'; }
                 enemyList.push(new Enemy(ex, ey, rx, ry, type));
             }
 
-            return { biome: biome, tiles: tiles, enemies: enemyList };
+            return { biome: biome, worldX: rx, worldY: ry, tiles: tiles, enemies: enemyList };
         }
 
         function getRoom(x, y) {
@@ -1162,7 +1248,7 @@
             return worldMap[key];
         }
 
-        let currentRoomX = 0; let currentRoomY = 0;
+        let currentRoomX = START_ROOM_X; let currentRoomY = START_ROOM_Y;
         let isTransitioning = false; let transOffset = { x: 0, y: 0 };
         let nextRoomData = null;
         let transDirX = 0, transDirY = 0, transProgress = 0;
@@ -1210,19 +1296,19 @@
                 if (this.invincibleTimer > 0) this.invincibleTimer--;
 
                 if (this.x < 0) {
-                    if (currentRoomX > -12) startTransition(-1, 0);
+                    if (currentRoomX > WORLD_MIN) startTransition(-1, 0);
                     else this.x = 0;
                 }
                 else if (this.x + this.w > SCREEN_COLS * TILE) {
-                    if (currentRoomX < 12) startTransition(1, 0);
+                    if (currentRoomX < WORLD_MAX) startTransition(1, 0);
                     else this.x = SCREEN_COLS * TILE - this.w;
                 }
                 else if (this.y < 0) {
-                    if (currentRoomY > -12) startTransition(0, -1);
+                    if (currentRoomY > WORLD_MIN) startTransition(0, -1);
                     else this.y = 0;
                 }
                 else if (this.y + this.h > SCREEN_ROWS * TILE) {
-                    if (currentRoomY < 12) startTransition(0, 1);
+                    if (currentRoomY < WORLD_MAX) startTransition(0, 1);
                     else this.y = SCREEN_ROWS * TILE - this.h;
                 }
                 
@@ -1763,19 +1849,60 @@
         const terrainLayerCache = new WeakMap();
 
         function getBaseTerrainSprite(biome) {
+            if (biome === 'forest') return sprites.terrain_grassland;
             if (biome === 'grassland') return sprites.terrain_grassland;
             if (biome === 'desert') return sprites.terrain_desert;
             if (biome === 'mountain') return sprites.terrain_mountain;
             if (biome === 'swamp') return sprites.terrain_wetland || sprites.ground_swamp;
+            if (biome === 'lake') return sprites.terrain_river;
             if (biome === 'snow') return sprites.terrain_snowfield;
             if (biome === 'volcano') return sprites.terrain_mountain;
             if (biome === 'town') return sprites.terrain_grassland || sprites.ground_town;
             return null;
         }
 
+        function getObjectSpriteBiome(biome) {
+            if (biome === 'forest') return 'grassland';
+            if (biome === 'lake') return 'swamp';
+            return biome;
+        }
+
         function drawTerrainSprite(layerCtx, sprite, c, r) {
             if (!sprite) return;
             layerCtx.drawImage(sprite, c * TILE, r * TILE);
+        }
+
+        function hasFahrenWorldMapBase(roomData) {
+            return fahrenWorldMapReady &&
+                fahrenWorldMapImage.naturalWidth &&
+                roomData.worldX !== undefined &&
+                roomData.worldY !== undefined &&
+                isInsideWorld(roomData.worldX, roomData.worldY);
+        }
+
+        function drawFahrenWorldMapSlice(layerCtx, roomData) {
+            if (!hasFahrenWorldMapBase(roomData)) {
+                return false;
+            }
+
+            const col = roomData.worldX - WORLD_MIN;
+            const row = roomData.worldY - WORLD_MIN;
+            if (col < 0 || col >= WORLD_SIZE || row < 0 || row >= WORLD_SIZE) return false;
+
+            const cellW = fahrenWorldMapImage.naturalWidth / WORLD_SIZE;
+            const cellH = fahrenWorldMapImage.naturalHeight / WORLD_SIZE;
+            const bleed = 0.08;
+            const sx = Math.max(0, (col - bleed) * cellW);
+            const sy = Math.max(0, (row - bleed) * cellH);
+            const sw = Math.min(fahrenWorldMapImage.naturalWidth - sx, cellW * (1 + bleed * 2));
+            const sh = Math.min(fahrenWorldMapImage.naturalHeight - sy, cellH * (1 + bleed * 2));
+
+            layerCtx.save();
+            layerCtx.imageSmoothingEnabled = false;
+            layerCtx.globalAlpha = 0.16;
+            layerCtx.drawImage(fahrenWorldMapImage, sx, sy, sw, sh, 0, 0, layerCtx.canvas.width, layerCtx.canvas.height);
+            layerCtx.restore();
+            return true;
         }
 
         function buildTerrainLayer(roomData) {
@@ -1792,22 +1919,29 @@
             }
             layerCtx.fillRect(0, 0, layer.width, layer.height);
 
+            const hasWorldMapBase = drawFahrenWorldMapSlice(layerCtx, roomData);
+
             const baseTerrain = getBaseTerrainSprite(biome);
             if (baseTerrain) {
+                layerCtx.globalAlpha = hasWorldMapBase ? 0.92 : 1;
                 for (let r = 0; r < SCREEN_ROWS; r++) {
                     for (let c = 0; c < SCREEN_COLS; c++) {
                         drawTerrainSprite(layerCtx, baseTerrain, c, r);
                     }
                 }
+                layerCtx.globalAlpha = 1;
             }
 
             for (let r = 0; r < SCREEN_ROWS; r++) {
                 for (let c = 0; c < SCREEN_COLS; c++) {
                     const tile = roomData.tiles[r][c];
 
-                    if (biome === 'grassland' && tile === 0 && (r === 5 || r === 6)) {
+                    if ((biome === 'grassland' || biome === 'forest') && tile === 0 && (r === 5 || r === 6)) {
                         const bridgeSprite = c >= 7 && c <= 8 ? sprites.terrain_wood_bridge : sprites.terrain_river;
                         drawTerrainSprite(layerCtx, bridgeSprite, c, r);
+                    }
+                    if (biome === 'lake' && tile === 0) {
+                        drawTerrainSprite(layerCtx, sprites.terrain_wood_bridge || sprites.terrain_river, c, r);
                     }
                     if (biome === 'swamp') {
                         if (tile === 0) drawTerrainSprite(layerCtx, sprites.ground_swamp, c, r);
@@ -1834,15 +1968,39 @@
             return canvas;
         }
 
+        function drawTownWallTile(x, y) {
+            ctx.fillStyle = '#4f565c';
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.fillStyle = '#8d969b';
+            ctx.fillRect(x + 1, y + 1, TILE - 2, 5);
+            ctx.fillStyle = '#6f777d';
+            ctx.fillRect(x + 1, y + 7, TILE - 2, 7);
+            ctx.strokeStyle = '#2a2f34';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+            ctx.beginPath();
+            ctx.moveTo(x + 8.5, y + 1);
+            ctx.lineTo(x + 8.5, y + 14);
+            ctx.moveTo(x + 1, y + 7.5);
+            ctx.lineTo(x + 15, y + 7.5);
+            ctx.stroke();
+        }
+
         function drawRoom(roomData, offsetX, offsetY) {
             if (!roomData) return;
             const biome = roomData.biome;
+            const objectBiome = getObjectSpriteBiome(biome);
             ctx.drawImage(getTerrainLayer(roomData), offsetX, offsetY + UI_OFFSET);
 
             for (let r = 0; r < SCREEN_ROWS; r++) {
                 for (let c = 0; c < SCREEN_COLS; c++) {
                     const tile = roomData.tiles[r][c];
                     if (biome === 'town') {
+                        if (tile === 1) {
+                            drawTownWallTile(offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                            continue;
+                        }
+                        if (tile >= 21 && tile <= 28) continue;
                         if (tile === 40) ctx.drawImage(sprites['fence_h'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                         if (tile === 41) ctx.drawImage(sprites['fence_v'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                         if (tile === 42) ctx.drawImage(sprites['mailbox'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
@@ -1862,7 +2020,7 @@
                     }
                     
                     if (tile === 0 || tile === 4 || tile >= 3) continue;
-                    let sprName = tile === 1 ? 'wall_' + biome : 'obs_' + biome;
+                    let sprName = tile === 1 ? 'wall_' + objectBiome : 'obs_' + objectBiome;
                     if(sprites[sprName]) ctx.drawImage(sprites[sprName], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                 }
             }
@@ -1916,7 +2074,7 @@
                 currentRoom.npcs.forEach(n => n.update());
             }
 
-            if (currentRoom && currentRoom.biome === 'mountain') {
+            if (currentRoom && (currentRoom.biome === 'mountain' || currentRoom.biome === 'volcano')) {
                 if (Math.random() < 0.02) hazards.push(new FallingRock());
             }
 
@@ -2015,8 +2173,15 @@
         }
 
         const BIOME_NAMES = {
-            town: 'はじまりのまち', grassland: 'そうげん', desert: 'さばく',
-            volcano: 'かざん', swamp: 'どろぬま', snow: 'せつげん', mountain: 'さんがく'
+            town: '王都/村',
+            grassland: '草原',
+            forest: '森林',
+            desert: '砂漠',
+            volcano: '火山',
+            lake: '湖',
+            swamp: '湿原',
+            snow: '雪原',
+            mountain: '山岳'
         };
 
         function drawUI() {
@@ -2147,12 +2312,17 @@
         let titleFrame = 0;
         function drawTitle() {
             titleFrame++;
-            // Sky gradient
-            const grad = ctx.createLinearGradient(0,0,0,canvas.height);
-            grad.addColorStop(0, '#050520');
-            grad.addColorStop(1, '#0a0a40');
-            ctx.fillStyle = grad;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            if (fahrenWorldMapReady) {
+                ctx.drawImage(fahrenWorldMapImage, 0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'rgba(3, 3, 16, 0.56)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            } else {
+                const grad = ctx.createLinearGradient(0,0,0,canvas.height);
+                grad.addColorStop(0, '#050520');
+                grad.addColorStop(1, '#0a0a40');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
             // Stars
             stars.forEach(st => {
                 const twinkle = 0.4 + 0.6 * Math.sin(titleFrame * 0.05 + st.bright * 10);
@@ -2161,28 +2331,30 @@
                 ctx.fillRect(Math.round(st.x), Math.round(st.y), st.s < 0.3 ? 2 : 1, st.s < 0.3 ? 2 : 1);
             });
             ctx.globalAlpha = 1;
-            // Mountains
-            ctx.fillStyle = '#1a1a4a';
-            ctx.beginPath(); ctx.moveTo(0,180);
-            for(let x=0;x<=256;x+=16){ctx.lineTo(x, 180 - Math.abs(Math.sin(x*0.04)*40+Math.sin(x*0.07)*20));}
-            ctx.lineTo(256,240);ctx.lineTo(0,240);ctx.closePath();ctx.fill();
-            ctx.fillStyle = '#0d0d30';
-            ctx.beginPath(); ctx.moveTo(0,200);
-            for(let x=0;x<=256;x+=10){ctx.lineTo(x, 200 - Math.abs(Math.sin(x*0.06+1)*30+Math.sin(x*0.1)*15));}
-            ctx.lineTo(256,240);ctx.lineTo(0,240);ctx.closePath();ctx.fill();
+            if (!fahrenWorldMapReady) {
+                ctx.fillStyle = '#1a1a4a';
+                ctx.beginPath(); ctx.moveTo(0,180);
+                for(let x=0;x<=256;x+=16){ctx.lineTo(x, 180 - Math.abs(Math.sin(x*0.04)*40+Math.sin(x*0.07)*20));}
+                ctx.lineTo(256,240);ctx.lineTo(0,240);ctx.closePath();ctx.fill();
+                ctx.fillStyle = '#0d0d30';
+                ctx.beginPath(); ctx.moveTo(0,200);
+                for(let x=0;x<=256;x+=10){ctx.lineTo(x, 200 - Math.abs(Math.sin(x*0.06+1)*30+Math.sin(x*0.1)*15));}
+                ctx.lineTo(256,240);ctx.lineTo(0,240);ctx.closePath();ctx.fill();
+            }
             // Title glow
             ctx.shadowColor = '#fc9838'; ctx.shadowBlur = 8;
             ctx.fillStyle = '#fc9838'; ctx.font = 'bold 18px monospace'; ctx.textAlign = 'center';
-            ctx.fillText('\u2605 THE INFINITE QUEST \u2605', canvas.width/2, 80);
+            ctx.fillText('FAHREN KINGDOM QUEST', canvas.width/2, 74);
             ctx.shadowBlur = 0;
             ctx.fillStyle = '#fcd8a8'; ctx.font = '10px monospace';
-            ctx.fillText('~  Retro Adventure RPG  ~', canvas.width/2, 96);
+            ctx.fillText('ファーレン王国 25x25 FIELD', canvas.width/2, 92);
             // Blink
             if (Math.floor(titleFrame/30)%2===0) {
                 ctx.fillStyle = '#ffffff';
-                ctx.fillText('PRESS SPACE TO START', canvas.width/2, 140);
+                ctx.fillText('PRESS SPACE TO START', canvas.width/2, 138);
             }
             ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+            ctx.fillText('Human / Elf / Dwarf Realm', canvas.width/2, 178);
             ctx.fillText('WASD:\u79fb\u52d5  Space/Z:\u3051\u3093  X:\u30a2\u30a4\u30c6\u30e0', canvas.width/2, 200);
             ctx.fillText('1:\u7206\u5f3e 2:\u5f13\u77e2 3:\u8001\u71ed 4:\u56de\u5fa9\u85ac', canvas.width/2, 212);
             ctx.textAlign = 'left';
@@ -2203,11 +2375,11 @@
             updateParticles();
             if (gameState === 'TITLE') {
                 if (isJustPressed('Space')) {
-                    player.reset(120, 120); currentRoomX=0; currentRoomY=0; gameState = 'PLAYING'; playSFX('item');
+                    player.reset(120, 120); currentRoomX=START_ROOM_X; currentRoomY=START_ROOM_Y; gameState = 'PLAYING'; playSFX('item');
                 }
             } else if (gameState === 'GAMEOVER') {
                 if (isJustPressed('Space')) {
-                    player.reset(120, 120); currentRoomX=0; currentRoomY=0; gameState = 'PLAYING'; playSFX('item');
+                    player.reset(120, 120); currentRoomX=START_ROOM_X; currentRoomY=START_ROOM_Y; gameState = 'PLAYING'; playSFX('item');
                 }
             } else if (gameState === 'PLAYING') {
                 updatePlaying();

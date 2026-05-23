@@ -92,9 +92,11 @@ Prompt summary: original retro top-down fantasy adventure terrain tiles in a cla
 - Files:
   - `world-map-fahren-badon-25x25.prompt.md` - GPT Image 2.0 prompt spec for regenerating the field map
   - `world-map-fahren-badon-25x25-layout.txt` - 25x25 logical layout draft (biome/landmark planning)
+  - `world-map-fahren-25x25.png` - GPT Image 2.0 generated field map for `zelda_like.html`
 - Created: 2026-05-22
-- Purpose: Recreate the field map around the Fahren Kingdom vs Demon King Badon invasion setting while keeping a non-cyberpunk dark fantasy style.
-- Integration target: output image path `assets/zelda-like/world-map-fahren-badon-25x25.svg`.
+- Updated: 2026-05-23
+- Purpose: Recreate the Fahren Kingdom field map as a 25x25-screen realm where humans, elves, and dwarves coexist, while keeping a non-cyberpunk fantasy style.
+- Integration target: output image path `assets/zelda-like/world-map-fahren-25x25.png`.
 
 ## Fahren Kingdom Field Map (25x25)
 
