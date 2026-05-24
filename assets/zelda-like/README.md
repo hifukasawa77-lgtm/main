@@ -27,19 +27,23 @@ Current `zelda_like.html` uses lightweight original Canvas pixel art for the liv
 - Files:
   - `player/gpt-image-2-hero-sheet-source.png` - original generated sheet with chroma-key background
   - `player/gpt-image-2-hero-sheet.png` - local transparent PNG processed from the source
+  - `player/gpt-image-2-hero-sheet-v2-source.png` - detailed generated sheet with chroma-key background
+  - `player/gpt-image-2-hero-sheet-v2.png` - detailed transparent PNG currently used by `zelda_like.html`
 - Generator: GPT Image 2
 - Created: 2026-05-19
 - Updated: 2026-05-24
 - Purpose: Original protagonist sprite sheet for `zelda_like.html`
 - Layout: 4 rows by 3 columns; rows are down, left, right, up; columns are step, idle, step
 
-Prompt summary: original top-down fantasy adventure hero sprite sheet, classic 8-bit/16-bit top-down action RPG mood, no copyrighted Zelda/Nintendo likeness, no official symbols, flat chroma-key background.
+Prompt summary: original top-down fantasy adventure hero sprite sheet, polished 16-bit/32-bit top-down action RPG mood, no copyrighted Zelda/Nintendo likeness, no official symbols, flat chroma-key background.
 
 ## GPT Image 2 Enemy Sprite
 
 - Files:
   - `enemies/gpt-image-2-enemy-sheet-source.png` - original generated sheet with chroma-key background
   - `enemies/gpt-image-2-enemy-sheet.png` - local transparent PNG processed from the source
+  - `enemies/gpt-image-2-enemy-sheet-v2-source.png` - detailed generated sheet with chroma-key background
+  - `enemies/gpt-image-2-enemy-sheet-v2.png` - detailed transparent PNG currently used by `zelda_like.html`
 - Generator: GPT Image 2
 - Created: 2026-05-19
 - Updated: 2026-05-24
@@ -51,13 +55,15 @@ Prompt summary: original top-down fantasy adventure hero sprite sheet, classic 8
   - row 4: blue-black crystal spider, idle/jump frames
   - row 5: tan sand worm, hidden/emerged frames
 
-Prompt summary: original retro top-down enemy sprite sheet preserving gameplay roles from the current game, no copyrighted Zelda/Nintendo enemy likenesses, flat chroma-key background.
+Prompt summary: original polished top-down enemy sprite sheet preserving gameplay roles from the current game, no copyrighted Zelda/Nintendo enemy likenesses, flat chroma-key background.
 
 ## GPT Image 2 NPC Sprite
 
 - Files:
   - `npcs/gpt-image-2-npc-sheet-source.png` - original generated sheet with chroma-key background
   - `npcs/gpt-image-2-npc-sheet.png` - local transparent PNG processed from the source
+  - `npcs/gpt-image-2-npc-sheet-v2-source.png` - detailed generated sheet with chroma-key background
+  - `npcs/gpt-image-2-npc-sheet-v2.png` - detailed transparent PNG currently used by `zelda_like.html`
 - Generator: GPT Image 2
 - Created: 2026-05-24
 - Purpose: Original NPC sprite sheet for `zelda_like.html`
@@ -68,7 +74,7 @@ Prompt summary: original retro top-down enemy sprite sheet preserving gameplay r
   - row 4: village dog, two frames
   - row 5: village chicken, two frames
 
-Prompt summary: original retro top-down NPC sprite sheet for Fahren Kingdom villagers, merchant, and village creatures, no copyrighted Zelda/Nintendo likenesses, flat chroma-key background.
+Prompt summary: original polished top-down NPC sprite sheet for Fahren Kingdom villagers, merchant, and village creatures, no copyrighted Zelda/Nintendo likenesses, flat chroma-key background.
 
 ## GPT Image 2 Object Sprite
 
