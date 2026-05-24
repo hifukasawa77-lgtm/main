@@ -12211,6 +12211,50 @@
       });
     }
 
+    async function fetchESPNScoreboard(sport) {
+      const slug = ESPN_SLUGS[sport];
+      const now = new Date();
+      const past = new Date(now); past.setDate(past.getDate() - 21);
+      const future = new Date(now); future.setDate(future.getDate() + 14);
+      const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+      const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${fmt(past)}-${fmt(future)}&limit=50`;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const res = await fetch(url, {signal: ctrl.signal});
+        clearTimeout(timer);
+        if (!res.ok) return {results: [], upcoming: []};
+        return parseESPNScoreboard(await res.json(), now);
+      } catch(e) { clearTimeout(timer); return {results: [], upcoming: []}; }
+    }
+
+    function parseESPNScoreboard(data, now) {
+      const events = data.events || [];
+      const results = [], upcoming = [];
+      for (const ev of events) {
+        const comp = ev.competitions && ev.competitions[0];
+        if (!comp) continue;
+        const home = comp.competitors && comp.competitors.find(c => c.homeAway === 'home');
+        const away = comp.competitors && comp.competitors.find(c => c.homeAway === 'away');
+        if (!home || !away) continue;
+        const completed = ev.status && ev.status.type && ev.status.type.completed === true;
+        const item = {
+          date: ev.date,
+          homeName: (home.team && home.team.displayName) || '',
+          awayName: (away.team && away.team.displayName) || '',
+          homeLogo: (home.team && home.team.logo) || '',
+          awayLogo: (away.team && away.team.logo) || '',
+          homeScore: completed ? (home.score != null ? home.score : '') : '',
+          awayScore: completed ? (away.score != null ? away.score : '') : '',
+          venue: (comp.venue && comp.venue.fullName) || '',
+          completed
+        };
+        if (completed) results.push(item);
+        else upcoming.push(item);
+      }
+      return {results: results.slice(-3), upcoming: upcoming.slice(0, 3)};
+    }
+
     async function fetchNPBResultStandings(league) {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -12436,6 +12480,86 @@
       return card;
     }
 
+    function renderESPNMatchCard(item, sport) {
+      const card = document.createElement('div');
+      card.className = 'sports-match-card';
+      const date = new Date(item.date);
+      const dateStr = date.toLocaleDateString('ja-JP', {month: 'numeric', day: 'numeric', weekday: 'short'});
+      const timeStr = date.toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit'});
+      const dateBadge = document.createElement('div');
+      dateBadge.className = 'sports-date-badge';
+      dateBadge.textContent = item.completed ? dateStr : dateStr + ' ' + timeStr;
+      card.appendChild(dateBadge);
+      const teams = document.createElement('div');
+      teams.className = 'sports-match-teams';
+      function makeESPNTeam(name, logo, align) {
+        const div = document.createElement('div');
+        div.className = 'sports-match-team';
+        div.style.cssText = 'display:flex;align-items:center;gap:4px;flex:1;' + (align === 'right' ? 'justify-content:flex-end;' : '');
+        if (logo) {
+          const img = document.createElement('img');
+          img.className = 'sports-team-logo-lg';
+          img.alt = '';
+          img.src = logo;
+          img.onerror = function() { this.style.display = 'none'; };
+          if (align === 'right') div.appendChild(document.createElement('span'));
+          div.insertBefore(img, align === 'right' ? div.lastChild : null);
+        }
+        const span = document.createElement('span');
+        span.textContent = teamJP(name, sport) || name;
+        div.appendChild(span);
+        return div;
+      }
+      const homeDiv = document.createElement('div');
+      homeDiv.className = 'sports-match-team';
+      homeDiv.style.cssText = 'display:flex;align-items:center;gap:4px;flex:1;justify-content:flex-end;';
+      const homeSpan = document.createElement('span');
+      homeSpan.textContent = teamJP(item.homeName, sport) || item.homeName;
+      homeDiv.appendChild(homeSpan);
+      if (item.homeLogo) {
+        const img = document.createElement('img');
+        img.className = 'sports-team-logo-lg';
+        img.alt = '';
+        img.src = item.homeLogo;
+        img.onerror = function() { this.style.display = 'none'; };
+        homeDiv.appendChild(img);
+      }
+      teams.appendChild(homeDiv);
+      const vs = document.createElement('div');
+      vs.className = 'sports-match-vs';
+      if (item.completed && item.homeScore !== '' && item.awayScore !== '') {
+        vs.textContent = item.homeScore + ' - ' + item.awayScore;
+        vs.classList.add('sports-match-score');
+        vs.style.fontSize = '1.3rem';
+      } else {
+        vs.textContent = 'vs';
+      }
+      teams.appendChild(vs);
+      const awayDiv = document.createElement('div');
+      awayDiv.className = 'sports-match-team';
+      awayDiv.style.cssText = 'display:flex;align-items:center;gap:4px;flex:1;';
+      if (item.awayLogo) {
+        const img = document.createElement('img');
+        img.className = 'sports-team-logo-lg';
+        img.alt = '';
+        img.src = item.awayLogo;
+        img.onerror = function() { this.style.display = 'none'; };
+        awayDiv.appendChild(img);
+      }
+      const awaySpan = document.createElement('span');
+      awaySpan.textContent = teamJP(item.awayName, sport) || item.awayName;
+      awayDiv.appendChild(awaySpan);
+      teams.appendChild(awayDiv);
+      card.appendChild(teams);
+      if (item.venue) {
+        const venue = document.createElement('div');
+        venue.className = 'sports-venue';
+        venue.textContent = item.venue;
+        card.appendChild(venue);
+      }
+      return card;
+    }
+
     function showNoData(id, msg) {
       const el = document.getElementById(id);
       if (!el) return;
@@ -12501,53 +12625,42 @@
         }
 
       } else {
-        const isJ1 = sport === 'j1';
         showSkeleton('sports-' + sport + '-standings');
         showSkeleton('sports-' + sport + '-results');
         showSkeleton('sports-' + sport + '-upcoming');
 
-        const [standResult, pastRes, nextRes] = await Promise.allSettled([
-          isJ1 ? fetchESPNStandings(sport) : sportsFetch('/lookuptable.php?l=' + lg.id + '&s=' + lg.season),
-          sportsFetch('/eventspastleague.php?id=' + lg.id),
-          sportsFetch('/eventsnextleague.php?id=' + lg.id)
+        const [standResult, scoreboardResult] = await Promise.allSettled([
+          fetchESPNStandings(sport),
+          fetchESPNScoreboard(sport)
         ]);
 
-        if (isJ1) {
-          const rows = standResult.status === 'fulfilled' ? standResult.value : null;
-          if (rows && rows.length) {
-            renderStandings(rows, 'sports-' + sport + '-standings', sport);
-          } else {
-            showNoData('sports-' + sport + '-standings', '順位表データを取得できませんでした');
-          }
+        const rows = standResult.status === 'fulfilled' ? standResult.value : null;
+        if (rows && rows.length) {
+          renderStandings(rows, 'sports-' + sport + '-standings', sport);
         } else {
-          const tsdb = standResult.status === 'fulfilled' ? standResult.value : null;
-          if (tsdb && tsdb.table && tsdb.table.length) {
-            renderStandings(tsdb.table, 'sports-' + sport + '-standings', sport);
+          showNoData('sports-' + sport + '-standings', '順位表データを取得できませんでした');
+        }
+
+        const sb = scoreboardResult.status === 'fulfilled' ? scoreboardResult.value : {results: [], upcoming: []};
+
+        const resultsEl = document.getElementById('sports-' + sport + '-results');
+        if (resultsEl) {
+          resultsEl.innerHTML = '';
+          if (sb.results.length) {
+            sb.results.forEach(item => resultsEl.appendChild(renderESPNMatchCard(item, sport)));
           } else {
-            showNoData('sports-' + sport + '-standings', '順位表データを取得できませんでした');
+            showNoData('sports-' + sport + '-results', 'データを取得できませんでした');
           }
         }
 
-        if (pastRes.status === 'fulfilled' && pastRes.value && pastRes.value.events && pastRes.value.events.length) {
-          const evts = pastRes.value.events.slice(-3).reverse();
-          const container = document.getElementById('sports-' + sport + '-results');
-          if (container) {
-            container.innerHTML = '';
-            evts.forEach(ev => container.appendChild(renderMatchCard(ev, sport)));
+        const upcomingEl = document.getElementById('sports-' + sport + '-upcoming');
+        if (upcomingEl) {
+          upcomingEl.innerHTML = '';
+          if (sb.upcoming.length) {
+            sb.upcoming.forEach(item => upcomingEl.appendChild(renderESPNMatchCard(item, sport)));
+          } else {
+            showNoData('sports-' + sport + '-upcoming', '予定データなし');
           }
-        } else {
-          showNoData('sports-' + sport + '-results', 'データを取得できませんでした');
-        }
-
-        if (nextRes.status === 'fulfilled' && nextRes.value && nextRes.value.events && nextRes.value.events.length) {
-          const evts = nextRes.value.events.slice(0, 3);
-          const container = document.getElementById('sports-' + sport + '-upcoming');
-          if (container) {
-            container.innerHTML = '';
-            evts.forEach(ev => container.appendChild(renderMatchCard(ev, sport)));
-          }
-        } else {
-          showNoData('sports-' + sport + '-upcoming', '予定データなし');
         }
       }
 
