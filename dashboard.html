@@ -170,6 +170,18 @@
     .fc-day .fc-label { color: var(--muted); }
     .fc-day .fc-icon { font-size: 1.1rem; margin: 2px 0; }
     .fc-day .fc-temp { color: var(--cyan); font-size: 0.8rem; }
+    .weather-section-title { font-size: 0.75rem; color: var(--muted); margin: 8px 0 4px; }
+    .weather-details { margin-top: 8px; border-top: 1px solid rgba(0,229,255,0.1); padding-top: 6px; }
+    .weather-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 4px 0; font-size: 0.82rem; }
+    .wr-label { color: var(--muted); white-space: nowrap; }
+    .wr-value { color: var(--text); text-align: right; margin-left: 8px; }
+    .weather-extra { display: flex; gap: 12px; margin-top: 8px; align-items: center; }
+    .weather-metrics { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+    .wm-item { display: flex; justify-content: space-between; font-size: 0.82rem; }
+    .wm-item .wm-label { color: var(--muted); }
+    .weather-hourly { margin-top: 10px; }
+    .weather-hourly .wh-title { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+    .weather-updated { font-size: 0.72rem; color: var(--muted); text-align: right; margin-top: 6px; }
 
     /* ── Stock ── */
     .stock-item {
@@ -803,28 +815,181 @@ function renderWeather(){
   }
   const cur = data.current;
   const daily = data.daily;
+  const ja = currentLang === 'ja';
+
+  // 7-day weekly forecast
   const fcDays = daily.time.map((dateStr, i) => {
     const dt = new Date(dateStr);
     const dayIdx = dt.getDay();
     let label;
     if(i === 0) label = t('today');
     else if(i === 1) label = t('tomorrow');
-    else label = currentLang === 'ja' ? DAYS[dayIdx]+'曜' : DAYS_EN[dayIdx];
+    else label = ja ? DAYS[dayIdx]+'曜' : DAYS_EN[dayIdx];
     return `<div class="fc-day">
       <div class="fc-label">${label}</div>
       <div class="fc-icon">${wmoEmoji(daily.weather_code[i])}</div>
       <div class="fc-temp">${Math.round(daily.temperature_2m_max[i])}°/<span style="color:var(--muted)">${Math.round(daily.temperature_2m_min[i])}°</span></div>
     </div>`;
   }).join('');
+
+  // Tomorrow's weather (daily[1])
+  const tmrCode = daily.weather_code[1];
+  const tmrMax = Math.round(daily.temperature_2m_max[1]);
+  const tmrMin = Math.round(daily.temperature_2m_min[1]);
+
+  // Pollen estimation from weather conditions
+  const { pollenLevel, pollenSource } = _estimatePollen(cur);
+
+  // Wind
+  const windSpeed = Math.round(cur.wind_speed_10m || 0);
+  const windDir = cur.wind_direction_10m || 0;
+  const windDirs16    = ['北','北北東','北東','東北東','東','東南東','南東','南南東','南','南南西','南西','西南西','西','北北西','北西','北北西'];
+  const windDirs16En  = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  const wdIdx = Math.round(windDir / 22.5) % 16;
+  const windDirLabel = ja ? windDirs16[wdIdx] : windDirs16En[wdIdx];
+
+  // UV and pressure
+  const uvIndex = Math.round(cur.uv_index || 0);
+  const uvLevel = uvIndex <= 2 ? (ja ? '低い' : 'Low') :
+                  uvIndex <= 5 ? (ja ? '中程度' : 'Moderate') :
+                  uvIndex <= 7 ? (ja ? '高い' : 'High') :
+                  uvIndex <= 10 ? (ja ? '非常に高い' : 'Very High') : (ja ? '極端' : 'Extreme');
+  const pressure = Math.round(cur.surface_pressure || 0);
+
+  // Hourly temperature chart
+  const hourlyHtml = _buildHourlyChart(data, ja);
+
+  // Update time
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+
   el.innerHTML = `
     <div class="weather-now">
       <div class="weather-emoji">${wmoEmoji(cur.weather_code)}</div>
       <div>
         <div class="weather-temp">${Math.round(cur.temperature_2m)}°C</div>
-        <div class="weather-desc">${wmoDesc(cur.weather_code)} / ${t('weather-humidity')} ${cur.relative_humidity_2m}%</div>
+        <div class="weather-desc">${wmoDesc(cur.weather_code)} / ${t('weather-humidity')} ${cur.relative_humidity_2m}% / ${ja ? '風速' : 'Wind'} ${windSpeed}m/s</div>
       </div>
     </div>
-    <div class="weather-forecast">${fcDays}</div>`;
+    <div class="weather-details">
+      <div class="weather-row">
+        <span class="wr-label">${ja ? '明日の天気' : "Tomorrow"}</span>
+        <span class="wr-value">${wmoEmoji(tmrCode)} ${tmrMax}° / ${tmrMin}° （${wmoDesc(tmrCode)}）</span>
+      </div>
+      <div class="weather-row">
+        <span class="wr-label">${ja ? '花粉予報' : 'Pollen'}</span>
+        <span class="wr-value">${pollenLevel}</span>
+      </div>
+      <div class="weather-row">
+        <span class="wr-label">${ja ? '判定ソース' : 'Source'}</span>
+        <span class="wr-value" style="color:var(--muted);font-size:0.75rem">${pollenSource}</span>
+      </div>
+    </div>
+    <div class="weather-extra">
+      ${_buildWindCompass(windDir, windDirLabel, windSpeed, ja)}
+      <div class="weather-metrics">
+        <div class="wm-item">
+          <span class="wm-label">${ja ? '紫外線' : 'UV Index'}</span>
+          <span>${uvIndex}（${uvLevel}）</span>
+        </div>
+        <div class="wm-item">
+          <span class="wm-label">${ja ? '気圧' : 'Pressure'}</span>
+          <span>${pressure} hPa</span>
+        </div>
+      </div>
+    </div>
+    ${hourlyHtml}
+    <div class="weather-section-title">${ja ? '週間天気予報' : '7-Day Forecast'}</div>
+    <div class="weather-forecast">${fcDays}</div>
+    <div class="weather-updated">${ja ? '更新' : 'Updated'}: ${timeStr}</div>`;
+}
+
+function _estimatePollen(cur) {
+  const month = new Date().getMonth() + 1;
+  const ja = currentLang === 'ja';
+  const isRaining = (cur.weather_code || 0) >= 51;
+  const temp = cur.temperature_2m || 15;
+  let lv, src;
+  if (ja) {
+    if (month >= 2 && month <= 4) {
+      lv = isRaining ? '少ない（雨のため）' : temp > 15 ? '多い（スギ・ヒノキ）' : 'やや多い';
+    } else if (month >= 5 && month <= 6) {
+      lv = isRaining ? 'ほぼなし（雨のため）' : 'やや少い（感覚推定）';
+    } else if (month >= 7 && month <= 9) {
+      lv = isRaining ? '少ない' : 'やや少い（草本類）';
+    } else {
+      lv = 'ほぼなし';
+    }
+    src = '気象条件から推定';
+  } else {
+    if (month >= 2 && month <= 4) {
+      lv = isRaining ? 'Low (rain)' : temp > 15 ? 'High (cedar/cypress)' : 'Moderate';
+    } else if (month >= 5 && month <= 9) {
+      lv = isRaining ? 'Very Low' : 'Low (est.)';
+    } else {
+      lv = 'Very Low';
+    }
+    src = 'Estimated from weather conditions';
+  }
+  return { pollenLevel: lv, pollenSource: src };
+}
+
+function _buildWindCompass(degrees, label, speed, ja) {
+  const cx = 28, cy = 28, r = 22;
+  const rad = (degrees - 90) * Math.PI / 180;
+  const nx = cx + (r - 5) * Math.cos(rad);
+  const ny = cy + (r - 5) * Math.sin(rad);
+  const tx = cx - (r - 5) * Math.cos(rad);
+  const ty = cy - (r - 5) * Math.sin(rad);
+  return `<div style="display:flex;flex-direction:column;align-items:center;min-width:60px">
+    <svg width="56" height="56" viewBox="0 0 56 56">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="rgba(0,229,255,0.05)" stroke="rgba(0,229,255,0.2)" stroke-width="1"/>
+      <text x="${cx}" y="8" text-anchor="middle" fill="#888" font-size="7">N</text>
+      <text x="${cx}" y="52" text-anchor="middle" fill="#888" font-size="7">S</text>
+      <text x="5" y="${cy+3}" text-anchor="middle" fill="#888" font-size="7">W</text>
+      <text x="51" y="${cy+3}" text-anchor="middle" fill="#888" font-size="7">E</text>
+      <line x1="${tx}" y1="${ty}" x2="${nx}" y2="${ny}" stroke="rgba(0,229,255,0.4)" stroke-width="1.5" stroke-linecap="round"/>
+      <polygon points="${nx},${ny} ${cx + 5*Math.cos(rad-2.4)},${cy + 5*Math.sin(rad-2.4)} ${cx + 5*Math.cos(rad+2.4)},${cy + 5*Math.sin(rad+2.4)}" fill="#00e5ff"/>
+      <circle cx="${cx}" cy="${cy}" r="2.5" fill="#00e5ff"/>
+    </svg>
+    <div style="font-size:0.7rem;color:var(--muted);text-align:center;line-height:1.3">${label}${ja ? 'から' : ''}<br>${speed}m/s</div>
+  </div>`;
+}
+
+function _buildHourlyChart(data, ja) {
+  if (!data.hourly || !data.hourly.temperature_2m) return '';
+  const todayDate = data.daily.time[0];
+  const entries = data.hourly.time.reduce((acc, t, i) => {
+    if (t.startsWith(todayDate)) {
+      acc.push({ hour: parseInt(t.split('T')[1]), temp: data.hourly.temperature_2m[i] });
+    }
+    return acc;
+  }, []);
+  if (entries.length < 3) return '';
+  const w = 240, h = 60, padX = 10, padY = 10;
+  const temps = entries.map(d => d.temp);
+  const minT = Math.min(...temps), maxT = Math.max(...temps);
+  const rangeT = maxT - minT || 1;
+  const pts = entries.map((d, i) => ({
+    x: padX + (i / (entries.length - 1)) * (w - padX * 2),
+    y: h - padY - ((d.temp - minT) / rangeT) * (h - padY * 2),
+    temp: d.temp, hour: d.hour
+  }));
+  const pathD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const labels = pts.filter(p => p.hour % 3 === 0)
+    .map(p => `<text x="${p.x.toFixed(1)}" y="${h + 2}" text-anchor="middle" fill="#777" font-size="7">${p.hour}</text>`)
+    .join('');
+  const maxPt = pts.reduce((a, b) => a.temp > b.temp ? a : b);
+  const minPt = pts.reduce((a, b) => a.temp < b.temp ? a : b);
+  const hiLabel = `<text x="${maxPt.x.toFixed(1)}" y="${(maxPt.y - 3).toFixed(1)}" text-anchor="middle" fill="#00e5ff" font-size="8">${Math.round(maxPt.temp)}</text>`;
+  const loLabel = `<text x="${minPt.x.toFixed(1)}" y="${(minPt.y - 3).toFixed(1)}" text-anchor="middle" fill="#888" font-size="8">${Math.round(minPt.temp)}</text>`;
+  return `<div class="weather-hourly">
+    <div class="wh-title">${ja ? '今日の時間別気温' : "Today's Hourly Temperature"}</div>
+    <svg width="100%" viewBox="0 0 ${w} ${h + 10}" style="overflow:visible">
+      <path d="${pathD}" fill="none" stroke="#00e5ff" stroke-width="1.5" stroke-linejoin="round"/>
+      ${hiLabel}${loLabel}${labels}
+    </svg>
+  </div>`;
 }
 
 async function initWeather(){
@@ -840,8 +1005,9 @@ async function initWeather(){
   if (cityLabel) cityLabel.textContent = ' ' + t('weather-city', {city});
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-      '&current=temperature_2m,weather_code,relative_humidity_2m' +
+      '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,wind_direction_10m,surface_pressure,uv_index' +
       '&daily=weather_code,temperature_2m_max,temperature_2m_min' +
+      '&hourly=temperature_2m' +
       '&timezone=Asia%2FTokyo&forecast_days=7';
     const res = await fetchWithTimeout(url, {}, 8000);
     if(!res.ok) throw new Error('HTTP '+res.status);
