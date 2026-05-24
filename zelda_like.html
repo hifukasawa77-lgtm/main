@@ -1566,8 +1566,9 @@
 
             draw() {
                 if (this.invincibleTimer > 0 && Math.floor(Date.now() / 100) % 2 === 0) return;
-                const drawX = Math.round(this.x + transOffset.x - 2);
-                const drawY = Math.round(this.y + transOffset.y + UI_OFFSET - 2);
+                const sprite = sprites[`link_${this.dir}_${this.animFrame}`];
+                const drawX = Math.round(this.x + transOffset.x + this.w / 2 - sprite.width / 2);
+                const drawY = Math.round(this.y + transOffset.y + UI_OFFSET + this.h - sprite.height + 4);
                 
                 if (this.isAttacking) {
                     let sX = drawX, sY = drawY;
@@ -1581,7 +1582,7 @@
                 ctx.save();
                 if(equipment.armorLevel === 1) ctx.filter = 'hue-rotate(90deg)'; // Greenish/Different
                 if(equipment.armorLevel === 2) ctx.filter = 'hue-rotate(180deg)'; // Reddish
-                ctx.drawImage(sprites[`link_${this.dir}_${this.animFrame}`], drawX, drawY);
+                ctx.drawImage(sprite, drawX, drawY);
                 ctx.restore();
             }
 
@@ -1770,12 +1771,15 @@
                 this.animFrame = 1; this.animTimer = 0;
                 this.isInvincible = false;
                 
-                switch(type) {
-                    case 'moblin': this.health = 4; this.baseSpeed = 0.6; break;
-                    case 'bat': this.health = 1; this.baseSpeed = 0.8; break;
-                    case 'spider': this.health = 3; this.baseSpeed = 2.0; this.state = 'wait'; break;
-                    case 'worm': this.health = 2; this.baseSpeed = 0.7; this.state = 'hidden'; this.timer = 60; this.isInvincible = true; break;
-                    default: this.health = 2; this.baseSpeed = 0.5; break; 
+                const profile = getEnemyProfile(type);
+                this.behavior = profile.behavior;
+                this.health = profile.health;
+                this.baseSpeed = profile.speed;
+                if (this.behavior === 'jumper') this.state = 'wait';
+                if (this.behavior === 'burrower') {
+                    this.state = 'hidden';
+                    this.timer = 60;
+                    this.isInvincible = true;
                 }
             }
 
@@ -1783,7 +1787,7 @@
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY || isTransitioning) return;
                 if (this.knockbackTimer > 0) {
                     this.knockbackTimer--;
-                    if (!checkCollision(this.x + this.kdx, this.y + this.kdy, this.w, this.h) || this.type === 'bat') {
+                    if (!checkCollision(this.x + this.kdx, this.y + this.kdy, this.w, this.h) || this.behavior === 'flyer') {
                         this.x += this.kdx; this.y += this.kdy;
                     }
                     return;
@@ -1792,7 +1796,7 @@
                 let speed = this.baseSpeed;
                 this.timer--;
 
-                if (this.type === 'bat') {
+                if (this.behavior === 'flyer') {
                     if (this.timer <= 0) {
                         this.timer = 20 + Math.random() * 40;
                         let pdx = player.x - this.x; let pdy = player.y - this.y;
@@ -1801,7 +1805,7 @@
                     }
                     this.x += this.dx; this.y += this.dy;
                 } 
-                else if (this.type === 'moblin') {
+                else if (this.behavior === 'chaser') {
                     if (this.timer <= 0) {
                         this.timer = 15;
                         let pdx = player.x - this.x; let pdy = player.y - this.y;
@@ -1811,7 +1815,7 @@
                     if (!checkCollision(this.x + this.dx, this.y, this.w, this.h)) this.x += this.dx;
                     if (!checkCollision(this.x, this.y + this.dy, this.w, this.h)) this.y += this.dy;
                 }
-                else if (this.type === 'spider') {
+                else if (this.behavior === 'jumper') {
                     if (this.state === 'wait') {
                         this.isInvincible = false;
                         if (this.timer <= 0) {
@@ -1826,7 +1830,7 @@
                         if (this.timer <= 0) { this.state = 'wait'; this.timer = 60 + Math.random() * 60; }
                     }
                 }
-                else if (this.type === 'worm') {
+                else if (this.behavior === 'burrower') {
                     if (this.state === 'hidden') {
                         this.isInvincible = true;
                         let pdx = player.x - this.x; let pdy = player.y - this.y;
@@ -1845,7 +1849,7 @@
                 }
                 else {
                     if (this.timer <= 0) {
-                        if (Math.random() < 0.3) {
+                        if (this.behavior === 'shooter' && Math.random() < 0.3) {
                             this.dx = 0; this.dy = 0; this.timer = 40;
                             let pdx = player.x - this.x, pdy = player.y - this.y;
                             let shootDx = 0, shootDy = 0;
@@ -1870,7 +1874,7 @@
                 if (this.y < 0) this.y = 0;
                 if (this.y > SCREEN_ROWS*TILE - this.h) this.y = SCREEN_ROWS*TILE - this.h;
 
-                if (this.dx !== 0 || this.dy !== 0 || this.type === 'spider' || this.type === 'worm') {
+                if (this.dx !== 0 || this.dy !== 0 || this.behavior === 'jumper' || this.behavior === 'burrower') {
                     this.animTimer++;
                     if (this.animTimer > 15) {
                         this.animTimer = 0;
@@ -1884,18 +1888,24 @@
                 if (this.knockbackTimer > 0 && Math.floor(Date.now()/50)%2===0) return;
                 
                 let sprName = `${this.type}_${this.animFrame}`;
-                if (this.type === 'spider' && this.state === 'jump') sprName = 'spider_2';
-                if (this.type === 'spider' && this.state === 'wait') sprName = 'spider_1';
+                if (this.behavior === 'jumper' && this.state === 'jump') sprName = `${this.type}_2`;
+                if (this.behavior === 'jumper' && this.state === 'wait') sprName = `${this.type}_1`;
                 if (this.type === 'worm' && this.state === 'hidden') sprName = 'worm_hidden';
                 if (this.type === 'worm' && this.state === 'emerge') sprName = 'worm_emerge';
+                if (this.type !== 'worm' && this.behavior === 'burrower' && this.state === 'hidden') sprName = `${this.type}_1`;
+                if (this.type !== 'worm' && this.behavior === 'burrower' && this.state === 'emerge') sprName = `${this.type}_2`;
                 
                 let drawY = this.y;
-                if (this.type === 'spider' && this.state === 'jump') {
+                if (this.behavior === 'jumper' && this.state === 'jump') {
                     let elapsed = 30 - this.timer;
                     let height = Math.sin((elapsed / 30) * Math.PI) * 20;
                     drawY -= height;
                 }
-                ctx.drawImage(sprites[sprName], Math.round(this.x + transOffset.x), Math.round(drawY + transOffset.y + UI_OFFSET));
+                const spr = sprites[sprName];
+                if (!spr) return;
+                const drawX = Math.round(this.x + transOffset.x + this.w / 2 - spr.width / 2);
+                const sy = Math.round(drawY + transOffset.y + UI_OFFSET + this.h - spr.height + 4);
+                ctx.drawImage(spr, drawX, sy);
             }
             
             takeDamage(px, py) {
