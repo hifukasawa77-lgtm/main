@@ -2547,8 +2547,15 @@
     grid-template-columns:1fr 1fr;
     gap:16px;
   }
+  .sports-npb-leagues-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:16px;
+    margin-bottom:8px;
+  }
   @media(max-width:640px){
     .sports-cards-grid { grid-template-columns:1fr; }
+    .sports-npb-leagues-grid { grid-template-columns:1fr; }
     .sports-standings-table th:nth-child(n+4),
     .sports-standings-table td:nth-child(n+4) { display:none; }
   }
@@ -3398,7 +3405,16 @@
              role="tabpanel" aria-labelledby="sports-tab-npb">
           <div class="card reveal" style="padding:20px">
             <h3 style="margin-bottom:12px;font-size:0.9rem;color:var(--muted)">順位表</h3>
-            <div id="sports-npb-standings"></div>
+            <div class="sports-npb-leagues-grid">
+              <div>
+                <h4 style="font-size:0.85rem;color:var(--muted);margin-bottom:6px">セ・リーグ</h4>
+                <div id="sports-npb-standings-cl"></div>
+              </div>
+              <div>
+                <h4 style="font-size:0.85rem;color:var(--muted);margin-bottom:6px">パ・リーグ</h4>
+                <div id="sports-npb-standings-pl"></div>
+              </div>
+            </div>
             <div class="sports-cards-grid" style="margin-top:20px">
               <div>
                 <h3 style="font-size:0.9rem;color:var(--muted);margin-bottom:8px">直近の結果</h3>
@@ -11968,6 +11984,7 @@
   /* ── Sports Section ── */
   (function () {
     const SPORTS_API = 'https://www.thesportsdb.com/api/v1/json/3';
+    const NPB_RESULT_API = 'https://npb-result.ant-npb.workers.dev';
     const LEAGUES = {
       npb: { id: '4591', season: '2026' },
       j1:  { id: '4633', season: '2026' },
@@ -12194,14 +12211,54 @@
       });
     }
 
-    async function fetchNPBStandings(lg) {
-      for (const season of [lg.season, String(Number(lg.season) - 1)]) {
-        try {
-          const data = await sportsFetch('/lookuptable.php?l=' + lg.id + '&s=' + season);
-          if (data && data.table && data.table.length) return data;
-        } catch (e) { /* try next season */ }
+    async function fetchNPBResultStandings(league) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const r = await fetch(NPB_RESULT_API + '/api/' + league, { signal: ctrl.signal });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return await r.json();
+      } finally {
+        clearTimeout(timer);
       }
-      return null;
+    }
+
+    function renderNPBStandings(rows, id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.innerHTML = '';
+      const table = document.createElement('table');
+      table.className = 'sports-standings-table';
+      const thead = document.createElement('thead');
+      const headRow = document.createElement('tr');
+      ['#', 'チーム', '試', '勝', '負', '分', '勝率', 'GB'].forEach(h => {
+        const th = document.createElement('th');
+        th.textContent = h;
+        headRow.appendChild(th);
+      });
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      rows.forEach(row => {
+        const tr = document.createElement('tr');
+        [
+          row.rank,
+          row.name,
+          row.playGameCount,
+          row.win,
+          row.lose,
+          row.draw,
+          row.pct != null ? row.pct.toFixed(3) : '-',
+          row.gamesBehind || '-'
+        ].forEach(val => {
+          const td = document.createElement('td');
+          td.textContent = val ?? '';
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      el.appendChild(table);
     }
 
     async function sportsFetch(path) {
@@ -12358,57 +12415,105 @@
       if (_loaded[sport]) return;
       _loaded[sport] = true;
       const lg = LEAGUES[sport];
-      const isJ1 = sport === 'j1';
-      showSkeleton('sports-' + sport + '-standings');
-      showSkeleton('sports-' + sport + '-results');
-      showSkeleton('sports-' + sport + '-upcoming');
 
-      const [standResult, pastRes, nextRes] = await Promise.allSettled([
-        isJ1 ? fetchESPNStandings(sport) : fetchNPBStandings(lg),
-        sportsFetch('/eventspastleague.php?id=' + lg.id),
-        sportsFetch('/eventsnextleague.php?id=' + lg.id)
-      ]);
+      if (sport === 'npb') {
+        showSkeleton('sports-npb-standings-cl');
+        showSkeleton('sports-npb-standings-pl');
+        showSkeleton('sports-npb-results');
+        showSkeleton('sports-npb-upcoming');
 
-      // 順位表
-      if (isJ1) {
-        const rows = standResult.status === 'fulfilled' ? standResult.value : null;
-        if (rows && rows.length) {
-          renderStandings(rows, 'sports-' + sport + '-standings', sport);
+        const [clRes, plRes, pastRes, nextRes] = await Promise.allSettled([
+          fetchNPBResultStandings('cl'),
+          fetchNPBResultStandings('pl'),
+          sportsFetch('/eventspastleague.php?id=' + lg.id),
+          sportsFetch('/eventsnextleague.php?id=' + lg.id)
+        ]);
+
+        const clRows = clRes.status === 'fulfilled' ? clRes.value : null;
+        if (Array.isArray(clRows) && clRows.length) {
+          renderNPBStandings(clRows, 'sports-npb-standings-cl');
         } else {
-          showNoData('sports-' + sport + '-standings', '順位表データを取得できませんでした');
+          showNoData('sports-npb-standings-cl', 'データを取得できませんでした');
         }
-      } else {
-        // NPB/J2/J3: TheSportsDB
-        const tsdb = standResult.status === 'fulfilled' ? standResult.value : null;
-        if (tsdb && tsdb.table && tsdb.table.length) {
-          renderStandings(tsdb.table, 'sports-' + sport + '-standings', sport);
+
+        const plRows = plRes.status === 'fulfilled' ? plRes.value : null;
+        if (Array.isArray(plRows) && plRows.length) {
+          renderNPBStandings(plRows, 'sports-npb-standings-pl');
         } else {
-          showNoData('sports-' + sport + '-standings', '順位表データを取得できませんでした');
+          showNoData('sports-npb-standings-pl', 'データを取得できませんでした');
         }
-      }
 
-      // 直近結果
-      if (pastRes.status === 'fulfilled' && pastRes.value && pastRes.value.events && pastRes.value.events.length) {
-        const evts = pastRes.value.events.slice(-3).reverse();
-        const container = document.getElementById('sports-' + sport + '-results');
-        if (container) {
-          container.innerHTML = '';
-          evts.forEach(ev => container.appendChild(renderMatchCard(ev, sport)));
+        if (pastRes.status === 'fulfilled' && pastRes.value && pastRes.value.events && pastRes.value.events.length) {
+          const evts = pastRes.value.events.slice(-3).reverse();
+          const container = document.getElementById('sports-npb-results');
+          if (container) {
+            container.innerHTML = '';
+            evts.forEach(ev => container.appendChild(renderMatchCard(ev, 'npb')));
+          }
+        } else {
+          showNoData('sports-npb-results', 'データを取得できませんでした');
         }
-      } else {
-        showNoData('sports-' + sport + '-results', 'データを取得できませんでした');
-      }
 
-      // 次の試合
-      if (nextRes.status === 'fulfilled' && nextRes.value && nextRes.value.events && nextRes.value.events.length) {
-        const evts = nextRes.value.events.slice(0, 3);
-        const container = document.getElementById('sports-' + sport + '-upcoming');
-        if (container) {
-          container.innerHTML = '';
-          evts.forEach(ev => container.appendChild(renderMatchCard(ev, sport)));
+        if (nextRes.status === 'fulfilled' && nextRes.value && nextRes.value.events && nextRes.value.events.length) {
+          const evts = nextRes.value.events.slice(0, 3);
+          const container = document.getElementById('sports-npb-upcoming');
+          if (container) {
+            container.innerHTML = '';
+            evts.forEach(ev => container.appendChild(renderMatchCard(ev, 'npb')));
+          }
+        } else {
+          showNoData('sports-npb-upcoming', '予定データなし');
         }
+
       } else {
-        showNoData('sports-' + sport + '-upcoming', '予定データなし');
+        const isJ1 = sport === 'j1';
+        showSkeleton('sports-' + sport + '-standings');
+        showSkeleton('sports-' + sport + '-results');
+        showSkeleton('sports-' + sport + '-upcoming');
+
+        const [standResult, pastRes, nextRes] = await Promise.allSettled([
+          isJ1 ? fetchESPNStandings(sport) : sportsFetch('/lookuptable.php?l=' + lg.id + '&s=' + lg.season),
+          sportsFetch('/eventspastleague.php?id=' + lg.id),
+          sportsFetch('/eventsnextleague.php?id=' + lg.id)
+        ]);
+
+        if (isJ1) {
+          const rows = standResult.status === 'fulfilled' ? standResult.value : null;
+          if (rows && rows.length) {
+            renderStandings(rows, 'sports-' + sport + '-standings', sport);
+          } else {
+            showNoData('sports-' + sport + '-standings', '順位表データを取得できませんでした');
+          }
+        } else {
+          const tsdb = standResult.status === 'fulfilled' ? standResult.value : null;
+          if (tsdb && tsdb.table && tsdb.table.length) {
+            renderStandings(tsdb.table, 'sports-' + sport + '-standings', sport);
+          } else {
+            showNoData('sports-' + sport + '-standings', '順位表データを取得できませんでした');
+          }
+        }
+
+        if (pastRes.status === 'fulfilled' && pastRes.value && pastRes.value.events && pastRes.value.events.length) {
+          const evts = pastRes.value.events.slice(-3).reverse();
+          const container = document.getElementById('sports-' + sport + '-results');
+          if (container) {
+            container.innerHTML = '';
+            evts.forEach(ev => container.appendChild(renderMatchCard(ev, sport)));
+          }
+        } else {
+          showNoData('sports-' + sport + '-results', 'データを取得できませんでした');
+        }
+
+        if (nextRes.status === 'fulfilled' && nextRes.value && nextRes.value.events && nextRes.value.events.length) {
+          const evts = nextRes.value.events.slice(0, 3);
+          const container = document.getElementById('sports-' + sport + '-upcoming');
+          if (container) {
+            container.innerHTML = '';
+            evts.forEach(ev => container.appendChild(renderMatchCard(ev, sport)));
+          }
+        } else {
+          showNoData('sports-' + sport + '-upcoming', '予定データなし');
+        }
       }
 
       const timeEl = document.getElementById('sports-' + sport + '-time');
