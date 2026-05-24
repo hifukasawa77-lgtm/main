@@ -36,6 +36,7 @@
       left: 10px;
       right: 10px;
       display: flex;
+      display: none;
       justify-content: space-between;
       pointer-events: none;
       font-size: 13px;
@@ -116,6 +117,86 @@ const MAX_LIVES = 3;
 // === キャンバス ===
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+
+// === GPT-image 2.0 visual assets ===
+const ART = {
+  bg: loadArtImage('assets/bubble-rescue/gpt-image-2-night-sky-background.png'),
+  sprites: loadArtImage('assets/bubble-rescue/gpt-image-2-sprite-atlas-source.png'),
+  effects: loadArtImage('assets/bubble-rescue/gpt-image-2-effects-atlas-source.png'),
+  spriteCanvas: null,
+  effectCanvas: null,
+};
+
+function loadArtImage(src) {
+  const img = new Image();
+  img.decoding = 'async';
+  img.src = src;
+  img.onload = () => {
+    if (src.includes('sprite-atlas')) ART.spriteCanvas = buildChromaKeyCanvas(img);
+    if (src.includes('effects-atlas')) ART.effectCanvas = buildChromaKeyCanvas(img);
+  };
+  return img;
+}
+
+function buildChromaKeyCanvas(img) {
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth || img.width;
+  c.height = img.naturalHeight || img.height;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0);
+  const pixels = g.getImageData(0, 0, c.width, c.height);
+  const d = pixels.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], gg = d[i + 1], b = d[i + 2];
+    if (r > 170 && b > 170 && gg < 145 && Math.abs(r - b) < 95) {
+      d[i + 3] = 0;
+    }
+  }
+  g.putImageData(pixels, 0, 0);
+  return c;
+}
+
+function hasSprites() { return !!ART.spriteCanvas; }
+function hasEffects() { return !!ART.effectCanvas; }
+
+function drawCoverImage(img, x, y, w, h) {
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return false;
+  const scale = Math.max(w / iw, h / ih);
+  const sw = w / scale, sh = h / scale;
+  const sx = (iw - sw) / 2, sy = (ih - sh) / 2;
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+  return true;
+}
+
+function drawAtlasSprite(canvas, cols, rows, idx, cx, cy, dw, dh, options = {}) {
+  if (!canvas) return false;
+  const cellW = canvas.width / cols;
+  const cellH = canvas.height / rows;
+  const sx = (idx % cols) * cellW;
+  const sy = Math.floor(idx / cols) * cellH;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  if (options.alpha !== undefined) ctx.globalAlpha *= options.alpha;
+  if (options.flipX) {
+    ctx.translate(cx, cy);
+    ctx.scale(-1, 1);
+    ctx.drawImage(canvas, sx, sy, cellW, cellH, -dw / 2, -dh / 2, dw, dh);
+  } else {
+    ctx.drawImage(canvas, sx, sy, cellW, cellH, cx - dw / 2, cy - dh / 2, dw, dh);
+  }
+  ctx.restore();
+  return true;
+}
+
+function drawSprite(idx, cx, cy, dw, dh, options) {
+  return drawAtlasSprite(ART.spriteCanvas, 4, 4, idx, cx, cy, dw, dh, options);
+}
+
+function drawEffect(idx, cx, cy, dw, dh, options) {
+  return drawAtlasSprite(ART.effectCanvas, 4, 2, idx, cx, cy, dw, dh, options);
+}
 
 // === Audio System (Phase 3) ===
 const AudioSystem = {
@@ -1111,6 +1192,15 @@ function updateHUD() {
 
 // === 描画ヘルパー ===
 function drawBackground() {
+  if ((ART.bg.complete && ART.bg.naturalWidth) && drawCoverImage(ART.bg, 0, 0, W, H)) {
+    const tint = stage >= 7 ? 'rgba(90,20,70,0.18)' :
+      stage >= 4 ? 'rgba(35,20,80,0.14)' : 'rgba(0,20,50,0.08)';
+    ctx.fillStyle = tint;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(2,8,24,0.48)';
+    ctx.fillRect(0, 0, W, 48);
+    return;
+  }
   // D4: ステージ間背景色補間
   function lerpHex(a, b, t) {
     const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
@@ -1147,6 +1237,19 @@ function drawBackground() {
 }
 
 function drawGround() {
+  if (hasSprites()) {
+    const grad = ctx.createLinearGradient(0, GROUND_Y - 8, 0, H);
+    grad.addColorStop(0, '#53b84b');
+    grad.addColorStop(1, '#1c5e28');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, GROUND_Y - 2, W, H - GROUND_Y + 2);
+    for (let x = -12; x < W + 22; x += 32) {
+      drawSprite(15, x + 16, GROUND_Y - 8, 42, 34);
+    }
+    drawSprite(13, 42, GROUND_Y - 32, 66, 66);
+    drawSprite(14, W - 42, GROUND_Y - 32, 66, 66);
+    return;
+  }
   ctx.fillStyle = '#1a4a1a';
   ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
   ctx.fillStyle = '#2d6a2d';
@@ -1161,6 +1264,27 @@ function drawGround() {
 
 function drawBubble(b) {
   if (b.popped && b.alpha <= 0) return;
+  if (hasSprites()) {
+    ctx.save();
+    ctx.globalAlpha = b.alpha;
+    const r = b.popped ? b.radius * Math.max(0.05, 1 - b.popTimer * 0.06) : b.radius;
+    drawSprite(4, b.x, b.y, r * 2.45, r * 2.45);
+    if (HAZARD_TYPES.has(b.contents)) {
+      const pulse = 0.5 + 0.5 * Math.sin(frameCount * 0.18);
+      ctx.strokeStyle = `rgba(255,50,50,${0.72 + 0.28 * pulse})`;
+      ctx.lineWidth = 4;
+      ctx.shadowColor = '#ff2200';
+      ctx.shadowBlur = 10 + 12 * pulse;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, r * 0.94, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+    if (!b.popped) drawItemIcon(b.x, b.y, b.contents,
+      Math.floor(r * (HAZARD_TYPES.has(b.contents) ? 0.7 : 0.58)));
+    ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.globalAlpha = b.alpha;
   const r = b.popped ? b.radius * Math.max(0.05, 1 - b.popTimer * 0.06) : b.radius;
@@ -1205,6 +1329,23 @@ function drawBubble(b) {
 }
 
 function drawItemIcon(x, y, type, size) {
+  if (hasSprites()) {
+    const spriteMap = {
+      coin: 5, chest: 6, ladder: 7, tool: 8,
+      bomb: 9, hammer: 10, ball: 11
+    };
+    const idx = spriteMap[type];
+    if (idx !== undefined) {
+      const scale = type === 'chest' ? 2.7 :
+        type === 'ladder' ? 2.9 :
+        type === 'tool' ? 2.7 :
+        type === 'hammer' ? 2.8 :
+        type === 'bomb' ? 2.65 :
+        type === 'ball' ? 2.45 : 2.35;
+      drawSprite(idx, x, y, size * scale, size * scale);
+      return;
+    }
+  }
   ctx.save();
   if (type === 'coin') {
     ctx.beginPath();
@@ -1291,6 +1432,10 @@ function drawItemIcon(x, y, type, size) {
 
 function drawLadder(lad) {
   const x = lad.x, top = lad.bottomY - lad.height, bot = lad.bottomY;
+  if (hasSprites()) {
+    drawSprite(7, x, top + lad.height / 2, 42, lad.height + 26);
+    return;
+  }
   ctx.strokeStyle = '#c8a06a';
   ctx.lineWidth = 3;
   ctx.beginPath(); ctx.moveTo(x - 8, top); ctx.lineTo(x - 8, bot); ctx.stroke();
@@ -1326,6 +1471,14 @@ function drawGnome(g) {
     ctx.restore();
   }
   // 帽子（三角）
+  if (hasSprites()) {
+    let spriteIdx = gnomeIdx >= 0 ? gnomeIdx % 4 : 0;
+    if (g.hatColor === '#33aa33') spriteIdx = 1;
+    else if (g.hatColor === '#5555dd') spriteIdx = 2;
+    else if (g.hatColor === '#dddd33') spriteIdx = 3;
+    drawSprite(spriteIdx, x, ay - 18, 54, 54, { flipX: g.vx < -0.1 });
+    return;
+  }
   ctx.fillStyle = g.hatColor;
   ctx.beginPath();
   ctx.moveTo(x, ay - GNOME_H - 8);
@@ -1379,6 +1532,18 @@ function drawGnome(g) {
 
 function drawBall(ball) {
   ctx.save();
+  if (hasSprites()) {
+    for (let i = 0; i < ball.trail.length; i++) {
+      const t = ball.trail[i];
+      const a = (i / ball.trail.length) * 0.35;
+      ctx.globalAlpha = a;
+      drawSprite(11, t.x, t.y, 18, 18);
+    }
+    ctx.globalAlpha = 1;
+    drawSprite(11, ball.x, ball.y, 30, 30);
+    ctx.restore();
+    return;
+  }
   // トレイル
   for (let i = 0; i < ball.trail.length; i++) {
     const t = ball.trail[i];
@@ -1451,6 +1616,10 @@ function drawRings() {
 function drawFloatingBlocks() {
   for (const bl of floatingBlocks) {
     const { x, y, w, h } = bl;
+    if (hasSprites()) {
+      drawSprite(12, x + w / 2, y + h / 2, w + 30, 54);
+      continue;
+    }
     // メイン面
     ctx.fillStyle = '#c8843a';
     ctx.fillRect(x, y, w, h);
@@ -1476,6 +1645,16 @@ function drawCrow(crow) {
   const cx = Math.round(crow.x), cy = Math.round(crow.y);
   const wing = Math.sin(crow.wingAnim * 0.28) * 7;
   const facingRight = crow.vx >= 0;
+  if (hasEffects()) {
+    drawEffect(facingRight ? 0 : 1, cx, cy + wing * 0.12, 52, 52);
+    if (crow.warnTimer > 0) {
+      ctx.save();
+      ctx.globalAlpha = Math.floor(crow.warnTimer / 5) % 2 === 0 ? 1.0 : 0.35;
+      drawEffect(2, cx, cy - 31, 28, 24);
+      ctx.restore();
+    }
+    return;
+  }
   ctx.save();
   // 翼（左右）
   ctx.fillStyle = '#1a1a1a';
@@ -1522,6 +1701,29 @@ function drawLightnings() {
   for (const lt of lightnings) {
     if (lt.phase === 'done') continue;
     ctx.save();
+    if (hasEffects()) {
+      if (lt.phase === 'warn') {
+        if (Math.floor(lt.timer / 6) % 2 === 0) {
+          ctx.strokeStyle = 'rgba(255,255,80,0.35)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([5, 5]);
+          ctx.beginPath();
+          ctx.moveTo(lt.x, 0);
+          ctx.lineTo(lt.x, GROUND_Y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          drawEffect(2, lt.x, 52 + Math.sin(frameCount * 0.15) * 5, 42, 34);
+        }
+      } else if (lt.phase === 'strike') {
+        const alpha = Math.max(0, 1 - lt.timer / 22);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = 'rgba(255,255,180,0.16)';
+        ctx.fillRect(lt.x - 34, 0, 68, GROUND_Y);
+        drawEffect(3, lt.x, GROUND_Y / 2, 96, GROUND_Y);
+      }
+      ctx.restore();
+      continue;
+    }
     if (lt.phase === 'warn') {
       // 点滅する警告ライン
       if (Math.floor(lt.timer / 6) % 2 === 0) {
@@ -1622,6 +1824,10 @@ function drawPath() {
 
 // Phase 2: ハート描画関数（ベジェ曲線でハート形）
 function drawHeart(cx, cy, size, filled) {
+  if (hasEffects()) {
+    drawEffect(4, cx, cy + size * 0.26, size * 3.2, size * 3.2, { alpha: filled ? 1 : 0.28 });
+    return;
+  }
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(cx, cy + size * 0.3);
@@ -1686,7 +1892,12 @@ function drawHUDBar() {
   ctx.font = '12px monospace';
   const ballFlash = ballCount <= 3 && Math.floor(frameCount / 10) % 2 === 0;
   ctx.fillStyle = ballFlash ? '#ff4444' : '#88ddff';
-  ctx.fillText('🔮 ' + ballCount, 56, 27);
+  if (hasSprites()) {
+    drawSprite(11, 58, 22, 22, 22);
+    ctx.fillText(String(ballCount), 74, 27);
+  } else {
+    ctx.fillText('🔮 ' + ballCount, 56, 27);
+  }
 
   // プログレスバー（アイテム収集）
   ctx.textAlign = 'right';
