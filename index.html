@@ -3873,6 +3873,18 @@
             <div class="dash-mini-note" id="home-news-time"></div>
           </article>
 
+          <!-- AI最新ニュースカード -->
+          <article class="card dashboard-card reveal" id="dash-card-ai-news">
+            <h3 style="display:flex;align-items:center;gap:8px;">
+              <span data-i18n="dash-ai-news-title">🤖 AI最新ニュース</span>
+              <button onclick="initAINewsCard()" class="dash-todo-btn" style="font-size:0.72rem;padding:3px 10px;margin-left:auto" data-i18n="dash-refresh-btn">更新</button>
+            </h3>
+            <ul class="dashboard-mini-list" id="home-ai-news-list">
+              <li class="dashboard-mini-item"><span>読み込み中…</span></li>
+            </ul>
+            <div class="dash-mini-note" id="home-ai-news-time"></div>
+          </article>
+
           <!-- よく使うリンクカード -->
           <article class="card dashboard-card reveal" id="dash-card-quicklinks">
             <h3 data-i18n="dash-quicklinks-title">🔖 よく使うリンク</h3>
@@ -9061,6 +9073,95 @@
       };
       setInterval(initNewsCard, 30 * 60 * 1000);
 
+      window.initAINewsCard = async function initAINewsCard() {
+        const list = document.getElementById('home-ai-news-list');
+        const timeEl = document.getElementById('home-ai-news-time');
+        if (!list) return;
+        list.innerHTML = '<li class="dashboard-mini-item"><span style="color:var(--muted)">取得中…</span></li>';
+
+        const AI_SOURCES = [
+          'https://rss.itmedia.co.jp/rss/2.0/ait.xml',
+          'https://venturebeat.com/category/ai/feed/',
+          'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml',
+        ];
+        const AI_PROXIES = [
+          u => `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(u)}&count=5`,
+          u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+          u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+          u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+          u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+        ];
+
+        function parseAIRSSXml(xml) {
+          const doc = new DOMParser().parseFromString(xml, 'text/xml');
+          return [...doc.querySelectorAll('item')].slice(0, 5).map(item => ({
+            title: item.querySelector('title')?.textContent?.trim() || '',
+            link: item.querySelector('link')?.textContent?.trim() || '#',
+            pubDate: item.querySelector('pubDate')?.textContent?.trim() || '',
+          })).filter(i => i.title);
+        }
+
+        async function fetchAISource(src) {
+          for (const makeProxy of AI_PROXIES) {
+            try {
+              const url = makeProxy(src);
+              const res = await fetchWithTimeout(url, 9000);
+              if (!res.ok) continue;
+              const ct = res.headers.get('content-type') || '';
+              if (ct.includes('json') || url.includes('rss2json')) {
+                const data = await res.json();
+                if (data.status === 'ok' && data.items?.length) {
+                  return data.items.slice(0, 5).map(i => ({ title: i.title || '', link: i.link || '#', pubDate: i.pubDate || '' })).filter(i => i.title);
+                }
+                const items = parseAIRSSXml(data.contents || '');
+                if (items.length) return items;
+              } else {
+                const xml = await res.text();
+                const items = parseAIRSSXml(xml);
+                if (items.length) return items;
+              }
+            } catch {}
+          }
+          return [];
+        }
+
+        const results = await Promise.allSettled(AI_SOURCES.map(fetchAISource));
+        const allItems = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+
+        allItems.sort((a, b) => {
+          const da = a.pubDate ? new Date(a.pubDate) : 0;
+          const db = b.pubDate ? new Date(b.pubDate) : 0;
+          return db - da;
+        });
+
+        const deduped = [];
+        const seen = new Set();
+        for (const item of allItems) {
+          const key = item.title.slice(0, 40);
+          if (!seen.has(key)) { seen.add(key); deduped.push(item); }
+          if (deduped.length >= 8) break;
+        }
+
+        if (deduped.length > 0) {
+          list.innerHTML = deduped.map(item => {
+            const safeLink = /^https?:\/\//i.test(item.link) ? item.link : '#';
+            return `<li class="dashboard-mini-item" style="padding:6px 10px;">
+              <a href="${safeLink}" target="_blank" rel="noopener noreferrer"
+                 style="color:inherit;text-decoration:none;font-size:0.82rem;line-height:1.4;flex:1">
+                ${escHtml(item.title)}
+              </a>
+            </li>`;
+          }).join('');
+        } else {
+          list.innerHTML = `<li class="dashboard-mini-item" style="flex-direction:column;gap:6px;">
+            <span style="color:var(--muted);font-size:0.8rem;">ニュースを取得できませんでした</span>
+            <a href="https://venturebeat.com/category/ai/" target="_blank" rel="noreferrer" style="font-size:0.78rem;color:var(--blue,#0ea5e9)">VentureBeat AIを確認する →</a>
+          </li>`;
+        }
+        if (timeEl) timeEl.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'});
+      };
+      setInterval(initAINewsCard, 30 * 60 * 1000);
+
 
       function initDashboardAPIs() {
         if (dashboardAPIsReady) return;
@@ -9080,6 +9181,7 @@
             initQuakeCard(),
             initTrafficCard(),
             initNewsCard(),
+            initAINewsCard(),
           ]);
         })().catch(() => {});
       }
@@ -9914,6 +10016,7 @@
           'dash-quake-title': '🌍 地震・防災情報',
           'dash-worldclock-title': '🌐 世界時計',
           'dash-news-title': '📰 最新ニュース',
+          'dash-ai-news-title': '🤖 AI最新ニュース',
           'dash-quicklinks-title': '🔖 よく使うリンク',
           // works
           'kicker-board-ai': 'ボードゲーム × AI',
@@ -10138,6 +10241,7 @@
           'dash-quake-title': '🌍 Earthquake Info',
           'dash-worldclock-title': '🌐 World Clock',
           'dash-news-title': '📰 Latest News',
+          'dash-ai-news-title': '🤖 AI Latest News',
           'dash-quicklinks-title': '🔖 Bookmarks',
           // works
           'kicker-board-ai': 'Board Game × AI',
