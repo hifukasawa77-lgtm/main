@@ -174,10 +174,21 @@ Prompt summary: original retro top-down fantasy adventure terrain tiles in a cla
   - `world-map-fahren-badon-25x25.prompt.md` - GPT Image 2.0 prompt spec for regenerating the field map
   - `world-map-fahren-badon-25x25-layout.txt` - 25x25 logical layout draft (biome/landmark planning)
   - `world-map-fahren-25x25.png` - GPT Image 2.0 generated field map for `zelda_like.html`
+  - `world-map-fahren-25x25-dungeons.png` - annotated field map showing the seven sacred-stone dungeon locations and boss names
+  - `world-map-fahren-badon-25x25.svg` - generated 25x25 field map art from the Badon invasion planning pass
 - Created: 2026-05-22
-- Updated: 2026-05-23
-- Purpose: Recreate the Fahren Kingdom field map as a 25x25-screen realm where humans, elves, and dwarves coexist, while keeping a non-cyberpunk fantasy style.
+- Updated: 2026-05-25
+- Purpose: Recreate the Fahren Kingdom field map as a 25x25-screen realm where humans, elves, and dwarves coexist, while keeping a non-cyberpunk fantasy style and marking the seven sacred-stone dungeon routes.
 - Integration target: output image path `assets/zelda-like/world-map-fahren-25x25.png`.
+- Annotated map target: output image path `assets/zelda-like/world-map-fahren-25x25-dungeons.png`.
+- Seven sacred-stone dungeon labels:
+  - D1 `月根の森祠` - boss `翠樹王ヴェイル`
+  - D2 `砂海の砦` - boss `琥砂王アクラバ`
+  - D3 `蒼湖の神殿` - boss `水鱗王ネラル`
+  - D4 `泥霧の洞窟` - boss `沼母モルヴァナ`
+  - D5 `鉄峰の地下庫` - boss `岩鎧王ガルド`
+  - D6 `焔冠の城塞` - boss `溶翼王イグノヴァ`
+  - D7 `白翼の塔` - boss `堕天騎士セラフィス`
 
 ## Fahren Kingdom Field Map (25x25)
 
