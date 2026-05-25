@@ -11543,35 +11543,64 @@
         if (!voiceEnabled || !window.speechSynthesis) return;
         window.speechSynthesis.cancel();
 
-        // 記号・改行を読み上げに適した形に変換
+        // 記号を読み上げ向けに変換し、文単位に分割
         const cleaned = text
-          .replace(/[「」『』【】〔〕《》]/g, '')
-          .replace(/([。！？])\s*/g, '$1、')
-          .replace(/\n+/g, '、')
-          .replace(/、{2,}/g, '、')
+          .replace(/[「」『』【】〔〕《》✨🎮💴☀️📈🎉🏙️👤🤖📡🧭🎯🔷🎲♟️♔🀄🌸📜⚫⚪🗡️]/g, '')
+          .replace(/([。！？])/g, '$1\n')
+          .replace(/\n+/g, '\n')
           .trim();
 
-        const utt = new SpeechSynthesisUtterance(cleaned);
-        utt.lang = State.lang === 'ja' ? 'ja-JP' : 'en-US';
+        const sentences = cleaned.split('\n').map(s => s.trim()).filter(Boolean);
+        if (!sentences.length) return;
 
         const voices = window.speechSynthesis.getVoices();
         const jaVoices = voices.filter(v => v.lang.startsWith('ja'));
+        const enVoices = voices.filter(v => v.lang.startsWith('en'));
 
-        if (voiceGender === 'female') {
-          utt.pitch = 1.1;
-          utt.rate = 0.94;
-          utt.voice = jaVoices.find(v => /haruka|nanami|kyoko|ayumi|hikari/i.test(v.name))
-                   || jaVoices.find(v => v.localService)
-                   || jaVoices[0] || null;
-        } else {
-          utt.pitch = 0.82;
-          utt.rate = 0.91;
-          utt.voice = jaVoices.find(v => /ichiro|kenji|otoya|takeru/i.test(v.name))
-                   || jaVoices.find(v => v.localService && !/haruka|nanami|kyoko/i.test(v.name))
-                   || jaVoices[jaVoices.length - 1] || null;
+        function makeUtt(sentence, idx, total) {
+          const utt = new SpeechSynthesisUtterance(sentence);
+          utt.lang = State.lang === 'ja' ? 'ja-JP' : 'en-US';
+
+          if (State.lang === 'ja') {
+            if (voiceGender === 'female') {
+              utt.pitch = 1.05;
+              // 文の位置で速度を微変化：最初の文はやや遅く、中間は普通、最後はやや遅く
+              utt.rate = idx === 0 ? 0.97 : idx === total - 1 ? 0.95 : 1.02;
+              utt.voice = jaVoices.find(v => /haruka|nanami|kyoko|ayumi|hikari/i.test(v.name))
+                       || jaVoices.find(v => v.localService)
+                       || jaVoices[0] || null;
+            } else {
+              utt.pitch = 0.88;
+              utt.rate = idx === 0 ? 0.95 : idx === total - 1 ? 0.92 : 0.98;
+              utt.voice = jaVoices.find(v => /ichiro|kenji|otoya|takeru/i.test(v.name))
+                       || jaVoices.find(v => v.localService && !/haruka|nanami|kyoko/i.test(v.name))
+                       || jaVoices[jaVoices.length - 1] || null;
+            }
+          } else {
+            utt.pitch = voiceGender === 'female' ? 1.08 : 0.9;
+            utt.rate = 1.0;
+            utt.voice = enVoices.find(v => voiceGender === 'female'
+              ? /samantha|karen|victoria|susan|zira/i.test(v.name)
+              : /daniel|alex|david|mark/i.test(v.name))
+              || enVoices[0] || null;
+          }
+          return utt;
         }
 
-        window.speechSynthesis.speak(utt);
+        // 文を順番にキューイング（onend で次を発話）
+        function speakQueue(arr, idx) {
+          if (idx >= arr.length) return;
+          const utt = makeUtt(arr[idx], idx, arr.length);
+          utt.onend = () => {
+            // 文間に自然な間（100〜180ms）
+            if (idx < arr.length - 1) {
+              setTimeout(() => speakQueue(arr, idx + 1), 130);
+            }
+          };
+          window.speechSynthesis.speak(utt);
+        }
+
+        speakQueue(sentences, 0);
       }
 
       async function botSay(text, opts) {
@@ -11763,6 +11792,7 @@
             ? '「' + gameHits[0].title.ja + '」ですね！下のカードから遊べます 🎮'
             : 'Here’s ' + gameHits[0].title.en + ' — tap below to play 🎮');
           renderGameCards(gameHits);
+          renderChips(contextChips('open_game'));
           return;
         }
         if (gameHits.length > 1) {
@@ -11862,6 +11892,68 @@
           .map(k => ({ label: t(k), query: t(k) }));
       }
 
+      // 会話文脈に応じたクイックチップを返す（インテント名 → チップ配列）
+      function contextChips(intentName) {
+        const isJa = State.lang === 'ja';
+        const map = {
+          listGames: isJa
+            ? [{ label: '✨ おすすめは？', query: 'おすすめは？' },
+               { label: '🎲 ボードゲームは？', query: 'ボードゲーム何ある？' },
+               { label: '🆓 無料で遊べる？', query: '無料で遊べる？' }]
+            : [{ label: '✨ Recommend one', query: 'Recommend one' },
+               { label: '🎲 Board games?', query: 'What board games?' },
+               { label: '🆓 Are they free?', query: 'Are they free?' }],
+          recommend: isJa
+            ? [{ label: '🎮 ゲーム一覧も見る', query: 'ゲーム何ある？' },
+               { label: '🎲 他のジャンルは？', query: 'ボードゲーム何ある？' },
+               { label: '🆓 無料で遊べる？', query: '無料で遊べる？' }]
+            : [{ label: '🎮 See all games', query: 'What games are here?' },
+               { label: '🎲 Other genres?', query: 'What board games?' },
+               { label: '🆓 Are they free?', query: 'Are they free?' }],
+          open_game: isJa
+            ? [{ label: '✨ 他のおすすめは？', query: 'おすすめは？' },
+               { label: '🎮 ゲーム一覧', query: 'ゲーム何ある？' }]
+            : [{ label: '✨ Other picks?', query: 'Recommend one' },
+               { label: '🎮 All games', query: 'What games are here?' }],
+          forex: isJa
+            ? [{ label: '📈 株価も調べる', query: 'トヨタの株価' },
+               { label: '☀️ 天気も教えて', query: '三郷市の天気' },
+               { label: '📊 ダッシュボードへ', action: () => { scrollToSection('dashboard'); setOpen(false); } }]
+            : [{ label: '📈 Check a stock', query: 'Toyota stock' },
+               { label: '☀️ Misato weather', query: 'Misato weather' },
+               { label: '📊 Dashboard', action: () => { scrollToSection('dashboard'); setOpen(false); } }],
+          weather: isJa
+            ? [{ label: '💴 ドル円も見る', query: 'ドル円教えて' },
+               { label: '📈 株価を調べる', query: 'トヨタの株価' },
+               { label: '📊 ダッシュボードへ', action: () => { scrollToSection('dashboard'); setOpen(false); } }]
+            : [{ label: '💴 USD/JPY rate', query: 'USD/JPY rate' },
+               { label: '📈 Check a stock', query: 'Toyota stock' },
+               { label: '📊 Dashboard', action: () => { scrollToSection('dashboard'); setOpen(false); } }],
+          stock: isJa
+            ? [{ label: '💴 ドル円も見る', query: 'ドル円教えて' },
+               { label: '📈 他の銘柄', query: 'ソニーの株価' },
+               { label: '📊 ダッシュボードへ', action: () => { scrollToSection('dashboard'); setOpen(false); } }]
+            : [{ label: '💴 USD/JPY rate', query: 'USD/JPY rate' },
+               { label: '📈 Another stock', query: 'Sony stock' },
+               { label: '📊 Dashboard', action: () => { scrollToSection('dashboard'); setOpen(false); } }],
+          about: isJa
+            ? [{ label: '🎯 趣味は？', query: '趣味を教えて' },
+               { label: '📬 連絡先', query: '連絡先を知りたい' },
+               { label: '🎮 ゲーム見てみる', query: 'ゲーム何ある？' }]
+            : [{ label: '🎯 Hobbies?', query: 'What are your hobbies?' },
+               { label: '📬 Contact', query: 'How to contact?' },
+               { label: '🎮 Check games', query: 'What games are here?' }],
+          greet: isJa
+            ? [{ label: '🎮 ゲーム何ある？', query: 'ゲーム何ある？' },
+               { label: '✨ おすすめは？', query: 'おすすめは？' },
+               { label: '☀️ 今日の天気', query: '三郷市の天気' }]
+            : [{ label: '🎮 What games?', query: 'What games are here?' },
+               { label: '✨ Recommend one', query: 'Recommend one' },
+               { label: '☀️ Misato weather', query: 'Misato weather' }],
+        };
+        return map[intentName] || defaultChips();
+      }
+
       async function runIntent(name) {
         switch (name) {
           case 'forex':     return runForex();
@@ -11878,7 +11970,7 @@
           case 'contact':   return runKb('contact', { section: 'contact' });
           case 'blog':      return runKb('blog', { section: 'blog' });
           case 'about':     return runKb('about');
-          case 'greet':     return runKb('greet', { chips: defaultChips() });
+          case 'greet':     return runKb('greet', { chips: contextChips('greet') });
           case 'thanks':    return runKb('thanks');
           case 'more':      return runMore();
           case 'stock':     return runStockGeneric();
@@ -11908,10 +12000,7 @@
           State.push({ id: uid(), role: 'agent', text: intro, ts: Date.now() });
           messagesEl.appendChild(buildForexCard(rate, date));
           scrollToBottom();
-          renderChips([
-            { label: State.lang === 'ja' ? '📊 ダッシュボードへ' : '📊 Dashboard', action: () => { scrollToSection('dashboard'); setOpen(false); } },
-            { label: t('agent-quick-2'), query: t('agent-quick-2') }
-          ]);
+          renderChips(contextChips('forex'));
         } catch (e) {
           setTyping(false);
           await botSay(t('agent-tool-error'));
@@ -11930,9 +12019,7 @@
           State.push({ id: uid(), role: 'agent', text: intro, ts: Date.now() });
           messagesEl.appendChild(buildWeatherCard(data));
           scrollToBottom();
-          renderChips([
-            { label: State.lang === 'ja' ? '📊 ダッシュボードへ' : '📊 Dashboard', action: () => { scrollToSection('dashboard'); setOpen(false); } }
-          ]);
+          renderChips(contextChips('weather'));
         } catch (e) {
           setTyping(false);
           await botSay(t('agent-tool-error'));
@@ -12028,7 +12115,7 @@
           : "Today's top 3 picks 🌟 — all playable right in the browser!";
         await botSay(txt);
         renderGameCards(picks);
-        renderChips([{ label: t('agent-quick-1'), query: t('agent-quick-1') }, { label: t('agent-quick-3'), query: t('agent-quick-3') }]);
+        renderChips(contextChips('recommend'));
       }
 
       async function runListGames() {
@@ -12041,7 +12128,8 @@
         renderGameCards(first);
         State.paginationOffset = 5;
         State.save();
-        const chips = [{ label: t('agent-more'), action: () => runMore() }, { label: t('agent-quick-2'), query: t('agent-quick-2') }];
+        // ページネーションの「もっと」は残しつつ文脈チップで補完
+        const chips = [{ label: t('agent-more'), action: () => runMore() }, ...contextChips('listGames')];
         renderChips(chips);
       }
 
@@ -12165,10 +12253,7 @@
           State.push({ id: uid(), role: 'agent', text: intro, ts: Date.now() });
           messagesEl.appendChild(buildStockCard(quote, match.name, match.symbol));
           scrollToBottom();
-          renderChips([
-            { label: State.lang === 'ja' ? '📊 ダッシュボードへ' : '📊 Dashboard', action: () => { scrollToSection('dashboard'); setOpen(false); } },
-            { label: State.lang === 'ja' ? '💴 ドル円も見る' : '💴 USD/JPY too', query: State.lang === 'ja' ? 'ドル円教えて' : 'USD/JPY rate' }
-          ]);
+          renderChips(contextChips('stock'));
         } catch (e) {
           setTyping(false);
           const msg = State.lang === 'ja'
