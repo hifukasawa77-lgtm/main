@@ -1052,13 +1052,17 @@
         const UI_OFFSET = 4 * TILE + 16; // Extended UI for items
 
         // --- STATE MANAGEMENT ---
-        let gameState = 'TITLE'; // TITLE, PLAYING, DIALOGUE, SHOP, GAMEOVER
+        let gameState = 'TITLE'; // TITLE, PLAYING, DIALOGUE, SHOP, MENU, SAVE_MENU, LOAD_MENU, GAMEOVER
         let dialogueText = [];
         let dialogueIndex = 0;
         let shopType = ''; 
         let shopItemsData = [];
         let shopCursor = 0;
         let currentNPC = null;
+        let menuCursor = 0;
+        let saveCursor = 0;
+        let saveMenuBackState = 'MENU';
+        let menuMessage = '';
 
         let inventory = {
             bombs: 0,
@@ -1083,11 +1087,10 @@
             if(!isAudioInitialized) initAudio();
             if(!keys[e.code]) keyPress[e.code] = true;
             keys[e.code] = true; 
-            if(['Space','ArrowUp','ArrowDown'].includes(e.code)) e.preventDefault(); 
+            if(['Space','ArrowUp','ArrowDown','Enter','NumpadEnter'].includes(e.code)) e.preventDefault(); 
         });
         window.addEventListener('keyup', e => { 
             keys[e.code] = false; 
-            keyPress[e.code] = false;
         });
 
         function isJustPressed(code) {
@@ -1096,6 +1099,10 @@
                 return true;
             }
             return false;
+        }
+
+        function isConfirmPressed() {
+            return isJustPressed('Space') || isJustPressed('KeyZ') || isJustPressed('Enter') || isJustPressed('NumpadEnter');
         }
 
         // --- WORLD GENERATION ---
@@ -2008,6 +2015,93 @@
             ]);
         }
 
+        const SAVE_SLOT_COUNT = 3;
+        const SAVE_KEY_PREFIX = 'fahren_kingdom_quest_save_';
+
+        function getSaveSlotKey(slot) {
+            return `${SAVE_KEY_PREFIX}${slot}`;
+        }
+
+        function createSaveData() {
+            return {
+                version: 1,
+                savedAt: new Date().toISOString(),
+                player: {
+                    x: Math.round(player.x),
+                    y: Math.round(player.y),
+                    health: player.health,
+                    maxHealth: player.maxHealth,
+                    dir: player.dir
+                },
+                room: { x: currentRoomX, y: currentRoomY },
+                rupees,
+                inventory: { ...inventory },
+                equipment: { ...equipment },
+                activeItem,
+                sacredStones: { ...sacredStones }
+            };
+        }
+
+        function readSaveSlot(slot) {
+            try {
+                const raw = localStorage.getItem(getSaveSlotKey(slot));
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function writeSaveSlot(slot) {
+            try {
+                localStorage.setItem(getSaveSlotKey(slot), JSON.stringify(createSaveData()));
+                menuMessage = `File ${slot} にセーブしました`;
+                playSFX('item');
+            } catch (e) {
+                menuMessage = 'セーブに失敗しました';
+                playSFX('error');
+            }
+        }
+
+        function applySaveData(data) {
+            if (!data || !data.player || !data.room) return false;
+            currentRoomX = Math.max(WORLD_MIN, Math.min(WORLD_MAX, data.room.x ?? START_ROOM_X));
+            currentRoomY = Math.max(WORLD_MIN, Math.min(WORLD_MAX, data.room.y ?? START_ROOM_Y));
+            player.reset(data.player.x ?? 120, data.player.y ?? 120);
+            player.maxHealth = data.player.maxHealth ?? player.maxHealth;
+            player.health = Math.max(1, Math.min(data.player.health ?? player.maxHealth, player.maxHealth));
+            player.dir = data.player.dir || 'down';
+            rupees = data.rupees ?? 0;
+            inventory = { bombs: 0, arrows: 0, keys: 0, potions: 0, ...(data.inventory || {}) };
+            equipment = { shield: false, bow: false, armorLevel: 0, candle: false, ...(data.equipment || {}) };
+            activeItem = data.activeItem || 'none';
+            sacredStones = { ...(data.sacredStones || {}) };
+            Object.keys(worldMap).forEach(key => delete worldMap[key]);
+            projectiles = []; playerProjectiles = []; items = []; hazards = [];
+            isTransitioning = false; nextRoomData = null; transOffset = { x: 0, y: 0 };
+            gameState = 'PLAYING';
+            menuMessage = 'ロードしました';
+            playSFX('item');
+            return true;
+        }
+
+        function formatSaveSlot(slot) {
+            const data = readSaveSlot(slot);
+            if (!data) return `File ${slot}: EMPTY`;
+            const stones = Object.keys(data.sacredStones || {}).length;
+            const date = data.savedAt ? new Date(data.savedAt) : null;
+            const stamp = date && !Number.isNaN(date.getTime())
+                ? `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+                : 'saved';
+            return `File ${slot}: ${stamp} S ${stones}/7 [${data.room?.x ?? 0},${-(data.room?.y ?? 0)}]`;
+        }
+
+        function openPauseMenu() {
+            menuCursor = 0;
+            menuMessage = '';
+            gameState = 'MENU';
+            playSFX('talk');
+        }
+
         function startShop(type, npcObj) {
             gameState = 'SHOP';
             shopType = type;
@@ -2393,6 +2487,75 @@
             }
         }
 
+        function updatePauseMenu() {
+            const items = ['つづける', 'セーブ', 'ロード'];
+            if (isJustPressed('ArrowUp') || isJustPressed('KeyW')) {
+                menuCursor = (menuCursor - 1 + items.length) % items.length;
+                playSFX('talk');
+            }
+            if (isJustPressed('ArrowDown') || isJustPressed('KeyS')) {
+                menuCursor = (menuCursor + 1) % items.length;
+                playSFX('talk');
+            }
+            if (isConfirmPressed()) {
+                if (menuCursor === 0) {
+                    gameState = 'PLAYING';
+                    playSFX('talk');
+                } else if (menuCursor === 1) {
+                    saveCursor = 0;
+                    saveMenuBackState = 'MENU';
+                    menuMessage = '';
+                    gameState = 'SAVE_MENU';
+                    playSFX('talk');
+                } else {
+                    saveCursor = 0;
+                    saveMenuBackState = 'MENU';
+                    menuMessage = '';
+                    gameState = 'LOAD_MENU';
+                    playSFX('talk');
+                }
+            }
+            if (isJustPressed('Escape') || isJustPressed('KeyX') || isJustPressed('ShiftLeft')) {
+                gameState = 'PLAYING';
+                playSFX('talk');
+            }
+        }
+
+        function updateSaveSlotMenu(isLoadMode) {
+            const itemCount = SAVE_SLOT_COUNT + 1;
+            if (isJustPressed('ArrowUp') || isJustPressed('KeyW')) {
+                saveCursor = (saveCursor - 1 + itemCount) % itemCount;
+                playSFX('talk');
+            }
+            if (isJustPressed('ArrowDown') || isJustPressed('KeyS')) {
+                saveCursor = (saveCursor + 1) % itemCount;
+                playSFX('talk');
+            }
+            if (isConfirmPressed()) {
+                if (saveCursor >= SAVE_SLOT_COUNT) {
+                    gameState = saveMenuBackState;
+                    playSFX('talk');
+                    return;
+                }
+                const slot = saveCursor + 1;
+                if (isLoadMode) {
+                    const data = readSaveSlot(slot);
+                    if (!data) {
+                        menuMessage = `File ${slot} は空です`;
+                        playSFX('error');
+                    } else {
+                        applySaveData(data);
+                    }
+                } else {
+                    writeSaveSlot(slot);
+                }
+            }
+            if (isJustPressed('Escape') || isJustPressed('KeyX') || isJustPressed('ShiftLeft')) {
+                gameState = saveMenuBackState;
+                playSFX('talk');
+            }
+        }
+
         const BIOME_NAMES = {
             town: '王都/村',
             grassland: '草原',
@@ -2573,6 +2736,56 @@
                 ctx.fillStyle = '#a8e0f8';
                 ctx.fillText(shopItemsData[shopCursor].desc, 24, 180);
             }
+
+            if (gameState === 'MENU') drawPauseMenuOverlay();
+            if (gameState === 'SAVE_MENU') drawSaveSlotOverlay(false);
+            if (gameState === 'LOAD_MENU') drawSaveSlotOverlay(true);
+        }
+
+        function drawMenuPanel(x, y, w, h, title) {
+            ctx.fillStyle = 'rgba(0,0,0,0.88)';
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeStyle = '#fcd8a8';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+            ctx.fillStyle = '#fcd8a8';
+            ctx.font = '12px monospace';
+            ctx.fillText(title, x + 12, y + 18);
+        }
+
+        function drawPauseMenuOverlay() {
+            const x = 56, y = 72, w = 144, h = 104;
+            const items = ['つづける', 'セーブ', 'ロード'];
+            drawMenuPanel(x, y, w, h, 'MENU / メニュー');
+            items.forEach((item, idx) => {
+                ctx.fillStyle = idx === menuCursor ? '#fff' : '#a8a8a8';
+                ctx.fillText(`${idx === menuCursor ? '▶' : ' '} ${item}`, x + 20, y + 42 + idx * 18);
+            });
+            ctx.fillStyle = '#888';
+            ctx.font = '8px monospace';
+            ctx.fillText('Enter/Space: OK  X/Esc: Back', x + 12, y + h - 12);
+            if (menuMessage) {
+                ctx.fillStyle = '#b8f818';
+                ctx.fillText(menuMessage, x + 12, y + h + 14);
+            }
+        }
+
+        function drawSaveSlotOverlay(isLoadMode) {
+            const x = 18, y = 62, w = 220, h = 132;
+            drawMenuPanel(x, y, w, h, isLoadMode ? 'LOAD / ロード' : 'SAVE / セーブ');
+            for (let i = 0; i < SAVE_SLOT_COUNT; i++) {
+                ctx.fillStyle = i === saveCursor ? '#fff' : '#a8a8a8';
+                ctx.fillText(`${i === saveCursor ? '▶' : ' '} ${formatSaveSlot(i + 1)}`, x + 14, y + 42 + i * 18);
+            }
+            ctx.fillStyle = saveCursor === SAVE_SLOT_COUNT ? '#fff' : '#a8a8a8';
+            ctx.fillText(`${saveCursor === SAVE_SLOT_COUNT ? '▶' : ' '} 戻る`, x + 14, y + 100);
+            ctx.fillStyle = '#888';
+            ctx.font = '8px monospace';
+            ctx.fillText('3つのファイルから選択', x + 14, y + h - 12);
+            if (menuMessage) {
+                ctx.fillStyle = '#b8f818';
+                ctx.fillText(menuMessage, x + 14, y + h + 14);
+            }
         }
 
         // Title screen star field
@@ -2624,6 +2837,7 @@
             }
             ctx.fillStyle = '#888'; ctx.font = '8px monospace';
             ctx.fillText('Human / Elf / Dwarf Realm', canvas.width/2, 178);
+            ctx.fillText('ENTER: LOAD MENU', canvas.width/2, 190);
             ctx.fillText('WASD:\u79fb\u52d5  Space/Z:\u3051\u3093  X:\u30a2\u30a4\u30c6\u30e0', canvas.width/2, 200);
             ctx.fillText('1:\u7206\u5f3e 2:\u5f13\u77e2 3:\u8001\u71ed 4:\u56de\u5fa9\u85ac', canvas.width/2, 212);
             ctx.textAlign = 'left';
@@ -2645,23 +2859,40 @@
             if (gameState === 'TITLE') {
                 if (isJustPressed('Space')) {
                     player.reset(120, 120); currentRoomX=START_ROOM_X; currentRoomY=START_ROOM_Y; gameState = 'PLAYING'; playSFX('item');
+                } else if (isJustPressed('Enter') || isJustPressed('NumpadEnter')) {
+                    saveCursor = 0;
+                    saveMenuBackState = 'TITLE';
+                    menuMessage = '';
+                    gameState = 'LOAD_MENU';
+                    playSFX('talk');
                 }
             } else if (gameState === 'GAMEOVER') {
                 if (isJustPressed('Space')) {
                     player.reset(120, 120); currentRoomX=START_ROOM_X; currentRoomY=START_ROOM_Y; gameState = 'PLAYING'; playSFX('item');
                 }
             } else if (gameState === 'PLAYING') {
-                updatePlaying();
+                if (isJustPressed('Enter') || isJustPressed('NumpadEnter')) openPauseMenu();
+                else updatePlaying();
             } else if (gameState === 'DIALOGUE') {
                 updateDialogue();
             } else if (gameState === 'SHOP') {
                 updateShop();
+            } else if (gameState === 'MENU') {
+                updatePauseMenu();
+            } else if (gameState === 'SAVE_MENU') {
+                updateSaveSlotMenu(false);
+            } else if (gameState === 'LOAD_MENU') {
+                updateSaveSlotMenu(true);
             }
         }
 
         function draw() {
             if (gameState === 'TITLE') drawTitle();
             else if (gameState === 'GAMEOVER') drawGameOver();
+            else if (gameState === 'LOAD_MENU' && saveMenuBackState === 'TITLE') {
+                drawTitle();
+                drawSaveSlotOverlay(true);
+            }
             else drawGame();
         }
 
