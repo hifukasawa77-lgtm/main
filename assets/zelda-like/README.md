@@ -86,6 +86,26 @@ Prompt summary: original top-down fantasy adventure hero sprite sheet for Fahren
 
 Prompt summary: original polished top-down enemy sprite sheets preserving gameplay roles from the current game and expanding Fahren Kingdom biomes, no copyrighted Zelda/Nintendo enemy likenesses, flat chroma-key background.
 
+## GPT Image 2 Boss Sprite
+
+- Files:
+  - `bosses/gpt-image-2-boss-sheet-v1-source.png` - generated sacred-stone boss sheet with chroma-key background
+  - `bosses/gpt-image-2-boss-sheet-v1.png` - transparent boss sheet currently used by `zelda_like.html`
+- Generator: GPT Image 2
+- Created: 2026-05-25
+- Purpose: Seven sacred-stone guardians and final boss Demon King Gran for Fahren Kingdom
+- Layout: 8 rows by 2 columns; left column is idle, right column is active/attack pose
+  - row 1: forest sacred-stone guardian, two frames
+  - row 2: desert sacred-stone guardian, two frames
+  - row 3: lake sacred-stone guardian, two frames
+  - row 4: swamp sacred-stone guardian, two frames
+  - row 5: mountain sacred-stone guardian, two frames
+  - row 6: volcano sacred-stone guardian, two frames
+  - row 7: ruined sanctuary sacred-stone guardian, two frames
+  - row 8: Demon King Gran, two frames
+
+Prompt summary: original polished top-down fantasy RPG boss sprite sheet for seven sacred stones scattered across Fahren Kingdom and the final boss Demon King Gran, no copyrighted Zelda/Nintendo likenesses, flat chroma-key background.
+
 ## GPT Image 2 NPC Sprite
 
 - Files:
