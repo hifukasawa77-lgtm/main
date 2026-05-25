@@ -28,14 +28,16 @@ Current `zelda_like.html` uses lightweight original Canvas pixel art for the liv
   - `player/gpt-image-2-hero-sheet-source.png` - original generated sheet with chroma-key background
   - `player/gpt-image-2-hero-sheet.png` - local transparent PNG processed from the source
   - `player/gpt-image-2-hero-sheet-v2-source.png` - detailed generated sheet with chroma-key background
-  - `player/gpt-image-2-hero-sheet-v2.png` - detailed transparent PNG currently used by `zelda_like.html`
+  - `player/gpt-image-2-hero-sheet-v2.png` - detailed transparent PNG
+  - `player/gpt-image-2-hero-sheet-v3-source.png` - refined generated sheet with chroma-key background
+  - `player/gpt-image-2-hero-sheet-v3.png` - refined transparent PNG currently used by `zelda_like.html`
 - Generator: GPT Image 2
 - Created: 2026-05-19
-- Updated: 2026-05-24
+- Updated: 2026-05-25
 - Purpose: Original protagonist sprite sheet for `zelda_like.html`
 - Layout: 4 rows by 3 columns; rows are down, left, right, up; columns are step, idle, step
 
-Prompt summary: original top-down fantasy adventure hero sprite sheet, polished 16-bit/32-bit top-down action RPG mood, no copyrighted Zelda/Nintendo likeness, no official symbols, flat chroma-key background.
+Prompt summary: original top-down fantasy adventure hero sprite sheet for Fahren Kingdom, polished 16-bit/32-bit top-down action RPG mood, no copyrighted Zelda/Nintendo likeness, no official symbols, flat chroma-key background.
 
 ## GPT Image 2 Enemy Sprite
 
@@ -44,18 +46,45 @@ Prompt summary: original top-down fantasy adventure hero sprite sheet, polished 
   - `enemies/gpt-image-2-enemy-sheet.png` - local transparent PNG processed from the source
   - `enemies/gpt-image-2-enemy-sheet-v2-source.png` - detailed generated sheet with chroma-key background
   - `enemies/gpt-image-2-enemy-sheet-v2.png` - detailed transparent PNG currently used by `zelda_like.html`
+  - `enemies/gpt-image-2-enemy-pack-a-v1-source.png` - generated grassland/forest enemy expansion sheet with chroma-key background
+  - `enemies/gpt-image-2-enemy-pack-a-v1.png` - transparent grassland/forest enemy expansion sheet currently used by `zelda_like.html`
+  - `enemies/gpt-image-2-enemy-pack-b-v1-source.png` - generated desert enemy expansion sheet with chroma-key background
+  - `enemies/gpt-image-2-enemy-pack-b-v1.png` - transparent desert enemy expansion sheet currently used by `zelda_like.html`
+  - `enemies/gpt-image-2-enemy-pack-c-v1-source.png` - generated volcano/mountain/swamp enemy expansion sheet with chroma-key background
+  - `enemies/gpt-image-2-enemy-pack-c-v1.png` - transparent volcano/mountain/swamp enemy expansion sheet currently used by `zelda_like.html`
 - Generator: GPT Image 2
 - Created: 2026-05-19
-- Updated: 2026-05-24
-- Purpose: Original enemy sprite sheet for `zelda_like.html`
+- Updated: 2026-05-25
+- Purpose: Original enemy sprite sheets for `zelda_like.html`, including 18 additional Fahren Kingdom enemy types
 - Layout: 5 rows by 2 columns
   - row 1: red pebble-spitter enemy, two frames
   - row 2: green forest brute, two frames
   - row 3: purple cave bat, two frames
   - row 4: blue-black crystal spider, idle/jump frames
   - row 5: tan sand worm, hidden/emerged frames
+- Expansion pack A layout: 6 rows by 2 columns
+  - row 1: slime, two frames
+  - row 2: boar, two frames
+  - row 3: spear goblin, two frames
+  - row 4: forest wisp, two frames
+  - row 5: leaf beetle, two frames
+  - row 6: river toad, two frames
+- Expansion pack B layout: 6 rows by 2 columns
+  - row 1: desert scarab, two frames
+  - row 2: sand bandit, two frames
+  - row 3: cactus mimic, two frames
+  - row 4: scorpion, two frames
+  - row 5: dust skull, two frames
+  - row 6: dune serpent, two frames
+- Expansion pack C layout: 6 rows by 2 columns
+  - row 1: lava sprite, two frames
+  - row 2: magma hound, two frames
+  - row 3: ash gargoyle, two frames
+  - row 4: crystal golem, two frames
+  - row 5: swamp leech, two frames
+  - row 6: bog witch, two frames
 
-Prompt summary: original polished top-down enemy sprite sheet preserving gameplay roles from the current game, no copyrighted Zelda/Nintendo enemy likenesses, flat chroma-key background.
+Prompt summary: original polished top-down enemy sprite sheets preserving gameplay roles from the current game and expanding Fahren Kingdom biomes, no copyrighted Zelda/Nintendo enemy likenesses, flat chroma-key background.
 
 ## GPT Image 2 NPC Sprite
 
@@ -63,9 +92,12 @@ Prompt summary: original polished top-down enemy sprite sheet preserving gamepla
   - `npcs/gpt-image-2-npc-sheet-source.png` - original generated sheet with chroma-key background
   - `npcs/gpt-image-2-npc-sheet.png` - local transparent PNG processed from the source
   - `npcs/gpt-image-2-npc-sheet-v2-source.png` - detailed generated sheet with chroma-key background
-  - `npcs/gpt-image-2-npc-sheet-v2.png` - detailed transparent PNG currently used by `zelda_like.html`
+  - `npcs/gpt-image-2-npc-sheet-v2.png` - detailed transparent PNG
+  - `npcs/gpt-image-2-npc-sheet-v3-source.png` - refined generated sheet with chroma-key background
+  - `npcs/gpt-image-2-npc-sheet-v3.png` - refined transparent PNG currently used by `zelda_like.html`
 - Generator: GPT Image 2
 - Created: 2026-05-24
+- Updated: 2026-05-25
 - Purpose: Original NPC sprite sheet for `zelda_like.html`
 - Layout: 5 rows by 2 columns
   - row 1: human villager man, two frames
