@@ -11474,6 +11474,15 @@
         const a = document.createElement('a');
         a.className = 'game-card-mini';
         a.href = g.href;
+        a.addEventListener('click', () => {
+          try {
+            localStorage.setItem('agent-last-game', JSON.stringify({
+              title: g.title[State.lang] || g.title.ja,
+              href: g.href,
+              ts: Date.now()
+            }));
+          } catch(e) {}
+        });
         a.rel = 'noopener';
         const thumb = document.createElement('div');
         thumb.className = 'thumb';
@@ -11529,7 +11538,22 @@
             const ch = text[i++];
             caret.insertAdjacentText('beforebegin', ch);
             scrollToBottom();
-            const delay = (ch === '\n') ? TYPE_SPEED_MS * 2 : TYPE_SPEED_MS;
+            // 文字位置によるアクセル・デセル効果
+            const progress = text.length > 1 ? i / text.length : 0.5;
+            let delay;
+            if (ch === '。' || ch === '！' || ch === '？') {
+              delay = TYPE_SPEED_MS * 5;      // 句点・感嘆符で長めの間
+            } else if (ch === '、' || ch === '…') {
+              delay = TYPE_SPEED_MS * 3;      // 読点で短めの間
+            } else if (ch === '\n') {
+              delay = TYPE_SPEED_MS * 6;      // 改行で最長の間
+            } else if (progress < 0.15) {
+              delay = TYPE_SPEED_MS * 0.6;    // 冒頭15%は速め
+            } else if (progress > 0.80) {
+              delay = TYPE_SPEED_MS * 1.8;    // 末尾20%はゆっくり
+            } else {
+              delay = TYPE_SPEED_MS;          // 中間は通常速度
+            }
             setTimeout(step, delay);
           };
           step();
@@ -11871,8 +11895,40 @@
             renderChips(defaultChips());
           }
         } else {
-          await botSay(t('agent-fallback'));
-          renderChips(defaultChips());
+          // 全インテントのスコアを計算して最も近い3候補を提示
+          const isJa = State.lang === 'ja';
+          const dict = INTENT_DICT[isJa ? 'ja' : 'en'] || INTENT_DICT.ja;
+          const labels = INTENT_CHIP_LABELS[isJa ? 'ja' : 'en'] || INTENT_CHIP_LABELS.ja;
+          const nt = normalize(text);
+          const scores = {};
+          for (const intent in dict) {
+            let s = 0;
+            for (const [kw, w] of dict[intent]) {
+              if (nt.includes(normalize(kw))) s += w;
+            }
+            if (s > 0) scores[intent] = s;
+          }
+          const topIntents = Object.entries(scores)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([name]) => name);
+
+          if (topIntents.length > 0) {
+            const msg = isJa
+              ? 'ちょっとうまく聞き取れませんでした 😅 こういったことでしょうか？'
+              : "Hmm, I'm not sure I followed that 😅 Maybe one of these?";
+            await botSay(msg);
+            const chips = topIntents
+              .filter(name => labels[name])
+              .map(name => ({ label: labels[name], query: labels[name].replace(/^[^\s]+\s/, '') }));
+            renderChips(chips.length > 0 ? chips : defaultChips());
+          } else {
+            const msg = isJa
+              ? 'うまく聞き取れませんでした 😅 別の言い方で試してみてください。'
+              : "I couldn't quite understand that 😅 Try rephrasing, or pick from below.";
+            await botSay(msg);
+            renderChips(defaultChips());
+          }
         }
       }
 
@@ -12297,7 +12353,48 @@
       }
 
       async function welcome() {
-        await botSay(t('agent-welcome'), { delay: 120 });
+        const isJa = State.lang === 'ja';
+        const h = new Date().getHours();
+
+        // 訪問回数を取得・更新
+        let visitCount = 0;
+        try { visitCount = parseInt(localStorage.getItem('agent-visit-count') || '0', 10) || 0; } catch(e) {}
+        visitCount++;
+        try { localStorage.setItem('agent-visit-count', String(visitCount)); } catch(e) {}
+
+        // 挨拶文を決定
+        let greeting;
+        if (visitCount > 1) {
+          greeting = isJa ? 'おかえりなさい！また来てくれてありがとう 😊' : 'Welcome back! Great to see you again 😊';
+        } else if (h >= 5 && h < 12) {
+          greeting = isJa ? 'おはようございます！hideのポートフォリオへようこそ 👋' : 'Good morning! Welcome to hide\'s portfolio 👋';
+        } else if (h >= 12 && h < 17) {
+          greeting = isJa ? 'こんにちは！hideのポートフォリオへようこそ 👋' : 'Good afternoon! Welcome to hide\'s portfolio 👋';
+        } else {
+          greeting = isJa ? 'こんばんは！hideのポートフォリオへようこそ 👋' : 'Good evening! Welcome to hide\'s portfolio 👋';
+        }
+
+        const capabilities = isJa
+          ? 'ゲーム紹介・サイト案内・為替や天気の取得ができます。下のチップからどうぞ。'
+          : "I can introduce games, navigate the site, and fetch live data. Try a chip below.";
+
+        await botSay(greeting + '\n' + capabilities, { delay: 120 });
+
+        // 前回遊んだゲームのサジェスト（変更5と共用）
+        let lastGame = null;
+        try { lastGame = JSON.parse(localStorage.getItem('agent-last-game') || 'null'); } catch(e) {}
+        if (lastGame && lastGame.title && lastGame.href) {
+          const msg = isJa
+            ? '前回「' + lastGame.title + '」を見ていましたね。続きはこちら →'
+            : 'Last time you checked out "' + lastGame.title + '". Continue here →';
+          await botSay(msg, { delay: 500 });
+          renderChips([
+            { label: (isJa ? '🎮 ' + lastGame.title + 'を開く' : '🎮 Open ' + lastGame.title),
+              action: () => { window.open(lastGame.href, '_blank', 'noopener'); } },
+            { label: (isJa ? '他のゲームも見る' : 'Browse other games'),
+              query: isJa ? 'ゲーム何ある？' : 'What games are here?' }
+          ]);
+        }
       }
 
       // ── Restore history on open ─────────────────────────────
