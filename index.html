@@ -1439,7 +1439,7 @@
     #home-weather-tempchart {
       display: block;
       width: 100%;
-      height: 90px;
+      height: 115px;
       border-radius: 10px;
       background: rgba(0,229,255,0.03);
       border: 1px solid var(--line);
@@ -4682,6 +4682,24 @@
         99: ['⛈', '激しい雷雨'],
       };
 
+      function weatherCodeToIcon(code, hour) {
+        const isNight = typeof hour === 'number' && (hour < 6 || hour >= 19);
+        const b = 'assets/weather/';
+        if (code === 0) return b + (isNight ? 'clear-night.svg' : 'clear-day.svg');
+        if (code <= 2) return b + (isNight ? 'partly-cloudy-night.svg' : 'partly-cloudy-day.svg');
+        if (code <= 3) return b + 'cloudy.svg';
+        if (code <= 48) return b + 'fog.svg';
+        if (code <= 57) return b + 'drizzle.svg';
+        if (code <= 63) return b + 'rain.svg';
+        if (code <= 67) return b + 'heavy-rain.svg';
+        if (code <= 77) return b + 'snow.svg';
+        if (code <= 81) return b + 'rain.svg';
+        if (code <= 82) return b + 'heavy-rain.svg';
+        if (code <= 86) return b + 'snow.svg';
+        if (code <= 94) return b + 'thunderstorms.svg';
+        return b + 'thunderstorms-rain.svg';
+      }
+
       function fetchWithTimeout(url, timeoutMs, options) {
         const ctrl = new AbortController();
         const id = setTimeout(() => ctrl.abort(), timeoutMs || 7000);
@@ -4800,18 +4818,20 @@
           </div>`;
       }
 
-      function drawTempChart(canvasId, hours, temps, nowHour, humidities) {
+      function drawTempChart(canvasId, hours, temps, nowHour, humidities, weatherCodes) {
         const canvas = document.getElementById(canvasId);
         if (!canvas || temps.length < 2) return;
         const dpr = window.devicePixelRatio || 1;
         const W = canvas.offsetWidth || 260;
-        const H = canvas.offsetHeight || 90;
+        const H = canvas.offsetHeight || 115;
         canvas.width = W * dpr;
         canvas.height = H * dpr;
         const ctx = canvas.getContext('2d');
         ctx.scale(dpr, dpr);
 
-        const pad = { top: 18, bottom: 22, left: 30, right: 10 };
+        const hasIcons = Array.isArray(weatherCodes) && weatherCodes.length > 0;
+        const pad = { top: 18, bottom: hasIcons ? 40 : 22, left: 30, right: 10 };
+        const iconCache = {};
         const cW = W - pad.left - pad.right;
         const cH = H - pad.top - pad.bottom;
         const n = temps.length;
@@ -4873,8 +4893,16 @@
             const y = yOf(temps[i]);
             ctx.fillStyle = '#00e5ff';
             ctx.fillText(`${Math.round(temps[i])}°`, x, y - 5);
+            const labelY = hasIcons ? pad.top + cH + 34 : pad.top + cH + 14;
             ctx.fillStyle = 'rgba(120,140,160,0.85)';
-            ctx.fillText(`${hours[i]}時`, x, pad.top + cH + 14);
+            ctx.fillText(`${hours[i]}時`, x, labelY);
+            if (hasIcons && weatherCodes[i] != null) {
+              const src = weatherCodeToIcon(weatherCodes[i], hours[i]);
+              const img = iconCache[src];
+              if (img && img.complete && img.naturalWidth > 0) {
+                ctx.drawImage(img, x - 8, pad.top + cH + 14, 16, 16);
+              }
+            }
           }
 
           // Y軸最高最低
@@ -4902,6 +4930,26 @@
         }
 
         drawBase(null);
+
+        // Preload weather icons and redraw once loaded
+        if (hasIcons) {
+          const needed = new Set();
+          for (let i = 0; i < hours.length; i++) {
+            if (hours[i] % 3 === 0 && weatherCodes[i] != null) {
+              needed.add(weatherCodeToIcon(weatherCodes[i], hours[i]));
+            }
+          }
+          let pending = needed.size;
+          if (pending === 0) { drawBase(null); }
+          else {
+            for (const src of needed) {
+              const img = new Image();
+              iconCache[src] = img;
+              img.onload = img.onerror = () => { if (--pending === 0) drawBase(null); };
+              img.src = src;
+            }
+          }
+        }
 
         let tip = document.getElementById('stock-hover-tip');
         if (!tip) {
@@ -5040,7 +5088,7 @@
         const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
           + '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,wind_direction_10m,uv_index,surface_pressure'
           + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
-          + '&hourly=temperature_2m,relative_humidity_2m'
+          + '&hourly=temperature_2m,relative_humidity_2m,weather_code'
           + '&timezone=Asia%2FTokyo&forecast_days=7';
         try {
           const res = await fetchWithTimeout(url, 8000);
@@ -5054,7 +5102,8 @@
           const uvIndex = Number(data.current.uv_index ?? 0);
           const pressure = Math.round(data.current.surface_pressure ?? 0);
           const pair = weatherMap[code] || ['🌡', '不明'];
-          weatherKpi.textContent = `${pair[0]} ${temp}°C`;
+          const wIconSrc = weatherCodeToIcon(code, new Date().getHours());
+          weatherKpi.innerHTML = `<img src="${wIconSrc}" alt="${pair[1]}" style="width:2.2rem;height:2.2rem;vertical-align:middle;margin-right:4px">${temp}°C`;
           weatherSub.textContent = `${pair[1]} / 湿度 ${humidity}% / 風速 ${fmtNum(windSpeed, 1)}m/s`;
 
           const tomorrowCode = data.daily?.weather_code?.[1];
@@ -5074,8 +5123,9 @@
             tomorrowRainProb: Number(tomorrowRainProb || 0),
           });
 
+          const tomorrowIconSrc = weatherCodeToIcon(Number(tomorrowCode ?? code), 12);
           weatherDetail.innerHTML = `
-            <li class="dashboard-mini-item"><span>明日の天気</span><small>${tomorrowPair[0]} ${Math.round(tomorrowMaxNum)}° / ${Math.round(tomorrowMinNum)}° (${tomorrowPair[1]})</small></li>
+            <li class="dashboard-mini-item"><span>明日の天気</span><small><img src="${tomorrowIconSrc}" alt="${tomorrowPair[1]}" style="width:1rem;height:1rem;vertical-align:middle;margin-right:2px">${Math.round(tomorrowMaxNum)}° / ${Math.round(tomorrowMinNum)}° (${tomorrowPair[1]})</small></li>
           `;
 
           // 風向コンパス描画
@@ -5110,8 +5160,9 @@
             const idx = startIdx >= 0 ? startIdx : 0;
             const hourTemps = data.hourly.temperature_2m.slice(idx, idx + 24);
             const hourHumidities = (data.hourly.relative_humidity_2m || []).slice(idx, idx + 24);
+            const hourWeatherCodes = (data.hourly.weather_code || []).slice(idx, idx + 24);
             const hourLabels = data.hourly.time.slice(idx, idx + 24).map(t => parseInt(t.slice(11, 13)));
-            drawTempChart('home-weather-tempchart', hourLabels, hourTemps, nowHour, hourHumidities);
+            drawTempChart('home-weather-tempchart', hourLabels, hourTemps, nowHour, hourHumidities, hourWeatherCodes);
           }
 
           document.getElementById('home-weather-visuals').style.display = '';
@@ -5127,12 +5178,13 @@
               else label = WEEKDAYS_JA[dt.getDay()] + '曜';
               const wCode = data.daily.weather_code?.[i] ?? 0;
               const wPair = weatherMap[wCode] || ['🌡', ''];
+              const wIconDay = weatherCodeToIcon(wCode, 12);
               const maxT = Math.round(data.daily.temperature_2m_max?.[i] ?? 0);
               const minT = Math.round(data.daily.temperature_2m_min?.[i] ?? 0);
               const rainP = data.daily.precipitation_probability_max?.[i] ?? 0;
               return `<div class="weather-day-item">
                 <div class="wd-label">${label}</div>
-                <div class="wd-icon">${wPair[0]}</div>
+                <div class="wd-icon"><img src="${wIconDay}" alt="${wPair[1]}" style="width:1.6rem;height:1.6rem"></div>
                 <div class="wd-temp">${maxT}°/<span class="wd-min">${minT}°</span></div>
                 <div class="wd-rain">💧${rainP}%</div>
               </div>`;
