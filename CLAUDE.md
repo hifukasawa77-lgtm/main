@@ -71,6 +71,13 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `.edge-test-profile/` はMicrosoft Edgeのブラウザデータ。gitignoreすること
 - `shogi_rpg_enhanced.jsx` はJSX形式だがビルド環境なし。取り扱い注意
 
+## APIキーに関する禁止事項（必ず守ること）
+- **有料APIキーを環境変数・設定ファイル・コードに設定・記述することを禁止**
+  - 禁止対象例: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` 等
+- Claude Codeのセッション認証はOAuth経由のみで行い、APIキーは使用しない
+- `.env` ファイルや `config.json` 等にAPIキーを書いた場合は即時削除し、gitにコミットしないこと
+- APIキーが誤ってコミットされた場合は、該当キーを即座に無効化（revoke）すること
+
 ## コンテキスト節約のルール（必ず守ること）
 
 ### ファイル読み込みの基本原則
