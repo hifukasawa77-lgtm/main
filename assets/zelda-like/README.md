@@ -54,7 +54,7 @@ Prompt summary: original top-down fantasy adventure hero sprite sheet for Fahren
   - `enemies/gpt-image-2-enemy-pack-c-v1.png` - transparent volcano/mountain/swamp enemy expansion sheet currently used by `zelda_like.html`
 - Generator: GPT Image 2
 - Created: 2026-05-19
-- Updated: 2026-05-25
+- Updated: 2026-05-26
 - Purpose: Original enemy sprite sheets for `zelda_like.html`, including 18 additional Fahren Kingdom enemy types
 - Layout: 5 rows by 2 columns
   - row 1: red pebble-spitter enemy, two frames
@@ -178,7 +178,7 @@ Prompt summary: original retro top-down fantasy adventure terrain tiles in a cla
   - `world-map-fahren-badon-25x25.svg` - generated 25x25 field map art from the Badon invasion planning pass
 - Created: 2026-05-22
 - Updated: 2026-05-25
-- Purpose: Recreate the Fahren Kingdom field map as a 25x25-screen realm where humans, elves, and dwarves coexist, while keeping a non-cyberpunk fantasy style and marking the seven sacred-stone dungeon routes.
+- Purpose: Recreate the Fahren Kingdom field map as a 25x25-screen realm where humans, elves, and dwarves coexist, while keeping a non-cyberpunk fantasy style and marking the seven sacred-stone dungeon routes. The gameplay layout now follows the annotated field map directly: northwest forest, west desert, central grassland/capital, central lake, right-center mountains, northeast volcano, and lower-right swamp.
 - Integration target: output image path `assets/zelda-like/world-map-fahren-25x25.png`.
 - Annotated map target: output image path `assets/zelda-like/world-map-fahren-25x25-dungeons.png`.
 - Seven sacred-stone dungeon labels:
@@ -186,9 +186,9 @@ Prompt summary: original retro top-down fantasy adventure terrain tiles in a cla
   - D2 `砂海の砦` - boss `琥砂王アクラバ`
   - D3 `蒼湖の神殿` - boss `水鱗王ネラル`
   - D4 `泥霧の洞窟` - boss `沼母モルヴァナ`
-  - D5 `鉄峰の地下庫` - boss `岩鎧王ガルド`
+  - D5 `鉄峰の地下庫` - boss `岩鎧王ガルド` - placed in the lower-right swamp
   - D6 `焔冠の城塞` - boss `溶翼王イグノヴァ`
-  - D7 `白翼の塔` - boss `堕天騎士セラフィス`
+  - D7 `白翼の洞窟` - boss `堕天騎士セラフィス` - placed at a right-center mountain cave
 
 ## Fahren Kingdom Field Map (25x25)
 
