@@ -652,6 +652,7 @@
                         const colByFrame = { idle: 1, step: 0 };
                         const output = {};
 
+                        const frames = [];
                         Object.entries(rowByDir).forEach(([dir, row]) => {
                             Object.entries(colByFrame).forEach(([frameName, col]) => {
                                 const crop = document.createElement('canvas');
@@ -674,26 +675,46 @@
                                         }
                                     }
                                 }
-
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-
-                                if (maxX > minX && maxY > minY) {
-                                    const srcW = maxX - minX + 1;
-                                    const srcH = maxY - minY + 1;
-                                    const scale = Math.min((size - 2) / srcW, (size - 2) / srcH);
-                                    const dstW = Math.max(1, Math.round(srcW * scale));
-                                    const dstH = Math.max(1, Math.round(srcH * scale));
-                                    const dstX = Math.floor((size - dstW) / 2);
-                                    const dstY = Math.max(0, size - dstH - 1);
-                                    fctx.drawImage(crop, minX, minY, srcW, srcH, dstX, dstY, dstW, dstH);
-                                }
-                                output[`${dir}_${frameName}`] = frame;
+                                frames.push({ dir, frameName, crop, minX, minY, maxX, maxY });
                             });
                         });
+
+                        const validFrames = frames.filter(frame => frame.maxX > frame.minX && frame.maxY > frame.minY);
+                        const maxFrameW = Math.max(...validFrames.map(frame => frame.maxX - frame.minX + 1));
+                        const maxFrameH = Math.max(...validFrames.map(frame => frame.maxY - frame.minY + 1));
+                        const sharedScale = Math.min((size - 2) / maxFrameW, (size - 2) / maxFrameH);
+
+                        frames.forEach(frameInfo => {
+                            const frame = document.createElement('canvas');
+                            frame.width = size;
+                            frame.height = size;
+                            const fctx = frame.getContext('2d');
+                            fctx.imageSmoothingEnabled = true;
+
+                            if (frameInfo.maxX > frameInfo.minX && frameInfo.maxY > frameInfo.minY) {
+                                const srcW = frameInfo.maxX - frameInfo.minX + 1;
+                                const srcH = frameInfo.maxY - frameInfo.minY + 1;
+                                const dstW = Math.max(1, Math.round(srcW * sharedScale));
+                                const dstH = Math.max(1, Math.round(srcH * sharedScale));
+                                const dstX = Math.floor((size - dstW) / 2);
+                                const dstY = Math.max(0, size - dstH - 1);
+                                fctx.drawImage(frameInfo.crop, frameInfo.minX, frameInfo.minY, srcW, srcH, dstX, dstY, dstW, dstH);
+                            }
+                            output[`${frameInfo.dir}_${frameInfo.frameName}`] = frame;
+                        });
+
+                        function mirrorFrame(frame) {
+                            const mirrored = document.createElement('canvas');
+                            mirrored.width = frame.width;
+                            mirrored.height = frame.height;
+                            const mctx = mirrored.getContext('2d');
+                            mctx.translate(frame.width, 0);
+                            mctx.scale(-1, 1);
+                            mctx.drawImage(frame, 0, 0);
+                            return mirrored;
+                        }
+                        output.right_idle = mirrorFrame(output.left_idle);
+                        output.right_step = mirrorFrame(output.left_step);
 
                         resolve(output);
                     };
@@ -1045,6 +1066,13 @@
         };
         fahrenDungeonMapImage.src = 'assets/zelda-like/world-map-fahren-25x25-dungeons.png';
 
+        const castleObjectsImage = new Image();
+        let castleObjectsReady = false;
+        castleObjectsImage.onload = () => {
+            castleObjectsReady = true;
+        };
+        castleObjectsImage.src = 'assets/zelda-like/objects/gpt-image-2-castle-objects-v1.png';
+
         // --- CONSTANTS ---
         const TILE = 16;
         const SCREEN_COLS = 16;
@@ -1122,11 +1150,11 @@
             'FFFFPPPVPPPPPMMMMMMOOOOOO',
             'FFFPPPPPPPPPPMMMMMLLLLOOO',
             'DDPPPPPPPPPPMMMMLLLLLLOOO',
-            'DDDPPPPPPPFFMMMLLLLLLLLOO',
-            'DDDPPPPFFFFPPMMLLLLLLLLMM',
-            'DDDPPPPCCCPPPLLLLLLLMMMMM',
-            'DDDPPPFFFFPPPLLLLLLLMMMMM',
-            'DDDPPPPFFFFPPLLLLLLLMMMMM',
+            'DDDPPPCCCCCFMMMLLLLLLLLOO',
+            'DDDPPPCCCCCPPMMLLLLLLLLMM',
+            'DDDPPPCCCCCPPLLLLLLLMMMMM',
+            'DDDPPPCCCCCPPLLLLLLLMMMMM',
+            'DDDPPPCCCCCPPLLLLLLLMMMMM',
             'DDDPPPPPPPPPLLLLLLLWWMMMM',
             'DDDPPPVPPPPPLLLLLLWWWWMMM',
             'DDPPPPPPPPPPPLLLLWWWWWMMM',
@@ -1274,9 +1302,43 @@
             return tiles;
         }
 
+        function isCastleRoom(rx, ry) {
+            return getWorldCode(rx, ry) === 'C';
+        }
+
+        function createCastleTiles(rx, ry) {
+            const dx = rx - START_ROOM_X;
+            const dy = ry - START_ROOM_Y;
+            const tiles = [];
+            for (let r = 0; r < SCREEN_ROWS; r++) {
+                const row = [];
+                for (let c = 0; c < SCREEN_COLS; c++) {
+                    const mainRoad = c >= 6 && c <= 9;
+                    const crossRoad = r >= 4 && r <= 6;
+                    let tile = mainRoad || crossRoad ? 3 : 0;
+
+                    const northWall = dy === -2 && r <= 1 && !(dx === 0 && c >= 7 && c <= 8);
+                    const southWall = dy === 2 && r >= SCREEN_ROWS - 2 && !(dx === 0 && c >= 7 && c <= 8);
+                    const westWall = dx === -2 && c <= 1 && !(dy === 0 && r >= 4 && r <= 6);
+                    const eastWall = dx === 2 && c >= SCREEN_COLS - 2 && !(dy === 0 && r >= 4 && r <= 6);
+
+                    if (northWall || southWall || westWall || eastWall) tile = 1;
+                    if ((dx === -2 || dx === 2) && (dy === -2 || dy === 2)) {
+                        if ((r <= 3 || r >= 7) && (c <= 3 || c >= 12)) tile = 1;
+                    }
+                    if (dx === 0 && dy === 0 && r >= 2 && r <= 3 && c >= 5 && c <= 10) tile = 1;
+                    if (dx === 0 && dy === 2 && r >= 7 && c >= 5 && c <= 10) tile = 3;
+                    if (tile === 0 && ((r === 2 && c === 3) || (r === 8 && c === 12))) tile = 43;
+                    row.push(tile);
+                }
+                tiles.push(row);
+            }
+            return tiles;
+        }
+
         function createTownTiles(rx, ry) {
             const settlementCode = getWorldCode(rx, ry);
-            if (settlementCode === 'C') return buildTemplateTiles(CAPITAL_ROOM_TEMPLATE);
+            if (settlementCode === 'C') return createCastleTiles(rx, ry);
             return createVillageTiles();
         }
 
@@ -2297,6 +2359,73 @@
             ctx.stroke();
         }
 
+        const CASTLE_OBJECT_RECTS = {
+            gateClosed: [36, 42, 398, 312],
+            gateOpen: [490, 44, 370, 310],
+            towerLarge: [920, 28, 210, 330],
+            towerTall: [1150, 75, 150, 285],
+            towerSmall: [1340, 160, 130, 190],
+            wallBanner: [40, 405, 235, 140],
+            wallWide: [490, 405, 240, 140],
+            wallBroken: [940, 410, 260, 150],
+            battlement: [42, 600, 185, 110],
+            stairs: [1080, 592, 120, 110],
+            plaza: [560, 760, 165, 155],
+            stoneTile: [760, 760, 160, 155],
+            drawbridge: [965, 748, 290, 190],
+            bridgeNarrow: [1280, 750, 150, 190],
+            bannerTall: [44, 748, 120, 220]
+        };
+
+        function drawCastleObject(name, dx, dy, dw, dh) {
+            if (!castleObjectsReady) return;
+            const rect = CASTLE_OBJECT_RECTS[name];
+            if (!rect) return;
+            ctx.drawImage(
+                castleObjectsImage,
+                rect[0], rect[1], rect[2], rect[3],
+                Math.round(dx), Math.round(dy), Math.round(dw), Math.round(dh)
+            );
+        }
+
+        function drawCastleDecor(roomData, offsetX, offsetY) {
+            if (!isCastleRoom(roomData.worldX, roomData.worldY)) return;
+            const dx = roomData.worldX - START_ROOM_X;
+            const dy = roomData.worldY - START_ROOM_Y;
+            const baseX = offsetX;
+            const baseY = offsetY + UI_OFFSET;
+
+            if (dy === -2) {
+                drawCastleObject('wallWide', baseX + 20, baseY + 2, 98, 52);
+                drawCastleObject('wallWide', baseX + 138, baseY + 2, 98, 52);
+                if (dx === -2 || dx === 2) drawCastleObject('towerTall', baseX + 84, baseY + 4, 80, 112);
+                if (dx === 0) drawCastleObject('gateClosed', baseX + 50, baseY - 2, 156, 112);
+            } else if (dy === -1) {
+                drawCastleObject('wallBanner', baseX + 12, baseY + 6, 94, 56);
+                drawCastleObject('wallWide', baseX + 142, baseY + 6, 94, 56);
+                if (dx === 0) drawCastleObject('plaza', baseX + 88, baseY + 72, 72, 64);
+            } else if (dy === 0) {
+                if (dx === 0) {
+                    drawCastleObject('gateOpen', baseX + 52, baseY + 0, 152, 112);
+                    drawCastleObject('bannerTall', baseX + 18, baseY + 36, 42, 78);
+                    drawCastleObject('bannerTall', baseX + 196, baseY + 36, 42, 78);
+                } else if (dx === -2 || dx === 2) {
+                    drawCastleObject('towerLarge', baseX + 78, baseY + 22, 96, 136);
+                } else {
+                    drawCastleObject('wallBroken', baseX + 54, baseY + 22, 148, 78);
+                }
+            } else if (dy === 1) {
+                drawCastleObject('plaza', baseX + 38, baseY + 18, 76, 70);
+                drawCastleObject('stoneTile', baseX + 142, baseY + 20, 76, 70);
+                if (dx === -2 || dx === 2) drawCastleObject('battlement', baseX + 40, baseY + 88, 92, 54);
+            } else if (dy === 2) {
+                drawCastleObject('wallWide', baseX + 26, baseY + 10, 96, 54);
+                drawCastleObject('wallWide', baseX + 134, baseY + 10, 96, 54);
+                if (dx === 0) drawCastleObject('drawbridge', baseX + 66, baseY + 78, 132, 84);
+                if (dx === -2 || dx === 2) drawCastleObject('towerSmall', baseX + 92, baseY + 28, 72, 96);
+            }
+        }
+
         function drawRoom(roomData, offsetX, offsetY) {
             if (!roomData) return;
             const biome = roomData.biome;
@@ -2335,6 +2464,7 @@
                     if(sprites[sprName]) ctx.drawImage(sprites[sprName], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                 }
             }
+            drawCastleDecor(roomData, offsetX, offsetY);
         }
 
         function startTransition(dx, dy) {

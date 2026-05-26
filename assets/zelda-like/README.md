@@ -137,10 +137,12 @@ Prompt summary: original polished top-down NPC sprite sheet for Fahren Kingdom v
   - `objects/gpt-image-2-house-full.png` - local transparent PNG processed from the complete house source
   - `objects/gpt-image-2-town-wall-source.png` - original generated castle wall tile with chroma-key background
   - `objects/gpt-image-2-town-wall.png` - local transparent PNG processed from the castle wall source
+  - `objects/gpt-image-2-castle-objects-v1-source.png` - GPT Image 2 generated Fahren Castle object sheet with chroma-key background
+  - `objects/gpt-image-2-castle-objects-v1.png` - local transparent PNG processed from the castle object source
 - Generator: GPT Image 2
 - Created: 2026-05-19
-- Updated: 2026-05-24
-- Purpose: Original environment object sprite sheet for `zelda_like.html`
+- Updated: 2026-05-26
+- Purpose: Original environment object sprite sheets for `zelda_like.html`, including Fahren Castle gates, walls, towers, banners, and drawbridges
 - Layout: 5 rows by 5 columns
   - row 1: house roof top-left, roof top-middle, roof top-right, wooden wall-left, wooden door
   - row 2: house lower-left, lower-middle, lower-right, wooden wall-right, mailbox
@@ -174,6 +176,8 @@ Prompt summary: original retro top-down fantasy adventure terrain tiles in a cla
   - `world-map-fahren-badon-25x25.prompt.md` - GPT Image 2.0 prompt spec for regenerating the field map
   - `world-map-fahren-badon-25x25-layout.txt` - 25x25 logical layout draft (biome/landmark planning)
   - `world-map-fahren-25x25.png` - GPT Image 2.0 generated field map for `zelda_like.html`
+  - `world-map-fahren-25x25-full.jpg` - JPEG export of the full 25x25 field map
+  - `world-map-fahren-25x25-grid-1-25.jpg` - JPEG export with 1-25 row/column labels and the Fahren Castle start marker
   - `world-map-fahren-25x25-dungeons.png` - annotated field map showing the seven sacred-stone dungeon locations and boss names
   - `world-map-fahren-badon-25x25.svg` - generated 25x25 field map art from the Badon invasion planning pass
 - Created: 2026-05-22
