@@ -8309,7 +8309,7 @@
       }
       setInterval(initQuakeCard, 10 * 60 * 1000);
 
-      // ─── 交通情報マップ（Leaflet + 国土地理院タイル・APIキー不要）────────
+      // ─── 交通情報マップ（Leaflet + 国土地理院タイル + JARTIC交通量API）──
       window.initJarticCanvasMap = function(lat, lon) {
         const mapDiv  = document.getElementById('traffic-leaflet-map');
         const loading = document.getElementById('traffic-map-loading');
@@ -8317,9 +8317,11 @@
         mapDiv.style.display = 'block';
         if (loading) loading.style.display = 'none';
 
-        // 再呼び出し時は位置だけ更新
+        // 再呼び出し時は位置を更新してデータ再取得
         if (mapDiv._leafletMap) {
           mapDiv._leafletMap.setView([lat, lon], 14);
+          if (mapDiv._jarticLayer) mapDiv._jarticLayer.clearLayers();
+          fetchJarticTrafficData(mapDiv._leafletMap, mapDiv, lat, lon);
           return;
         }
 
@@ -8327,18 +8329,79 @@
                      .setView([lat, lon], 14);
         mapDiv._leafletMap = map;
 
-        // 国土地理院標準地図 (無料・APIキー不要)
         L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
           maxZoom: 18,
-          attribution: '© <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">国土地理院</a>'
+          attribution: '© <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">国土地理院</a> | <a href="https://www.jartic-open-traffic.org/" target="_blank" rel="noreferrer">JARTIC</a>'
         }).addTo(map);
 
-        // 現在地マーカー
         L.circleMarker([lat, lon], {
           radius: 9, fillColor: '#00c8ff', color: '#ffffff',
           weight: 2.5, opacity: 1, fillOpacity: 0.85
         }).addTo(map).bindPopup('📍 現在地').openPopup();
+
+        mapDiv._jarticLayer = L.layerGroup().addTo(map);
+        fetchJarticTrafficData(map, mapDiv, lat, lon);
       };
+
+      // JARTIC 交通量API（直轄国道 5分間交通量・APIキー不要）
+      function fetchJarticTrafficData(map, mapDiv, lat, lon) {
+        // JST (UTC+9) で25分前を5分刻み切り捨て（API処理遅延考慮）
+        const jst = new Date(Date.now() + 9 * 3600000 - 25 * 60000);
+        jst.setUTCMinutes(Math.floor(jst.getUTCMinutes() / 5) * 5, 0, 0);
+        const jstEnd = new Date(jst.getTime() + 5 * 60000);
+        const p2  = n => String(n).padStart(2, '0');
+        const fmt = d => `${d.getUTCFullYear()}${p2(d.getUTCMonth()+1)}${p2(d.getUTCDate())}${p2(d.getUTCHours())}${p2(d.getUTCMinutes())}`;
+        const tc1 = fmt(jst), tc2 = fmt(jstEnd);
+
+        const mg  = 0.15; // ±0.15度 ≈ 15km
+        const cql = `道路種別='3' AND 時間コード>='${tc1}' AND 時間コード<='${tc2}' AND BBOX(ジオメトリ,${lon-mg},${lat-mg},${lon+mg},${lat+mg},'EPSG:4326')`;
+        const url = 'https://api.jartic-open-traffic.org/geoserver/ows?' + new URLSearchParams({
+          service: 'WFS', version: '2.0.0', request: 'GetFeature',
+          typeNames: 't_travospublic_measure_5m',
+          outputFormat: 'application/json',
+          cql_filter: cql
+        });
+
+        const timeEl = document.getElementById('home-traffic-time');
+        const congEl = document.getElementById('home-traffic-congestion');
+        const nowStr = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+
+        fetch(url)
+          .then(r => r.ok ? r.json() : Promise.reject(r.status))
+          .then(data => {
+            const features = data.features || [];
+            const layer = mapDiv._jarticLayer;
+            let redCnt = 0, orgCnt = 0;
+
+            for (const f of features) {
+              const pr = f.properties;
+              const [flon, flat] = f.geometry.coordinates;
+              const vol = (pr['上り・小型交通量']||0) + (pr['上り・大型交通量']||0) + (pr['上り・車種判別不能交通量']||0)
+                        + (pr['下り・小型交通量']||0) + (pr['下り・大型交通量']||0) + (pr['下り・車種判別不能交通量']||0);
+              const color  = vol > 400 ? '#ef4444' : vol > 150 ? '#f97316' : '#22c55e';
+              const status = vol > 400 ? '渋滞' : vol > 150 ? '混雑' : '順調';
+              if (vol > 400) redCnt++; else if (vol > 150) orgCnt++;
+              L.circleMarker([flat, flon], {
+                radius: 7, fillColor: color, color: '#fff', weight: 1.5, fillOpacity: 0.85
+              }).addTo(layer)
+                .bindPopup(`<b>交通量観測点</b><br>5分間: <b>${vol}</b>台<br>状態: <span style="color:${color};font-weight:bold">${status}</span>`);
+            }
+
+            if (timeEl) timeEl.textContent = `© JARTIC — ${nowStr} 現在 (${features.length}観測点)`;
+            if (congEl && features.length > 0) {
+              const lbl = redCnt > 0 ? `🔴 渋滞 ${redCnt}箇所`
+                        : orgCnt  > 0 ? `🟠 混雑 ${orgCnt}箇所`
+                        : '🟢 全観測点 順調';
+              const bg  = redCnt > 0 ? 'rgba(239,68,68,0.12)' : orgCnt > 0 ? 'rgba(249,115,22,0.12)' : 'rgba(34,197,94,0.12)';
+              const col = redCnt > 0 ? '#ef4444' : orgCnt > 0 ? '#f97316' : '#22c55e';
+              congEl.textContent = lbl;
+              Object.assign(congEl.style, { background: bg, color: col, display: 'block' });
+            }
+          })
+          .catch(() => {
+            if (timeEl) timeEl.textContent = `© JARTIC — ${nowStr} 現在`;
+          });
+      }
 
       // ─── 交通情報 ─────────────────────────────────────────────
       function initTrafficCard() {
