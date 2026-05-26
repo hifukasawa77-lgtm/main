@@ -4304,6 +4304,17 @@
               <span class="work-link" data-i18n="work-play-now">今すぐ遊ぶ →</span>
             </div>
           </a>
+          <a class="card work-card reveal" href="corridor.html" data-category="board">
+            <div class="work-thumb">
+              <img src="assets/corridor-thumb.svg" alt="コリドール" loading="lazy">
+            </div>
+            <div class="work-body">
+              <div class="work-kicker" data-i18n="kicker-board-ai">ボードゲーム × AI</div>
+              <h3 data-i18n="work-corridor-title">コリドール</h3>
+              <p data-i18n="work-corridor-desc">9×9盤で相手より先に向こう側へ到達する戦略ゲーム。壁を置いてCPUの進路を読め。</p>
+              <span class="work-link" data-i18n="work-play-now">今すぐ遊ぶ →</span>
+            </div>
+          </a>
           <a class="card work-card reveal" href="hex.html" data-category="board">
             <div class="work-thumb work-thumb-hex">
               <div class="hex-thumb-board" aria-hidden="true">
@@ -13380,20 +13391,20 @@
       }
     }
 
-    // 英語チーム名 → NPB_TEAM_MARK の短縮キー
+    // 英語チーム名 → NPB_TEAM_MARK の短縮キー（TheSportsDB・ESPN両方に対応）
     const NPB_EN_SHORT = {
-      'Hanshin Tigers':'阪神',
-      'Yomiuri Giants':'巨人',
-      'Hiroshima Toyo Carp':'広島',
-      'Tokyo Yakult Swallows':'ヤクルト',
-      'Yokohama DeNA BayStars':'DeNA',
-      'Chunichi Dragons':'中日',
-      'Fukuoka SoftBank Hawks':'ソフトバンク',
-      'Tohoku Rakuten Golden Eagles':'楽天',
-      'Chiba Lotte Marines':'ロッテ',
-      'Orix Buffaloes':'オリックス',
-      'Saitama Seibu Lions':'西武',
-      'Hokkaido Nippon-Ham Fighters':'日本ハム',
+      'Hanshin Tigers':'阪神',   'Tigers':'阪神',
+      'Yomiuri Giants':'巨人',   'Giants':'巨人',
+      'Hiroshima Toyo Carp':'広島', 'Carp':'広島',
+      'Tokyo Yakult Swallows':'ヤクルト', 'Swallows':'ヤクルト', 'Yakult Swallows':'ヤクルト',
+      'Yokohama DeNA BayStars':'DeNA', 'BayStars':'DeNA', 'DeNA BayStars':'DeNA',
+      'Chunichi Dragons':'中日', 'Dragons':'中日',
+      'Fukuoka SoftBank Hawks':'ソフトバンク', 'SoftBank Hawks':'ソフトバンク', 'Hawks':'ソフトバンク',
+      'Tohoku Rakuten Golden Eagles':'楽天', 'Golden Eagles':'楽天', 'Eagles':'楽天',
+      'Chiba Lotte Marines':'ロッテ', 'Marines':'ロッテ', 'Lotte Marines':'ロッテ',
+      'Orix Buffaloes':'オリックス', 'Buffaloes':'オリックス',
+      'Saitama Seibu Lions':'西武', 'Lions':'西武', 'Seibu Lions':'西武',
+      'Hokkaido Nippon-Ham Fighters':'日本ハム', 'Fighters':'日本ハム', 'Nippon-Ham Fighters':'日本ハム',
     };
 
     // 球場名 英語 → 日本語
@@ -13448,161 +13459,197 @@
 
     let _npbTodayTimer = null;
 
-    async function fetchNPBLivescores() {
+    // ESPN NPB Baseball スコアボードからイニング付きの全試合を取得
+    async function fetchESPNNPBToday(dateStr) {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const timer = setTimeout(() => ctrl.abort(), 8000);
       try {
-        const r = await fetch(`${SPORTS_API}/livescore.php?l=4591`, { signal: ctrl.signal });
+        const r = await fetch(
+          `https://site.api.espn.com/apis/site/v2/sports/baseball/npb/scoreboard?dates=${dateStr}`,
+          { signal: ctrl.signal }
+        );
         if (!r.ok) return null;
         const data = await r.json();
-        return Array.isArray(data.events) && data.events.length ? data.events : null;
+        return (data.events && data.events.length) ? data.events : null;
       } catch { return null; } finally { clearTimeout(timer); }
     }
 
+    // ESPN イベント → 統一ゲームオブジェクトへ変換
+    function parseESPNNPBEvent(ev) {
+      const comp = ev.competitions && ev.competitions[0];
+      if (!comp) return null;
+      const home = comp.competitors && comp.competitors.find(c => c.homeAway === 'home');
+      const away = comp.competitors && comp.competitors.find(c => c.homeAway === 'away');
+      if (!home || !away) return null;
+
+      const st     = ev.status || {};
+      const stType = st.type || {};
+      const state  = stType.state || 'pre';  // 'pre' | 'in' | 'post'
+      const completed = stType.completed === true || state === 'post';
+
+      // イニング表示（ESPN shortDetail: "Top 2nd", "Bot 3rd", "Final" etc.）
+      let statusCls = 'pre', statusText = '試合前';
+      if (completed) {
+        statusCls = 'fin'; statusText = '終了';
+      } else if (state === 'in') {
+        statusCls = 'live';
+        const detail = (stType.shortDetail || '').toLowerCase();
+        const period = st.period || 0;
+        const isBot  = detail.includes('bot') || detail.includes('end') || detail.includes('b ');
+        statusText = period ? `${period}回${isBot ? '裏' : '表'}` : '試合中';
+      }
+
+      // スコア（試合中・終了はスコアあり）
+      const hs = (state === 'in' || completed) && home.score != null ? String(home.score) : null;
+      const as = (state === 'in' || completed) && away.score != null ? String(away.score) : null;
+
+      // 開始時刻をJSTに変換
+      let timeLocal = '18:00';
+      if (ev.date) {
+        const dt = new Date(ev.date);
+        timeLocal = `${String((dt.getUTCHours() + 9) % 24).padStart(2,'0')}:${String(dt.getUTCMinutes()).padStart(2,'0')}`;
+      }
+
+      const homeEN = (home.team && home.team.displayName) || '';
+      const awayEN = (away.team && away.team.displayName) || '';
+      const homeShort = NPB_EN_SHORT[homeEN] || homeEN;
+      const awayShort = NPB_EN_SHORT[awayEN] || awayEN;
+
+      return {
+        homeEN, awayEN, homeShort, awayShort,
+        homeJP: NPB_JP[homeEN] || homeShort,
+        awayJP: NPB_JP[awayEN] || awayShort,
+        homeScore: hs, awayScore: as,
+        statusCls, statusText,
+        timeLocal,
+        venue: venueJP((comp.venue && comp.venue.fullName) || ''),
+        homeLogo: (home.team && home.team.logos && home.team.logos[0] && home.team.logos[0].href) || '',
+        awayLogo: (away.team && away.team.logos && away.team.logos[0] && away.team.logos[0].href) || '',
+        isLive: statusCls === 'live',
+        isFinished: statusCls === 'fin',
+      };
+    }
+
+    // TheSportsDB eventsday → 統一ゲームオブジェクトへ変換
+    function parseTSDBEvent(ev) {
+      const homeEN   = ev.strHomeTeam || '';
+      const awayEN   = ev.strAwayTeam || '';
+      const homeShort = NPB_EN_SHORT[homeEN] || homeEN;
+      const awayShort = NPB_EN_SHORT[awayEN] || awayEN;
+
+      const isFin = ['FT','Match Finished','AOT','PEN'].includes(ev.strStatus);
+      const hs = ev.intHomeScore != null ? String(ev.intHomeScore) : null;
+      const as = ev.intAwayScore != null ? String(ev.intAwayScore) : null;
+      const hasScore = hs !== null && as !== null;
+
+      let statusCls = 'pre', statusText = '試合前';
+      if (isFin) { statusCls = 'fin'; statusText = '終了'; }
+      else if (hasScore) { statusCls = 'live'; statusText = '試合中'; }
+      else if (ev.strTimeLocal && ev.dateEvent) {
+        try {
+          const gameMs = new Date(`${ev.dateEvent}T${ev.strTimeLocal}`).getTime();
+          const nowJst = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'})).getTime();
+          if (nowJst - gameMs > 20 * 60 * 1000) { statusCls = 'live'; statusText = '試合中?'; }
+        } catch { /* ignore */ }
+      }
+
+      return {
+        homeEN, awayEN, homeShort, awayShort,
+        homeJP: teamJP(homeEN, 'npb') || homeEN,
+        awayJP: teamJP(awayEN, 'npb') || awayEN,
+        homeScore: hs, awayScore: as,
+        statusCls, statusText,
+        timeLocal: ev.strTimeLocal ? ev.strTimeLocal.slice(0, 5) : '18:00',
+        venue: venueJP(ev.strVenue || ''),
+        homeLogo: ev.strHomeTeamBadge || NPB_TEAM_LOGO_URL[homeShort] || '',
+        awayLogo: ev.strAwayTeamBadge || NPB_TEAM_LOGO_URL[awayShort] || '',
+        isLive: statusCls === 'live',
+        isFinished: statusCls === 'fin',
+      };
+    }
+
     async function fetchNPBToday() {
-      const jst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+      const jst  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
       const yyyy = jst.getFullYear();
       const mm   = String(jst.getMonth() + 1).padStart(2, '0');
       const dd   = String(jst.getDate()).padStart(2, '0');
-      const dateStr = `${yyyy}-${mm}-${dd}`;
       const dateEl = document.getElementById('sports-npb-today-date');
       if (dateEl) dateEl.textContent = `${jst.getMonth() + 1}/${jst.getDate()}`;
 
-      const [dayRes, liveRes] = await Promise.allSettled([
-        (async () => {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 8000);
-          try {
-            const r = await fetch(`${SPORTS_API}/eventsday.php?l=4591&d=${dateStr}`, { signal: ctrl.signal });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            const data = await r.json();
-            return data.events || [];
-          } finally { clearTimeout(timer); }
-        })(),
-        fetchNPBLivescores()
-      ]);
-
-      const events = dayRes.status === 'fulfilled' ? dayRes.value : [];
-      const live   = liveRes.status === 'fulfilled' && liveRes.value ? liveRes.value : [];
-
-      // ライブスコアで eventsday のスコア・ステータスを上書き
-      if (live.length) {
-        return events.map(ev => {
-          const lv = live.find(l =>
-            l.idEvent === ev.idEvent ||
-            (l.strHomeTeam === ev.strHomeTeam && l.strAwayTeam === ev.strAwayTeam)
-          );
-          return lv ? { ...ev, ...lv } : ev;
-        });
+      // ESPN を優先（全試合・リアルタイムスコア・イニング）
+      const espnDate = `${yyyy}${mm}${dd}`;
+      const espnEvents = await fetchESPNNPBToday(espnDate);
+      if (espnEvents && espnEvents.length) {
+        return espnEvents.map(parseESPNNPBEvent).filter(Boolean);
       }
-      return events;
+
+      // フォールバック: TheSportsDB eventsday
+      const dateStr = `${yyyy}-${mm}-${dd}`;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const r = await fetch(`${SPORTS_API}/eventsday.php?l=4591&d=${dateStr}`, { signal: ctrl.signal });
+        if (!r.ok) return [];
+        const data = await r.json();
+        return (data.events || []).map(parseTSDBEvent);
+      } catch { return []; } finally { clearTimeout(timer); }
     }
 
-    function npbGameStatus(ev) {
-      if (['FT','Match Finished','AOT','PEN'].includes(ev.strStatus)) {
-        return { cls: 'fin', text: '終了' };
-      }
-      const hs = ev.intHomeScore != null ? String(ev.intHomeScore) : null;
-      const as = ev.intAwayScore != null ? String(ev.intAwayScore) : null;
-      if (hs !== null && as !== null) return { cls: 'live', text: '試合中' };
-
-      // 開始時刻から20分以上経過している場合は「試合中?」
-      if (ev.strTimeLocal && ev.dateEvent) {
-        try {
-          const gameMs = new Date(`${ev.dateEvent}T${ev.strTimeLocal}`).getTime();
-          const nowJst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })).getTime();
-          if (nowJst - gameMs > 20 * 60 * 1000) return { cls: 'live', text: '試合中?' };
-        } catch { /* ignore */ }
-      }
-      return { cls: 'pre', text: '試合前' };
-    }
-
-    function renderNPBTodayGames(events) {
+    function renderNPBTodayGames(games) {
       const container = document.getElementById('sports-npb-today');
       const legacy    = document.getElementById('sports-npb-legacy');
       if (!container) return;
       container.innerHTML = '';
 
-      if (!events || !events.length) {
+      if (!games || !games.length) {
         container.innerHTML = '<p class="sports-error-msg" style="text-align:left;padding:10px 0">本日の試合情報はありません</p>';
         if (legacy) legacy.style.display = '';
         return;
       }
       if (legacy) legacy.style.display = 'none';
 
-      events.forEach(ev => {
-        const hs = ev.intHomeScore != null ? String(ev.intHomeScore) : null;
-        const as = ev.intAwayScore != null ? String(ev.intAwayScore) : null;
-        const hasScore = hs !== null && as !== null;
-        const { cls: statusClass, text: statusText } = npbGameStatus(ev);
+      games.forEach(g => {
+        const homeMark = NPB_TEAM_MARK[g.homeShort] || { bg:'#444', fg:'#fff', abbr: g.homeShort.slice(0,2) };
+        const awayMark = NPB_TEAM_MARK[g.awayShort] || { bg:'#444', fg:'#fff', abbr: g.awayShort.slice(0,2) };
 
-        const homeShort = NPB_EN_SHORT[ev.strHomeTeam] || teamJP(ev.strHomeTeam, 'npb');
-        const awayShort = NPB_EN_SHORT[ev.strAwayTeam] || teamJP(ev.strAwayTeam, 'npb');
-        const homeMark  = NPB_TEAM_MARK[homeShort] || { bg: '#444', fg: '#fff', abbr: homeShort.slice(0, 2) };
-        const awayMark  = NPB_TEAM_MARK[awayShort] || { bg: '#444', fg: '#fff', abbr: awayShort.slice(0, 2) };
-        const homeJP = teamJP(ev.strHomeTeam, 'npb') || ev.strHomeTeam;
-        const awayJP = teamJP(ev.strAwayTeam, 'npb') || ev.strAwayTeam;
+        const makeLogo = (url, mark, name) => url
+          ? `<img class="npb-team-logo" src="${url}" alt="${name}" loading="lazy" onerror="this.outerHTML='<span class=npb-team-badge style=background:${encodeURIComponent(mark.bg)};color:${encodeURIComponent(mark.fg)}>${mark.abbr}</span>'">`
+          : `<span class="npb-team-badge" style="background:${mark.bg};color:${mark.fg}">${mark.abbr}</span>`;
 
-        // ロゴ: APIが返すバッジURL → フォールバックで文字バッジ
-        function makeBadge(badgeUrl, mark, name) {
-          if (badgeUrl) {
-            return `<img class="npb-team-logo" src="${badgeUrl}" alt="${name}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'npb-team-badge',textContent:'${mark.abbr}',style:'background:${mark.bg};color:${mark.fg}'}))">`;
-          }
-          const fallbackUrl = NPB_TEAM_LOGO_URL[homeShort] || NPB_TEAM_LOGO_URL[awayShort];
-          if (fallbackUrl) {
-            return `<img class="npb-team-logo" src="${fallbackUrl}" alt="${name}" onerror="this.style.display='none'">`;
-          }
-          return `<span class="npb-team-badge" style="background:${mark.bg};color:${mark.fg}">${mark.abbr}</span>`;
-        }
-        const homeBadge = makeBadge(ev.strHomeTeamBadge, homeMark, homeJP);
-        const awayBadge = (function() {
-          if (ev.strAwayTeamBadge) {
-            return `<img class="npb-team-logo" src="${ev.strAwayTeamBadge}" alt="${awayJP}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'npb-team-badge',textContent:'${awayMark.abbr}',style:'background:${awayMark.bg};color:${awayMark.fg}'}))">`;
-          }
-          const fb = NPB_TEAM_LOGO_URL[awayShort];
-          if (fb) return `<img class="npb-team-logo" src="${fb}" alt="${awayJP}" onerror="this.style.display='none'">`;
-          return `<span class="npb-team-badge" style="background:${awayMark.bg};color:${awayMark.fg}">${awayMark.abbr}</span>`;
-        })();
-
+        const hasScore = g.homeScore !== null && g.awayScore !== null;
         const scoreHtml = hasScore
-          ? `<div class="npb-score-box">${hs} - ${as}</div>`
-          : `<div class="npb-score-box kick">${ev.strTimeLocal ? ev.strTimeLocal.slice(0, 5) : 'vs'}</div>`;
+          ? `<div class="npb-score-box">${g.homeScore} - ${g.awayScore}</div>`
+          : `<div class="npb-score-box kick">${g.timeLocal}</div>`;
 
         const row = document.createElement('div');
         row.className = 'npb-game-row';
         row.innerHTML =
-          homeBadge +
-          `<span class="npb-team-name home">${homeJP}</span>` +
+          makeLogo(g.homeLogo, homeMark, g.homeJP) +
+          `<span class="npb-team-name home">${g.homeJP}</span>` +
           scoreHtml +
-          `<span class="npb-team-name">${awayJP}</span>` +
-          awayBadge +
-          `<span class="npb-status-badge ${statusClass}">${statusText}</span>` +
-          `<span class="npb-game-venue">${venueJP(ev.strVenue)}</span>`;
+          `<span class="npb-team-name">${g.awayJP}</span>` +
+          makeLogo(g.awayLogo, awayMark, g.awayJP) +
+          `<span class="npb-status-badge ${g.statusCls}">${g.statusText}</span>` +
+          `<span class="npb-game-venue">${g.venue}</span>`;
         container.appendChild(row);
       });
     }
 
-    function scheduleNPBAutoRefresh(events) {
+    function scheduleNPBAutoRefresh(games) {
       if (_npbTodayTimer) { clearInterval(_npbTodayTimer); _npbTodayTimer = null; }
       const jst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
       const h = jst.getHours();
       if (h < 17 || h >= 24) return;
-      // 未終了試合（スコアなし含む）があれば更新継続
-      const hasActive = events && events.some(ev => !['FT','Match Finished'].includes(ev.strStatus));
+      const hasActive = games && games.some(g => !g.isFinished);
       if (!hasActive) return;
-      // 試合中の可能性があれば30秒、それ以外は60秒
-      const hasLive = events.some(ev => {
-        const hs = ev.intHomeScore != null;
-        const fin = ['FT','Match Finished'].includes(ev.strStatus);
-        return !fin && hs;
-      });
+      const hasLive = games.some(g => g.isLive);
       _npbTodayTimer = setInterval(async () => {
         try {
-          const evts = await fetchNPBToday();
-          renderNPBTodayGames(evts);
+          const gs = await fetchNPBToday();
+          renderNPBTodayGames(gs);
           const timeEl = document.getElementById('sports-npb-time');
           if (timeEl) timeEl.textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
-          scheduleNPBAutoRefresh(evts);
+          scheduleNPBAutoRefresh(gs);
         } catch (e) { /* silent */ }
       }, hasLive ? 30000 : 60000);
     }
