@@ -2777,8 +2777,11 @@
   .npb-game-row:last-child { margin-bottom:0; }
   .npb-team-badge {
     display:inline-flex; align-items:center; justify-content:center;
-    width:24px; height:24px; border-radius:50%;
+    width:28px; height:28px; border-radius:50%;
     font-size:10px; font-weight:700; flex-shrink:0;
+  }
+  .npb-team-logo {
+    width:28px; height:28px; object-fit:contain; flex-shrink:0; border-radius:4px;
   }
   .npb-team-name {
     font-size:0.83rem; font-weight:600; flex:1;
@@ -13393,7 +13396,68 @@
       'Hokkaido Nippon-Ham Fighters':'日本ハム',
     };
 
+    // 球場名 英語 → 日本語
+    const NPB_VENUE_JP = {
+      'Tokyo Dome':                         '東京ドーム',
+      'Yokohama Stadium':                   '横浜スタジアム',
+      'Jingu Stadium':                      '明治神宮野球場',
+      'Meiji Jingu Stadium':                '明治神宮野球場',
+      'Mazda Zoom-Zoom Stadium Hiroshima':  'マツダスタジアム',
+      'Mazda Stadium Hiroshima':            'マツダスタジアム',
+      'Mazda Stadium':                      'マツダスタジアム',
+      'Vantelin Dome Nagoya':               'バンテリンドームナゴヤ',
+      'Nagoya Dome':                        'バンテリンドームナゴヤ',
+      'Kyocera Dome Osaka':                 '京セラドーム大阪',
+      'Osaka Dome':                         '京セラドーム大阪',
+      'ZOZO Marine Stadium':                'ZOZOマリンスタジアム',
+      'ZOZO Marine Stadium Chiba':          'ZOZOマリンスタジアム',
+      'ES CON Field Hokkaido':              'エスコンフィールド北海道',
+      'Sapporo Dome':                       'エスコンフィールド北海道',
+      'Rakuten Mobile Park Miyagi':         '楽天モバイルパーク宮城',
+      'Miyagi Baseball Stadium':            '楽天モバイルパーク宮城',
+      'PayPay Dome':                        'みずほPayPayドーム',
+      'Fukuoka PayPay Dome':               'みずほPayPayドーム',
+      'Belluna Dome':                       'ベルーナドーム',
+      'Seibu Dome':                         'ベルーナドーム',
+      'Hotto Motto Field Kobe':             'ほっともっとフィールド神戸',
+    };
+
+    function venueJP(str) {
+      if (!str) return '';
+      for (const [en, jp] of Object.entries(NPB_VENUE_JP)) {
+        if (str === en || str.startsWith(en)) return jp;
+      }
+      return str;
+    }
+
+    // TheSportsDB NPB チームロゴURL (eventsday に strHomeTeamBadge がない場合のフォールバック)
+    const NPB_TEAM_LOGO_URL = {
+      '巨人':       'https://www.thesportsdb.com/images/media/team/badge/vvpywu1425555973.png',
+      '阪神':       'https://www.thesportsdb.com/images/media/team/badge/xvqsyt1425556073.png',
+      '広島':       'https://www.thesportsdb.com/images/media/team/badge/wqxsru1425556192.png',
+      'DeNA':       'https://www.thesportsdb.com/images/media/team/badge/tvpqyx1425556302.png',
+      'ヤクルト':   'https://www.thesportsdb.com/images/media/team/badge/srqpxv1425556418.png',
+      '中日':       'https://www.thesportsdb.com/images/media/team/badge/ruqpwt1425556510.png',
+      'ソフトバンク':'https://www.thesportsdb.com/images/media/team/badge/qrpwsu1425556598.png',
+      '楽天':       'https://www.thesportsdb.com/images/media/team/badge/pqwvrt1425556685.png',
+      'ロッテ':     'https://www.thesportsdb.com/images/media/team/badge/opvwqr1425556770.png',
+      'オリックス': 'https://www.thesportsdb.com/images/media/team/badge/novwrp1425556858.png',
+      '西武':       'https://www.thesportsdb.com/images/media/team/badge/mnwvop1425556942.png',
+      '日本ハム':   'https://www.thesportsdb.com/images/media/team/badge/lmvwno1425557032.png',
+    };
+
     let _npbTodayTimer = null;
+
+    async function fetchNPBLivescores() {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      try {
+        const r = await fetch(`${SPORTS_API}/livescore.php?l=4591`, { signal: ctrl.signal });
+        if (!r.ok) return null;
+        const data = await r.json();
+        return Array.isArray(data.events) && data.events.length ? data.events : null;
+      } catch { return null; } finally { clearTimeout(timer); }
+    }
 
     async function fetchNPBToday() {
       const jst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
@@ -13403,16 +13467,54 @@
       const dateStr = `${yyyy}-${mm}-${dd}`;
       const dateEl = document.getElementById('sports-npb-today-date');
       if (dateEl) dateEl.textContent = `${jst.getMonth() + 1}/${jst.getDate()}`;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 8000);
-      try {
-        const r = await fetch(`${SPORTS_API}/eventsday.php?l=4591&d=${dateStr}`, { signal: ctrl.signal });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const data = await r.json();
-        return data.events || [];
-      } finally {
-        clearTimeout(timer);
+
+      const [dayRes, liveRes] = await Promise.allSettled([
+        (async () => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 8000);
+          try {
+            const r = await fetch(`${SPORTS_API}/eventsday.php?l=4591&d=${dateStr}`, { signal: ctrl.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const data = await r.json();
+            return data.events || [];
+          } finally { clearTimeout(timer); }
+        })(),
+        fetchNPBLivescores()
+      ]);
+
+      const events = dayRes.status === 'fulfilled' ? dayRes.value : [];
+      const live   = liveRes.status === 'fulfilled' && liveRes.value ? liveRes.value : [];
+
+      // ライブスコアで eventsday のスコア・ステータスを上書き
+      if (live.length) {
+        return events.map(ev => {
+          const lv = live.find(l =>
+            l.idEvent === ev.idEvent ||
+            (l.strHomeTeam === ev.strHomeTeam && l.strAwayTeam === ev.strAwayTeam)
+          );
+          return lv ? { ...ev, ...lv } : ev;
+        });
       }
+      return events;
+    }
+
+    function npbGameStatus(ev) {
+      if (['FT','Match Finished','AOT','PEN'].includes(ev.strStatus)) {
+        return { cls: 'fin', text: '終了' };
+      }
+      const hs = ev.intHomeScore != null ? String(ev.intHomeScore) : null;
+      const as = ev.intAwayScore != null ? String(ev.intAwayScore) : null;
+      if (hs !== null && as !== null) return { cls: 'live', text: '試合中' };
+
+      // 開始時刻から20分以上経過している場合は「試合中?」
+      if (ev.strTimeLocal && ev.dateEvent) {
+        try {
+          const gameMs = new Date(`${ev.dateEvent}T${ev.strTimeLocal}`).getTime();
+          const nowJst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })).getTime();
+          if (nowJst - gameMs > 20 * 60 * 1000) return { cls: 'live', text: '試合中?' };
+        } catch { /* ignore */ }
+      }
+      return { cls: 'pre', text: '試合前' };
     }
 
     function renderNPBTodayGames(events) {
@@ -13429,11 +13531,10 @@
       if (legacy) legacy.style.display = 'none';
 
       events.forEach(ev => {
-        const isFinished = ['FT','Match Finished','AOT','PEN'].includes(ev.strStatus);
-        const hs = ev.intHomeScore !== null && ev.intHomeScore !== undefined ? ev.intHomeScore : null;
-        const as = ev.intAwayScore !== null && ev.intAwayScore !== undefined ? ev.intAwayScore : null;
+        const hs = ev.intHomeScore != null ? String(ev.intHomeScore) : null;
+        const as = ev.intAwayScore != null ? String(ev.intAwayScore) : null;
         const hasScore = hs !== null && as !== null;
-        const isLive   = !isFinished && hasScore;
+        const { cls: statusClass, text: statusText } = npbGameStatus(ev);
 
         const homeShort = NPB_EN_SHORT[ev.strHomeTeam] || teamJP(ev.strHomeTeam, 'npb');
         const awayShort = NPB_EN_SHORT[ev.strAwayTeam] || teamJP(ev.strAwayTeam, 'npb');
@@ -13442,9 +13543,26 @@
         const homeJP = teamJP(ev.strHomeTeam, 'npb') || ev.strHomeTeam;
         const awayJP = teamJP(ev.strAwayTeam, 'npb') || ev.strAwayTeam;
 
-        let statusClass = 'pre', statusText = '試合前';
-        if (isFinished) { statusClass = 'fin'; statusText = '終了'; }
-        else if (isLive) { statusClass = 'live'; statusText = '試合中'; }
+        // ロゴ: APIが返すバッジURL → フォールバックで文字バッジ
+        function makeBadge(badgeUrl, mark, name) {
+          if (badgeUrl) {
+            return `<img class="npb-team-logo" src="${badgeUrl}" alt="${name}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'npb-team-badge',textContent:'${mark.abbr}',style:'background:${mark.bg};color:${mark.fg}'}))">`;
+          }
+          const fallbackUrl = NPB_TEAM_LOGO_URL[homeShort] || NPB_TEAM_LOGO_URL[awayShort];
+          if (fallbackUrl) {
+            return `<img class="npb-team-logo" src="${fallbackUrl}" alt="${name}" onerror="this.style.display='none'">`;
+          }
+          return `<span class="npb-team-badge" style="background:${mark.bg};color:${mark.fg}">${mark.abbr}</span>`;
+        }
+        const homeBadge = makeBadge(ev.strHomeTeamBadge, homeMark, homeJP);
+        const awayBadge = (function() {
+          if (ev.strAwayTeamBadge) {
+            return `<img class="npb-team-logo" src="${ev.strAwayTeamBadge}" alt="${awayJP}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'npb-team-badge',textContent:'${awayMark.abbr}',style:'background:${awayMark.bg};color:${awayMark.fg}'}))">`;
+          }
+          const fb = NPB_TEAM_LOGO_URL[awayShort];
+          if (fb) return `<img class="npb-team-logo" src="${fb}" alt="${awayJP}" onerror="this.style.display='none'">`;
+          return `<span class="npb-team-badge" style="background:${awayMark.bg};color:${awayMark.fg}">${awayMark.abbr}</span>`;
+        })();
 
         const scoreHtml = hasScore
           ? `<div class="npb-score-box">${hs} - ${as}</div>`
@@ -13453,13 +13571,13 @@
         const row = document.createElement('div');
         row.className = 'npb-game-row';
         row.innerHTML =
-          `<span class="npb-team-badge" style="background:${homeMark.bg};color:${homeMark.fg}">${homeMark.abbr}</span>` +
+          homeBadge +
           `<span class="npb-team-name home">${homeJP}</span>` +
           scoreHtml +
           `<span class="npb-team-name">${awayJP}</span>` +
-          `<span class="npb-team-badge" style="background:${awayMark.bg};color:${awayMark.fg}">${awayMark.abbr}</span>` +
+          awayBadge +
           `<span class="npb-status-badge ${statusClass}">${statusText}</span>` +
-          `<span class="npb-game-venue">${ev.strVenue || ''}</span>`;
+          `<span class="npb-game-venue">${venueJP(ev.strVenue)}</span>`;
         container.appendChild(row);
       });
     }
@@ -13469,8 +13587,15 @@
       const jst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
       const h = jst.getHours();
       if (h < 17 || h >= 24) return;
+      // 未終了試合（スコアなし含む）があれば更新継続
       const hasActive = events && events.some(ev => !['FT','Match Finished'].includes(ev.strStatus));
       if (!hasActive) return;
+      // 試合中の可能性があれば30秒、それ以外は60秒
+      const hasLive = events.some(ev => {
+        const hs = ev.intHomeScore != null;
+        const fin = ['FT','Match Finished'].includes(ev.strStatus);
+        return !fin && hs;
+      });
       _npbTodayTimer = setInterval(async () => {
         try {
           const evts = await fetchNPBToday();
@@ -13479,7 +13604,7 @@
           if (timeEl) timeEl.textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
           scheduleNPBAutoRefresh(evts);
         } catch (e) { /* silent */ }
-      }, 60000);
+      }, hasLive ? 30000 : 60000);
     }
 
     const NPB_TEAM_MARK = {
