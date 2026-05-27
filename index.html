@@ -3712,6 +3712,8 @@
             <h3 data-i18n="dash-visit-title">👁️ サイト訪問数</h3>
             <div class="dashboard-kpi" id="home-visit-kpi"><span class="skeleton-bar" style="display:inline-block;width:6rem;height:1.6rem;vertical-align:middle;border-radius:8px"></span></div>
             <p class="dashboard-sub" id="home-visit-sub">アクセス情報を取得しています。</p>
+            <div id="home-visit-trend" style="font-size:0.75rem;min-height:1.2em"></div>
+            <div id="home-visit-sparkline" style="margin-top:2px"></div>
             <a class="dash-open-link" href="dashboard.html" data-i18n="dash-visit-link">詳細ダッシュボードを開く →</a>
           </article>
 
@@ -4946,11 +4948,52 @@
       function incrementLocalVisit() {
         const today = toDateKey(new Date());
         const saved = JSON.parse(localStorage.getItem(VISIT_KEY) || '{}');
-        const next = saved.date === today
-          ? { date: today, todayCount: (saved.todayCount || 0) + 1, total: (saved.total || 0) + 1 }
-          : { date: today, todayCount: 1, total: (saved.total || 0) + 1 };
+        // Weekly history: keep last 7 days
+        const history = Array.isArray(saved.weeklyHistory) ? saved.weeklyHistory : [];
+        const todayIdx = history.findIndex(e => e.date === today);
+        if (todayIdx >= 0) { history[todayIdx].count += 1; } else { history.push({ date: today, count: 1 }); }
+        const cutoff = toDateKey(new Date(Date.now() - 6 * 86400000));
+        const trimmed = history.filter(e => e.date >= cutoff).sort((a, b) => a.date < b.date ? -1 : 1);
+        const yesterdayKey = toDateKey(new Date(Date.now() - 86400000));
+        let next;
+        if (saved.date === today) {
+          next = { date: today, todayCount: (saved.todayCount || 0) + 1, total: (saved.total || 0) + 1, yesterday: saved.yesterday != null ? saved.yesterday : 0, weeklyHistory: trimmed };
+        } else {
+          next = { date: today, todayCount: 1, total: (saved.total || 0) + 1, yesterday: saved.date === yesterdayKey ? (saved.todayCount || 0) : 0, weeklyHistory: trimmed };
+        }
         localStorage.setItem(VISIT_KEY, JSON.stringify(next));
         return next;
+      }
+
+      // E: count-up animation
+      function animateCount(el, target, onComplete) {
+        const duration = 1200;
+        const start = performance.now();
+        el.textContent = '0 回';
+        function step(now) {
+          const t = Math.min((now - start) / duration, 1);
+          const eased = 1 - Math.pow(1 - t, 3);
+          el.textContent = fmtNum(Math.round(eased * target)) + ' 回';
+          if (t < 1) { requestAnimationFrame(step); } else if (onComplete) { onComplete(); }
+        }
+        requestAnimationFrame(step);
+      }
+
+      // G: weekly sparkline SVG bar chart
+      function renderVisitSparkline(history) {
+        if (!history || history.length === 0) return '';
+        const today = toDateKey(new Date());
+        const maxC = Math.max(...history.map(e => e.count), 1);
+        const n = history.length, vw = 116, vh = 28;
+        const bw = Math.max(4, Math.floor((vw - (n - 1) * 2) / n));
+        const bars = history.map((e, i) => {
+          const bh = Math.max(3, Math.round((e.count / maxC) * vh));
+          const x = i * (bw + 2), y = vh - bh;
+          const fill = e.date === today ? 'var(--blue)' : 'rgba(14,165,233,0.4)';
+          const [, mo, da] = e.date.split('-');
+          return '<rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + bh + '" rx="2" fill="' + fill + '"><title>' + parseInt(mo) + '/' + parseInt(da) + ': ' + e.count + '回</title></rect>';
+        }).join('');
+        return '<svg viewBox="0 0 ' + vw + ' ' + vh + '" width="' + vw + '" height="' + vh + '" style="display:block">' + bars + '</svg>';
       }
 
       async function initVisitCard() {
@@ -4962,11 +5005,37 @@
             const data = await res.json();
             if (typeof data.value === 'number') total = data.value;
           }
-        } catch (e) {
-          // Fallback to local-only count.
-        }
-        visitKpi.textContent = `${fmtNum(total)} 回`;
+        } catch (e) { /* Fallback to local-only count. */ }
         visitSub.textContent = `本日のアクセス: ${fmtNum(local.todayCount)} 回`;
+        // F: yesterday comparison
+        const trendEl = document.getElementById('home-visit-trend');
+        if (trendEl && local.yesterday > 0) {
+          const diff = local.todayCount - local.yesterday;
+          const sign = diff > 0 ? '+' : '';
+          const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '→';
+          const color = diff > 0 ? 'var(--green)' : diff < 0 ? '#ef4444' : 'var(--muted)';
+          trendEl.innerHTML = '<span style="color:' + color + ';font-weight:600">昨日比 ' + sign + fmtNum(diff) + ' ' + arrow + '</span>';
+        }
+        // G: sparkline
+        const sparkEl = document.getElementById('home-visit-sparkline');
+        if (sparkEl) sparkEl.innerHTML = renderVisitSparkline(local.weeklyHistory);
+        // E: count-up + H: milestone
+        animateCount(visitKpi, total, function() {
+          const milestones = [
+            { min: 10000, color: 'var(--orange)', label: '🏆 10,000回！' },
+            { min: 1000,  color: 'var(--orange)', label: '🏆 1,000回！' },
+            { min: 500,   color: 'var(--purple)', label: '⭐ 500回！' },
+            { min: 100,   color: 'var(--green)',  label: '🎉 100回！' },
+          ];
+          const ms = milestones.find(m => total >= m.min);
+          if (ms) {
+            visitKpi.style.color = ms.color;
+            const badge = document.createElement('span');
+            badge.style.cssText = 'font-size:0.65rem;border-radius:8px;padding:1px 6px;background:rgba(0,0,0,0.06);margin-left:6px;font-weight:600;vertical-align:middle';
+            badge.textContent = ms.label;
+            visitKpi.appendChild(badge);
+          }
+        });
       }
 
       function renderUpdates() {
@@ -9161,6 +9230,34 @@
           { label: 'NY', tz: 'America/New_York', flag: '🇺🇸', mkt: { name: 'NYSE', oh: 9, om: 30, ch: 16, cm: 0 } },
           { label: 'ロンドン', tz: 'Europe/London', flag: '🇬🇧', mkt: { name: 'LSE', oh: 8, om: 0, ch: 16, cm: 30 } },
         ];
+        const DAY_NAMES = ['日','月','火','水','木','金','土'];
+
+        // B: timezone offset minutes relative to Tokyo
+        function getRelativeToTokyo(tz) {
+          if (tz === 'Asia/Tokyo') return '';
+          const now = new Date();
+          const getMin = (t) => { const s = now.toLocaleString('en-US', { timeZone: t, hour12: false, hour: '2-digit', minute: '2-digit' }); const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+          let diff = getMin(tz) - getMin('Asia/Tokyo');
+          if (diff > 720) diff -= 1440;
+          if (diff < -720) diff += 1440;
+          const sign = diff >= 0 ? '+' : '';
+          const h = diff / 60;
+          return '東京' + sign + (Number.isInteger(h) ? h : h.toFixed(1)) + 'h';
+        }
+
+        // C: remaining / next open time string
+        function fmtMarketRemaining(mkt, tot, mktOpen, isWd) {
+          const openMin = mkt.oh * 60 + mkt.om, closeMin = mkt.ch * 60 + mkt.cm;
+          if (mktOpen) {
+            const rem = closeMin - tot;
+            return 'あと' + (rem >= 60 ? Math.floor(rem / 60) + 'h' : '') + (rem % 60) + 'm';
+          }
+          if (isWd && tot < openMin) {
+            const rem = openMin - tot;
+            return '開場まで' + (rem >= 60 ? Math.floor(rem / 60) + 'h' : '') + (rem % 60) + 'm';
+          }
+          return '';
+        }
 
         function renderCity(city) {
           const now = new Date();
@@ -9168,37 +9265,80 @@
           const [hh, mm, ss] = parts;
           const hDeg = (hh % 12 + mm / 60) * 30;
           const mDeg = (mm + ss / 60) * 6;
-          const sDeg = ss * 6;
+          const subSec = (Date.now() % 1000) / 1000;
+          const sDeg = (ss + subSec) * 6;
           const dow = new Date(now.toLocaleString('en-US', { timeZone: city.tz })).getDay();
           const isWd = dow > 0 && dow < 6;
           const tot = hh * 60 + mm;
           const mktOpen = isWd && tot >= city.mkt.oh * 60 + city.mkt.om && tot < city.mkt.ch * 60 + city.mkt.cm;
+          // A: glow ring on open markets
+          const rimStroke = mktOpen ? '#22c55e' : 'rgba(148,163,184,0.2)';
+          const rimWidth = mktOpen ? '2.5' : '2';
+          const glowId = 'wcglow-' + city.label;
+          const rimFilter = mktOpen ? 'filter="url(#' + glowId + ')"' : '';
           const ticks = [0,30,60,90,120,150,180,210,240,270,300,330].map(a => {
             const r = a * Math.PI / 180, r1 = a % 90 === 0 ? 22 : 24;
             return `<line x1="${30+r1*Math.sin(r)}" y1="${30-r1*Math.cos(r)}" x2="${30+26*Math.sin(r)}" y2="${30-26*Math.cos(r)}" stroke="rgba(148,163,184,0.5)" stroke-width="${a%90===0?2:1}"/>`;
           }).join('');
-          const hand = (deg, len, w, col) => { const r = deg * Math.PI / 180; return `<line x1="30" y1="30" x2="${30+len*Math.sin(r)}" y2="${30-len*Math.cos(r)}" stroke="${col}" stroke-width="${w}" stroke-linecap="round"/>`; };
-          return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px">
-            <div style="font-size:0.72rem;font-weight:600">${city.flag} ${city.label}</div>
+          const hand = (deg, len, w, col) => { const r = deg * Math.PI / 180; return `<line x1="30" y1="30" x2="${(30+len*Math.sin(r)).toFixed(2)}" y2="${(30-len*Math.cos(r)).toFixed(2)}" stroke="${col}" stroke-width="${w}" stroke-linecap="round"/>`; };
+          const sR = sDeg * Math.PI / 180;
+          const sx2 = (30 + 22 * Math.sin(sR)).toFixed(2), sy2 = (30 - 22 * Math.cos(sR)).toFixed(2);
+          // B: date label and relative offset
+          const dateStr = now.toLocaleString('en-US', { timeZone: city.tz, month: 'numeric', day: 'numeric' });
+          const relTokyo = getRelativeToTokyo(city.tz);
+          const dayNight = (hh >= 6 && hh < 19) ? '☀️' : '🌙';
+          // C: remaining time + progress bar
+          const remStr = fmtMarketRemaining(city.mkt, tot, mktOpen, isWd);
+          const openMin = city.mkt.oh * 60 + city.mkt.om, closeMin = city.mkt.ch * 60 + city.mkt.cm;
+          const pct = mktOpen ? Math.max(0, Math.min(100, (tot - openMin) / (closeMin - openMin) * 100)).toFixed(1) : 0;
+          const progressInner = mktOpen ? '<div style="width:' + pct + '%;height:100%;background:var(--green);border-radius:2px"></div>' : '';
+          const glowDef = mktOpen ? '<defs><filter id="' + glowId + '"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>' : '';
+          return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+            <div style="font-size:0.72rem;font-weight:600">${city.flag} ${city.label} ${dayNight}</div>
             <svg viewBox="0 0 60 60" width="56" height="56">
-              <circle cx="30" cy="30" r="28" fill="none" stroke="rgba(148,163,184,0.2)" stroke-width="2"/>
+              ${glowDef}
+              <circle cx="30" cy="30" r="28" fill="none" stroke="${rimStroke}" stroke-width="${rimWidth}" ${rimFilter}/>
               ${ticks}
               ${hand(hDeg, 14, 2.5, 'currentColor')}
               ${hand(mDeg, 20, 1.5, 'currentColor')}
-              ${hand(sDeg, 22, 1, '#ef4444')}
+              <line id="wc-sec-${city.label}" x1="30" y1="30" x2="${sx2}" y2="${sy2}" stroke="#ef4444" stroke-width="1" stroke-linecap="round"/>
               <circle cx="30" cy="30" r="2" fill="#ef4444"/>
             </svg>
-            <div style="font-size:0.9rem;font-weight:700;letter-spacing:1px;font-variant-numeric:tabular-nums">${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}</div>
-            <div style="font-size:0.6rem;padding:1px 5px;border-radius:8px;font-weight:600;background:${mktOpen?'rgba(34,197,94,0.15)':'rgba(100,116,139,0.12)'};color:${mktOpen?'#22c55e':'var(--muted)'}">${city.mkt.name} ${mktOpen?'開場中':'閉場'}</div>
+            <div style="font-size:0.88rem;font-weight:700;letter-spacing:1px;font-variant-numeric:tabular-nums">${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}</div>
+            <div style="font-size:0.62rem;color:var(--muted)">${dateStr} ${DAY_NAMES[dow]}${relTokyo ? ' <span style="color:var(--blue);opacity:0.85">' + relTokyo + '</span>' : ''}</div>
+            <div style="font-size:0.6rem;padding:1px 5px;border-radius:8px;font-weight:600;background:${mktOpen?'rgba(34,197,94,0.15)':'rgba(100,116,139,0.12)'};color:${mktOpen?'#22c55e':'var(--muted)'}">
+              ${city.mkt.name} ${mktOpen?'開場中':'閉場'}${remStr?' · '+remStr:''}
+            </div>
+            <div style="width:100%;height:3px;background:rgba(100,116,139,0.15);border-radius:2px;overflow:hidden;margin-top:1px">${progressInner}</div>
           </div>`;
         }
 
+        let lastSec = -1;
         function updateWorldClock() {
           const grid = document.getElementById('home-worldclock-grid');
-          if (grid) grid.innerHTML = CITIES.map(c => renderCity(c)).join('');
+          if (!grid) return;
+          const sec = Math.floor(Date.now() / 1000);
+          if (sec !== lastSec) {
+            // Full render every second (updates all elements)
+            lastSec = sec;
+            grid.innerHTML = CITIES.map(c => renderCity(c)).join('');
+          } else {
+            // D: smooth second hand – update only x2/y2 at 100ms intervals
+            const now = new Date();
+            const sub = (Date.now() % 1000) / 1000;
+            CITIES.forEach(city => {
+              const el = document.getElementById('wc-sec-' + city.label);
+              if (!el) return;
+              const s = now.toLocaleString('en-US', { timeZone: city.tz, hour12: false, second: '2-digit' });
+              const sDeg = (parseInt(s, 10) + sub) * 6;
+              const r = sDeg * Math.PI / 180;
+              el.setAttribute('x2', (30 + 22 * Math.sin(r)).toFixed(2));
+              el.setAttribute('y2', (30 - 22 * Math.cos(r)).toFixed(2));
+            });
+          }
         }
         updateWorldClock();
-        setInterval(updateWorldClock, 1000);
+        setInterval(updateWorldClock, 100);
       })();
 
       // ─── ダッシュボード表示・並び替え設定（ユーザーごとにlocalStorage保存） ─────
