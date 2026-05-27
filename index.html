@@ -3940,7 +3940,7 @@
           <!-- 電車遅延情報 -->
           <article class="card dashboard-card reveal" id="dash-card-train">
             <h3 style="display:flex;align-items:center;gap:8px;">
-              <span data-i18n="dash-train-title">🚃 電車遅延情報（関東）</span>
+              <span id="home-train-title" data-i18n="dash-train-title">🚃 電車遅延情報（関東）</span>
               <button onclick="initTrainCard()" class="dash-todo-btn" style="font-size:0.72rem;padding:3px 10px;margin-left:auto" data-i18n="dash-refresh-btn">更新</button>
             </h3>
             <ul class="dashboard-mini-list" id="home-train-list">
@@ -8563,16 +8563,77 @@
       })();
 
       // ─── 電車遅延情報 ─────────────────────────────────────────
-      const TRAIN_TARGET = 'https://transit.yahoo.co.jp/traininfo/area/4/';
+      const TRAIN_AREA_BASE = 'https://transit.yahoo.co.jp/traininfo/area/';
+      const TRAIN_CACHE_KEY = 'train-area-cache';
+      const TRAIN_DEFAULT_AREA = { code: 4, name: '関東' };
       const TRAIN_PROXIES = [
         u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
         u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
         u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
       ];
+      const TRAIN_PREF_TO_AREA = {
+        '北海道': { code: 1, name: '北海道' },
+        '青森県': { code: 2, name: '東北' }, '岩手県': { code: 2, name: '東北' },
+        '宮城県': { code: 2, name: '東北' }, '秋田県': { code: 2, name: '東北' },
+        '山形県': { code: 2, name: '東北' }, '福島県': { code: 2, name: '東北' },
+        '茨城県': { code: 4, name: '関東' }, '栃木県': { code: 4, name: '関東' },
+        '群馬県': { code: 4, name: '関東' }, '埼玉県': { code: 4, name: '関東' },
+        '千葉県': { code: 4, name: '関東' }, '東京都': { code: 4, name: '関東' },
+        '神奈川県': { code: 4, name: '関東' },
+        '新潟県': { code: 3, name: '関東甲信越' }, '長野県': { code: 3, name: '関東甲信越' },
+        '山梨県': { code: 3, name: '関東甲信越' },
+        '静岡県': { code: 5, name: '中部' }, '愛知県': { code: 5, name: '中部' },
+        '岐阜県': { code: 5, name: '中部' }, '三重県': { code: 5, name: '中部' },
+        '富山県': { code: 5, name: '中部' }, '石川県': { code: 5, name: '中部' },
+        '福井県': { code: 5, name: '中部' },
+        '大阪府': { code: 6, name: '近畿' }, '京都府': { code: 6, name: '近畿' },
+        '兵庫県': { code: 6, name: '近畿' }, '奈良県': { code: 6, name: '近畿' },
+        '滋賀県': { code: 6, name: '近畿' }, '和歌山県': { code: 6, name: '近畿' },
+        '鳥取県': { code: 7, name: '中国・四国' }, '島根県': { code: 7, name: '中国・四国' },
+        '岡山県': { code: 7, name: '中国・四国' }, '広島県': { code: 7, name: '中国・四国' },
+        '山口県': { code: 7, name: '中国・四国' }, '徳島県': { code: 7, name: '中国・四国' },
+        '香川県': { code: 7, name: '中国・四国' }, '愛媛県': { code: 7, name: '中国・四国' },
+        '高知県': { code: 7, name: '中国・四国' },
+        '福岡県': { code: 8, name: '九州・沖縄' }, '佐賀県': { code: 8, name: '九州・沖縄' },
+        '長崎県': { code: 8, name: '九州・沖縄' }, '熊本県': { code: 8, name: '九州・沖縄' },
+        '大分県': { code: 8, name: '九州・沖縄' }, '宮崎県': { code: 8, name: '九州・沖縄' },
+        '鹿児島県': { code: 8, name: '九州・沖縄' }, '沖縄県': { code: 8, name: '九州・沖縄' },
+      };
+
+      async function detectTrainRegion() {
+        const cached = JSON.parse(localStorage.getItem(TRAIN_CACHE_KEY) || 'null');
+        if (cached && Date.now() - cached.ts < 10 * 60 * 1000) return cached.area;
+        try {
+          const pos = await new Promise((resolve, reject) => {
+            if (!navigator.geolocation) { reject(new Error('no geo')); return; }
+            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000, maximumAge: 300000 });
+          });
+          const { latitude: lat, longitude: lon } = pos.coords;
+          const res = await fetchWithTimeout(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=ja`,
+            6000
+          );
+          const data = await res.json();
+          const pref = data.address?.state || data.address?.province || '';
+          const area = TRAIN_PREF_TO_AREA[pref] || TRAIN_DEFAULT_AREA;
+          localStorage.setItem(TRAIN_CACHE_KEY, JSON.stringify({ area, ts: Date.now() }));
+          return area;
+        } catch {
+          return TRAIN_DEFAULT_AREA;
+        }
+      }
+
       window.initTrainCard = async function initTrainCard() {
         const list = document.getElementById('home-train-list');
         const timeEl = document.getElementById('home-train-time');
+        const titleEl = document.getElementById('home-train-title');
         if (!list) return;
+        list.innerHTML = '<li class="dashboard-mini-item"><span style="color:var(--muted)">📍 位置情報取得中…</span></li>';
+
+        const area = await detectTrainRegion();
+        if (titleEl) titleEl.textContent = `🚃 電車遅延情報（${area.name}）`;
+        const TRAIN_TARGET = TRAIN_AREA_BASE + area.code + '/';
+
         list.innerHTML = '<li class="dashboard-mini-item"><span style="color:var(--muted)">取得中…</span></li>';
 
         let html = null;
@@ -8596,7 +8657,6 @@
           return;
         }
 
-        // 「主要鉄道」セクション以降を切り捨てて遅延情報セクションのみ残す
         for (const marker of ['主要鉄道', '利用者が多い路線', 'elmMajorLine']) {
           const idx = html.indexOf(marker);
           if (idx > 500) { html = html.slice(0, idx); break; }
@@ -8606,7 +8666,6 @@
         const DISRUPTION_RE = /遅延|見合わせ|運休|乱れ|障害/;
         const disruptions = [];
 
-        // テーブル行（路線名セル＋状況セル）を抽出
         doc2.querySelectorAll('tr').forEach(row => {
           const cells = [...row.querySelectorAll('td')];
           if (cells.length < 2) return;
@@ -8617,7 +8676,6 @@
           }
         });
 
-        // フォールバック: <a>タグの親要素が遅延ワードを含む場合
         if (!disruptions.length) {
           doc2.querySelectorAll('a').forEach(a => {
             const parent = a.closest('tr, li');
@@ -8644,7 +8702,7 @@
         list.innerHTML += `<li class="dashboard-mini-item" style="margin-top:4px;">
           <a href="${TRAIN_TARGET}" target="_blank" rel="noreferrer" style="font-size:0.72rem;color:var(--blue,#0ea5e9)">Yahoo路線情報で詳細確認 →</a>
         </li>`;
-        if (timeEl) timeEl.textContent = '関東 更新: ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+        if (timeEl) timeEl.textContent = `${area.name} 更新: ` + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
       }
       setInterval(initTrainCard, 5 * 60 * 1000);
 
