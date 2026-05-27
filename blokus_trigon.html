@@ -179,9 +179,7 @@
     #board-canvas {
       display: block;
       border-radius: 6px;
-      border: 1px solid rgba(0,0,0,0.12);
       cursor: crosshair;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
     }
 
     #piece-controls {
@@ -452,20 +450,19 @@
 // ============================================================
 const ROWS = 13;
 const COLS = 25; // 13行 × 25列 (各行に上向き13・下向き12 = 25セル)
-const TW = 28;   // セル幅
-const TH = 24;   // セル高さ (≈TW*√3/2)
+const TW = 44;   // セル幅 (拡大)
+const TH = 38;   // セル高さ (≈TW*√3/2)
 
 const PLAYER_COLORS = ['#06b6d4', '#f87171', '#fbbf24', '#a78bfa'];
 const PLAYER_LABELS = ['1P', '2P', '3P', '4P'];
 const BADGE_CLASSES = ['p1-badge', 'p2-badge', 'p3-badge', 'p4-badge'];
 
-// 各プレイヤーのコーナー開始セル [row, col]
-// 13×25グリッドの四隅付近（上向き△のみ）
+// 各プレイヤーのコーナー開始セル [row, col] — 六角形盤の4頂点
 const CORNER_STARTS = [
-  [0, 0],      // P1: 左上
-  [0, 24],     // P2: 右上（最右端は(r+c)%2==0の偶数列 → col=24はrow=0で(0+24)%2=0→上向き）
-  [12, 24],    // P3: 右下
-  [12, 0],     // P4: 左下
+  [0, 12],    // P1: 上頂点
+  [6, 0],     // P2: 左頂点
+  [12, 12],   // P3: 下頂点
+  [6, 24],    // P4: 右頂点
 ];
 
 // ============================================================
@@ -473,6 +470,14 @@ const CORNER_STARTS = [
 // ============================================================
 function isUpTriangle(r, c) {
   return (r + c) % 2 === 0;
+}
+
+// 六角形盤の有効セル判定 (13×25グリッドを六角形にマスク)
+// 行rの有効列範囲: leftBound(r) <= c <= rightBound(r)
+function isInHexBoard(r, c) {
+  const leftBound = r <= 6 ? (6 - r) : (r - 6);
+  const rightBound = r <= 6 ? (18 + r) : (30 - r);
+  return c >= leftBound && c <= rightBound;
 }
 
 // セルの三頂点を返す [[x,y], [x,y], [x,y]]
@@ -646,9 +651,10 @@ function getTransformed(cells, rotation, flipped) {
 function isValidPlacement(board, playerIdx, pieceCells, originR, originC, isFirst) {
   const placed = pieceCells.map(([r, c]) => [originR + r, originC + c]);
 
-  // ボード範囲チェック
+  // ボード範囲チェック（六角形境界も含む）
   for (const [r, c] of placed) {
     if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return false;
+    if (!isInHexBoard(r, c)) return false;
   }
 
   // 空きチェック
@@ -697,6 +703,7 @@ function findValidMoves(board, playerIdx, pieces, isFirst) {
         seen.add(key);
         for (let r = 0; r < ROWS; r++) {
           for (let c = 0; c < COLS; c++) {
+            if (!isInHexBoard(r, c)) continue;
             if (isValidPlacement(board, playerIdx, cells, r, c, isFirst)) {
               moves.push({ pieceIdx: pi, cells, originR: r, originC: c, rot, flip });
             }
@@ -865,28 +872,54 @@ function drawTriangle(verts, fillColor, strokeColor, alpha) {
 // ============================================================
 //  ボード描画
 // ============================================================
+// 六角形ボード外枠の6頂点を返す
+function getHexPolygon() {
+  return [
+    triVertices(0, 6)[0],    // 左上頂点
+    triVertices(0, 18)[0],   // 右上頂点
+    triVertices(6, 24)[2],   // 右頂点
+    triVertices(12, 18)[2],  // 右下頂点
+    triVertices(12, 6)[1],   // 左下頂点
+    triVertices(6, 0)[1],    // 左頂点
+  ];
+}
+
+function drawHexPath() {
+  const pts = getHexPolygon();
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+}
+
 function drawBoard() {
   if (!state) return;
   const board = state.board;
 
-  ctx.fillStyle = '#f8fafc';
+  // キャンバス全体をページ背景色でクリア
+  ctx.fillStyle = '#1e293b';
   ctx.fillRect(0, 0, BOARD_W, BOARD_H);
+
+  // 六角形内部を盤面色で塗りつぶし
+  drawHexPath();
+  ctx.fillStyle = '#f8fafc';
+  ctx.fill();
 
   // コーナー開始セルを薄く着色
   for (let pi = 0; pi < state.playerCount; pi++) {
     const [cr, cc] = CORNER_STARTS[pi];
     const verts = triVertices(cr, cc);
-    drawTriangle(verts, hexToRgba(PLAYER_COLORS[pi], 0.25), null);
+    drawTriangle(verts, hexToRgba(PLAYER_COLORS[pi], 0.3), null);
   }
 
-  // 配置済みセル
+  // 配置済みセル（六角形内のみ）
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
+      if (!isInHexBoard(r, c)) continue;
       const pi = board[r][c];
       if (pi !== null) {
         const verts = triVertices(r, c);
         drawTriangle(verts, PLAYER_COLORS[pi], 'rgba(255,255,255,0.25)');
-        // ハイライト辺
         ctx.strokeStyle = 'rgba(255,255,255,0.4)';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -897,11 +930,12 @@ function drawBoard() {
     }
   }
 
-  // グリッド線
+  // グリッド線（六角形内のみ）
   ctx.strokeStyle = 'rgba(0,0,0,0.1)';
   ctx.lineWidth = 0.5;
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
+      if (!isInHexBoard(r, c)) continue;
       const verts = triVertices(r, c);
       ctx.beginPath();
       ctx.moveTo(verts[0][0], verts[0][1]);
@@ -911,6 +945,12 @@ function drawBoard() {
       ctx.stroke();
     }
   }
+
+  // 六角形外枠
+  drawHexPath();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
 
   drawPreview();
 }
@@ -954,10 +994,10 @@ function triSign(px, py, ax, ay, bx, by) {
 }
 
 function getCellFromPoint(x, y) {
-  // 概算行
   const estR = Math.floor(y / TH);
   for (let r = Math.max(0, estR - 1); r <= Math.min(ROWS - 1, estR + 1); r++) {
     for (let c = 0; c < COLS; c++) {
+      if (!isInHexBoard(r, c)) continue;
       const verts = triVertices(r, c);
       if (pointInTriangle(x, y,
         verts[0][0], verts[0][1],
@@ -1456,12 +1496,17 @@ window.addEventListener('resize', () => {
 // ============================================================
 (function init() {
   resizeCanvas();
-  ctx.fillStyle = '#f8fafc';
+  // 初期表示: 六角形盤を描画
+  ctx.fillStyle = '#1e293b';
   ctx.fillRect(0, 0, BOARD_W, BOARD_H);
+  drawHexPath();
+  ctx.fillStyle = '#f8fafc';
+  ctx.fill();
   ctx.strokeStyle = 'rgba(0,0,0,0.1)';
   ctx.lineWidth = 0.5;
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
+      if (!isInHexBoard(r, c)) continue;
       const verts = triVertices(r, c);
       ctx.beginPath();
       ctx.moveTo(verts[0][0], verts[0][1]);
@@ -1471,6 +1516,10 @@ window.addEventListener('resize', () => {
       ctx.stroke();
     }
   }
+  drawHexPath();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
 })();
 </script>
 </body>
