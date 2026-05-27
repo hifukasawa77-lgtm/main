@@ -49,8 +49,11 @@ const ATTACKS = {
 };
 
 const FIGHTER_DEFS = [
-  { id:0, name:'月影', nameEn:'Tsukikage', speed:2.8, hp:160, attacks:'tsukikage' },
-  { id:1, name:'紅蓮', nameEn:'Guren',     speed:4.2, hp:130, attacks:'guren' }
+  { id:0, name:'朧丸', nameEn:'Oboromaru', speed:2.8, hp:160, attacks:'tsukikage' },
+  { id:1, name:'夜叉お鈴', nameEn:'Osuzu', speed:4.2, hp:130, attacks:'guren' },
+  { id:2, name:'源鉄斎', nameEn:'Tetsusai', speed:2.4, hp:190, attacks:'tsukikage' },
+  { id:3, name:'葛葉', nameEn:'Kuzuha', speed:3.4, hp:140, attacks:'guren' },
+  { id:4, name:'骸坊', nameEn:'Gaibo', speed:2.6, hp:180, attacks:'tsukikage' }
 ];
 
 // ── Canvas setup ───────────────────────────────────────────────────────────
@@ -63,6 +66,16 @@ const charImages = [0, 1, 2, 3, 4].map(i => {
   img.src = `assets/hyakki-char-${i}.png`;
   return img;
 });
+const ACTION_POSES = ['idle', 'walk', 'jump', 'punch', 'kick', 'weapon', 'special', 'throw'];
+const actionImages = [0, 1, 2, 3, 4].map(i => {
+  const poses = {};
+  ACTION_POSES.forEach(pose => {
+    const img = new Image();
+    img.src = `assets/hyakki-animations/char-${i}/${pose}.png`;
+    poses[pose] = img;
+  });
+  return poses;
+});
 
 // ── Game state vars ────────────────────────────────────────────────────────
 let gameState, menuCursor, gameMode;
@@ -71,18 +84,51 @@ let currentStage;
 let frameCount;
 let particles;
 let shakeTimer, shakeIntensity;
+let paused;
 
 let charSelectState;
 let roundState;
+let bgmStage = null;
 
 // ── Input tracking ─────────────────────────────────────────────────────────
 const keys = {};
+const commandHistory = [];
 window.addEventListener('keydown', e => {
-  if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(e.key)) e.preventDefault();
+  if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' ','Enter'].includes(e.key)) e.preventDefault();
+  ensureAudio();
+  if (e.key === 'Enter' && gameState === 'battle' && !keys.Enter) {
+    paused = !paused;
+    playSfx('pause');
+  }
+  recordCommandKey(e.key);
   keys[e.key] = true;
   handleMenuInput(e.key);
 });
 window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+function recordCommandKey(key) {
+  if (gameState !== 'battle') return;
+  let token = null;
+  if (key === 'ArrowDown') token = 'D';
+  if (key === 'ArrowUp') token = 'U';
+  if (key === 'ArrowLeft') token = p1 && p1.facing === -1 ? 'F' : 'B';
+  if (key === 'ArrowRight') token = p1 && p1.facing === -1 ? 'B' : 'F';
+  if (key === 'z' || key === 'Z') token = 'Z';
+  if (key === 'x' || key === 'X') token = 'X';
+  if (!token) return;
+  commandHistory.push({ token, frame: frameCount || 0 });
+  while (commandHistory.length > 18) commandHistory.shift();
+}
+
+function detectCommand(sequence, maxAge) {
+  if (!frameCount) return false;
+  let si = sequence.length - 1;
+  for (let i = commandHistory.length - 1; i >= 0 && si >= 0; i--) {
+    if (frameCount - commandHistory[i].frame > maxAge) break;
+    if (commandHistory[i].token === sequence[si]) si--;
+  }
+  return si < 0;
+}
 
 // ── Touch input ────────────────────────────────────────────────────────────
 const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -98,6 +144,97 @@ const VBTNS = [
 ];
 const touchKeys = { left:false, right:false, up:false, down:false,
                     light:false, heavy:false, special:false, super:false };
+
+// ── Procedural audio ────────────────────────────────────────────────────────
+let audioCtx = null;
+let masterGain = null;
+let bgmGain = null;
+let bgmTimer = null;
+let bgmStep = 0;
+
+function ensureAudio() {
+  if (!window.AudioContext && !window.webkitAudioContext) return;
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    bgmGain = audioCtx.createGain();
+    masterGain.gain.value = 0.22;
+    bgmGain.gain.value = 0.18;
+    bgmGain.connect(masterGain);
+    masterGain.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function midiToHz(m) {
+  return 440 * Math.pow(2, (m - 69) / 12);
+}
+
+function playTone(freq, duration, type = 'square', gain = 0.12, dest = masterGain, detune = 0) {
+  if (!audioCtx || !dest) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  osc.detune.value = detune;
+  g.gain.setValueAtTime(0, now);
+  g.gain.linearRampToValueAtTime(gain, now + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  osc.connect(g);
+  g.connect(dest);
+  osc.start(now);
+  osc.stop(now + duration + 0.03);
+}
+
+function playNoise(duration, gain = 0.08) {
+  if (!audioCtx || !masterGain) return;
+  const len = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
+  const buffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = audioCtx.createBufferSource();
+  const g = audioCtx.createGain();
+  g.gain.value = gain;
+  src.connect(g);
+  g.connect(masterGain);
+  src.buffer = buffer;
+  src.start();
+}
+
+function playSfx(type) {
+  ensureAudio();
+  if (!audioCtx) return;
+  if (type === 'jump') playTone(520, 0.09, 'triangle', 0.08);
+  else if (type === 'kick') { playTone(170, 0.06, 'square', 0.08); playNoise(0.04, 0.04); }
+  else if (type === 'weapon') { playTone(760, 0.08, 'sawtooth', 0.07); playTone(1140, 0.06, 'triangle', 0.04); }
+  else if (type === 'special') { playTone(220, 0.18, 'sawtooth', 0.08); playTone(440, 0.2, 'triangle', 0.05); }
+  else if (type === 'hit') { playTone(96, 0.08, 'square', 0.11); playNoise(0.08, 0.08); }
+  else if (type === 'block') { playTone(260, 0.08, 'triangle', 0.08); playNoise(0.05, 0.04); }
+  else if (type === 'pause') playTone(paused ? 260 : 420, 0.1, 'triangle', 0.08);
+}
+
+function startStageBgm(stage) {
+  ensureAudio();
+  if (!audioCtx || bgmStage === stage) return;
+  if (bgmTimer) clearInterval(bgmTimer);
+  bgmStage = stage;
+  bgmStep = 0;
+  const patterns = [
+    { tempo: 150, bass: [38, 38, 43, 41, 38, 45, 43, 36], lead: [62, 65, 67, 70, 67, 65, 62, 58], wave: 'square' },
+    { tempo: 132, bass: [33, 40, 38, 36, 33, 43, 40, 38], lead: [57, 60, 64, 67, 69, 67, 64, 60], wave: 'triangle' }
+  ];
+  const p = patterns[stage % patterns.length];
+  const interval = 60000 / p.tempo / 2;
+  bgmTimer = setInterval(() => {
+    if (!audioCtx || gameState !== 'battle' || paused) return;
+    const i = bgmStep % 8;
+    playTone(midiToHz(p.bass[i]), 0.16, 'sawtooth', 0.045, bgmGain, -8);
+    if (bgmStep % 2 === 0) playTone(midiToHz(p.lead[i]), 0.12, p.wave, 0.035, bgmGain);
+    if (bgmStep % 4 === 2) playNoise(0.025, 0.012);
+    bgmStep++;
+  }, interval);
+}
 
 function touchToCanvas(touch) {
   const r = canvas.getBoundingClientRect();
@@ -144,6 +281,7 @@ function handleTouchMenu(touch) {
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
+  ensureAudio();
   if (gameState === 'battle') updateTouchKeys(e);
   else if (e.touches.length > 0) handleTouchMenu(e.touches[0]);
 }, { passive: false });
@@ -187,6 +325,7 @@ function createFighter(def, playerNum, isAI) {
     isBlocking: false,
     state: S.IDLE, stateTimer: 0,
     attackData: null, hitActive: false, hasHitOpponent: false,
+    attackType: null,
     hitbox: null,
     hurtbox: { w:42, h:88, ox:-21, oy:-88 },
     hitFlash: 0,
@@ -197,28 +336,30 @@ function createFighter(def, playerNum, isAI) {
 
 // ── Input readers ──────────────────────────────────────────────────────────
 function getP1Input() {
+  const qcf = detectCommand(['D', 'F'], 18);
+  const qcb = detectCommand(['D', 'B'], 18);
   return {
-    left:    !!(keys['a'] || keys['A'] || touchKeys.left),
-    right:   !!(keys['d'] || keys['D'] || touchKeys.right),
-    up:      !!(keys['w'] || keys['W'] || touchKeys.up),
-    down:    !!(keys['s'] || keys['S'] || touchKeys.down),
-    light:   !!(keys['f'] || keys['F'] || touchKeys.light),
-    heavy:   !!(keys['g'] || keys['G'] || touchKeys.heavy),
-    special: !!(keys['h'] || keys['H'] || touchKeys.special),
-    super:   !!(keys['t'] || keys['T'] || touchKeys.super),
+    left:    !!(keys['ArrowLeft'] || touchKeys.left),
+    right:   !!(keys['ArrowRight'] || touchKeys.right),
+    up:      !!(keys['ArrowUp'] || touchKeys.up),
+    down:    !!(keys['ArrowDown'] || touchKeys.down),
+    light:   !!(keys['z'] || keys['Z'] || touchKeys.light),
+    heavy:   !!(keys['x'] || keys['X'] || touchKeys.heavy),
+    special: !!((keys['x'] || keys['X']) && (qcf || touchKeys.special)),
+    super:   !!((keys['x'] || keys['X']) && qcb),
   };
 }
 
 function getP2Input() {
   return {
-    left:    keys['ArrowLeft'],
-    right:   keys['ArrowRight'],
-    up:      keys['ArrowUp'],
-    down:    keys['ArrowDown'],
-    light:   keys['u'] || keys['U'],
-    heavy:   keys['i'] || keys['I'],
-    special: keys['o'] || keys['O'],
-    super:   keys['p'] || keys['P'],
+    left:    keys['a'] || keys['A'],
+    right:   keys['d'] || keys['D'],
+    up:      keys['w'] || keys['W'],
+    down:    keys['s'] || keys['S'],
+    light:   keys['f'] || keys['F'],
+    heavy:   keys['g'] || keys['G'],
+    special: keys['h'] || keys['H'],
+    super:   keys['t'] || keys['T'],
   };
 }
 
@@ -357,6 +498,7 @@ function startAttack(f, type) {
   const key = type === 'light' ? 'light' : type === 'heavy' ? 'heavy' : type === 'special' ? 'special' : type === 'super' ? 'super' : 'jumpAtk';
   const atkKey = f.def.attacks; // 'tsukikage' or 'guren'
   f.attackData = ATTACKS[atkKey][key];
+  f.attackType = type;
   const total = f.attackData.startup + f.attackData.active + f.attackData.recovery;
   f.stateTimer = total;
   f.hitActive = false;
@@ -367,6 +509,7 @@ function startAttack(f, type) {
   else if (type === 'special') f.state = S.SPECIAL;
   else if (type === 'super')   f.state = S.SUPER;
   else if (type === 'jumpAtk') f.state = S.JUMP_ATTACK;
+  playSfx(type === 'light' || type === 'jumpAtk' ? 'kick' : (type === 'heavy' ? 'weapon' : 'special'));
   f.vx = 0;
 }
 
@@ -411,6 +554,7 @@ function updateFighter(f, opp, inp) {
         f.vy = JUMP_VY;
         f.onGround = false;
         f.state = S.JUMP;
+        playSfx('jump');
       } else if (inp.down) {
         f.state = S.CROUCH;
       } else if ((f.facing === 1 && inp.right) || (f.facing === -1 && inp.left)) {
@@ -434,7 +578,7 @@ function updateFighter(f, opp, inp) {
       } else if (inp.light) {
         f.vx = 0; startAttack(f, 'light');
       } else if (inp.up) {
-        f.vy = JUMP_VY; f.onGround = false; f.vx = 0; f.state = S.JUMP;
+        f.vy = JUMP_VY; f.onGround = false; f.vx = 0; f.state = S.JUMP; playSfx('jump');
       } else if (!inp.right && !inp.left && !inp.up && !inp.down) {
         f.state = S.IDLE;
       } else if ((f.facing === 1 && inp.left) || (f.facing === -1 && inp.right)) {
@@ -459,7 +603,7 @@ function updateFighter(f, opp, inp) {
       } else if (inp.light) {
         f.vx = 0; f.isBlocking = false; startAttack(f, 'light');
       } else if (inp.up) {
-        f.vy = JUMP_VY; f.onGround = false; f.vx = 0; f.isBlocking = false; f.state = S.JUMP;
+        f.vy = JUMP_VY; f.onGround = false; f.vx = 0; f.isBlocking = false; f.state = S.JUMP; playSfx('jump');
       } else if (!inp.left && !inp.right) {
         f.state = S.IDLE;
       } else if ((f.facing === 1 && inp.right) || (f.facing === -1 && inp.left)) {
@@ -493,7 +637,7 @@ function updateFighter(f, opp, inp) {
         f.hitActive = false; f.hitbox = null;
       }
       if (f.stateTimer <= 0 && !f.onGround) {
-        f.state = S.JUMP; f.attackData = null; f.hitbox = null; f.hitActive = false;
+        f.state = S.JUMP; f.attackData = null; f.attackType = null; f.hitbox = null; f.hitActive = false;
       }
       break;
     }
@@ -513,6 +657,7 @@ function updateFighter(f, opp, inp) {
       if (f.stateTimer <= 0) {
         f.state = S.IDLE;
         f.attackData = null;
+        f.attackType = null;
         f.hitbox = null;
         f.hitActive = false;
       }
@@ -544,7 +689,7 @@ function updateFighter(f, opp, inp) {
       f.onGround = true;
       // Land transitions
       if (f.state === S.JUMP) f.state = S.IDLE;
-      if (f.state === S.JUMP_ATTACK) { f.state = S.IDLE; f.attackData = null; f.hitbox = null; f.hitActive = false; }
+      if (f.state === S.JUMP_ATTACK) { f.state = S.IDLE; f.attackData = null; f.attackType = null; f.hitbox = null; f.hitActive = false; }
     }
   } else {
     f.x += f.vx;
@@ -577,6 +722,7 @@ function resolveHits(attacker, defender) {
   const hitY = (attacker.hitbox.y + attacker.hitbox.y + attacker.hitbox.h) / 2;
 
   if (defender.isBlocking && defender.onGround) {
+    playSfx('block');
     // Chip damage
     const chip = Math.max(1, Math.floor(atk.damage * 0.08));
     defender.hp = Math.max(0, defender.hp - chip);
@@ -589,6 +735,7 @@ function resolveHits(attacker, defender) {
     spawnHitEffect(hitX, hitY, 'block');
     attacker.meter = Math.min(attacker.maxMeter, attacker.meter + Math.floor(atk.damage * 0.3));
   } else {
+    playSfx('hit');
     // Full hit
     defender.hp -= atk.damage;
     defender.hitFlash = 8;
@@ -897,8 +1044,8 @@ function drawFighter(f) {
   ctx.translate(f.x, f.y);
   ctx.scale(f.facing, 1);
 
-  if (f.id === 0) drawTsukikage(f);
-  else drawGuren(f);
+  if (f.id === 1) drawGuren(f);
+  else _drawCharImage(f, f.id);
 
   // Hit flash overlay (rect covers the character image area)
   if (f.hitFlash > 0) {
@@ -911,10 +1058,25 @@ function drawFighter(f) {
   ctx.restore();
 }
 
+function getActionPose(f) {
+  if (f.state === S.WALK_F || f.state === S.WALK_B) return 'walk';
+  if (f.state === S.JUMP) return 'jump';
+  if (f.state === S.JUMP_ATTACK) return 'kick';
+  if (f.state === S.ATTACK_L) return 'punch';
+  if (f.state === S.ATTACK_H) return 'weapon';
+  if (f.state === S.SPECIAL || f.state === S.SUPER) return 'special';
+  return 'idle';
+}
+
 function _drawCharImage(f, imgIdx) {
-  const img = charImages[imgIdx];
-  const dispH = 120, dispW = 98;
-  const imgSrcSkipTop = 80; // skip logo/title text at top of portrait
+  const pose = getActionPose(f);
+  const poseImg = actionImages[imgIdx]?.[pose];
+  const img = (poseImg && poseImg.complete && poseImg.naturalWidth) ? poseImg : charImages[imgIdx];
+  const usesActionArt = img === poseImg;
+  const isAttackPose = ['punch', 'kick', 'weapon', 'special', 'throw'].includes(pose);
+  const dispH = usesActionArt ? 132 : 120;
+  const dispW = usesActionArt ? (isAttackPose ? 142 : 118) : 98;
+  const imgSrcSkipTop = 0;
 
   const bob = (f.state === S.WALK_F || f.state === S.WALK_B)
     ? Math.sin(frameCount * 0.3) * 3
@@ -939,7 +1101,7 @@ function _drawCharImage(f, imgIdx) {
                     f.state === S.SPECIAL   || f.state === S.SUPER;
   const isHurt    = f.state === S.HURT || f.state === S.KO;
 
-  const xOff = isAttack ? 10 : (isHurt ? -8 : 0);
+  const xOff = isAttack ? 14 : (isHurt ? -8 : 0);
   const yOff = (isCrouch ? 22 : 0) + bob;
   const dH   = isCrouch ? dispH * 0.82 : dispH;
 
@@ -1169,8 +1331,8 @@ function drawTitle() {
   ctx.font = '11px monospace';
   ctx.fillStyle = '#444';
   ctx.textAlign = 'center';
-  ctx.fillText('P1: A/D移動  W跳躍  S屈み  F弱  G強  H必殺  T超必', W/2, 418);
-  ctx.fillText('P2: ←/→移動  ↑跳躍  ↓屈み  U弱  I強  O必殺  P超必', W/2, 436);
+  ctx.fillText('P1: ←/→移動  ↑ジャンプ  ↓しゃがみ  Zキック  X武器攻撃  Enterポーズ', W/2, 418);
+  ctx.fillText('必殺技: ↓→X / 超必殺: ↓←X   P2: A/D移動 Wジャンプ Sしゃがみ F/G攻撃', W/2, 436);
   ctx.fillText('後方向キーを押しながらでガード', W/2, 454);
 }
 
@@ -1179,13 +1341,13 @@ function handleCharSelectKey(key) {
   const cs = charSelectState;
   // P1 controls
   if (!cs.confirmed[0]) {
-    if (key === 'a' || key === 'A') cs.cursors[0] = (cs.cursors[0] + FIGHTER_DEFS.length - 1) % FIGHTER_DEFS.length;
-    if (key === 'd' || key === 'D') cs.cursors[0] = (cs.cursors[0] + 1) % FIGHTER_DEFS.length;
-    if (key === 'f' || key === 'F' || key === 'Enter') {
+    if (key === 'ArrowLeft') cs.cursors[0] = (cs.cursors[0] + FIGHTER_DEFS.length - 1) % FIGHTER_DEFS.length;
+    if (key === 'ArrowRight') cs.cursors[0] = (cs.cursors[0] + 1) % FIGHTER_DEFS.length;
+    if (key === 'x' || key === 'X' || key === 'z' || key === 'Z' || key === 'Enter') {
       cs.confirmed[0] = true;
       if (gameMode === 'vscpu') {
-        // AI picks opposite or random
-        cs.cursors[1] = cs.cursors[0] === 0 ? 1 : 0;
+        // AI picks a different fighter.
+        cs.cursors[1] = (cs.cursors[0] + 1 + Math.floor(Math.random() * (FIGHTER_DEFS.length - 1))) % FIGHTER_DEFS.length;
         cs.confirmed[1] = true;
         startBattle();
       }
@@ -1193,9 +1355,9 @@ function handleCharSelectKey(key) {
   }
   // P2 controls (vs player only)
   if (gameMode === 'vsplayer' && !cs.confirmed[1]) {
-    if (key === 'ArrowLeft') cs.cursors[1] = (cs.cursors[1] + FIGHTER_DEFS.length - 1) % FIGHTER_DEFS.length;
-    if (key === 'ArrowRight') cs.cursors[1] = (cs.cursors[1] + 1) % FIGHTER_DEFS.length;
-    if (key === 'u' || key === 'U') {
+    if (key === 'a' || key === 'A') cs.cursors[1] = (cs.cursors[1] + FIGHTER_DEFS.length - 1) % FIGHTER_DEFS.length;
+    if (key === 'd' || key === 'D') cs.cursors[1] = (cs.cursors[1] + 1) % FIGHTER_DEFS.length;
+    if (key === 'f' || key === 'F') {
       cs.confirmed[1] = true;
       if (cs.confirmed[0]) startBattle();
     }
@@ -1268,8 +1430,8 @@ function drawCharSelect() {
       hitFlash: 0, inputBuf: [], isAI: false,
       aiMode:'approach', aiDecideTimer:0, aiDecideInterval:22
     };
-    if (def.id === 0) drawTsukikage(fakeFighter);
-    else drawGuren(fakeFighter);
+    if (def.id === 1) drawGuren(fakeFighter);
+    else _drawCharImage(fakeFighter, def.id);
     ctx.restore();
 
     // Player label
@@ -1299,9 +1461,9 @@ function drawCharSelect() {
   ctx.font = '11px monospace';
   ctx.fillStyle = '#555';
   ctx.textAlign = 'center';
-  ctx.fillText('P1: A/D選択  F/Enter決定', W/2, 390);
+  ctx.fillText('P1: ←/→選択  Z/X/Enter決定', W/2, 390);
   if (gameMode === 'vsplayer') {
-    ctx.fillText('P2: ←/→選択  U決定', W/2, 406);
+    ctx.fillText('P2: A/D選択  F決定', W/2, 406);
   }
 }
 
@@ -1416,6 +1578,7 @@ function endRound(winnerId) {
 }
 
 function initRound() {
+  paused = false;
   roundState.round++;
   roundState.timer = 99 * 60;
   roundState.timerActive = false;
@@ -1461,6 +1624,7 @@ function startCharSelect() {
 }
 
 function startBattle() {
+  paused = false;
   const def1 = FIGHTER_DEFS[charSelectState.cursors[0]];
   const def2 = FIGHTER_DEFS[charSelectState.cursors[1]];
   p1 = createFighter(def1, 1, false);
@@ -1473,6 +1637,7 @@ function startBattle() {
 
 function initGame() {
   gameState = 'title';
+  paused = false;
   menuCursor = 0;
   gameMode = 'vscpu';
   p1 = null;
@@ -1493,6 +1658,8 @@ function update() {
   updateParticles();
 
   if (gameState === 'battle' && p1 && p2) {
+    startStageBgm(currentStage);
+    if (paused) return;
     updateRound();
     const inp1 = getP1Input();
     const inp2 = gameMode === 'vsplayer' ? getP2Input() : getAIInput(p2, p1);
@@ -1566,6 +1733,18 @@ function render() {
 
   // HUD
   if ((gameState === 'battle' || gameState === 'roundend') && p1 && p2) drawHUD();
+
+  if (gameState === 'battle' && paused) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.font = 'bold 42px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#e8d890';
+    ctx.fillText('PAUSE', W / 2, H / 2);
+    ctx.font = '16px monospace';
+    ctx.fillStyle = '#aaa';
+    ctx.fillText('Enterで再開', W / 2, H / 2 + 34);
+  }
 
   // Overlay screens
   if (gameState === 'title')      drawTitle();
