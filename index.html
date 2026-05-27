@@ -6377,8 +6377,9 @@
         try {
           const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
           if (cached) {
-            if (Date.now() - cached.ts < STOCK_CHART_CACHE_TTL) return cached.data;
-            staleData = cached.data;
+            const cachedPts = cached.pts || cached.data;
+            if (Date.now() - cached.ts < STOCK_CHART_CACHE_TTL) return { pts: cachedPts, prevClose: cached.prevClose ?? null };
+            staleData = { pts: cachedPts, prevClose: cached.prevClose ?? null };
           }
         } catch (e) { /* ignore */ }
 
@@ -6393,31 +6394,32 @@
           if (!result) return null;
           const timestamps = result.timestamp || [];
           const q = result.indicators?.quote?.[0] || {};
-          const closes = q.close || [], opens = q.open || [], highs = q.high || [], lows = q.low || [];
+          const closes = q.close || [], opens = q.open || [], highs = q.high || [], lows = q.low || [], volumes = q.volume || [];
+          const prevClose = result.meta?.chartPreviousClose ?? result.meta?.previousClose ?? null;
           const pts = [];
           for (let i = 0; i < timestamps.length; i++) {
-            if (closes[i] != null) pts.push({ t: timestamps[i] * 1000, v: closes[i], o: opens[i] ?? null, h: highs[i] ?? null, l: lows[i] ?? null });
+            if (closes[i] != null) pts.push({ t: timestamps[i] * 1000, v: closes[i], o: opens[i] ?? null, h: highs[i] ?? null, l: lows[i] ?? null, vol: volumes[i] ?? null });
           }
-          return pts.length ? pts : null;
+          return pts.length ? { pts, prevClose } : null;
         };
 
-        const points = await Promise.any(
+        const result = await Promise.any(
           urls.map(url => fetchJsonWithProxies(url).then(p => {
-            const pts = parsePoints(p);
-            if (!pts) throw new Error('chart-no-data');
-            return pts;
+            const parsed = parsePoints(p);
+            if (!parsed) throw new Error('chart-no-data');
+            return parsed;
           }))
         ).catch(() => null);
 
-        if (!points) {
+        if (!result) {
           if (staleData) { staleData._stale = true; return staleData; }
           throw new Error('chart-fetch-failed');
         }
 
         try {
-          localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: points }));
+          localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), pts: result.pts, prevClose: result.prevClose }));
         } catch (e) { /* ignore */ }
-        return points;
+        return result;
       }
 
       function renderStockChart(symbol, name, range) {
@@ -6440,19 +6442,18 @@
           btn.classList.toggle('active', btn.dataset.range === range);
         });
 
-        fetchStockHistory(symbol, range).then((points) => {
+        fetchStockHistory(symbol, range).then(({ pts, prevClose, _stale }) => {
           if (activeChartSymbol !== symbol || activeChartRange !== range) return;
-          const isStale = points._stale;
-          msg.textContent = isStale ? '※ キャッシュデータを表示中（最新取得に失敗）' : '';
+          msg.textContent = _stale ? '※ キャッシュデータを表示中（最新取得に失敗）' : '';
           canvas.style.display = '';
-          drawStockCanvas(canvas, points);
+          drawStockCanvas(canvas, pts, prevClose);
         }).catch(() => {
           if (activeChartSymbol !== symbol) return;
           msg.textContent = 'チャートデータを取得できませんでした。時間をおいて再試行してください。';
         });
       }
 
-      function drawStockCanvas(canvas, points) {
+      function drawStockCanvas(canvas, points, prevClose = null) {
         const dpr = window.devicePixelRatio || 1;
         const W = canvas.offsetWidth || 280;
         const H = 100;
@@ -6492,6 +6493,27 @@
             ctx.stroke();
           });
           ctx.restore();
+
+          // 前日終値 破線
+          if (prevClose != null) {
+            const py = yOf(prevClose);
+            if (py >= pad.top && py <= pad.top + cH) {
+              ctx.save();
+              ctx.strokeStyle = 'rgba(148,163,184,0.7)';
+              ctx.lineWidth = 1;
+              ctx.setLineDash([4, 4]);
+              ctx.beginPath();
+              ctx.moveTo(pad.left, py);
+              ctx.lineTo(pad.left + cW, py);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = 'rgba(148,163,184,0.8)';
+              ctx.font = `${9 * dpr > 12 ? 9 : 9}px sans-serif`;
+              ctx.textAlign = 'right';
+              ctx.fillText('前終', pad.left - 2, py + 3);
+              ctx.restore();
+            }
+          }
 
           // グラデーション塗り
           const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
@@ -6599,12 +6621,15 @@
           const d = new Date(pt.t);
           const ds = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
           const fmt = (v) => v != null ? (v >= 1000 ? Math.round(v).toLocaleString() : v.toFixed(2)) : '—';
+          const fmtVol = (v) => v == null ? '—' : v >= 1e8 ? (v / 1e8).toFixed(1) + '億' : v >= 1e4 ? (v / 1e4).toFixed(0) + '万' : v.toLocaleString();
           tip.innerHTML =
             `<div class="sht-date">${ds}</div>` +
             `<div>始値: <b>${fmt(pt.o)}</b></div>` +
             `<div>高値: <b class="sht-hi">${fmt(pt.h)}</b></div>` +
             `<div>安値: <b class="sht-lo">${fmt(pt.l)}</b></div>` +
-            `<div>終値: <b>${fmt(pt.v)}</b></div>`;
+            `<div>終値: <b>${fmt(pt.v)}</b></div>` +
+            `<div>出来高: <b>${fmtVol(pt.vol)}</b></div>` +
+            `<div style="border-top:1px solid rgba(100,160,220,0.2);margin-top:3px;padding-top:3px">前日終値: <b>${fmt(prevClose)}</b></div>`;
 
           const tipW = 155;
           const left = cx + 14 + tipW > window.innerWidth ? cx - tipW - 14 : cx + 14;
