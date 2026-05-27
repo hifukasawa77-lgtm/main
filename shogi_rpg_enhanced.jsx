@@ -3,9 +3,26 @@ import React, { useState, useEffect } from 'react';
 const ShogiRPG = () => {
   const BOARD_SIZE = 9; // 全ステージ9×9固定
   const PLAYER_MAX_HP = 1000;
-  
+
   // 妖怪SVGコンポーネント - 全身バージョン
-  const YokaiSVG = ({ type, size = 140 }) => {
+  const YokaiSVG = ({ type, size = 140, image = null }) => {
+    if (image) {
+      return (
+        <img
+          src={image}
+          alt=""
+          style={{
+            width: size,
+            height: size,
+            objectFit: 'contain',
+            objectPosition: 'center',
+            borderRadius: '14px',
+            display: 'block'
+          }}
+        />
+      );
+    }
+
     // SVGを直接返す（ID重複を避けるため、グラデーションは使わない）
     if (type === 'zashiki') {
       return (
@@ -29,18 +46,18 @@ const ShogiRPG = () => {
                 0%, 100% { transform: translateY(0); }
                 50% { transform: translateY(-5px); }
               }
-              .zashiki-body { 
-                animation: zashikiSway 4s ease-in-out infinite, ghostBlink 6s ease-in-out infinite, float 3s ease-in-out infinite; 
+              .zashiki-body {
+                animation: zashikiSway 4s ease-in-out infinite, ghostBlink 6s ease-in-out infinite, float 3s ease-in-out infinite;
                 transform-origin: center bottom;
               }
-              .blood-tear { 
-                animation: bloodDrip 3s ease-in infinite; 
+              .blood-tear {
+                animation: bloodDrip 3s ease-in infinite;
               }
               .blood-tear-left { animation-delay: 0s; }
               .blood-tear-right { animation-delay: 1.5s; }
             `}</style>
           </defs>
-          
+
           <g className="zashiki-body">
             {/* 着物の体 */}
             <path d="M 50 60 L 45 90 L 40 130 L 50 130 L 55 95 L 60 130 L 80 130 L 85 95 L 90 130 L 100 130 L 95 90 L 90 60 Z" fill="#2A1A1A" stroke="#1A0A0A" strokeWidth="2"/>
@@ -52,7 +69,7 @@ const ShogiRPG = () => {
             {/* 手 */}
             <ellipse cx="30" cy="86" rx="6" ry="8" fill="#8B7A6A"/>
             <ellipse cx="110" cy="86" rx="6" ry="8" fill="#8B7A6A"/>
-            
+
             {/* 顔 */}
             <ellipse cx="70" cy="40" rx="28" ry="30" fill="#9B8B7A" stroke="#4A3A2A" strokeWidth="3"/>
             {/* 腐敗の斑点 */}
@@ -66,7 +83,7 @@ const ShogiRPG = () => {
             {/* 虚ろな目 */}
             <ellipse cx="60" cy="38" rx="8" ry="10" fill="#000000" stroke="#1a1a1a" strokeWidth="2"/>
             <ellipse cx="80" cy="38" rx="8" ry="10" fill="#000000" stroke="#1a1a1a" strokeWidth="2"/>
-            
+
             {/* 血の涙 */}
             <g className="blood-tear blood-tear-left">
               <path d="M 60 48 L 59 58 L 60 68" stroke="#5D0000" strokeWidth="2" fill="none" opacity="0"/>
@@ -76,7 +93,7 @@ const ShogiRPG = () => {
               <path d="M 80 48 L 81 58 L 80 68" stroke="#5D0000" strokeWidth="2" fill="none" opacity="0"/>
               <ellipse cx="81" cy="70" rx="2" ry="3" fill="#8B0000" opacity="0"/>
             </g>
-            
+
             {/* 口 */}
             <path d="M 58 52 Q 70 58 82 52" fill="none" stroke="#1a0a0a" strokeWidth="3"/>
             <path d="M 60 54 Q 70 57 80 54" fill="#0a0000"/>
@@ -87,7 +104,7 @@ const ShogiRPG = () => {
         </svg>
       );
     }
-    
+
     if (type === 'kappa') {
       return (
         <svg width={size} height={size} viewBox="0 0 140 140">
@@ -109,11 +126,11 @@ const ShogiRPG = () => {
                 0%, 100% { transform: rotate(0deg); }
                 50% { transform: rotate(-15deg); }
               }
-              .kappa-body { 
+              .kappa-body {
                 animation: kappaFloat 3s ease-in-out infinite;
                 transform-origin: center center;
               }
-              .water-drop { 
+              .water-drop {
                 animation: waterDrip 2s ease-in-out infinite;
                 transform-origin: top center;
               }
@@ -127,7 +144,7 @@ const ShogiRPG = () => {
               }
             `}</style>
           </defs>
-          
+
           <g className="kappa-body">
             {/* 体・甲羅 */}
             <ellipse cx="70" cy="75" rx="35" ry="32" fill="#2F5233" stroke="#0F1F0F" strokeWidth="4"/>
@@ -136,7 +153,7 @@ const ShogiRPG = () => {
             <circle cx="60" cy="65" r="6" fill="#1F2F1F" opacity="0.6"/>
             <circle cx="80" cy="68" r="5" fill="#1F2F1F" opacity="0.6"/>
             <circle cx="70" cy="78" r="6" fill="#1F2F1F" opacity="0.6"/>
-            
+
             {/* 皿 */}
             <ellipse cx="70" cy="28" rx="25" ry="8" fill="#3F5F3F" stroke="#1F2F1F" strokeWidth="3"/>
             <ellipse cx="70" cy="28" rx="22" ry="6" fill="#2F4F2F" opacity="0.8"/>
@@ -144,14 +161,14 @@ const ShogiRPG = () => {
             {/* 皿のヒビ */}
             <path d="M 55 28 L 85 28" stroke="#0F1F0F" strokeWidth="2"/>
             <path d="M 70 18 L 70 38" stroke="#0F1F0F" strokeWidth="2"/>
-            
+
             {/* 水滴 */}
             <ellipse className="water-drop" cx="65" cy="38" rx="2" ry="5" fill="#1A2A1A" opacity="0"/>
             <ellipse className="water-drop" cx="75" cy="38" rx="2" ry="5" fill="#1A2A1A" opacity="0" style={{ animationDelay: '1s' }}/>
-            
+
             {/* 頭 */}
             <ellipse cx="70" cy="50" rx="22" ry="20" fill="#3D5A3D" stroke="#1F2F1F" strokeWidth="3"/>
-            
+
             {/* 目 */}
             <g className="kappa-eye">
               <ellipse cx="62" cy="48" rx="8" ry="10" fill="#D8D8C0" stroke="#6B6B5A" strokeWidth="2"/>
@@ -161,13 +178,13 @@ const ShogiRPG = () => {
               <ellipse cx="78" cy="48" rx="8" ry="10" fill="#D8D8C0" stroke="#6B6B5A" strokeWidth="2"/>
               <circle cx="78" cy="48" r="5" fill="#1a1a1a"/>
             </g>
-            
+
             {/* くちばし */}
             <path d="M 65 58 L 70 65 L 75 58 Z" fill="#3A4A3A" stroke="#1A2A1A" strokeWidth="3"/>
             {/* 牙 */}
             <path d="M 66 60 L 64 68 L 68 60 Z" fill="#D8D8C0" stroke="#A8A890" strokeWidth="1.5"/>
             <path d="M 74 60 L 72 68 L 76 60 Z" fill="#D8D8C0" stroke="#A8A890" strokeWidth="1.5"/>
-            
+
             {/* 腕 */}
             <g className="kappa-arm">
               <ellipse cx="45" cy="70" rx="8" ry="18" fill="#3D5A3D" stroke="#1F2F1F" strokeWidth="2"/>
@@ -187,7 +204,7 @@ const ShogiRPG = () => {
               <path d="M 95 85 L 95 92" stroke="#6B6B5A" strokeWidth="2"/>
               <path d="M 98 85 L 100 92" stroke="#6B6B5A" strokeWidth="2"/>
             </g>
-            
+
             {/* 足 */}
             <ellipse cx="60" cy="105" rx="8" ry="12" fill="#3D5A3D" stroke="#1F2F1F" strokeWidth="2"/>
             <ellipse cx="80" cy="105" rx="8" ry="12" fill="#3D5A3D" stroke="#1F2F1F" strokeWidth="2"/>
@@ -198,7 +215,7 @@ const ShogiRPG = () => {
         </svg>
       );
     }
-    
+
     if (type === 'tengu') {
       return (
         <svg width={size} height={size} viewBox="0 0 140 140">
@@ -220,7 +237,7 @@ const ShogiRPG = () => {
                 0%, 100% { transform: rotate(0deg) scaleY(1); }
                 50% { transform: rotate(-5deg) scaleY(0.95); }
               }
-              .tengu-body { 
+              .tengu-body {
                 animation: tenguBreathe 2.5s ease-in-out infinite;
                 transform-origin: center center;
               }
@@ -236,7 +253,7 @@ const ShogiRPG = () => {
               }
             `}</style>
           </defs>
-          
+
           <g className="tengu-body">
             {/* 翼（左） */}
             <g className="tengu-wing">
@@ -248,12 +265,12 @@ const ShogiRPG = () => {
               <path d="M 110 60 Q 125 55 130 65 Q 132 75 125 80 Q 115 75 110 70 Z" fill="#2A1A1A" stroke="#1A0A0A" strokeWidth="2"/>
               <path d="M 115 60 L 122 65 M 115 65 L 122 70 M 115 70 L 122 75" stroke="#3A2A2A" strokeWidth="1"/>
             </g>
-            
+
             {/* 装束（体） */}
             <path d="M 55 60 L 50 90 L 45 125 L 55 125 L 60 95 L 65 125 L 75 125 L 80 95 L 85 125 L 95 125 L 90 90 L 85 60 Z" fill="#5D0000" stroke="#3D0000" strokeWidth="3"/>
             {/* 帯 */}
             <rect x="50" y="85" width="40" height="8" fill="#1a1a1a" stroke="#0a0a0a" strokeWidth="2"/>
-            
+
             {/* 頭 */}
             <ellipse cx="70" cy="40" rx="28" ry="30" fill="#7F0000" stroke="#3D0000" strokeWidth="4"/>
             {/* 血管 */}
@@ -262,7 +279,7 @@ const ShogiRPG = () => {
             {/* 角のような眉 */}
             <path d="M 48 30 L 45 18 L 50 22 L 52 32 Z" fill="#0a0000" stroke="#000" strokeWidth="2"/>
             <path d="M 92 30 L 95 18 L 90 22 L 88 32 Z" fill="#0a0000" stroke="#000" strokeWidth="2"/>
-            
+
             {/* 目 */}
             <g className="tengu-eye">
               <ellipse cx="60" cy="38" rx="9" ry="11" fill="#FFF5E1" stroke="#8B0000" strokeWidth="2"/>
@@ -276,28 +293,28 @@ const ShogiRPG = () => {
               <circle cx="80" cy="38" r="4" fill="#1a1a1a"/>
               <circle cx="79" cy="36" r="2" fill="#C41E3A"/>
             </g>
-            
+
             {/* 鼻 */}
             <g className="tengu-nose">
               <ellipse cx="78" cy="48" rx="18" ry="12" fill="#B01010" stroke="#5D0000" strokeWidth="3"/>
               <path d="M 70 45 L 95 52 L 92 58 L 70 52 Z" fill="#A01010" stroke="#5D0000" strokeWidth="3"/>
               <ellipse cx="94" cy="55" rx="5" ry="4" fill="#5D0000" stroke="#3D0000" strokeWidth="1.5"/>
             </g>
-            
+
             {/* 口 */}
             <path d="M 55 58 Q 65 65 75 58" fill="none" stroke="#0a0000" strokeWidth="4"/>
             <ellipse cx="65" cy="62" rx="12" ry="8" fill="#3D0000"/>
             {/* 牙 */}
             <path d="M 60 60 L 58 68 L 62 60 Z" fill="#FFF5E1" stroke="#D8D8C0" strokeWidth="2"/>
             <path d="M 70 60 L 68 68 L 72 60 Z" fill="#FFF5E1" stroke="#D8D8C0" strokeWidth="2"/>
-            
+
             {/* 傷跡 */}
             <path d="M 75 30 L 82 40" stroke="#3D0000" strokeWidth="3"/>
           </g>
         </svg>
       );
     }
-    
+
     if (type === 'oni') {
       return (
         <svg width={size} height={size} viewBox="0 0 140 140">
@@ -321,7 +338,7 @@ const ShogiRPG = () => {
                 0%, 100% { transform: rotate(0deg); }
                 50% { transform: rotate(-10deg); }
               }
-              .oni-body { 
+              .oni-body {
                 animation: oniRage 3s ease-in-out infinite;
                 transform-origin: center center;
               }
@@ -339,7 +356,7 @@ const ShogiRPG = () => {
               }
             `}</style>
           </defs>
-          
+
           <g className="oni-body">
             {/* 金棒 */}
             <g className="oni-club">
@@ -351,34 +368,34 @@ const ShogiRPG = () => {
               <circle cx="106" cy="94" r="4" fill="#2A1A1A"/>
               <circle cx="106" cy="106" r="4" fill="#2A1A1A"/>
             </g>
-            
+
             {/* 体 */}
             <ellipse cx="60" cy="85" rx="35" ry="30" fill="#5D0000" stroke="#1a0000" strokeWidth="4"/>
             {/* 筋肉の線 */}
             <path d="M 40 75 Q 45 70 50 75" fill="none" stroke="#3D0000" strokeWidth="2" opacity="0.9"/>
             <path d="M 70 75 Q 75 70 80 75" fill="none" stroke="#3D0000" strokeWidth="2" opacity="0.9"/>
             <path d="M 55 90 L 65 90" stroke="#3D0000" strokeWidth="2" opacity="0.9"/>
-            
+
             {/* 腕（左） */}
             <ellipse cx="35" cy="70" rx="10" ry="20" fill="#5D0000" stroke="#1a0000" strokeWidth="3"/>
             <ellipse cx="35" cy="88" rx="8" ry="10" fill="#4D0000"/>
             {/* 腕（右・金棒を持つ） */}
             <ellipse cx="85" cy="70" rx="10" ry="20" fill="#5D0000" stroke="#1a0000" strokeWidth="3"/>
             <ellipse cx="95" cy="85" rx="8" ry="10" fill="#4D0000"/>
-            
+
             {/* 虎柄のパンツ */}
             <path d="M 40 105 L 35 130 L 50 130 L 55 110 L 65 110 L 70 130 L 85 130 L 80 105 Z" fill="#FFD700" stroke="#D4A017" strokeWidth="2"/>
             <path d="M 42 110 L 45 125 M 52 112 L 55 125 M 62 112 L 65 125 M 72 112 L 75 125" stroke="#1a1a1a" strokeWidth="2"/>
-            
+
             {/* 足 */}
             <ellipse cx="48" cy="130" rx="10" ry="8" fill="#5D0000"/>
             <ellipse cx="77" cy="130" rx="10" ry="8" fill="#5D0000"/>
-            
+
             {/* 頭 */}
             <ellipse cx="60" cy="45" rx="32" ry="30" fill="#5D0000" stroke="#1a0000" strokeWidth="4"/>
             <path d="M 38 50 Q 42 45 46 50" fill="none" stroke="#3D0000" strokeWidth="3" opacity="0.9"/>
             <path d="M 74 50 Q 78 45 82 50" fill="none" stroke="#3D0000" strokeWidth="3" opacity="0.9"/>
-            
+
             {/* 角 */}
             <g className="oni-horn">
               <path d="M 35 38 L 28 15 L 35 20 L 40 40 Z" fill="#C8C8B0" stroke="#1a1a1a" strokeWidth="3"/>
@@ -386,7 +403,7 @@ const ShogiRPG = () => {
             <g className="oni-horn" style={{ animationDelay: '0.5s' }}>
               <path d="M 85 38 L 92 15 L 85 20 L 80 40 Z" fill="#C8C8B0" stroke="#1a1a1a" strokeWidth="3"/>
             </g>
-            
+
             {/* 目 */}
             <g className="oni-eye-fire">
               <ellipse cx="48" cy="43" rx="10" ry="12" fill="#FFEB3B" stroke="#8B0000" strokeWidth="3"/>
@@ -400,11 +417,11 @@ const ShogiRPG = () => {
               <circle cx="72" cy="43" r="4" fill="#0a0000"/>
               <circle cx="71" cy="41" r="2" fill="#DC143C"/>
             </g>
-            
+
             {/* 鼻 */}
             <ellipse cx="57" cy="55" rx="3" ry="4" fill="#1a0000"/>
             <ellipse cx="63" cy="55" rx="3" ry="4" fill="#1a0000"/>
-            
+
             {/* 口 */}
             <path d="M 45 62 Q 60 72 75 62" fill="#0a0000" stroke="#000" strokeWidth="3"/>
             <ellipse cx="60" cy="66" rx="18" ry="12" fill="#1a0000"/>
@@ -413,14 +430,14 @@ const ShogiRPG = () => {
             <path d="M 57 65 L 54 75 L 60 65 Z" fill="#E8E8D0" stroke="#C8C8B0" strokeWidth="2"/>
             <path d="M 66 65 L 63 75 L 69 65 Z" fill="#E8E8D0" stroke="#C8C8B0" strokeWidth="2"/>
             <path d="M 75 63 L 72 73 L 78 63 Z" fill="#E8E8D0" stroke="#C8C8B0" strokeWidth="2"/>
-            
+
             {/* 傷跡 */}
             <path d="M 72 35 L 80 48" stroke="#1a0000" strokeWidth="4"/>
           </g>
         </svg>
       );
     }
-    
+
     if (type === 'kyubi') {
       return (
         <svg width={size} height={size} viewBox="0 0 140 140">
@@ -443,7 +460,7 @@ const ShogiRPG = () => {
                 0%, 100% { opacity: 1; filter: drop-shadow(0 0 3px #8B0000); }
                 50% { opacity: 0.8; filter: drop-shadow(0 0 8px #DC143C); }
               }
-              .kyubi-body { 
+              .kyubi-body {
                 animation: foxSway 4s ease-in-out infinite;
                 transform-origin: center center;
               }
@@ -460,10 +477,10 @@ const ShogiRPG = () => {
               }
             `}</style>
           </defs>
-          
+
           {/* 呪いのオーラ */}
           <circle cx="70" cy="70" r="65" fill="#5D0000" opacity="0.2"/>
-          
+
           <g className="kyubi-body">
             {/* 九つの尾（後ろ） */}
             <g className="kyubi-tail" style={{ animationDelay: '0s' }}>
@@ -484,12 +501,12 @@ const ShogiRPG = () => {
             <g className="kyubi-tail" style={{ animationDelay: '0.5s' }}>
               <path d="M 85 80 Q 120 70 125 50 Q 128 40 120 35 Q 110 45 105 60 Q 95 75 85 80 Z" fill="#654321" stroke="#1a1a1a" strokeWidth="2"/>
             </g>
-            
+
             {/* 体 */}
             <ellipse cx="70" cy="75" rx="32" ry="28" fill="#6B5C2A" stroke="#2A1C0A" strokeWidth="3"/>
             {/* 模様 */}
             <ellipse cx="70" cy="72" rx="28" ry="24" fill="#8B6914" opacity="0.5"/>
-            
+
             {/* 足 */}
             <ellipse cx="55" cy="100" rx="8" ry="18" fill="#6B5C2A" stroke="#2A1C0A" strokeWidth="2"/>
             <ellipse cx="70" cy="102" rx="8" ry="18" fill="#6B5C2A" stroke="#2A1C0A" strokeWidth="2"/>
@@ -498,11 +515,11 @@ const ShogiRPG = () => {
             <ellipse cx="55" cy="115" rx="6" ry="5" fill="#4A3C1A"/>
             <ellipse cx="70" cy="117" rx="6" ry="5" fill="#4A3C1A"/>
             <ellipse cx="85" cy="115" rx="6" ry="5" fill="#4A3C1A"/>
-            
+
             {/* 前足 */}
             <ellipse cx="55" cy="60" rx="7" ry="15" fill="#6B5C2A" stroke="#2A1C0A" strokeWidth="2"/>
             <ellipse cx="85" cy="60" rx="7" ry="15" fill="#6B5C2A" stroke="#2A1C0A" strokeWidth="2"/>
-            
+
             {/* 頭 */}
             <ellipse cx="70" cy="40" rx="22" ry="20" fill="#6B5C2A" stroke="#2A1C0A" strokeWidth="3"/>
             {/* 耳 */}
@@ -510,7 +527,7 @@ const ShogiRPG = () => {
             <path d="M 51 26 L 50 22 L 54 26 Z" fill="#0a0000"/>
             <path d="M 88 30 L 92 18 L 84 28 Z" fill="#8B6914" stroke="#2A1C0A" strokeWidth="2"/>
             <path d="M 89 26 L 90 22 L 86 26 Z" fill="#0a0000"/>
-            
+
             {/* 目 */}
             <g className="kyubi-eye">
               <ellipse cx="62" cy="38" rx="8" ry="10" fill="#0a0000" stroke="#000" strokeWidth="2"/>
@@ -522,28 +539,28 @@ const ShogiRPG = () => {
               <ellipse cx="78" cy="38" rx="3" ry="8" fill="#8B0000"/>
               <ellipse cx="78" cy="35" rx="1.5" ry="4" fill="#3D0000"/>
             </g>
-            
+
             {/* 鼻 */}
             <ellipse cx="70" cy="45" rx="3" ry="4" fill="#2A1C0A"/>
-            
+
             {/* 口 */}
             <path d="M 62 48 Q 70 52 78 48" fill="none" stroke="#0a0000" strokeWidth="2"/>
             {/* 牙 */}
             <path d="M 65 49 L 64 55 L 66 49 Z" fill="#E8E8D0" stroke="#C8C8B0" strokeWidth="1.5"/>
             <path d="M 75 49 L 74 55 L 76 49 Z" fill="#E8E8D0" stroke="#C8C8B0" strokeWidth="1.5"/>
-            
+
             {/* ひげ */}
             <path d="M 52 42 L 38 40" stroke="#1a1a1a" strokeWidth="1.5" opacity="0.9"/>
             <path d="M 52 44 L 35 44" stroke="#1a1a1a" strokeWidth="1.5" opacity="0.9"/>
             <path d="M 88 42 L 102 40" stroke="#1a1a1a" strokeWidth="1.5" opacity="0.9"/>
             <path d="M 88 44 L 105 44" stroke="#1a1a1a" strokeWidth="1.5" opacity="0.9"/>
-            
+
             {/* 額の呪いの宝珠 */}
             <g className="curse-orb">
               <circle cx="70" cy="28" r="6" fill="#3D0000" stroke="#1a0000" strokeWidth="2"/>
               <circle cx="70" cy="28" r="4" fill="#8B0000"/>
             </g>
-            
+
             {/* 尾（前面の3本） */}
             <g className="kyubi-tail" style={{ animationDelay: '0.15s' }}>
               <path d="M 55 85 Q 45 105 40 115 Q 38 120 42 122 Q 48 118 52 108 Q 58 95 55 85 Z" fill="#654321" stroke="#1a1a1a" strokeWidth="2"/>
@@ -558,7 +575,7 @@ const ShogiRPG = () => {
         </svg>
       );
     }
-    
+
     return null;
   };
 
@@ -602,7 +619,7 @@ const ShogiRPG = () => {
         </div>
       );
     }
-    
+
     if (stage === 2) {
       // 河童 - 河原
       return (
@@ -651,7 +668,7 @@ const ShogiRPG = () => {
         </div>
       );
     }
-    
+
     if (stage === 3) {
       // 天狗 - 険しい山岳
       return (
@@ -683,7 +700,7 @@ const ShogiRPG = () => {
         </div>
       );
     }
-    
+
     if (stage === 4) {
       // 鬼 - 鬼ヶ島（燃える溶岩）
       return (
@@ -740,7 +757,7 @@ const ShogiRPG = () => {
         </div>
       );
     }
-    
+
     if (stage === 5) {
       // 九尾の狐 - 神社
       return (
@@ -797,7 +814,7 @@ const ShogiRPG = () => {
         </div>
       );
     }
-    
+
     return null;
   };
 
@@ -808,9 +825,9 @@ const ShogiRPG = () => {
 
     const promotedGlow = piece.promoted;
     const uniqueId = `${type}-${Math.random().toString(36).substr(2, 9)}`;
-    
+
     return (
-      <svg width={size} height={size} viewBox="0 0 70 70" style={{ 
+      <svg width={size} height={size} viewBox="0 0 70 70" style={{
         filter: 'drop-shadow(2px 3px 3px rgba(0,0,0,0.4))',
         maxWidth: '100%',
         maxHeight: '100%'
@@ -821,7 +838,7 @@ const ShogiRPG = () => {
             <stop offset="50%" stopColor={piece.color} />
             <stop offset="100%" stopColor={piece.color} stopOpacity="0.8" />
           </linearGradient>
-          
+
           <radialGradient id={`shadow-${uniqueId}`}>
             <stop offset="0%" stopColor="rgba(0,0,0,0.6)" />
             <stop offset="100%" stopColor="rgba(0,0,0,0)" />
@@ -834,32 +851,32 @@ const ShogiRPG = () => {
             </radialGradient>
           )}
         </defs>
-        
+
         <ellipse cx="35" cy="65" rx="28" ry="4" fill={`url(#shadow-${uniqueId})`} opacity="0.5" />
-        
+
         {promotedGlow && (
           <circle cx="35" cy="35" r="32" fill={`url(#glow-${uniqueId})`} />
         )}
-        
+
         <path
           d="M35,8 L60,25 L55,58 L15,58 L10,25 Z"
           fill={`url(#grad-${uniqueId})`}
           stroke="#2c1810"
           strokeWidth="2.5"
         />
-        
+
         <path
           d="M35,12 L56,27 L52,52 L18,52 L14,27 Z"
           fill="rgba(255,255,255,0.15)"
           stroke="none"
         />
-        
+
         <g opacity="0.2">
           <line x1="20" y1="20" x2="50" y2="50" stroke="#8B4513" strokeWidth="0.5" />
           <line x1="25" y1="15" x2="55" y2="45" stroke="#8B4513" strokeWidth="0.5" />
           <line x1="15" y1="25" x2="45" y2="55" stroke="#8B4513" strokeWidth="0.5" />
         </g>
-        
+
         <text
           x="35"
           y="42"
@@ -881,7 +898,7 @@ const ShogiRPG = () => {
   const ParticleEffect = ({ type, size = 10 }) => {
     const piece = PIECES[type];
     const color = piece?.color || '#FFD700';
-    
+
     return (
       <div style={{
         position: 'absolute',
@@ -928,62 +945,62 @@ const ShogiRPG = () => {
   };
 
   const MONSTERS = [
-    { 
-      id: 1, name: '座敷わらし', svgType: 'zashiki', maxHp: 300, attackPower: 0.8, stage: 1, color: '#FFB6C1', 
+    {
+      id: 1, name: '座敷わらし', svgType: 'zashiki', image: 'assets/yokai/enhanced/zashiki-warashi.png', maxHp: 300, attackPower: 0.8, stage: 1, color: '#FFB6C1',
       description: '呪われた子供の亡霊',
       story: '古い旅館に現れた座敷わらし。かつて幸福をもたらす存在だったが、今は呪いに満ちている。血の涙を流しながら、訪れる者を恐怖に陥れる。',
       defeatStory: '座敷わらしは消え去った。旅館に再び静けさが戻る。だが、これは始まりに過ぎない...'
     },
-    { 
-      id: 2, name: '河童', svgType: 'kappa', maxHp: 500, attackPower: 1.0, stage: 2, color: '#4CAF50', 
+    {
+      id: 2, name: '河童', svgType: 'kappa', image: 'assets/yokai/enhanced/kappa.png', maxHp: 500, attackPower: 1.0, stage: 2, color: '#4CAF50',
       description: '腐敗した水の悪魔',
       story: '川辺に潜む河童。かつてはいたずら好きな妖怪だったが、今や腐敗した水の化身となり、近づく者を水中へ引きずり込む。',
       defeatStory: '河童は水底へと沈んでいった。川の水が少しだけ澄んだような気がする。'
     },
-    { 
-      id: 3, name: '天狗', svgType: 'tengu', maxHp: 800, attackPower: 1.2, stage: 3, color: '#D84315', 
+    {
+      id: 3, name: '天狗', svgType: 'tengu', image: 'assets/yokai/enhanced/tengu.png', maxHp: 800, attackPower: 1.2, stage: 3, color: '#D84315',
       description: '血に飢えた殺戮鬼',
       story: '山奥に潜む天狗。修験者を守護する存在から一転、血に飢えた殺戮鬼へと堕ちた。黒い翼で空を舞い、長い鼻から炎を吹く。',
       defeatStory: '天狗は山の彼方へ飛び去った。山に再び平和が訪れるだろう。'
     },
-    { 
-      id: 4, name: '鬼', svgType: 'oni', maxHp: 1200, attackPower: 1.5, stage: 4, color: '#C62828', 
+    {
+      id: 4, name: '鬼', svgType: 'oni', image: 'assets/yokai/enhanced/oni.png', maxHp: 1200, attackPower: 1.5, stage: 4, color: '#C62828',
       description: '地獄から来た悪魔',
       story: '鬼ヶ島から現れた巨大な鬼。金棒を振り回し、あらゆるものを破壊する。その咆哮は大地を揺るがす。',
       defeatStory: '鬼は倒れ、地獄へと帰っていった。しかし、さらに強大な妖怪が待ち受けている。'
     },
-    { 
-      id: 5, name: '九尾の狐', svgType: 'kyubi', maxHp: 2000, attackPower: 2.0, stage: 5, color: '#FFD700', 
+    {
+      id: 5, name: '九尾の狐', svgType: 'kyubi', image: 'assets/yokai/enhanced/kyubi.png', maxHp: 2000, attackPower: 2.0, stage: 5, color: '#FFD700',
       description: '呪われた妖狐',
       story: '九つの尾を持つ伝説の妖狐。千年の時を生き、無数の人間を惑わせてきた。その美しさの裏には恐るべき呪いの力が秘められている。',
       defeatStory: '九尾の狐は力尽き、姿を消した。だが、これで終わりではない。さらなる強敵が...'
     },
-    { 
-      id: 6, name: '雪女', svgType: 'zashiki', maxHp: 1400, attackPower: 1.6, stage: 6, color: '#B0E0E6', 
+    {
+      id: 6, name: '雪女', svgType: 'zashiki', image: 'assets/yokai/enhanced/yuki-onna.png', maxHp: 1400, attackPower: 1.6, stage: 6, color: '#B0E0E6',
       description: '凍てつく雪の女王',
       story: '雪山に現れる美しくも恐ろしい雪女。その吐息は全てを凍らせ、触れた者は氷の彫像と化す。悲しみに満ちた瞳が心を凍らせる。',
       defeatStory: '雪女は雪のように溶けて消えた。しかし、まだ見ぬ恐怖が待っている。'
     },
-    { 
-      id: 7, name: '一つ目小僧', svgType: 'kappa', maxHp: 1800, attackPower: 1.8, stage: 7, color: '#8B008B', 
+    {
+      id: 7, name: '一つ目小僧', svgType: 'kappa', image: 'assets/yokai/enhanced/hitotsume-kozo.png', maxHp: 1800, attackPower: 1.8, stage: 7, color: '#8B008B',
       description: '巨大な一つ目の妖怪',
       story: '巨大な一つの目を持つ奇怪な妖怪。その眼光は全てを見通し、睨まれた者は身動きが取れなくなる。',
       defeatStory: '一つ目小僧は倒れた。だが、さらに凶悪な妖怪が姿を現す。'
     },
-    { 
-      id: 8, name: '大蛇', svgType: 'tengu', maxHp: 2500, attackPower: 2.2, stage: 8, color: '#006400', 
+    {
+      id: 8, name: '大蛇', svgType: 'tengu', image: 'assets/yokai/enhanced/orochi.png', maxHp: 2500, attackPower: 2.2, stage: 8, color: '#006400',
       description: '八つ首の恐るべき大蛇',
       story: '八つの首を持つ伝説の大蛇。かつて英雄によって倒されたはずだったが、闇の力で復活した。その猛毒は大地をも枯らす。',
       defeatStory: '大蛇は地に倒れた。しかし、最後の試練が近づいている。'
     },
-    { 
-      id: 9, name: '鵺', svgType: 'oni', maxHp: 3000, attackPower: 2.5, stage: 9, color: '#4B0082', 
+    {
+      id: 9, name: '鵺', svgType: 'oni', image: 'assets/yokai/enhanced/nue.png', maxHp: 3000, attackPower: 2.5, stage: 9, color: '#4B0082',
       description: '虎と蛇と猿の混合獣',
       story: '虎の体、蛇の尾、猿の顔を持つ怪物・鵺。その鳴き声は不吉の前兆とされ、現れた場所には災いが訪れる。',
       defeatStory: '鵺は闇の中へ消えた。そして、ついに最後の敵が現れる。地獄の支配者が...'
     },
-    { 
-      id: 10, name: '閻魔大王', svgType: 'kyubi', maxHp: 4000, attackPower: 3.0, stage: 10, color: '#8B0000', 
+    {
+      id: 10, name: '閻魔大王', svgType: 'kyubi', image: 'assets/yokai/enhanced/enma-daio.png', maxHp: 4000, attackPower: 3.0, stage: 10, color: '#8B0000',
       description: '地獄の最高支配者',
       story: '地獄を統べる閻魔大王。死者の魂を裁く存在が、なぜか現世に現れた。その力は計り知れず、全ての妖怪を従える絶対的支配者だ。これが最後の戦いとなる。',
       defeatStory: '閻魔大王は倒れた！地獄の扉が閉じ、妖怪たちは全て消え去った。あなたは世界を救ったのだ。だが、また新たな脅威が現れるかもしれない...'
@@ -1002,7 +1019,7 @@ const ShogiRPG = () => {
     { id: 'regen_pro', name: '高速再生薬', price: 500, effect: 'regen', value: 100, emoji: '💚', category: 'heal', rarity: 'rare', gacha: true, description: '3ターン毎にHP+100' },
     { id: 'revive', name: '復活の秘薬', price: 800, effect: 'revive', value: 500, emoji: '🔮', category: 'heal', rarity: 'epic', gacha: true, description: '倒れた時HP50%で復活' },
     { id: 'phoenix_down', name: '不死鳥の尾', price: 1500, effect: 'revive', value: 1000, emoji: '🦅', category: 'heal', rarity: 'legendary', gacha: true, description: '倒れた時HP100%で復活' },
-    
+
     // ===== 防御系（15種類） =====
     { id: 'armor_leather', name: '革の鎧', price: 200, effect: 'armor', value: 10, emoji: '🛡️', category: 'defense', rarity: 'common', gacha: true },
     { id: 'armor_bronze', name: '青銅の鎧', price: 350, effect: 'armor', value: 15, emoji: '🛡️', category: 'defense', rarity: 'common', gacha: true },
@@ -1019,7 +1036,7 @@ const ShogiRPG = () => {
     { id: 'dodge', name: '回避の羽根', price: 400, effect: 'dodge', value: 1, emoji: '🪶', category: 'defense', rarity: 'uncommon', gacha: true, description: '次の攻撃を回避' },
     { id: 'dodge_master', name: '疾風の羽根', price: 900, effect: 'dodge', value: 3, emoji: '🪶', category: 'defense', rarity: 'epic', gacha: true, description: '3回攻撃を回避' },
     { id: 'invincible', name: '無敵の聖水', price: 2500, effect: 'invincible', value: 5, emoji: '⭐', category: 'defense', rarity: 'legendary', gacha: true, description: '5ターン無敵' },
-    
+
     // ===== 攻撃系（15種類） =====
     { id: 'bomb', name: '爆弾', price: 300, effect: 'bomb', value: 500, emoji: '💣', category: 'attack', rarity: 'common', gacha: true, description: '敵に500固定ダメージ' },
     { id: 'bomb_mega', name: 'メガボム', price: 600, effect: 'bomb', value: 1200, emoji: '💥', category: 'attack', rarity: 'rare', gacha: true, description: '敵に1200固定ダメージ' },
@@ -1036,7 +1053,7 @@ const ShogiRPG = () => {
     { id: 'ice', name: '氷の巻物', price: 700, effect: 'bomb', value: 1800, emoji: '🧊', category: 'attack', rarity: 'rare', gacha: true, description: '敵に1800氷ダメージ' },
     { id: 'meteor', name: 'メテオ', price: 1500, effect: 'bomb', value: 3500, emoji: '☄️', category: 'attack', rarity: 'epic', gacha: true, description: '隕石を落とす' },
     { id: 'ultimate', name: 'アルティメット', price: 3000, effect: 'bomb', value: 9999, emoji: '💫', category: 'attack', rarity: 'legendary', gacha: true, description: '究極の一撃' },
-    
+
     // ===== 強化系（12種類） =====
     { id: 'power_up', name: '力の薬', price: 300, effect: 'power_up', value: 50, emoji: '💪', category: 'buff', rarity: 'uncommon', gacha: true, description: '攻撃力+50%（3ターン）' },
     { id: 'power_master', name: '巨人の力', price: 600, effect: 'power_up', value: 100, emoji: '💪', category: 'buff', rarity: 'rare', gacha: true, description: '攻撃力+100%（3ターン）' },
@@ -1050,7 +1067,7 @@ const ShogiRPG = () => {
     { id: 'speed_up', name: '加速の靴', price: 400, effect: 'speed', value: 1, emoji: '👟', category: 'buff', rarity: 'uncommon', gacha: true, description: '行動速度2倍' },
     { id: 'berserk', name: 'バーサーク', price: 1000, effect: 'berserk', value: 0, emoji: '😡', category: 'buff', rarity: 'epic', gacha: true, description: '攻撃2倍、防御0' },
     { id: 'focus', name: '集中の薬', price: 350, effect: 'focus', value: 30, emoji: '🎯', category: 'buff', rarity: 'uncommon', gacha: true, description: '命中率+30%' },
-    
+
     // ===== 盤面操作系（18種類） =====
     { id: 'shuffle', name: 'シャッフル', price: 200, effect: 'shuffle', value: 0, emoji: '🔀', category: 'board', rarity: 'common', gacha: true, description: '盤面をシャッフル' },
     { id: 'shuffle_smart', name: 'スマートシャッフル', price: 400, effect: 'shuffle_smart', value: 0, emoji: '🔀', category: 'board', rarity: 'rare', gacha: true, description: 'マッチ確定シャッフル' },
@@ -1070,7 +1087,7 @@ const ShogiRPG = () => {
     { id: 'gravity', name: '重力反転', price: 700, effect: 'gravity', value: 0, emoji: '🌀', category: 'board', rarity: 'rare', gacha: true, description: '駒が上に落ちる' },
     { id: 'duplicate', name: '駒複製', price: 500, effect: 'duplicate', value: 0, emoji: '📋', category: 'board', rarity: 'rare', gacha: true, description: '選択駒を2倍に' },
     { id: 'wildcard', name: 'ワイルドカード', price: 1000, effect: 'wildcard', value: 3, emoji: '🃏', category: 'board', rarity: 'epic', gacha: true, description: 'どの駒ともマッチ' },
-    
+
     // ===== 特殊系（10種類） =====
     { id: 'hint_restore', name: 'ヒント回復', price: 100, effect: 'hint', value: 1, emoji: '💡', category: 'special', rarity: 'common', gacha: true, description: 'ヒント回数+1' },
     { id: 'hint_master', name: 'ヒント∞', price: 500, effect: 'hint', value: 99, emoji: '💡', category: 'special', rarity: 'epic', gacha: true, description: 'ヒント回数+99' },
@@ -1083,7 +1100,7 @@ const ShogiRPG = () => {
     { id: 'exp_boost', name: '経験値2倍', price: 400, effect: 'exp_boost', value: 2, emoji: '📈', category: 'special', rarity: 'uncommon', gacha: true, description: '経験値2倍獲得' },
     { id: 'lucky_coin', name: 'ラッキーコイン', price: 300, effect: 'lucky', value: 0, emoji: '🪙', category: 'special', rarity: 'uncommon', gacha: true, description: 'ランダムで良い効果' }
   ];
-  
+
   const PIECES = {
     FU: { kanji: '歩', color: '#8B4513', lightColor: '#D2691E', moves: [[0, -1]] },
     KYO: { kanji: '香', color: '#228B22', lightColor: '#32CD32', moves: [[0, -1], [0, -2], [0, -3], [0, -4]] },
@@ -1101,7 +1118,7 @@ const ShogiRPG = () => {
     UMA: { kanji: '馬', color: '#9370DB', lightColor: '#BA55D3', moves: [[-1, -1], [1, -1], [-1, 1], [1, 1], [-2, -2], [2, -2], [-2, 2], [2, 2], [-3, -3], [3, -3], [-3, 3], [3, 3], [-1, 0], [1, 0], [0, -1], [0, 1]], promoted: true, base: 'KAKU' },
     RYU: { kanji: '竜', color: '#FF1493', lightColor: '#FF69B4', moves: [[0, -1], [0, 1], [-1, 0], [1, 0], [0, -2], [0, 2], [-2, 0], [2, 0], [0, -3], [0, 3], [-3, 0], [3, 0], [-1, -1], [1, -1], [-1, 1], [1, 1]], promoted: true, base: 'HI' }
   };
-  
+
   // 成り駒変換テーブル
   const PROMOTION_MAP = {
     'FU': 'TOKIN',
@@ -1160,7 +1177,7 @@ const ShogiRPG = () => {
   const [showInventory, setShowInventory] = useState(false); // 所持アイテム画面表示
 
   const currentMonster = MONSTERS[currentStage - 1];
-  
+
   // 難易度倍率
   const getDifficultyMultiplier = () => {
     switch(difficulty) {
@@ -1170,19 +1187,19 @@ const ShogiRPG = () => {
       default: return { hp: 1, damage: 1, money: 1 };
     }
   };
-  
+
   // 効果音システム（Web Audio API）
   const playSound = (type) => {
     if (!soundEnabled) return;
-    
+
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
-      
+
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
-      
+
       switch(type) {
         case 'match': // 駒が消える音
           oscillator.frequency.value = 600;
@@ -1233,11 +1250,11 @@ const ShogiRPG = () => {
         id: Math.random()
       }))
     );
-    
+
     // ステージに応じた揃いやすさを調整
     // ステージが若いほど、揃いやすいパターンを多く配置
     let easyPatternCount = 0;
-    
+
     if (stage <= 2) {
       // ステージ1-2: 超簡単 - 3個揃いを10-15箇所作る
       easyPatternCount = 10 + Math.floor(Math.random() * 6);
@@ -1254,12 +1271,12 @@ const ShogiRPG = () => {
       // ステージ10: 最難関 - 完全ランダム
       easyPatternCount = 0;
     }
-    
+
     // 揃いやすいパターンを配置
     for (let i = 0; i < easyPatternCount; i++) {
       const patternType = Math.random();
       const pieceType = PIECE_TYPES[Math.floor(Math.random() * PIECE_TYPES.length)];
-      
+
       if (patternType < 0.5 && stage <= 4) {
         // 横3個揃い（簡単ステージのみ）
         const y = Math.floor(Math.random() * BOARD_SIZE);
@@ -1282,14 +1299,14 @@ const ShogiRPG = () => {
         board[y][x + 1] = { type: pieceType, id: Math.random() };
       }
     }
-    
+
     return board;
   };
 
   const startGame = () => {
     const newBoard = initializeBoard(1); // ステージ1でボード初期化
     const multiplier = getDifficultyMultiplier();
-    
+
     setBoard(newBoard);
     setPlayerHp(PLAYER_MAX_HP);
     setMoney(0);
@@ -1308,14 +1325,14 @@ const ShogiRPG = () => {
     setAchievements(prev => ({ ...prev, noHint: true })); // noHintのみリセット
     setGameState('playing');
     setShowStory(true); // ストーリー表示
-    
+
     setTimeout(() => checkAndRemoveMatches(newBoard, true), 500);
   };
 
   const startNextStage = () => {
     const nextStage = currentStage + 1;
     const multiplier = getDifficultyMultiplier();
-    
+
     // 倒した妖怪を図鑑に追加
     const currentMonster = MONSTERS[currentStage - 1];
     if (!yokaiCollection.includes(currentMonster.id)) {
@@ -1323,28 +1340,28 @@ const ShogiRPG = () => {
       setYokaiCollection(newCollection);
       localStorage.setItem('yokaiCollection', JSON.stringify(newCollection));
     }
-    
+
     // 初勝利実績
     if (currentStage === 1 && !achievements.firstWin) {
       setAchievements(prev => ({ ...prev, firstWin: true }));
     }
-    
+
     // デイリーミッション: ステージクリア
     updateDailyMission(2, 1);
-    
+
     if (nextStage > MONSTERS.length) {
       // 全クリア実績
       setAchievements(prev => ({ ...prev, allClear: true }));
-      
+
       // ランキングに保存（スコア = 所持金 + 残りHP）
       const finalScore = money + playerHp;
       saveRanking(finalScore);
-      
+
       setGameState('victory');
       playSound('victory');
       return;
     }
-    
+
     const newBoard = initializeBoard(nextStage); // 次のステージのサイズでボード初期化
     setBoard(newBoard);
     setCurrentStage(nextStage);
@@ -1462,7 +1479,7 @@ const ShogiRPG = () => {
         }
         return newCombo;
       });
-      
+
       if (isEnemy) {
         playSound('damage');
         setPlayerHp(hp => {
@@ -1482,10 +1499,10 @@ const ShogiRPG = () => {
           const newHp = Math.max(0, hp - damage);
           setDamageAnimation({ damage, timestamp: Date.now(), isPlayer: false });
           setTimeout(() => setDamageAnimation(null), 1000);
-          
+
           // デイリーミッション: ダメージ蓄積
           updateDailyMission(3, damage);
-          
+
           if (newHp === 0) {
             const earnedMoney = Math.floor(100 * currentStage * multiplier.money);
             setMoney(m => m + earnedMoney);
@@ -1512,7 +1529,7 @@ const ShogiRPG = () => {
 
   const applyGravity = (currentBoard, isEnemy = false) => {
     const newBoard = currentBoard.map(row => [...row]);
-    
+
     for (let x = 0; x < BOARD_SIZE; x++) {
       let writePos = BOARD_SIZE - 1;
       for (let y = BOARD_SIZE - 1; y >= 0; y--) {
@@ -1538,7 +1555,7 @@ const ShogiRPG = () => {
     }
 
     setBoard(newBoard);
-    
+
     setTimeout(() => {
       checkAndRemoveMatches(newBoard, false, isEnemy);
     }, 500);
@@ -1547,7 +1564,7 @@ const ShogiRPG = () => {
   const executeAITurn = () => {
     setMessage(`${currentMonster.name}の思考中...`);
     setHint(null);
-    
+
     setTimeout(() => {
       const move = findBestMove(board);
       if (move) {
@@ -1556,10 +1573,10 @@ const ShogiRPG = () => {
         const temp = newBoard[fromY][fromX];
         newBoard[fromY][fromX] = newBoard[toY][toX];
         newBoard[toY][toX] = temp;
-        
+
         setBoard(newBoard);
         setMessage(`${currentMonster.name}の攻撃！`);
-        
+
         setTimeout(() => {
           checkAndRemoveMatches(newBoard, false, true);
         }, 500);
@@ -1579,14 +1596,14 @@ const ShogiRPG = () => {
       for (let x = 0; x < BOARD_SIZE; x++) {
         const cell = board[y][x];
         if (!cell) continue;
-        
+
         const validMoves = getValidMoves(x, y, cell.type);
         for (const [toX, toY] of validMoves) {
           const testBoard = board.map(row => [...row]);
           const temp = testBoard[y][x];
           testBoard[y][x] = testBoard[toY][toX];
           testBoard[toY][toX] = temp;
-          
+
           const matches = findMatches(testBoard);
           if (matches.length > 0) {
             const score = matches.length;
@@ -1603,16 +1620,16 @@ const ShogiRPG = () => {
 
   const showHint = () => {
     if (currentTurn !== 'player') return;
-    
+
     if (hintCount <= 0) {
       setMessage('ヒント回数がありません（ショップで購入できます）');
       setTimeout(() => setMessage(''), 2000);
       return;
     }
-    
+
     setAchievements(prev => ({ ...prev, noHint: false }));
     setHintCount(c => c - 1);
-    
+
     const bestMove = findBestMove(board);
     if (bestMove) {
       setHint(bestMove);
@@ -1625,7 +1642,7 @@ const ShogiRPG = () => {
 
   const handleCellClick = (x, y) => {
     if (gameState !== 'playing' || currentTurn !== 'player') return;
-    
+
     const clickedCell = board[y]?.[x];
     if (!clickedCell) return;
 
@@ -1633,19 +1650,19 @@ const ShogiRPG = () => {
     if (isPromoting) {
       const pieceType = clickedCell.type;
       const promotedType = PROMOTION_MAP[pieceType];
-      
+
       if (!promotedType) {
         setMessage('この駒は成れません');
         setTimeout(() => setMessage(''), 2000);
         return;
       }
-      
+
       if (PIECES[pieceType].promoted) {
         setMessage('すでに成駒です');
         setTimeout(() => setMessage(''), 2000);
         return;
       }
-      
+
       // 駒を成駒に変換
       const newBoard = board.map(row => [...row]);
       newBoard[y][x] = { type: promotedType, id: clickedCell.id };
@@ -1703,13 +1720,13 @@ const ShogiRPG = () => {
 
     playSound('click');
     setMoney(m => m - item.price);
-    
+
     // インベントリに追加
     setInventory(inv => {
       const existing = inv.find(i => i.itemId === item.id);
       if (existing) {
-        return inv.map(i => 
-          i.itemId === item.id 
+        return inv.map(i =>
+          i.itemId === item.id
             ? { ...i, quantity: i.quantity + 1 }
             : i
         );
@@ -1717,15 +1734,15 @@ const ShogiRPG = () => {
         return [...inv, { itemId: item.id, quantity: 1 }];
       }
     });
-    
+
     setMessage(`${item.emoji} ${item.name}を購入！`);
     setTimeout(() => setMessage(''), 2000);
   };
-  
+
   // アイテム使用関数（新規）
   const useItem = (item) => {
     playSound('click');
-    
+
     // 戦闘中のみ使用可能なアイテムのチェック
     const battleOnlyEffects = ['bomb', 'poison', 'curse', 'shuffle', 'create_piece', 'transform', 'extra_turn', 'time_stop'];
     if (battleOnlyEffects.includes(item.effect) && gameState !== 'playing') {
@@ -1733,7 +1750,7 @@ const ShogiRPG = () => {
       setTimeout(() => setMessage(''), 2000);
       return;
     }
-    
+
     // 盤面操作系は盤面が必要
     const boardRequiredEffects = ['shuffle', 'create_piece', 'transform'];
     if (boardRequiredEffects.includes(item.effect) && (!board || board.length === 0)) {
@@ -1741,7 +1758,7 @@ const ShogiRPG = () => {
       setTimeout(() => setMessage(''), 2000);
       return;
     }
-    
+
     // 攻撃系はモンスターが必要
     const enemyRequiredEffects = ['bomb', 'poison', 'curse', 'time_stop'];
     if (enemyRequiredEffects.includes(item.effect) && !currentMonster) {
@@ -1749,17 +1766,17 @@ const ShogiRPG = () => {
       setTimeout(() => setMessage(''), 2000);
       return;
     }
-    
+
     // ここまで来たら使用可能なので、インベントリから削除
     setInventory(inv => {
       const existing = inv.find(i => i.itemId === item.id);
       if (!existing || existing.quantity <= 0) return inv;
-      
+
       if (existing.quantity === 1) {
         return inv.filter(i => i.itemId !== item.id);
       } else {
-        return inv.map(i => 
-          i.itemId === item.id 
+        return inv.map(i =>
+          i.itemId === item.id
             ? { ...i, quantity: i.quantity - 1 }
             : i
         );
@@ -1773,16 +1790,16 @@ const ShogiRPG = () => {
     } else if (item.effect === 'heal_full') {
       setPlayerHp(PLAYER_MAX_HP);
       setMessage(`${item.name}を使用！ HP全回復`);
-    } 
-    
+    }
+
     // 防御系
     else if (item.effect === 'armor') {
       setArmor(item.value);
       setMessage(`${item.name}を装備！ ダメージ${item.value}%軽減`);
     } else if (item.effect === 'barrier') {
       setMessage(`${item.name}を使用！ 次のダメージを${item.value}吸収`);
-    } 
-    
+    }
+
     // 攻撃系
     else if (item.effect === 'bomb') {
       setMonsterHp(hp => {
@@ -1807,8 +1824,8 @@ const ShogiRPG = () => {
       setMessage(`${item.emoji} ${item.name}を使用！ 継続ダメージ効果`);
     } else if (item.effect === 'curse') {
       setMessage(`${item.emoji} ${item.name}を使用！ 敵の攻撃力-${item.value}%`);
-    } 
-    
+    }
+
     // 強化系
     else if (item.effect === 'power_up') {
       setMessage(`${item.emoji} ${item.name}を使用！ 攻撃力+${item.value}%`);
@@ -1816,8 +1833,8 @@ const ShogiRPG = () => {
       setMessage(`${item.emoji} ${item.name}を使用！ コンボダメージ${item.value}%UP`);
     } else if (item.effect === 'double_money') {
       setMessage(`${item.emoji} ${item.name}を使用！ 獲得金貨${item.value}倍`);
-    } 
-    
+    }
+
     // 盤面操作系
     else if (item.effect === 'shuffle') {
       const newBoard = initializeBoard(currentStage);
@@ -1839,8 +1856,8 @@ const ShogiRPG = () => {
       setMessage(`${item.emoji} ${PIECES[item.value].kanji}を3個生成！`);
     } else if (item.effect === 'transform') {
       setMessage(`${item.emoji} 駒変換モード！ 駒を選択してください`);
-    } 
-    
+    }
+
     // 特殊系
     else if (item.effect === 'hint') {
       setHintCount(c => c + item.value);
@@ -1873,7 +1890,7 @@ const ShogiRPG = () => {
   useEffect(() => {
     const today = new Date().toDateString();
     const saved = localStorage.getItem('dailyMissions');
-    
+
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed.lastDate === today) {
@@ -1903,20 +1920,20 @@ const ShogiRPG = () => {
       setDailyMissions(newMissions);
       localStorage.setItem('dailyMissions', JSON.stringify(newMissions));
     }
-    
+
     // ランキング読み込み
     const savedRankings = localStorage.getItem('rankings');
     if (savedRankings) {
       setRankings(JSON.parse(savedRankings));
     }
-    
+
     // 妖怪図鑑読み込み
     const savedCollection = localStorage.getItem('yokaiCollection');
     if (savedCollection) {
       setYokaiCollection(JSON.parse(savedCollection));
     }
   }, []);
-  
+
   // デイリーミッション更新
   const updateDailyMission = (missionId, progress) => {
     setDailyMissions(prev => {
@@ -1939,7 +1956,7 @@ const ShogiRPG = () => {
       return updated;
     });
   };
-  
+
   // ランキング保存
   const saveRanking = (score) => {
     const newRanking = {
@@ -1949,11 +1966,11 @@ const ShogiRPG = () => {
       date: new Date().toLocaleDateString('ja-JP'),
       timestamp: Date.now()
     };
-    
+
     const currentRankings = [...rankings, newRanking]
       .sort((a, b) => b.score - a.score)
       .slice(0, 5); // トップ5のみ保存
-    
+
     setRankings(currentRankings);
     localStorage.setItem('rankings', JSON.stringify(currentRankings));
   };
@@ -1985,7 +2002,7 @@ const ShogiRPG = () => {
       {gameState === 'playing' && currentMonster && (
         <StageBackground stage={currentStage} />
       )}
-      
+
       {/* 和風パターン */}
       <div style={{
         position: 'absolute',
@@ -2028,13 +2045,13 @@ const ShogiRPG = () => {
             <h2 style={{ color: '#ffd700', fontSize: '2rem', marginBottom: '20px', textAlign: 'center' }}>
               📖 遊び方
             </h2>
-            
+
             <div style={{ color: '#fff', fontSize: '1.1rem', lineHeight: 1.8 }}>
               <div style={{ marginBottom: '25px' }}>
                 <h3 style={{ color: '#4ade80', fontSize: '1.4rem', marginBottom: '10px' }}>🎯 ゲームの目的</h3>
                 <p>将棋駒を動かして3つ以上揃えて消し、妖怪にダメージを与えよう！</p>
               </div>
-              
+
               <div style={{ marginBottom: '25px' }}>
                 <h3 style={{ color: '#4ade80', fontSize: '1.4rem', marginBottom: '10px' }}>🎮 操作方法</h3>
                 <ol style={{ paddingLeft: '20px' }}>
@@ -2044,7 +2061,7 @@ const ShogiRPG = () => {
                   <li>連鎖するとコンボで大ダメージ！</li>
                 </ol>
               </div>
-              
+
               <div style={{ marginBottom: '25px' }}>
                 <h3 style={{ color: '#4ade80', fontSize: '1.4rem', marginBottom: '10px' }}>♟️ 将棋駒の動き</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.95rem' }}>
@@ -2058,7 +2075,7 @@ const ShogiRPG = () => {
                   <div>飛：縦横全方向</div>
                 </div>
               </div>
-              
+
               <div style={{ marginBottom: '25px' }}>
                 <h3 style={{ color: '#4ade80', fontSize: '1.4rem', marginBottom: '10px' }}>💡 攻略のコツ</h3>
                 <ul style={{ paddingLeft: '20px' }}>
@@ -2068,7 +2085,7 @@ const ShogiRPG = () => {
                   <li>🛡️防具は早めに買うのがオススメ</li>
                 </ul>
               </div>
-              
+
               <div style={{
                 background: 'rgba(255,215,0,0.1)',
                 border: '2px solid #ffd700',
@@ -2086,7 +2103,7 @@ const ShogiRPG = () => {
                 </div>
               </div>
             </div>
-            
+
             <button onClick={() => setShowTutorial(false)} style={{
               width: '100%',
               fontSize: '1.3rem',
@@ -2104,7 +2121,7 @@ const ShogiRPG = () => {
           </div>
         </div>
       )}
-      
+
       {/* ストーリーモーダル */}
       {showStory && gameState !== 'start' && (
         <div style={{
@@ -2146,9 +2163,9 @@ const ShogiRPG = () => {
             }}>
               {MONSTERS[currentStage - 1].story}
             </div>
-            <button onClick={() => { 
-              setShowStory(false); 
-              playSound('click'); 
+            <button onClick={() => {
+              setShowStory(false);
+              playSound('click');
             }} style={{
               width: '100%',
               padding: '15px',
@@ -2209,13 +2226,13 @@ const ShogiRPG = () => {
             }}>
               収集率: {yokaiCollection.length}/10 ({Math.floor(yokaiCollection.length / 10 * 100)}%)
             </div>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '20px' }}>
               {MONSTERS.map(monster => {
                 const isUnlocked = yokaiCollection.includes(monster.id);
                 return (
                   <div key={monster.id} style={{
-                    background: isUnlocked 
+                    background: isUnlocked
                       ? 'linear-gradient(135deg, rgba(16,185,129,0.2), rgba(5,150,105,0.2))'
                       : 'rgba(0,0,0,0.5)',
                     border: `2px solid ${isUnlocked ? '#10B981' : '#555'}`,
@@ -2258,10 +2275,10 @@ const ShogiRPG = () => {
                 );
               })}
             </div>
-            
-            <button onClick={() => { 
-              setShowCollection(false); 
-              playSound('click'); 
+
+            <button onClick={() => {
+              setShowCollection(false);
+              playSound('click');
             }} style={{
               width: '100%',
               padding: '15px',
@@ -2305,7 +2322,7 @@ const ShogiRPG = () => {
             全10ステージ・最終ボス「閻魔大王」を倒せ！<br/>
             座敷わらし、河童、天狗、鬼、九尾の狐...
           </p>
-          
+
           {/* デイリーミッション */}
           <div style={{
             background: 'linear-gradient(135deg, rgba(139,92,246,0.2), rgba(99,102,241,0.2))',
@@ -2350,7 +2367,7 @@ const ShogiRPG = () => {
               ))}
             </div>
           </div>
-          
+
           {/* 難易度選択 */}
           <div style={{
             background: 'rgba(0,0,0,0.5)',
@@ -2369,8 +2386,8 @@ const ShogiRPG = () => {
                   minWidth: '100px',
                   fontSize: '1.1rem',
                   padding: '12px 20px',
-                  background: difficulty === diff 
-                    ? 'linear-gradient(135deg, #c41e3a, #8b0000)' 
+                  background: difficulty === diff
+                    ? 'linear-gradient(135deg, #c41e3a, #8b0000)'
                     : 'rgba(100,100,100,0.5)',
                   color: '#fff',
                   border: difficulty === diff ? '3px solid #ffd700' : '2px solid #666',
@@ -2392,7 +2409,7 @@ const ShogiRPG = () => {
               {difficulty === 'hard' && '敵HP 150%, ダメージ 150%, 報酬 80%'}
             </div>
           </div>
-          
+
           {/* アチーブメント表示 */}
           {(achievements.firstWin || achievements.allClear) && (
             <div style={{
@@ -2422,7 +2439,7 @@ const ShogiRPG = () => {
               </div>
             </div>
           )}
-          
+
           {/* ランキング表示 */}
           {rankings.length > 0 && (
             <div style={{
@@ -2467,7 +2484,7 @@ const ShogiRPG = () => {
               </div>
             </div>
           )}
-          
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', alignItems: 'center' }}>
             <button onClick={() => { startGame(); playSound('click'); }} style={{
               fontSize: 'clamp(1.2rem, 4vw, 1.8rem)',
@@ -2486,7 +2503,7 @@ const ShogiRPG = () => {
             }}>
               ゲーム開始
             </button>
-            
+
             <button onClick={() => { setShowTutorial(true); playSound('click'); }} style={{
               fontSize: 'clamp(1rem, 3.5vw, 1.4rem)',
               padding: '15px 40px',
@@ -2504,7 +2521,7 @@ const ShogiRPG = () => {
             }}>
               📖 遊び方
             </button>
-            
+
             <button onClick={() => { setShowCollection(true); playSound('click'); }} style={{
               fontSize: 'clamp(1rem, 3.5vw, 1.4rem)',
               padding: '15px 40px',
@@ -2522,7 +2539,7 @@ const ShogiRPG = () => {
             }}>
               📚 妖怪図鑑 ({yokaiCollection.length}/10)
             </button>
-            
+
             {/* サウンドトグル */}
             <button onClick={() => { setSoundEnabled(!soundEnabled); playSound('click'); }} style={{
               fontSize: '1rem',
@@ -2554,12 +2571,12 @@ const ShogiRPG = () => {
           }}>
             所持金: {money}円
           </div>
-          
+
           {/* カテゴリータブ */}
-          <div style={{ 
-            display: 'flex', 
-            gap: '8px', 
-            marginBottom: '20px', 
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            marginBottom: '20px',
             overflowX: 'auto',
             padding: '5px'
           }}>
@@ -2579,7 +2596,7 @@ const ShogiRPG = () => {
                   whiteSpace: 'nowrap'
                 }}
               >
-                {cat === 'all' ? '全て' : 
+                {cat === 'all' ? '全て' :
                  cat === 'heal' ? '回復' :
                  cat === 'defense' ? '防御' :
                  cat === 'attack' ? '攻撃' :
@@ -2588,11 +2605,11 @@ const ShogiRPG = () => {
               </button>
             ))}
           </div>
-          
-          <div style={{ 
-            display: 'flex', 
-            flexDirection: 'column', 
-            gap: '12px', 
+
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
             marginBottom: '30px',
             maxHeight: '400px',
             overflowY: 'auto',
@@ -2609,7 +2626,7 @@ const ShogiRPG = () => {
                   legendary: '#F59E0B'
                 };
                 const rarityColor = rarityColors[item.rarity] || '#9CA3AF';
-                
+
                 return (
                   <div key={item.id} style={{
                     background: 'linear-gradient(135deg, rgba(40,40,60,0.8), rgba(30,30,50,0.8))',
@@ -2624,8 +2641,8 @@ const ShogiRPG = () => {
                     <div style={{ textAlign: 'left', flex: 1 }}>
                       <div style={{ fontSize: '1.3rem', marginBottom: '5px' }}>
                         {item.emoji} {item.name}
-                        <span style={{ 
-                          fontSize: '0.7rem', 
+                        <span style={{
+                          fontSize: '0.7rem',
                           marginLeft: '8px',
                           color: rarityColor,
                           fontWeight: 'bold'
@@ -2637,8 +2654,8 @@ const ShogiRPG = () => {
                         </span>
                       </div>
                       <div style={{ fontSize: '0.85rem', color: '#aaa' }}>
-                        {item.description || 
-                          (item.effect === 'heal' ? `HP+${item.value}` : 
+                        {item.description ||
+                          (item.effect === 'heal' ? `HP+${item.value}` :
                            item.effect === 'heal_full' ? `HP全回復` :
                            item.effect === 'armor' ? `ダメージ${item.value}%軽減` : '')}
                       </div>
@@ -2695,7 +2712,7 @@ const ShogiRPG = () => {
           }}>
             総アイテム数: {inventory.reduce((sum, item) => sum + item.quantity, 0)}個
           </div>
-          
+
           {inventory.length === 0 ? (
             <div style={{
               background: 'rgba(0,0,0,0.7)',
@@ -2709,10 +2726,10 @@ const ShogiRPG = () => {
               ショップで購入しましょう！
             </div>
           ) : (
-            <div style={{ 
-              display: 'flex', 
-              flexDirection: 'column', 
-              gap: '12px', 
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
               marginBottom: '30px',
               maxHeight: '500px',
               overflowY: 'auto',
@@ -2721,7 +2738,7 @@ const ShogiRPG = () => {
               {inventory.map(invItem => {
                 const item = SHOP_ITEMS.find(i => i.id === invItem.itemId);
                 if (!item) return null;
-                
+
                 const rarityColors = {
                   common: '#9CA3AF',
                   uncommon: '#10B981',
@@ -2730,7 +2747,7 @@ const ShogiRPG = () => {
                   legendary: '#F59E0B'
                 };
                 const rarityColor = rarityColors[item.rarity] || '#9CA3AF';
-                
+
                 return (
                   <div key={item.id} style={{
                     background: 'linear-gradient(135deg, rgba(40,40,60,0.8), rgba(30,30,50,0.8))',
@@ -2745,8 +2762,8 @@ const ShogiRPG = () => {
                     <div style={{ textAlign: 'left', flex: 1 }}>
                       <div style={{ fontSize: '1.3rem', marginBottom: '5px' }}>
                         {item.emoji} {item.name}
-                        <span style={{ 
-                          fontSize: '0.7rem', 
+                        <span style={{
+                          fontSize: '0.7rem',
                           marginLeft: '8px',
                           color: rarityColor,
                           fontWeight: 'bold'
@@ -2766,8 +2783,8 @@ const ShogiRPG = () => {
                         </span>
                       </div>
                       <div style={{ fontSize: '0.85rem', color: '#aaa' }}>
-                        {item.description || 
-                          (item.effect === 'heal' ? `HP+${item.value}` : 
+                        {item.description ||
+                          (item.effect === 'heal' ? `HP+${item.value}` :
                            item.effect === 'heal_full' ? `HP全回復` :
                            item.effect === 'armor' ? `ダメージ${item.value}%軽減` : '')}
                       </div>
@@ -2795,7 +2812,7 @@ const ShogiRPG = () => {
               })}
             </div>
           )}
-          
+
           <button onClick={() => {
             setShowInventory(false);
             playSound('click');
@@ -2846,23 +2863,23 @@ const ShogiRPG = () => {
               filter: 'blur(30px)',
               pointerEvents: 'none'
             }} />
-            
+
             <div style={{ display: 'flex', alignItems: 'center', gap: '25px', position: 'relative', zIndex: 1 }}>
-              <div style={{ 
+              <div style={{
                 animation: monsterHp > 0 ? 'float 2.5s ease-in-out infinite' : 'shake 0.5s',
                 filter: `drop-shadow(0 0 15px ${currentMonster.color}) drop-shadow(0 5px 10px rgba(0,0,0,0.5))`,
                 transform: 'scale(1.1)'
               }}>
-                <YokaiSVG type={currentMonster.svgType} size={140} />
+                <YokaiSVG type={currentMonster.svgType} size={140} image={currentMonster.image} />
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ color: '#888', fontSize: '0.85rem', marginBottom: '5px', letterSpacing: '0.1em' }}>
                   第{currentStage}ノ刻
                 </div>
-                <div style={{ 
-                  color: '#fff', 
-                  fontSize: '2rem', 
-                  fontWeight: 700, 
+                <div style={{
+                  color: '#fff',
+                  fontSize: '2rem',
+                  fontWeight: 700,
                   marginBottom: '5px',
                   textShadow: `0 0 10px ${currentMonster.color}, 0 2px 5px rgba(0,0,0,0.8)`,
                   letterSpacing: '0.05em'
@@ -2901,10 +2918,10 @@ const ShogiRPG = () => {
                     }} />
                   </div>
                 </div>
-                <div style={{ 
-                  color: '#fff', 
-                  fontSize: '1.1rem', 
-                  marginTop: '10px', 
+                <div style={{
+                  color: '#fff',
+                  fontSize: '1.1rem',
+                  marginTop: '10px',
                   fontWeight: 'bold',
                   textShadow: '0 2px 4px rgba(0,0,0,0.8)'
                 }}>
@@ -2974,8 +2991,8 @@ const ShogiRPG = () => {
               {currentTurn === 'player' && (
                 <button onClick={showHint} style={{
                   padding: '12px 20px',
-                  background: hintCount > 0 
-                    ? 'linear-gradient(135deg, #8B5CF6, #7C3AED)' 
+                  background: hintCount > 0
+                    ? 'linear-gradient(135deg, #8B5CF6, #7C3AED)'
                     : 'linear-gradient(135deg, #666, #555)',
                   color: '#fff',
                   border: `2px solid ${hintCount > 0 ? '#A78BFA' : '#888'}`,
@@ -2998,8 +3015,8 @@ const ShogiRPG = () => {
                   setMessage(isPromoting ? '' : '成駒にする駒をタップしてください');
                 }} style={{
                   padding: '12px 20px',
-                  background: isPromoting 
-                    ? 'linear-gradient(135deg, #FFD700, #FFA500)' 
+                  background: isPromoting
+                    ? 'linear-gradient(135deg, #FFD700, #FFA500)'
                     : 'linear-gradient(135deg, #10B981, #059669)',
                   color: '#fff',
                   border: `3px solid ${isPromoting ? '#FFD700' : '#34D399'}`,
@@ -3084,7 +3101,7 @@ const ShogiRPG = () => {
               {hint ? `💡 ヒント: ${PIECES[board[hint.fromY][hint.fromX].type].kanji} を動かすと ${hint.score * 10}点獲得！` : message}
             </div>
           )}
-          
+
           {/* コンボ表示 */}
           {combo > 1 && currentTurn === 'waiting' && (
             <div style={{
@@ -3125,7 +3142,7 @@ const ShogiRPG = () => {
                   const isValidMove = validMovesList.some(([mx, my]) => mx === x && my === y);
                   const isHintFrom = hint && hint.fromX === x && hint.fromY === y;
                   const isHintTo = hint && hint.toX === x && hint.toY === y;
-                  
+
                   return (
                     <button
                       key={`${x}-${y}-${cell?.id || 'empty'}`}
@@ -3134,15 +3151,15 @@ const ShogiRPG = () => {
                       style={{
                         width: 'clamp(45px, 10vw, 75px)',
                         height: 'clamp(45px, 10vw, 75px)',
-                        background: isSelected 
+                        background: isSelected
                           ? 'linear-gradient(135deg, rgba(255,215,0,0.7), rgba(255,237,78,0.6))'
                           : isValidMove
                           ? 'linear-gradient(135deg, #90EE90, #32CD32)'
                           : isHintFrom || isHintTo
                           ? 'linear-gradient(135deg, #A78BFA, #8B5CF6)'
                           : 'linear-gradient(135deg, rgba(232,220,196,0.9), rgba(205,170,125,0.8))',
-                        border: isSelected 
-                          ? '4px solid #ffd700' 
+                        border: isSelected
+                          ? '4px solid #ffd700'
                           : isValidMove
                           ? '4px solid #00FF00'
                           : isHintFrom || isHintTo
@@ -3154,8 +3171,8 @@ const ShogiRPG = () => {
                         justifyContent: 'center',
                         cursor: currentTurn === 'player' ? 'pointer' : 'not-allowed',
                         padding: '2px',
-                        boxShadow: isValidMove 
-                          ? '0 0 15px #00FF00' 
+                        boxShadow: isValidMove
+                          ? '0 0 15px #00FF00'
                           : isSelected
                           ? '0 0 15px #FFD700'
                           : isHintFrom || isHintTo
@@ -3181,7 +3198,7 @@ const ShogiRPG = () => {
         <div style={{ textAlign: 'center', color: '#fff', position: 'relative', zIndex: 1, maxWidth: '450px' }}>
           <h2 style={{ fontSize: '3rem', marginBottom: '20px', color: '#4ade80' }}>ステージクリア！</h2>
           <div style={{ fontSize: '5rem', marginBottom: '20px' }}>🎉</div>
-          
+
           <div style={{
             background: 'linear-gradient(135deg, rgba(74,222,128,0.2), rgba(74,222,128,0.1))',
             border: '2px solid #4ade80',
@@ -3198,7 +3215,7 @@ const ShogiRPG = () => {
             <div style={{ fontSize: '1.1rem', color: '#4ade80' }}>
               残りHP: {playerHp} / {PLAYER_MAX_HP}
             </div>
-            
+
             {playerHp === PLAYER_MAX_HP && (
               <div style={{
                 background: 'rgba(255,215,0,0.3)',
@@ -3213,7 +3230,7 @@ const ShogiRPG = () => {
               </div>
             )}
           </div>
-          
+
           <button onClick={startNextStage} style={{
             width: '100%',
             fontSize: '1.5rem',
@@ -3234,7 +3251,7 @@ const ShogiRPG = () => {
         <div style={{ textAlign: 'center', color: '#fff', position: 'relative', zIndex: 1, maxWidth: '500px' }}>
           <h2 style={{ fontSize: '3rem', marginBottom: '20px', color: '#ffd700' }}>全ステージクリア！</h2>
           <div style={{ fontSize: '5rem', marginBottom: '20px' }}>👑</div>
-          
+
           {/* スコア表示 */}
           <div style={{
             background: 'linear-gradient(135deg, rgba(255,215,0,0.2), rgba(255,215,0,0.1))',
@@ -3264,7 +3281,7 @@ const ShogiRPG = () => {
               </div>
             )}
           </div>
-          
+
           {/* 実績表示 */}
           <div style={{
             background: 'rgba(0,0,0,0.5)',
@@ -3297,7 +3314,7 @@ const ShogiRPG = () => {
               )}
             </div>
           </div>
-          
+
           {/* ランキング表示 */}
           {rankings.length > 0 && (
             <div style={{
@@ -3334,7 +3351,7 @@ const ShogiRPG = () => {
               </div>
             </div>
           )}
-          
+
           {/* シェアボタン */}
           <button onClick={() => {
             const text = `将棋妖怪退治を全クリア！🎉\n所持金: ${money}円\n${achievements.noHint ? '💎ノーヒントクリア達成！' : ''}\n#将棋妖怪退治`;
@@ -3358,7 +3375,7 @@ const ShogiRPG = () => {
           }}>
             🐦 結果をシェア
           </button>
-          
+
           <button onClick={startGame} style={{
             width: '100%',
             fontSize: '1.5rem',
@@ -3399,68 +3416,68 @@ const ShogiRPG = () => {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&display=swap');
         * { box-sizing: border-box; }
-        
+
         @keyframes float {
           0%, 100% { transform: translateY(0px); }
           50% { transform: translateY(-15px); }
         }
-        
+
         @keyframes shake {
           0%, 100% { transform: translateX(0) rotate(0deg); }
           25% { transform: translateX(-10px) rotate(-5deg); }
           50% { transform: translateX(10px) rotate(5deg); }
           75% { transform: translateX(-5px) rotate(-2deg); }
         }
-        
+
         @keyframes damageFloat {
           0% { transform: translateY(0) scale(1); opacity: 1; }
           50% { transform: translateY(-20px) scale(1.2); opacity: 1; }
           100% { transform: translateY(-40px) scale(0.8); opacity: 0; }
         }
-        
+
         @keyframes hintPulse {
-          0%, 100% { 
-            transform: scale(1); 
+          0%, 100% {
+            transform: scale(1);
             box-shadow: 0 0 20px #A78BFA, 0 0 10px #8B5CF6;
           }
-          50% { 
-            transform: scale(1.1); 
+          50% {
+            transform: scale(1.1);
             box-shadow: 0 0 30px #A78BFA, 0 0 20px #8B5CF6, 0 0 10px #7C3AED;
           }
         }
-        
+
         @keyframes comboPulse {
           0%, 100% { transform: scale(1); }
           50% { transform: scale(1.15); }
         }
-        
+
         @keyframes lavaGlow {
           0%, 100% { opacity: 0.3; }
           50% { opacity: 0.6; }
         }
-        
+
         @keyframes fireParticle1 {
           0% { transform: translateY(0); opacity: 0; }
           20% { opacity: 1; }
           100% { transform: translateY(-200px); opacity: 0; }
         }
-        
+
         @keyframes fireParticle2 {
           0% { transform: translateY(0); opacity: 0; }
           20% { opacity: 1; }
           100% { transform: translateY(-180px); opacity: 0; }
         }
-        
+
         @keyframes foxFire1 {
           0%, 100% { transform: translateY(0) scale(1); opacity: 0.6; }
           50% { transform: translateY(-10px) scale(1.2); opacity: 1; }
         }
-        
+
         @keyframes foxFire2 {
           0%, 100% { transform: translateY(0) scale(1); opacity: 0.5; }
           50% { transform: translateY(-15px) scale(1.3); opacity: 1; }
         }
-        
+
         @keyframes foxFire3 {
           0%, 100% { transform: translateY(0) scale(1); opacity: 0.7; }
           50% { transform: translateY(-12px) scale(1.1); opacity: 1; }
