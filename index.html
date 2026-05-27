@@ -3737,7 +3737,7 @@
             <div id="home-weather-weekly" style="display:none"></div>
             <button id="home-weather-radar-btn" onclick="toggleWeatherRadar()" class="dash-todo-btn" style="font-size:0.72rem;padding:3px 10px;margin-top:4px;display:none">🌧 雨雲レーダー</button>
             <div id="home-weather-radar-wrap" style="display:none;margin-top:8px">
-              <iframe id="home-weather-radar" width="100%" height="320" frameborder="0" style="border-radius:10px;border:1px solid var(--line)" allowfullscreen loading="lazy"></iframe>
+              <div id="home-weather-radar" style="height:300px;border-radius:10px;border:1px solid var(--line);overflow:hidden"></div>
             </div>
             <div class="dash-mini-note" id="home-weather-time">更新時刻を取得中…</div>
           </article>
@@ -5298,15 +5298,38 @@
       window.toggleWeatherRadar = function() {
         const wrap = document.getElementById('home-weather-radar-wrap');
         const btn  = document.getElementById('home-weather-radar-btn');
-        const iframe = document.getElementById('home-weather-radar');
+        const mapDiv = document.getElementById('home-weather-radar');
         if (!wrap) return;
         const opening = wrap.style.display === 'none';
-        if (opening && iframe && !iframe.src) {
-          const loc = window._weatherLatLon || { lat: 35.83, lon: 139.87 };
-          iframe.src = `https://embed.windy.com/embed2.html?lat=${loc.lat}&lon=${loc.lon}&zoom=9&level=surface&overlay=rain&menu=&message=&marker=true&calendar=now&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1`;
-        }
         wrap.style.display = opening ? 'block' : 'none';
         if (btn) btn.textContent = opening ? '× レーダーを閉じる' : '🌧 雨雲レーダー';
+
+        if (opening && mapDiv && !mapDiv._radarMap) {
+          const loc = window._weatherLatLon || { lat: 35.83, lon: 139.87 };
+          const map = L.map(mapDiv, { zoomControl: true, attributionControl: true })
+            .setView([loc.lat, loc.lon], 9);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors', maxZoom: 18
+          }).addTo(map);
+          L.circleMarker([loc.lat, loc.lon], { radius: 6, color: '#0ea5e9', fillColor: '#0ea5e9', fillOpacity: 0.9 })
+            .addTo(map);
+          mapDiv._radarMap = map;
+          mapDiv._radarLayer = null;
+
+          fetch('https://api.rainviewer.com/public/weather-maps.json')
+            .then(r => r.json())
+            .then(data => {
+              const frames = data.radar?.past || [];
+              if (!frames.length) return;
+              const latest = frames[frames.length - 1];
+              if (mapDiv._radarLayer) map.removeLayer(mapDiv._radarLayer);
+              mapDiv._radarLayer = L.tileLayer(
+                `https://tilecache.rainviewer.com${latest.path}/256/{z}/{x}/{y}/2/1_1.png`,
+                { opacity: 0.6, attribution: '© RainViewer', maxZoom: 18 }
+              ).addTo(map);
+            })
+            .catch(() => {});
+        }
       };
 
       async function initWeatherCard() {
