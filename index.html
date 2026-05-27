@@ -1248,6 +1248,8 @@
       transition: opacity 0.2s;
     }
     .dash-todo-btn:hover { opacity: 0.88; }
+    .pomo-dot { width:7px;height:7px;border-radius:50%;background:rgba(99,102,241,0.18);transition:background 0.3s;display:inline-block; }
+    .pomo-dot.done { background:#6366f1; }
     .dash-voice-btn {
       display: inline-grid;
       place-items: center;
@@ -3982,7 +3984,7 @@
           <!-- ポモドーロタイマー -->
           <article class="card dashboard-card reveal" id="dash-card-pomodoro">
             <h3 data-i18n="dash-pomo-title">⏱️ ポモドーロタイマー</h3>
-            <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:4px 0;">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:4px 0;">
               <div style="position:relative;width:120px;height:120px;">
                 <svg viewBox="0 0 120 120" width="120" height="120">
                   <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(99,102,241,0.15)" stroke-width="10"/>
@@ -3993,13 +3995,28 @@
                 <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;line-height:1.2">
                   <div id="pomo-time" style="font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:1px">25:00</div>
                   <div id="pomo-mode" style="font-size:0.65rem;color:var(--muted);margin-top:2px">集中</div>
+                  <div id="pomo-dots" style="display:flex;gap:5px;justify-content:center;margin-top:4px"></div>
                 </div>
               </div>
+              <input id="pomo-task" type="text" maxlength="40" placeholder="今やること…"
+                style="width:100%;border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:0.78rem;background:var(--card-tint);color:var(--text);outline:none;box-sizing:border-box">
               <div style="display:flex;gap:8px;">
                 <button id="pomo-btn" class="dash-todo-btn" onclick="pomodoroToggle()" style="min-width:64px">▶ 開始</button>
                 <button class="dash-todo-btn" onclick="pomodoroReset()" style="background:rgba(99,102,241,0.12);color:var(--muted)" data-i18n="dash-pomo-reset">リセット</button>
               </div>
-              <div style="font-size:0.72rem;color:var(--muted)">今日の完了: <strong id="pomo-count" style="color:var(--text)">0</strong> セット</div>
+              <div style="width:100%;text-align:right;margin-top:-4px">
+                <button id="pomo-setting-btn" onclick="pomoToggleSetting()" style="background:none;border:none;font-size:0.72rem;color:var(--muted);cursor:pointer">⚙ 設定</button>
+              </div>
+              <div id="pomo-settings" style="display:none;width:100%;font-size:0.75rem;color:var(--muted)">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center">
+                  <span>集中 <input id="pomo-set-focus" type="number" min="1" max="90" value="25" style="width:42px;border:1px solid var(--line);border-radius:6px;padding:2px 4px;background:var(--card-tint);color:var(--text)">分</span>
+                  <span>短休 <input id="pomo-set-short" type="number" min="1" max="30" value="5" style="width:42px;border:1px solid var(--line);border-radius:6px;padding:2px 4px;background:var(--card-tint);color:var(--text)">分</span>
+                  <span>長休 <input id="pomo-set-long" type="number" min="1" max="60" value="15" style="width:42px;border:1px solid var(--line);border-radius:6px;padding:2px 4px;background:var(--card-tint);color:var(--text)">分</span>
+                  <button onclick="pomoApplySetting()" class="dash-todo-btn" style="font-size:0.72rem;padding:3px 8px">適用</button>
+                </div>
+              </div>
+              <div style="font-size:0.72rem;color:var(--muted);text-align:center" id="pomo-count-wrap">今日の完了: <strong id="pomo-count" style="color:var(--text)">0</strong> セット</div>
+              <div id="pomo-sparkline" style="width:100%"></div>
             </div>
           </article>
 
@@ -8801,17 +8818,69 @@
 
       // ─── ポモドーロタイマー ────────────────────────────────────
       (function() {
-        const MODES = [
-          { label: '集中', duration: 25 * 60, color: '#6366f1' },
-          { label: '短い休憩', duration: 5 * 60, color: '#22c55e' },
-          { label: '長い休憩', duration: 15 * 60, color: '#0ea5e9' },
+        // D: カスタム時間をlocalStorageから復元
+        const customDur = JSON.parse(localStorage.getItem('pomo-custom-durations') || 'null');
+        let MODES = [
+          { label: '集中',     duration: (customDur?.[0] || 25) * 60, color: '#6366f1' },
+          { label: '短い休憩', duration: (customDur?.[1] || 5)  * 60, color: '#22c55e' },
+          { label: '長い休憩', duration: (customDur?.[2] || 15) * 60, color: '#0ea5e9' },
         ];
         const CIRC = 2 * Math.PI * 52;
         let modeIdx = 0, remaining = MODES[0].duration, running = false, timerHandle = null;
 
         function pomoKey() { return 'pomo-count-' + new Date().toDateString(); }
         function getCount() { return parseInt(localStorage.getItem(pomoKey()) || '0'); }
-        function incCount() { localStorage.setItem(pomoKey(), getCount() + 1); renderPomo(); }
+        function incCount() {
+          localStorage.setItem(pomoKey(), getCount() + 1);
+          updatePomoHistory(); // E
+          renderPomo();
+        }
+
+        // C: チャイム音
+        function playPomoChime() {
+          try {
+            const ac = new (window.AudioContext || window.webkitAudioContext)();
+            [[523.25, 0], [659.25, 0.3], [783.99, 0.6]].forEach(([freq, delay]) => {
+              const osc = ac.createOscillator(), gain = ac.createGain();
+              osc.connect(gain); gain.connect(ac.destination);
+              osc.type = 'sine'; osc.frequency.value = freq;
+              gain.gain.setValueAtTime(0.3, ac.currentTime + delay);
+              gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + delay + 0.8);
+              osc.start(ac.currentTime + delay);
+              osc.stop(ac.currentTime + delay + 0.8);
+            });
+          } catch {}
+        }
+
+        // E: 週間履歴更新
+        function updatePomoHistory() {
+          const today = new Date().toDateString();
+          let hist = JSON.parse(localStorage.getItem('pomo-history') || '[]');
+          const idx = hist.findIndex(h => h.date === today);
+          if (idx >= 0) hist[idx].count = getCount();
+          else hist.push({ date: today, count: getCount() });
+          localStorage.setItem('pomo-history', JSON.stringify(hist.slice(-7)));
+        }
+
+        // E: スパークライン描画
+        function renderPomoSparkline() {
+          const el = document.getElementById('pomo-sparkline');
+          if (!el) return;
+          const hist = JSON.parse(localStorage.getItem('pomo-history') || '[]');
+          if (hist.length < 2) { el.innerHTML = ''; return; }
+          const counts = hist.map(h => h.count);
+          const max = Math.max(...counts, 1);
+          const W = 160, H = 28, barW = Math.floor(W / 7) - 2;
+          const bars = counts.map((c, i) => {
+            const bh = Math.max(3, Math.round((c / max) * (H - 6)));
+            const x = i * (barW + 2);
+            const isToday = hist[i].date === new Date().toDateString();
+            return `<rect x="${x}" y="${H - bh}" width="${barW}" height="${bh}" rx="2"
+              fill="${isToday ? 'var(--blue,#0ea5e9)' : 'rgba(14,165,233,0.35)'}">
+              <title>${hist[i].date.slice(4, 10)}: ${c}セット</title></rect>`;
+          }).join('');
+          el.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;margin:0 auto">${bars}</svg>`;
+        }
 
         function renderPomo() {
           const m = String(Math.floor(remaining / 60)).padStart(2, '0');
@@ -8829,10 +8898,27 @@
             ring.style.stroke           = MODES[modeIdx].color;
           }
           if (btn) btn.textContent = running ? '⏸ 一時停止' : '▶ 開始';
-          if (cnt) cnt.textContent  = getCount();
+          // B: 累計集中時間
+          if (cnt) {
+            const totalMin = getCount() * (MODES[0].duration / 60);
+            const h = Math.floor(totalMin / 60), mi = totalMin % 60;
+            const timeStr = h > 0 ? `${h}時間${mi > 0 ? mi + '分' : ''}` : `${mi}分`;
+            cnt.textContent = getCount() + ' セット（' + timeStr + ' 集中）';
+          }
+          // A: 進捗ドット
+          const dotsEl = document.getElementById('pomo-dots');
+          if (dotsEl) {
+            const done = getCount() % 4;
+            dotsEl.innerHTML = Array.from({length: 4}, (_, i) =>
+              `<span class="pomo-dot${i < done ? ' done' : ''}"></span>`
+            ).join('');
+          }
+          // E: スパークライン
+          renderPomoSparkline();
         }
 
         function nextMode() {
+          playPomoChime(); // C
           if (modeIdx === 0) { incCount(); modeIdx = (getCount() % 4 === 0) ? 2 : 1; }
           else modeIdx = 0;
           remaining = MODES[modeIdx].duration;
@@ -8860,6 +8946,43 @@
           remaining = MODES[modeIdx].duration;
           renderPomo();
         };
+
+        // D: 設定トグル
+        window.pomoToggleSetting = function() {
+          const s = document.getElementById('pomo-settings');
+          if (s) s.style.display = s.style.display === 'none' ? 'block' : 'none';
+        };
+        window.pomoApplySetting = function() {
+          const f = parseInt(document.getElementById('pomo-set-focus')?.value) || 25;
+          const sh = parseInt(document.getElementById('pomo-set-short')?.value) || 5;
+          const lo = parseInt(document.getElementById('pomo-set-long')?.value) || 15;
+          MODES[0].duration = Math.max(1, Math.min(90, f)) * 60;
+          MODES[1].duration = Math.max(1, Math.min(30, sh)) * 60;
+          MODES[2].duration = Math.max(1, Math.min(60, lo)) * 60;
+          localStorage.setItem('pomo-custom-durations', JSON.stringify([f, sh, lo]));
+          running = false; clearInterval(timerHandle);
+          remaining = MODES[modeIdx].duration;
+          const s = document.getElementById('pomo-settings');
+          if (s) s.style.display = 'none';
+          renderPomo();
+        };
+
+        // D: タスクメモ復元と保存
+        const taskEl = document.getElementById('pomo-task');
+        if (taskEl) {
+          taskEl.value = localStorage.getItem('pomo-task') || '';
+          taskEl.addEventListener('input', () => localStorage.setItem('pomo-task', taskEl.value));
+        }
+        // D: 設定値を入力欄に反映
+        if (customDur) {
+          const fi = document.getElementById('pomo-set-focus');
+          const si = document.getElementById('pomo-set-short');
+          const li = document.getElementById('pomo-set-long');
+          if (fi) fi.value = customDur[0];
+          if (si) si.value = customDur[1];
+          if (li) li.value = customDur[2];
+        }
+
         renderPomo();
       })();
 
