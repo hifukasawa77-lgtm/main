@@ -9,5 +9,6 @@ Generated with the built-in GPT-image-2 image tool for the AI Shogi game.
 - `shogi-piece-base-alpha.png` - transparent-background game-ready version of the base piece
 - `shogi-piece-promoted-alpha.png` - transparent-background game-ready version of the promoted piece
 - `shogi-thumb-gpt-image-2.png` - homepage thumbnail used by `index.html`
+- `warlords/*.png` - full-body Sengoku warlord and ashigaru piece art used by shogi warlord mode
 
 The game keeps piece names as DOM text so the rules, accessibility, and existing move logic remain unchanged while all visible board and piece graphics come from generated raster assets.
