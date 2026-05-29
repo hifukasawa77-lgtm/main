@@ -448,6 +448,76 @@
       .yomi-area { gap: 12px; padding: 14px 16px; }
       .status-bar { gap: 8px; }
     }
+
+    /* ── AI対戦モード ── */
+    .ai-mode-row {
+      margin-top: 20px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(248,211,111,0.12);
+    }
+    .ai-mode-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .ai-toggle-btn {
+      padding: 10px 28px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.04);
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.92rem;
+      font-weight: 600;
+      transition: all 0.18s ease;
+      letter-spacing: 0.06em;
+    }
+    .ai-toggle-btn:hover {
+      border-color: rgba(0,200,220,0.5);
+      color: #00c8dc;
+      background: rgba(0,200,220,0.07);
+    }
+    .ai-toggle-btn.active {
+      border-color: #00c8dc;
+      color: #00c8dc;
+      background: rgba(0,200,220,0.12);
+      box-shadow: 0 0 16px rgba(0,200,220,0.15);
+    }
+    .stat-val.ai-val { color: #00c8dc; }
+    .stat-label.ai-lbl { color: rgba(0,200,220,0.75); }
+    @keyframes aiCorrectFlash {
+      0%   { box-shadow: 0 0 0 0 rgba(0,200,220,0.9), inset 0 0 0 3px rgba(0,200,220,0.9); transform: scale(1); opacity: 1; }
+      40%  { box-shadow: 0 0 24px 8px rgba(0,200,220,0.35), inset 0 0 0 3px rgba(0,200,220,0.9); transform: scale(1.08); opacity: 1; }
+      100% { box-shadow: 0 0 0 0 rgba(0,200,220,0); transform: scale(0); opacity: 0; }
+    }
+    .ai-correct-flash { animation: aiCorrectFlash 0.5s ease forwards; pointer-events: none; }
+    .result-battle-panel {
+      background: rgba(0,200,220,0.06);
+      border: 1px solid rgba(0,200,220,0.25);
+      border-radius: 16px;
+      padding: 20px 24px;
+      margin-top: 16px;
+    }
+    .result-winner {
+      font-size: 1.4rem;
+      font-weight: 900;
+      margin-bottom: 14px;
+    }
+    .result-winner.win  { color: var(--good); }
+    .result-winner.lose { color: var(--danger); }
+    .result-winner.draw { color: var(--gold); }
+    .result-battle-scores {
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+    }
+    .result-battle-score-val { font-size: 2rem; font-weight: 900; }
+    .result-battle-score-val.player-col { color: var(--good); }
+    .result-battle-score-val.ai-col { color: #00c8dc; }
+    .result-battle-score-lbl { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -482,6 +552,10 @@
         </button>
       </div>
       <button class="start-btn" id="btn-start" type="button">はじめる / Start</button>
+      <div class="ai-mode-row">
+        <p class="ai-mode-label">対戦モード / Battle Mode</p>
+        <button class="ai-toggle-btn" id="btn-ai-toggle" type="button">🤖 AI対戦をオンにする</button>
+      </div>
     </div>
   </div>
 
@@ -501,6 +575,10 @@
       <span class="stat-item">
         <span class="stat-label">残り</span>
         <span class="stat-val remain" id="stat-remain">48</span>
+      </span>
+      <span class="stat-item" id="ai-stat-item" style="display:none">
+        <span class="stat-label ai-lbl">AI</span>
+        <span class="stat-val ai-val" id="stat-ai">0</span>
       </span>
       <span class="spacer"></span>
       <span class="stat-item" id="timer-container" style="display:none;">
@@ -556,6 +634,21 @@
       <div class="result-best">
         <span>ベストスコア / Best:</span>
         <span class="result-best-val" id="result-best">--</span>
+      </div>
+    </div>
+    <div id="result-battle-area" style="display:none">
+      <div class="result-battle-panel">
+        <div class="result-winner" id="result-winner-text">--</div>
+        <div class="result-battle-scores">
+          <div>
+            <div class="result-battle-score-val player-col" id="result-battle-player">0</div>
+            <div class="result-battle-score-lbl">あなた / You</div>
+          </div>
+          <div>
+            <div class="result-battle-score-val ai-col" id="result-battle-ai">0</div>
+            <div class="result-battle-score-lbl">AI</div>
+          </div>
+        </div>
       </div>
     </div>
     <button class="retry-btn" id="btn-retry" type="button">もう一度 / Play Again</button>
@@ -621,6 +714,13 @@
       easy:   { autoNext: 2500, timeLimit: 0,  speechRate: 0.8 },
       normal: { autoNext: 1500, timeLimit: 0,  speechRate: 1.0 },
       hard:   { autoNext: 800,  timeLimit: 60, speechRate: 1.2 },
+    };
+
+    // AI反応時間（ms）と誤答率
+    const AI_CONFIG = {
+      easy:   { minMs: 3200, maxMs: 5800, missRate: 0.18 },
+      normal: { minMs: 1600, maxMs: 3000, missRate: 0.08 },
+      hard:   { minMs: 400,  maxMs: 1100, missRate: 0.04 },
     };
 
     const CARD_W = 68;
@@ -744,6 +844,9 @@
       timerInterval: null,
       autoNextTimeout: null,
       waitingNext: false, // 正誤確認後の待機フラグ
+      mode: "solo",       // "solo" | "ai-battle"
+      aiScore: 0,
+      aiTimeout: null,
     };
 
     // =====================================================================
@@ -1147,6 +1250,8 @@
     const elTimerBarWrap  = document.getElementById("timer-bar-wrap");
     const elTimerBar      = document.getElementById("timer-bar");
     const elGrid          = document.getElementById("efuda-grid");
+    const elAiStatItem    = document.getElementById("ai-stat-item");
+    const elStatAi        = document.getElementById("stat-ai");
 
     [IROHA_ART.cardBase].concat(IROHA_ART.atlases.map(function(atlas) { return atlas.image; }))
       .forEach(function(image) {
@@ -1169,12 +1274,22 @@
       state.wrongCount = 0;
       state.waitingNext = false;
       state.startTime = Date.now();
+      state.aiScore = 0;
+      clearTimeout(state.aiTimeout);
+      state.aiTimeout = null;
 
       elStatCorrect.textContent = "0";
       elStatWrong.textContent = "0";
       elStatRemain.textContent = String(state.deck.length);
       elFeedbackMsg.textContent = "";
       elFeedbackMsg.className = "feedback-msg";
+
+      if (state.mode === "ai-battle") {
+        elAiStatItem.style.display = "";
+        elStatAi.textContent = "0";
+      } else {
+        elAiStatItem.style.display = "none";
+      }
 
       // タイマー表示制御
       if (cfg.timeLimit > 0) {
@@ -1252,6 +1367,8 @@
 
       const cfg = DIFFICULTY_CONFIG[state.difficulty];
       SpeechEngine.speak(data.yomi, cfg.speechRate);
+
+      if (state.mode === "ai-battle") scheduleAiPick();
     }
 
     function checkAnswer(clickedId) {
@@ -1265,6 +1382,7 @@
       const cfg = DIFFICULTY_CONFIG[state.difficulty];
 
       if (isCorrect) {
+        clearTimeout(state.aiTimeout);
         state.correctCount++;
         elStatCorrect.textContent = String(state.correctCount);
         elFeedbackMsg.textContent = "正解！ / Correct!";
@@ -1296,6 +1414,7 @@
     function endGame() {
       clearInterval(state.timerInterval);
       clearTimeout(state.autoNextTimeout);
+      clearTimeout(state.aiTimeout);
       SpeechEngine.cancel();
 
       const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
@@ -1323,7 +1442,77 @@
       document.getElementById("result-time").textContent = timeStr;
       document.getElementById("result-best").textContent = String(best);
 
+      const battleArea = document.getElementById("result-battle-area");
+      if (state.mode === "ai-battle") {
+        battleArea.style.display = "";
+        document.getElementById("result-battle-player").textContent = String(state.correctCount);
+        document.getElementById("result-battle-ai").textContent = String(state.aiScore);
+        const winnerEl = document.getElementById("result-winner-text");
+        if (state.correctCount > state.aiScore) {
+          winnerEl.textContent = "🎉 あなたの勝ち！";
+          winnerEl.className = "result-winner win";
+        } else if (state.correctCount < state.aiScore) {
+          winnerEl.textContent = "🤖 AIの勝ち…";
+          winnerEl.className = "result-winner lose";
+        } else {
+          winnerEl.textContent = "🤝 引き分け！";
+          winnerEl.className = "result-winner draw";
+        }
+      } else {
+        battleArea.style.display = "none";
+      }
+
       showScreen("screen-result");
+    }
+
+    // =====================================================================
+    // AI対戦ロジック
+    // =====================================================================
+    function scheduleAiPick() {
+      clearTimeout(state.aiTimeout);
+      const cfg = AI_CONFIG[state.difficulty];
+      const delay = cfg.minMs + Math.random() * (cfg.maxMs - cfg.minMs);
+      state.aiTimeout = setTimeout(aiPickCard, delay);
+    }
+
+    function aiPickCard() {
+      if (state.waitingNext || !state.currentCard) return;
+      const cfg = AI_CONFIG[state.difficulty];
+
+      // 一定確率で誤答カードを選ぶ
+      let targetId = state.currentCard.id;
+      if (Math.random() < cfg.missRate) {
+        const wrong = state.deck.filter(function(id) { return id !== state.currentCard.id; });
+        if (wrong.length > 0) targetId = wrong[Math.floor(Math.random() * wrong.length)];
+      }
+
+      const wrap = elGrid.querySelector("[data-id=\"" + targetId + "\"]");
+      if (!wrap || wrap.classList.contains("answered")) {
+        // ターゲットが消えていたら正解カードを狙う
+        const correct = elGrid.querySelector("[data-id=\"" + state.currentCard.id + "\"]");
+        if (correct && !correct.classList.contains("answered")) aiTakeCard(state.currentCard.id, correct);
+        return;
+      }
+      aiTakeCard(targetId, wrap);
+    }
+
+    function aiTakeCard(cardId, wrap) {
+      const isCorrect = (cardId === state.currentCard.id);
+      if (isCorrect) {
+        state.aiScore++;
+        elStatAi.textContent = String(state.aiScore);
+        elFeedbackMsg.textContent = "🤖 AI取得！";
+        elFeedbackMsg.className = "feedback-msg ng";
+        wrap.classList.add("ai-correct-flash");
+        setTimeout(function() { wrap.classList.add("answered"); }, 320);
+        state.deck = state.deck.filter(function(id) { return id !== cardId; });
+        elStatRemain.textContent = String(state.deck.length);
+        state.waitingNext = true;
+        clearTimeout(state.autoNextTimeout);
+        const cfg = DIFFICULTY_CONFIG[state.difficulty];
+        state.autoNextTimeout = setTimeout(nextCard, cfg.autoNext);
+      }
+      // AIの誤答はスコアに影響しない（静かに無視）
     }
 
     // =====================================================================
@@ -1350,8 +1539,22 @@
       e.preventDefault();
       clearInterval(state.timerInterval);
       clearTimeout(state.autoNextTimeout);
+      clearTimeout(state.aiTimeout);
       SpeechEngine.cancel();
       showScreen("screen-start");
+    });
+
+    // AI対戦トグル
+    document.getElementById("btn-ai-toggle").addEventListener("click", function() {
+      if (state.mode === "ai-battle") {
+        state.mode = "solo";
+        this.textContent = "🤖 AI対戦をオンにする";
+        this.classList.remove("active");
+      } else {
+        state.mode = "ai-battle";
+        this.textContent = "🤖 AI対戦モード：オン";
+        this.classList.add("active");
+      }
     });
 
     // 読み上げボタン
