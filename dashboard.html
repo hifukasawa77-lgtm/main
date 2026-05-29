@@ -270,6 +270,12 @@
       flex-shrink: 0;
     }
     .btn-del-sm:hover { background: rgba(255,0,204,0.22); }
+    .stock-detail-row { display:flex; flex-wrap:wrap; gap:4px 8px; margin-top:4px; }
+    .stock-detail-chip { display:flex; flex-direction:column; font-size:0.67rem; }
+    .stock-detail-chip-lbl { color:var(--muted); }
+    .stock-detail-chip-val { color:var(--text); font-weight:500; }
+    .stock-yutai-link { font-size:0.67rem; color:var(--cyan); text-decoration:none; }
+    .stock-yutai-link:hover { text-decoration:underline; }
 
     /* ── Game Score ── */
     .score-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: 180px; }
@@ -1039,6 +1045,81 @@ async function fetchStock(symbol){
     tryFetch(`https://api.allorigins.win/get?url=${enc}`, true),
     tryFetch(`https://api.allorigins.win/raw?url=${enc}`, false),
   ]);
+}
+
+/* ── 業種名マッピング（英語→日本語）── */
+const INDUSTRY_JA = {
+  'Auto Manufacturers':'自動車','Auto Parts':'自動車部品',
+  'Semiconductors':'半導体','Semiconductor Equipment':'半導体製造装置',
+  'Consumer Electronics':'電機・精密機器','Electronic Components':'電子部品',
+  'Electrical Equipment & Parts':'電気機器',
+  'Software—Application':'ソフトウェア','Software—Infrastructure':'ソフトウェア基盤',
+  'Information Technology Services':'ITサービス',
+  'Banks—Diversified':'銀行','Banks—Regional':'地方銀行',
+  'Insurance—Life':'生命保険','Insurance—Property & Casualty':'損害保険',
+  'Capital Markets':'証券・金融',
+  'Steel':'鉄鋼','Aluminum':'非鉄金属',
+  'Specialty Chemicals':'化学','Diversified Chemicals':'総合化学',
+  'Drug Manufacturers—General':'医薬品','Drug Manufacturers—Specialty & Generic':'ジェネリック医薬品',
+  'Medical Instruments & Supplies':'医療機器',
+  'Food Distribution':'食料品','Beverages—Non-Alcoholic':'飲料','Beverages—Alcoholic':'酒類',
+  'Grocery Stores':'スーパー','Department Stores':'百貨店','Specialty Retail':'小売業',
+  'Telecom Services':'通信サービス',
+  'Oil & Gas Integrated':'石油・ガス','Oil & Gas E&P':'石油開発',
+  'Real Estate—Diversified':'不動産','REIT—Diversified':'不動産投資信託',
+  'Industrial Distribution':'機械商社','Specialty Industrial Machinery':'産業機械',
+  'Farm & Construction Machinery':'建設機械',
+  'Publishing':'出版','Advertising Agencies':'広告',
+  'Leisure':'レジャー','Resorts & Casinos':'観光・ホテル',
+  'Restaurants':'外食',
+  'Paper & Paper Products':'紙・パルプ',
+};
+
+function fmtMarketCap(cap, currency) {
+  if (!cap) return '—';
+  if (currency === 'JPY' || (cap > 1e12 && currency !== 'USD')) {
+    if (cap >= 1e12) return (cap / 1e12).toFixed(1) + '兆円';
+    if (cap >= 1e8)  return Math.round(cap / 1e8) + '億円';
+    return Math.round(cap / 1e4) + '万円';
+  }
+  if (cap >= 1e12) return (cap / 1e12).toFixed(2) + 'T';
+  if (cap >= 1e9)  return (cap / 1e9).toFixed(1) + 'B';
+  return (cap / 1e6).toFixed(0) + 'M';
+}
+
+function fmtShares(n) {
+  if (!n) return '—';
+  if (n >= 1e8) return (n / 1e8).toFixed(1) + '億株';
+  if (n >= 1e4) return Math.round(n / 1e4) + '万株';
+  return n.toLocaleString() + '株';
+}
+
+async function fetchStockDetail(symbol) {
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`;
+  const enc = encodeURIComponent(url);
+  const parse = text => {
+    const d = JSON.parse(text);
+    const q = d?.quoteResponse?.result?.[0];
+    if (!q) throw new Error('no result');
+    return {
+      industry: q.industry || '',
+      marketCap: q.marketCap || 0,
+      sharesOutstanding: q.sharesOutstanding || 0,
+      dividendYield: q.trailingAnnualDividendYield || 0,
+      currency: q.currency || '',
+    };
+  };
+  const tryFetch = async (proxyUrl, isJson) => {
+    const res = await fetchWithTimeout(proxyUrl, {}, 8000);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = isJson ? String((await res.json())?.contents || '') : await res.text();
+    return parse(text);
+  };
+  return Promise.any([
+    tryFetch(`https://thingproxy.freeboard.io/fetch/${url}`, false),
+    tryFetch(`https://api.allorigins.win/get?url=${enc}`, true),
+    tryFetch(`https://api.allorigins.win/raw?url=${enc}`, false),
+  ]).catch(() => ({}));
 }
 
 const STOCK_INDICES = [
@@ -1847,7 +1928,8 @@ async function addStockFromInput() {
     return;
   }
 
-  customTickers.push({ symbol, name });
+  const detail = await fetchStockDetail(symbol).catch(() => ({}));
+  customTickers.push({ symbol, name, ...detail, detailFetchedAt: Date.now() });
   saveCustomTickers();
   input.value = '';
   suggestSelected = '';
@@ -1861,6 +1943,26 @@ function removeCustomStock(symbol) {
   renderCustomStocks();
 }
 
+function buildDetailRow(ct) {
+  const industryEn = ct.industry || '';
+  const industryJa = INDUSTRY_JA[industryEn] || industryEn || '—';
+  const cap = fmtMarketCap(ct.marketCap, ct.currency);
+  const shares = fmtShares(ct.sharesOutstanding);
+  const div = ct.dividendYield ? (ct.dividendYield * 100).toFixed(2) + '%' : '—';
+  const isTSE = /\.T$/i.test(ct.symbol);
+  const code = ct.symbol.replace(/\.T$/i, '');
+  const yutaiLink = isTSE
+    ? `<a class="stock-yutai-link" href="https://kabutan.jp/stock/?code=${encodeURIComponent(code)}" target="_blank" rel="noopener">株主優待 ↗</a>`
+    : '';
+  return `<div class="stock-detail-row">
+    <span class="stock-detail-chip"><span class="stock-detail-chip-lbl">業種</span><span class="stock-detail-chip-val">${escHtml(industryJa)}</span></span>
+    <span class="stock-detail-chip"><span class="stock-detail-chip-lbl">時価総額</span><span class="stock-detail-chip-val">${escHtml(cap)}</span></span>
+    <span class="stock-detail-chip"><span class="stock-detail-chip-lbl">発行済株式</span><span class="stock-detail-chip-val">${escHtml(shares)}</span></span>
+    <span class="stock-detail-chip"><span class="stock-detail-chip-lbl">配当利回り</span><span class="stock-detail-chip-val">${escHtml(div)}</span></span>
+    ${yutaiLink}
+  </div>`;
+}
+
 async function renderCustomStocks() {
   const el = document.getElementById('custom-stock-list');
   if (!el) return;
@@ -1869,32 +1971,62 @@ async function renderCustomStocks() {
   el.innerHTML = `<div class="stock-suggest-msg">${t('stock-fetching')}</div>`;
   const results = await Promise.allSettled(customTickers.map(ct => fetchStock(ct.symbol)));
 
+  // 詳細データ未取得の銘柄は背景でフェッチしてlocalStorageを更新
+  const needsDetail = customTickers
+    .map((ct, i) => ({ ct, i }))
+    .filter(({ ct }) => !ct.detailFetchedAt);
+  if (needsDetail.length) {
+    Promise.allSettled(needsDetail.map(({ ct, i }) =>
+      fetchStockDetail(ct.symbol).then(d => {
+        customTickers[i] = { ...ct, ...d, detailFetchedAt: Date.now() };
+      })
+    )).then(() => {
+      saveCustomTickers();
+      renderCustomStocks();
+    });
+  }
+
   el.innerHTML = results.map((r, i) => {
     const ct = customTickers[i];
     const delBtn = `<button class="btn-del-sm" onclick="removeCustomStock('${escHtml(ct.symbol)}')">削除</button>`;
+    const detailRow = ct.detailFetchedAt ? buildDetailRow(ct) : '';
     if (r.status === 'fulfilled') {
       const { price, prev } = r.value;
       const chg = price - prev;
       const pct = (chg / prev) * 100;
       const cls = chg >= 0 ? 'up' : 'down';
       const sign = chg >= 0 ? '+' : '';
-      return `<div class="custom-stock-item">
-        <div class="custom-stock-info">
-          <span class="custom-stock-name">${escHtml(ct.name)}</span>
-          <span class="custom-stock-ticker">${escHtml(ct.symbol)}</span>
+      return `<div class="custom-stock-item" style="flex-wrap:wrap;">
+        <div class="custom-stock-info" style="flex-basis:100%;min-width:0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span>
+              <span class="custom-stock-name">${escHtml(ct.name)}</span>
+              <span class="custom-stock-ticker">${escHtml(ct.symbol)}</span>
+            </span>
+            <span style="display:flex;align-items:center;gap:6px;">
+              <span class="stock-val ${cls}" style="font-size:0.88rem;">${fmtNum(price)}</span>
+              <span class="stock-change ${cls}">${sign}${fmtNum(chg)} (${sign}${pct.toFixed(2)}%)</span>
+              ${delBtn}
+            </span>
+          </div>
+          ${detailRow}
         </div>
-        <span class="stock-val ${cls}" style="font-size:0.88rem;">${fmtNum(price)}</span>
-        <span class="stock-change ${cls}">${sign}${fmtNum(chg)} (${sign}${pct.toFixed(2)}%)</span>
-        ${delBtn}
       </div>`;
     } else {
-      return `<div class="custom-stock-item">
-        <div class="custom-stock-info">
-          <span class="custom-stock-name">${escHtml(ct.name)}</span>
-          <span class="custom-stock-ticker">${escHtml(ct.symbol)}</span>
+      return `<div class="custom-stock-item" style="flex-wrap:wrap;">
+        <div class="custom-stock-info" style="flex-basis:100%;min-width:0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span>
+              <span class="custom-stock-name">${escHtml(ct.name)}</span>
+              <span class="custom-stock-ticker">${escHtml(ct.symbol)}</span>
+            </span>
+            <span style="display:flex;align-items:center;gap:6px;">
+              <span class="down" style="font-size:0.75rem;">${t('stock-fail')}</span>
+              ${delBtn}
+            </span>
+          </div>
+          ${detailRow}
         </div>
-        <span class="down" style="font-size:0.75rem;">${t('stock-fail')}</span>
-        ${delBtn}
       </div>`;
     }
   }).join('');
