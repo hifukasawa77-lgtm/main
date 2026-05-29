@@ -6488,16 +6488,8 @@
         } catch (e) { /* ignore */ }
 
         const enc = encodeURIComponent(symbol);
-        // 複数エンドポイント（query1/query2 × quote/chart）を完全並列で試行
-        const endpoints = [
-          `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${enc}`,
-          `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${enc}`,
-          `https://query1.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=2d`,
-          `https://query2.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=2d`,
-        ];
-
-        const parsed = await Promise.any(
-          endpoints.map(url =>
+        const tryEndpoints = (urls) => Promise.any(
+          urls.map(url =>
             fetchJsonWithProxies(url).then(payload => {
               const r = parseStockPayload(payload);
               if (!r) throw new Error('parse-failed');
@@ -6505,6 +6497,17 @@
             })
           )
         ).catch(() => null);
+
+        // v7 quote を優先（業種・発行済株式数・配当利回りが含まれる）、失敗時のみ v8 chart へフォールバック
+        const v7urls = [
+          `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${enc}`,
+          `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${enc}`,
+        ];
+        const v8urls = [
+          `https://query1.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=2d`,
+          `https://query2.finance.yahoo.com/v8/finance/chart/${enc}?interval=1d&range=2d`,
+        ];
+        const parsed = (await tryEndpoints(v7urls)) ?? (await tryEndpoints(v8urls));
 
         if (!parsed) {
           if (staleData) return staleData;
