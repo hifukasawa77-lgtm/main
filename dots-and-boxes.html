@@ -154,9 +154,9 @@
     display: block;
     border-radius: var(--radius);
     background:
-      linear-gradient(90deg, rgba(128, 99, 55, 0.08) 1px, transparent 1px),
-      linear-gradient(0deg, rgba(128, 99, 55, 0.08) 1px, transparent 1px),
-      #fffaf0;
+      radial-gradient(circle at 18% 20%, rgba(0, 245, 255, 0.12), transparent 24%),
+      radial-gradient(circle at 82% 78%, rgba(168, 85, 247, 0.13), transparent 26%),
+      #070a12;
     background-size: 34px 34px;
     cursor: pointer;
     touch-action: none;
@@ -370,6 +370,19 @@ const hintBtn = document.getElementById('hintBtn');
 
 const PLAYER = 'player';
 const CPU = 'cpu';
+const ASSET_PATH = 'assets/dots-and-boxes/gpt-image-2-dots-atlas.png';
+const atlas = new Image();
+let assetsReady = false;
+const SPRITES = {
+  board: { x: 58, y: 94, w: 344, h: 344 },
+  dot: { x: 548, y: 132, w: 150, h: 190 },
+  playerLine: { x: 838, y: 214, w: 352, h: 96 },
+  cpuLine: { x: 68, y: 574, w: 338, h: 76 },
+  pendingLine: { x: 460, y: 574, w: 336, h: 76 },
+  hintLine: { x: 846, y: 574, w: 338, h: 76 },
+  playerBox: { x: 68, y: 786, w: 350, h: 350 },
+  cpuBox: { x: 458, y: 786, w: 350, h: 350 },
+};
 const COLORS = {
   player: '#2f7d58',
   cpu: '#b85c38',
@@ -388,6 +401,12 @@ let current = PLAYER;
 let gameOver = false;
 let cpuThinking = false;
 let hintEdge = null;
+
+atlas.onload = () => {
+  assetsReady = true;
+  draw();
+};
+atlas.src = ASSET_PATH;
 
 function makeMatrix(rows, cols, fill = null) {
   return Array.from({ length: rows }, () => Array.from({ length: cols }, () => fill));
@@ -423,23 +442,24 @@ function dotPos(row, col) {
 function draw() {
   const { size, step } = metrics();
   ctx.clearRect(0, 0, size, size);
-  ctx.fillStyle = '#fffaf0';
-  ctx.fillRect(0, 0, size, size);
+  if (assetsReady) {
+    ctx.fillStyle = '#070a12';
+    ctx.fillRect(0, 0, size, size);
+    drawSprite(SPRITES.board, 0, 0, size, size);
+  } else {
+    ctx.fillStyle = '#fffaf0';
+    ctx.fillRect(0, 0, size, size);
+  }
 
   for (let r = 0; r < boxesPerSide; r++) {
     for (let c = 0; c < boxesPerSide; c++) {
       if (!owners[r][c]) continue;
       const p = dotPos(r, c);
-      ctx.fillStyle = owners[r][c] === PLAYER ? COLORS.boxPlayer : COLORS.boxCpu;
-      roundRect(p.x + 6, p.y + 6, step - 12, step - 12, 8);
-      ctx.fill();
-      ctx.fillStyle = owners[r][c] === PLAYER ? COLORS.player : COLORS.cpu;
-      ctx.globalAlpha = 0.72;
-      ctx.font = `800 ${Math.max(18, step * 0.26)}px Segoe UI, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(owners[r][c] === PLAYER ? 'Y' : 'C', p.x + step / 2, p.y + step / 2);
-      ctx.globalAlpha = 1;
+      if (!drawBoxAsset(owners[r][c], p.x + 4, p.y + 4, step - 8, step - 8)) {
+        ctx.fillStyle = owners[r][c] === PLAYER ? COLORS.boxPlayer : COLORS.boxCpu;
+        roundRect(p.x + 6, p.y + 6, step - 12, step - 12, 8);
+        ctx.fill();
+      }
     }
   }
 
@@ -453,13 +473,15 @@ function draw() {
   for (let r = 0; r <= boxesPerSide; r++) {
     for (let c = 0; c <= boxesPerSide; c++) {
       const p = dotPos(r, c);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, Math.max(5, step * 0.055), 0, Math.PI * 2);
-      ctx.fillStyle = COLORS.dot;
-      ctx.fill();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#f2e6d2';
-      ctx.stroke();
+      if (!drawDotAsset(p.x, p.y, step)) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(5, step * 0.055), 0, Math.PI * 2);
+        ctx.fillStyle = COLORS.dot;
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#f2e6d2';
+        ctx.stroke();
+      }
     }
   }
 }
@@ -475,6 +497,7 @@ function drawEdges(matrix, type) {
 }
 
 function drawSingleEdge(edge, color, width, glow) {
+  if (drawEdgeAsset(edge, color, width, glow)) return;
   const a = edge.type === 'h' ? dotPos(edge.r, edge.c) : dotPos(edge.r, edge.c);
   const b = edge.type === 'h' ? dotPos(edge.r, edge.c + 1) : dotPos(edge.r + 1, edge.c);
   ctx.save();
@@ -490,6 +513,52 @@ function drawSingleEdge(edge, color, width, glow) {
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
   ctx.restore();
+}
+
+function spriteForLine(color) {
+  if (color === COLORS.player) return SPRITES.playerLine;
+  if (color === COLORS.cpu) return SPRITES.cpuLine;
+  if (color === COLORS.hint) return SPRITES.hintLine;
+  return SPRITES.pendingLine;
+}
+
+function drawSprite(sprite, x, y, w, h, alpha = 1, rotation = 0) {
+  if (!assetsReady) return false;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (rotation) {
+    ctx.translate(x + w / 2, y + h / 2);
+    ctx.rotate(rotation);
+    ctx.drawImage(atlas, sprite.x, sprite.y, sprite.w, sprite.h, -w / 2, -h / 2, w, h);
+  } else {
+    ctx.drawImage(atlas, sprite.x, sprite.y, sprite.w, sprite.h, x, y, w, h);
+  }
+  ctx.restore();
+  return true;
+}
+
+function drawBoxAsset(owner, x, y, w, h) {
+  const sprite = owner === PLAYER ? SPRITES.playerBox : SPRITES.cpuBox;
+  return drawSprite(sprite, x, y, w, h, 0.88);
+}
+
+function drawDotAsset(x, y, step) {
+  const size = Math.max(24, step * 0.24);
+  return drawSprite(SPRITES.dot, x - size / 2, y - size / 2, size, size);
+}
+
+function drawEdgeAsset(edge, color, width, glow) {
+  const a = dotPos(edge.r, edge.c);
+  const b = edge.type === 'h' ? dotPos(edge.r, edge.c + 1) : dotPos(edge.r + 1, edge.c);
+  const length = Math.hypot(b.x - a.x, b.y - a.y);
+  const thickness = Math.max(width * 3.4, metrics().step * 0.16);
+  const alpha = color === COLORS.pending ? 0.55 : 0.95;
+  const sprite = spriteForLine(color);
+
+  if (edge.type === 'h') {
+    return drawSprite(sprite, a.x - thickness * 0.48, a.y - thickness / 2, length + thickness * 0.96, thickness, alpha);
+  }
+  return drawSprite(sprite, a.x - thickness / 2, a.y - thickness * 0.48, length + thickness * 0.96, thickness, alpha, Math.PI / 2);
 }
 
 function roundRect(x, y, w, h, r) {
