@@ -1,10 +1,9 @@
-const CACHE_NAME = 'receipt-ocr-v1';
+const CACHE_NAME = 'hide-no-heya-v1';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/manifest.json'
+  '/main/',
+  '/main/index.html',
+  '/main/manifest.json',
+  '/main/assets/og-image.png'
 ];
 
 self.addEventListener('install', event => {
