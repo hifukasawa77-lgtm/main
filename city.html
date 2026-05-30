@@ -109,6 +109,15 @@ canvas { display: block; cursor: crosshair; }
   font-size: 0.68rem; color: #6e7a87; min-height: 15px;
   font-family: 'Courier New', monospace;
 }
+#map-ctrl {
+  display: flex; gap: 3px; flex-wrap: wrap;
+  margin-top: 4px; width: 640px;
+}
+@media (max-width: 680px) {
+  #toolbar, #controls, #status-bar, #info-line, #map-ctrl { width: 100%; }
+  #canvas-wrap { width: 100%; height: auto; aspect-ratio: 640/512; }
+  canvas { width: 100%; height: 100%; }
+}
 </style>
 </head>
 <body>
@@ -175,15 +184,23 @@ canvas { display: block; cursor: crosshair; }
     <button class="c-btn" id="btn-pause">⏸ 停止</button>
   </div>
 </div>
-<div id="info-line">↑↓←→ キー / ボタンでスクロール | タイルをクリックして建設</div>
+<div id="map-ctrl">
+  <button class="c-btn map-type-btn active" data-mtype="0">🌿ランダム</button>
+  <button class="c-btn map-type-btn" data-mtype="1">🌾平野</button>
+  <button class="c-btn map-type-btn" data-mtype="2">🌲森林</button>
+  <button class="c-btn map-type-btn" data-mtype="3">⛰山地</button>
+  <button class="c-btn map-type-btn" data-mtype="4">🌊海岸</button>
+  <button class="c-btn" id="btn-newmap">↺ 新マップ</button>
+</div>
+<div id="info-line">ドラッグ: マップ移動 | タップ/クリック: 建設 | 矢印キー: 移動</div>
 
 <script>
 // ============================================================
 // ① CONSTANTS
 // ============================================================
 const TS    = 32;
-const COLS  = 40;
-const ROWS  = 32;
+const COLS  = 64;
+const ROWS  = 50;
 const VCOLS = 20;
 const VROWS = 16;
 
@@ -383,7 +400,7 @@ function init() {
   );
   viewX = Math.floor((COLS - VCOLS) / 2);
   viewY = Math.floor((ROWS - VROWS) / 2);
-  generateTerrain();
+  generateTerrain(currentMapType);
   document.getElementById('overlay').classList.remove('show');
   updateUI();
 }
@@ -410,28 +427,38 @@ function octNoise(x, y, oct, seed) {
   }
   return v/mx;
 }
-function generateTerrain() {
+let currentMapType = 0;
+// Terrain presets: [seaT, riverT, highT, forestH, forestM, rivers, fClusters]
+const MAP_PRESETS = [
+  {seaT:0.28, riverT:0.37, highT:0.64, forestH:0.40, forestM:0.52, rivers:5, fClusters:14}, // random
+  {seaT:0.18, riverT:0.25, highT:0.78, forestH:0.48, forestM:0.68, rivers:2, fClusters:5},  // plains
+  {seaT:0.20, riverT:0.28, highT:0.70, forestH:0.35, forestM:0.42, rivers:4, fClusters:24}, // forest
+  {seaT:0.22, riverT:0.30, highT:0.52, forestH:0.55, forestM:0.65, rivers:7, fClusters:8},  // highland
+  {seaT:0.44, riverT:0.52, highT:0.72, forestH:0.58, forestM:0.52, rivers:5, fClusters:10}, // coastal
+];
+function generateTerrain(mapType=0) {
+  const p = MAP_PRESETS[mapType] || MAP_PRESETS[0];
   const s = Math.random()*1000;
   for (let r=0; r<ROWS; r++) {
     for (let c=0; c<COLS; c++) {
       const h = octNoise(c/COLS*4, r/ROWS*4, 5, s);
       const m = octNoise(c/COLS*3, r/ROWS*3, 3, s+500);
       let t;
-      if (h < 0.30)      t = TR.SEA;
-      else if (h < 0.38) t = TR.RIVER;
-      else if (h > 0.72) t = TR.HIGHLAND;
-      else if (m > 0.65 && h > 0.42) t = TR.FOREST;
-      else                t = TR.GRASS;
+      if (h < p.seaT)      t = TR.SEA;
+      else if (h < p.riverT) t = TR.RIVER;
+      else if (h > p.highT) t = TR.HIGHLAND;
+      else if (m > p.forestM && h > p.forestH) t = TR.FOREST;
+      else                  t = TR.GRASS;
       state.map[r][c].terrain = t;
     }
   }
-  // Rivers: random walk from highland to sea
-  for (let ri=0; ri<3; ri++) {
+  // Rivers: random walk from highland toward sea
+  for (let ri=0; ri<p.rivers; ri++) {
     const starts=[];
     for (let r=0; r<ROWS; r++)
       for (let c=0; c<COLS; c++)
         if (state.map[r][c].terrain===TR.HIGHLAND) starts.push([r,c]);
-    if (!starts.length) continue;
+    if (!starts.length) break;
     let [r,c] = starts[Math.floor(Math.random()*starts.length)];
     for (let step=0; step<ROWS*2; step++) {
       state.map[r][c].terrain = TR.RIVER;
@@ -442,7 +469,7 @@ function generateTerrain() {
     }
   }
   // Forests: random clusters
-  for (let fi=0; fi<10; fi++) {
+  for (let fi=0; fi<p.fClusters; fi++) {
     const fr=Math.floor(Math.random()*ROWS), fc=Math.floor(Math.random()*COLS);
     const sz=2+Math.floor(Math.random()*4);
     for (let dr=-sz; dr<=sz; dr++)
@@ -1299,6 +1326,40 @@ document.getElementById('sc-right').addEventListener('click',()=>scrollView(3,0)
 document.getElementById('sc-up').addEventListener('click',()=>scrollView(0,-3));
 document.getElementById('sc-down').addEventListener('click',()=>scrollView(0,3));
 
+// Touch controls: drag to pan, tap to place
+let touchStartX=0, touchStartY=0, lastTouchX=0, lastTouchY=0;
+let touchPanMode=false, dragAccX=0, dragAccY=0;
+canvas.addEventListener('touchstart', e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  touchStartX=lastTouchX=t.clientX;
+  touchStartY=lastTouchY=t.clientY;
+  touchPanMode=false; dragAccX=0; dragAccY=0;
+},{passive:false});
+canvas.addEventListener('touchmove', e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  if (!touchPanMode && (Math.abs(t.clientX-touchStartX)>8 || Math.abs(t.clientY-touchStartY)>8))
+    touchPanMode=true;
+  if (touchPanMode) {
+    const rect=canvas.getBoundingClientRect();
+    dragAccX+=(t.clientX-lastTouchX)*canvas.width/rect.width;
+    dragAccY+=(t.clientY-lastTouchY)*canvas.height/rect.height;
+    const dx=Math.trunc(dragAccX/TS), dy=Math.trunc(dragAccY/TS);
+    if (dx||dy){ scrollView(-dx,-dy); dragAccX-=dx*TS; dragAccY-=dy*TS; }
+  }
+  lastTouchX=t.clientX; lastTouchY=t.clientY;
+},{passive:false});
+canvas.addEventListener('touchend', e=>{
+  e.preventDefault();
+  if (!touchPanMode){
+    const t=e.changedTouches[0];
+    const {r,c}=screenToTile(t.clientX,t.clientY);
+    if (state.isDemolish) demolish(r,c); else placeTile(r,c,state.selectedTool);
+  }
+  touchPanMode=false;
+},{passive:false});
+
 // ============================================================
 // ⑫ UI
 // ============================================================
@@ -1315,7 +1376,7 @@ function setInfo(msg) {
   const el=document.getElementById('info-line');
   if (!el) return;
   el.textContent=msg;
-  setTimeout(()=>{ if(el.textContent===msg) el.textContent='↑↓←→ キー / ボタンでスクロール | クリックして建設'; },3500);
+  setTimeout(()=>{ if(el.textContent===msg) el.textContent='ドラッグ: マップ移動 | タップ/クリック: 建設 | 矢印キー: 移動'; },3500);
 }
 function showOverlay(title, sub, color) {
   const ol=document.getElementById('overlay');
@@ -1378,6 +1439,16 @@ function initToolbar() {
   });
   // Restart
   document.getElementById('ov-btn').addEventListener('click',()=>{ init(); setSpeed(state.speed); });
+  // Map type selection
+  document.querySelectorAll('.map-type-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      document.querySelectorAll('.map-type-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      currentMapType=parseInt(btn.dataset.mtype);
+    });
+  });
+  // New map button
+  document.getElementById('btn-newmap').addEventListener('click',()=>{ init(); setSpeed(state.speed); });
 }
 
 // ============================================================
