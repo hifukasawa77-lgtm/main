@@ -44,6 +44,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--sky);color:var
 .tool-icon{width:22px;height:22px;border-radius:3px;flex-shrink:0;image-rendering:pixelated}
 .tool-cost{margin-left:auto;font-size:.66rem;color:var(--txt2);font-weight:600;white-space:nowrap}
 .tool-btn.active .tool-cost{color:rgba(255,255,255,.85)}
+.map-type-btn,#btn-newmap{display:inline-block;margin:2px 2px;padding:3px 6px;font-size:.6rem;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--txt2);cursor:pointer;}
+.map-type-btn.active{background:var(--blue);border-color:var(--blue);color:#fff;}
+.map-type-btn:hover,#btn-newmap:hover{border-color:#aaa;background:#fafafa;color:#333;}
 #tips{margin-top:auto;border-top:1px solid var(--border);padding:8px 3px 0;font-size:.6rem;color:var(--txt2);line-height:1.8}
 
 /* Canvas */
@@ -134,9 +137,18 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--sky);color:var
     <div class="tg-label">ツール</div>
     <button class="tool-btn" data-tool="bulldoze"><canvas class="tool-icon" id="ico-bulldoze"></canvas>撤去<span class="tool-cost">$10</span></button>
   </div>
+  <div>
+    <div class="tg-label">マップタイプ</div>
+    <button class="map-type-btn active" data-mtype="0">🌿ランダム</button>
+    <button class="map-type-btn" data-mtype="1">🌾平野</button>
+    <button class="map-type-btn" data-mtype="2">🌲森林</button>
+    <button class="map-type-btn" data-mtype="3">⛰山地</button>
+    <button class="map-type-btn" data-mtype="4">🌊海岸</button>
+    <button id="btn-newmap">↺ 新マップ</button>
+  </div>
   <div id="tips">
-    右ドラッグ: 移動<br>
-    ホイール: ズーム<br>
+    右ドラッグ/1本指ドラッグ: 移動<br>
+    ホイール/2本指ピンチ: ズーム<br>
     R線 J路 K駅 A空港<br>
     H住 C商 I工 P公園<br>
     Q警 F消 M病 O学<br>
@@ -176,7 +188,16 @@ const T = {
   STADIUM:13, AIRPORT:14,
   RAIL:15, STATION:16,
 };
-const GRID=40, BASE=32, SIM_MS=5000;
+const GRID=60, BASE=32, SIM_MS=5000;
+const TR={GRASS:0,RIVER:1,HIGHLAND:2,FOREST:3,SEA:4};
+let currentMapType=0;
+const MAP_PRESETS=[
+  {seaT:.28,riverT:.37,highT:.64,forestH:.40,forestM:.52,rivers:5,fClusters:14},
+  {seaT:.18,riverT:.25,highT:.78,forestH:.48,forestM:.68,rivers:2,fClusters:5},
+  {seaT:.20,riverT:.28,highT:.70,forestH:.35,forestM:.42,rivers:4,fClusters:24},
+  {seaT:.22,riverT:.30,highT:.52,forestH:.55,forestM:.65,rivers:7,fClusters:8},
+  {seaT:.44,riverT:.52,highT:.72,forestH:.58,forestM:.52,rivers:5,fClusters:10},
+];
 
 const COSTS={
   road:50,rail:80,station:1000,airport:5000,
@@ -207,8 +228,8 @@ const TOOL_TYPE={
 // ════════════════════════════════════════════════════════════
 //  Grid
 // ════════════════════════════════════════════════════════════
-function mkTile(type){
-  return{type,level:type===0?0:1,powered:false,road:false,rail:false,
+function mkTile(type,terrain=TR.GRASS){
+  return{type,terrain,level:type===0?0:1,powered:false,road:false,rail:false,
     gasAccess:false,waterAccess:false,sewerAccess:false,
     pollution:0,growTimer:0,
     util:{gas:false,water:false,powerline:false,sewer:false}};
@@ -217,10 +238,72 @@ const grid=Array.from({length:GRID},()=>Array.from({length:GRID},()=>mkTile(T.EM
 
 const gs={
   funds:10000,year:1,population:0,happiness:100,income:0,
-  tool:'road',speed:1,
+  tool:'road',speed:1,frame:0,
   cam:{x:0,y:0},zoom:1.6,
   hover:null,dragging:false,dragPt:null,drawing:false,lastSim:0,
 };
+
+// ════════════════════════════════════════════════════════════
+//  Terrain generation
+// ════════════════════════════════════════════════════════════
+function hash2(x,y,s){let n=Math.sin(x*127.1+y*311.7+s*74.3)*43758.5453;return n-Math.floor(n);}
+function octNoise(x,y,oct,seed){
+  let v=0,a=1,f=1,mx=0;
+  for(let i=0;i<oct;i++){
+    const fx=x*f,fy=y*f,ix=Math.floor(fx),iy=Math.floor(fy);
+    const tx=fx-ix,ty=fy-iy,ux=tx*tx*(3-2*tx),uy=ty*ty*(3-2*ty);
+    const h=hash2(ix,iy,seed+i*13)*(1-ux)*(1-uy)+hash2(ix+1,iy,seed+i*13)*ux*(1-uy)
+           +hash2(ix,iy+1,seed+i*13)*(1-ux)*uy+hash2(ix+1,iy+1,seed+i*13)*ux*uy;
+    v+=h*a;mx+=a;a*=.5;f*=2;
+  }
+  return v/mx;
+}
+function generateTerrain(mapType=0){
+  const p=MAP_PRESETS[mapType]||MAP_PRESETS[0];
+  const s=Math.random()*1000;
+  for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
+    const h=octNoise(x/GRID*4,y/GRID*4,5,s);
+    const m=octNoise(x/GRID*3,y/GRID*3,3,s+500);
+    let t;
+    if(h<p.seaT) t=TR.SEA;
+    else if(h<p.riverT) t=TR.RIVER;
+    else if(h>p.highT) t=TR.HIGHLAND;
+    else if(m>p.forestM&&h>p.forestH) t=TR.FOREST;
+    else t=TR.GRASS;
+    grid[y][x].terrain=t;
+  }
+  for(let ri=0;ri<p.rivers;ri++){
+    const starts=[];
+    for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++)
+      if(grid[y][x].terrain===TR.HIGHLAND)starts.push([x,y]);
+    if(!starts.length)break;
+    let[x,y]=starts[Math.floor(Math.random()*starts.length)];
+    for(let step=0;step<GRID*2;step++){
+      grid[y][x].terrain=TR.RIVER;
+      const d=[[1,0],[0,1],[0,-1],[1,1],[1,-1]][Math.floor(Math.random()*5)];
+      x=Math.max(0,Math.min(GRID-1,x+d[0]));y=Math.max(0,Math.min(GRID-1,y+d[1]));
+      if(grid[y][x].terrain===TR.SEA)break;
+    }
+  }
+  for(let fi=0;fi<p.fClusters;fi++){
+    const fx=Math.floor(Math.random()*GRID),fy=Math.floor(Math.random()*GRID);
+    const sz=2+Math.floor(Math.random()*4);
+    for(let dy=-sz;dy<=sz;dy++)for(let dx=-sz;dx<=sz;dx++){
+      if(dx*dx+dy*dy>sz*sz)continue;
+      const nx=fx+dx,ny=fy+dy;
+      if(nx<0||nx>=GRID||ny<0||ny>=GRID)continue;
+      if(grid[ny][nx].terrain===TR.GRASS&&Math.random()<.7)grid[ny][nx].terrain=TR.FOREST;
+    }
+  }
+}
+function resetGrid(){
+  for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++)grid[y][x]=mkTile(T.EMPTY);
+  generateTerrain(currentMapType);
+  center();
+  Object.assign(gs,{funds:10000,year:1,population:0,happiness:100,income:0,lastSim:0,frame:0});
+  updateHUD();
+}
+generateTerrain(0);
 
 // ════════════════════════════════════════════════════════════
 //  Canvas setup
@@ -269,6 +352,31 @@ function grass(c,s){
   c.fillStyle='rgba(0,0,0,.04)';c.fillRect(0,0,s,s*.5);
   c.strokeStyle='rgba(0,0,0,.07)';c.lineWidth=.5;c.strokeRect(.5,.5,s-1,s-1);
 }
+function river(c,s){
+  c.fillStyle='#1e6fa8';c.fillRect(0,0,s,s);
+  const ph=(gs.frame*.04)%(Math.PI*2);
+  c.strokeStyle='rgba(100,180,255,.4)';c.lineWidth=1;
+  for(let i=0;i<3;i++){const wy=s*.2+i*s*.25;c.beginPath();for(let px=0;px<=s;px+=3){const py=wy+Math.sin(ph+px*.25+i*1.1)*1.5;px?c.lineTo(px,py):c.moveTo(px,py);}c.stroke();}
+}
+function highland(c,s){
+  c.fillStyle='#7a6244';c.fillRect(0,0,s,s);
+  c.strokeStyle='rgba(0,0,0,.2)';c.lineWidth=.5;
+  c.beginPath();c.moveTo(s*.1,s*.6);c.lineTo(s*.4,s*.35);c.lineTo(s*.65,s*.45);c.lineTo(s*.9,s*.3);c.stroke();
+  c.fillStyle='rgba(255,255,255,.18)';c.beginPath();c.ellipse(s*.38,s*.28,s*.1,s*.05,-.3,0,Math.PI*2);c.fill();
+}
+function forest(c,s){
+  c.fillStyle='#3a6e25';c.fillRect(0,0,s,s);
+  [[s*.2,s*.55],[s*.55,s*.4],[s*.75,s*.65]].forEach(([tx,ty])=>{
+    c.fillStyle='#2e5c1d';c.beginPath();c.arc(tx,ty,s*.16,0,Math.PI*2);c.fill();
+    c.fillStyle='#4a8c32';c.beginPath();c.arc(tx-s*.03,ty-s*.05,s*.12,0,Math.PI*2);c.fill();
+  });
+}
+function sea(c,s){
+  c.fillStyle='#0e4d7a';c.fillRect(0,0,s,s);
+  const ph=(gs.frame*.025)%(Math.PI*2);
+  c.strokeStyle='rgba(50,150,220,.35)';c.lineWidth=1.2;
+  for(let i=0;i<2;i++){const wy=s*.3+i*s*.35;c.beginPath();for(let px=0;px<=s;px+=4){const py=wy+Math.sin(ph+px*.2+i*.9)*2;px?c.lineTo(px,py):c.moveTo(px,py);}c.stroke();}
+}
 function drawStar(c,cx,cy,n,R,r){
   c.beginPath();
   for(let i=0;i<n*2;i++){const rad=i%2?r:R,a=(i*Math.PI/n)-Math.PI/2;i?c.lineTo(cx+rad*Math.cos(a),cy+rad*Math.sin(a)):c.moveTo(cx+rad*Math.cos(a),cy+rad*Math.sin(a));}
@@ -284,7 +392,15 @@ function hasAdj(tx,ty,check){
 // ════════════════════════════════════════════════════════════
 //  Tile draw functions
 // ════════════════════════════════════════════════════════════
-function drawEmpty(c,s){if(drawAsset(c,'grass',s))return;grass(c,s);}
+function drawEmpty(c,s,tx,ty){
+  const tr=grid[ty][tx].terrain;
+  if(tr===TR.RIVER){river(c,s);return;}
+  if(tr===TR.HIGHLAND){highland(c,s);return;}
+  if(tr===TR.FOREST){forest(c,s);return;}
+  if(tr===TR.SEA){sea(c,s);return;}
+  if(drawAsset(c,'grass',s))return;
+  grass(c,s);
+}
 
 function drawRoad(c,s,tx,ty){
   const L=tx>0&&grid[ty][tx-1].type===T.ROAD,R=tx<GRID-1&&grid[ty][tx+1].type===T.ROAD;
@@ -685,11 +801,16 @@ const MM_COL={
   [T.POLICE]:'#1a237e',[T.FIRE]:'#c62828',[T.HOSPITAL]:'#e0e0e0',[T.SCHOOL]:'#fff9c4',
   [T.STADIUM]:'#4caf50',
 };
+const TR_MINI_COL={[TR.GRASS]:'#7ec850',[TR.RIVER]:'#1e6fa8',[TR.HIGHLAND]:'#7a6244',[TR.FOREST]:'#3a6e25',[TR.SEA]:'#0e4d7a'};
 function drawMinimap(){
   const cell=mm.width/GRID;
   mctx.fillStyle='#7ec850';mctx.fillRect(0,0,mm.width,mm.height);
   for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
-    const t=grid[y][x];if(t.type===T.EMPTY)continue;
+    const t=grid[y][x];
+    if(t.type===T.EMPTY){
+      if(t.terrain!==TR.GRASS){mctx.fillStyle=TR_MINI_COL[t.terrain]||'#7ec850';mctx.fillRect(x*cell,y*cell,cell+.5,cell+.5);}
+      continue;
+    }
     mctx.fillStyle=MM_COL[t.type]||'#ccc';
     mctx.fillRect(x*cell,y*cell,cell+.5,cell+.5);
   }
@@ -712,7 +833,7 @@ function render(){
     const t=grid[y][x];
     ctx.save();ctx.translate(px,py);
     switch(t.type){
-      case T.EMPTY:       drawEmpty(ctx,size);break;
+      case T.EMPTY:       drawEmpty(ctx,size,x,y);break;
       case T.ROAD:        drawRoad(ctx,size,x,y);break;
       case T.RAIL:        drawRail(ctx,size,x,y);break;
       case T.STATION:     drawStation(ctx,size);break;
@@ -915,14 +1036,15 @@ function showToast(txt,kind=''){
 function placeTile(tx,ty){
   if(tx<0||ty<0||tx>=GRID||ty>=GRID)return;
   const t=grid[ty][tx];
+  if(gs.tool!=='bulldoze'&&t.terrain===TR.SEA)return;
 
   if(gs.tool==='bulldoze'){
     const hasUtil=t.util.gas||t.util.water||t.util.powerline||t.util.sewer;
     if(t.type===T.EMPTY&&!hasUtil)return;
     if(gs.funds<COSTS.bulldoze){showToast('💸 資金不足！','err');return;}
     gs.funds-=COSTS.bulldoze;
-    const preserved=Object.assign({},t.util);// clear one util at a time? just clear all
-    grid[ty][tx]=mkTile(T.EMPTY);
+    const savedTerrain=t.terrain;
+    grid[ty][tx]=mkTile(T.EMPTY,savedTerrain);
     updateHUD();return;
   }
 
@@ -969,18 +1091,44 @@ wrap.addEventListener('wheel',e=>{
   gs.cam.x=mx-(mx-gs.cam.x)*(nz/gs.zoom);gs.cam.y=my-(my-gs.cam.y)*(nz/gs.zoom);gs.zoom=nz;
 },{passive:false});
 
-let _ltd=null,_tc=null;
+let _ltd=null,_tc=null,_tstart=null,_tlast=null,_tpan=false;
 wrap.addEventListener('touchstart',e=>{
   e.preventDefault();
-  if(e.touches.length===1){const r=wrap.getBoundingClientRect(),t=e.touches[0];const tile=s2t(t.clientX-r.left,t.clientY-r.top);gs.drawing=true;gs.hover=tile;placeTile(tile.x,tile.y);}
-  else if(e.touches.length===2){gs.drawing=false;_ltd=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);_tc={x:(e.touches[0].clientX+e.touches[1].clientX)/2,y:(e.touches[0].clientY+e.touches[1].clientY)/2};}
+  if(e.touches.length===1){
+    const t=e.touches[0];
+    _tstart={x:t.clientX,y:t.clientY};_tlast={x:t.clientX,y:t.clientY};
+    _tpan=false;gs.drawing=false;
+  } else if(e.touches.length===2){
+    gs.drawing=false;_tpan=false;
+    _ltd=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    _tc={x:(e.touches[0].clientX+e.touches[1].clientX)/2,y:(e.touches[0].clientY+e.touches[1].clientY)/2};
+  }
 },{passive:false});
 wrap.addEventListener('touchmove',e=>{
-  e.preventDefault();const r=wrap.getBoundingClientRect();
-  if(e.touches.length===1&&gs.drawing){const t=e.touches[0],tile=s2t(t.clientX-r.left,t.clientY-r.top);gs.hover=tile;placeTile(tile.x,tile.y);}
-  else if(e.touches.length===2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);if(_ltd)gs.zoom=Math.max(.4,Math.min(5,gs.zoom*(d/_ltd)));_ltd=d;const nc={x:(e.touches[0].clientX+e.touches[1].clientX)/2,y:(e.touches[0].clientY+e.touches[1].clientY)/2};if(_tc){gs.cam.x+=nc.x-_tc.x;gs.cam.y+=nc.y-_tc.y;}_tc=nc;}
+  e.preventDefault();
+  if(e.touches.length===1){
+    const t=e.touches[0];
+    if(!_tpan&&_tstart&&(Math.abs(t.clientX-_tstart.x)>8||Math.abs(t.clientY-_tstart.y)>8))_tpan=true;
+    if(_tpan&&_tlast){gs.cam.x+=t.clientX-_tlast.x;gs.cam.y+=t.clientY-_tlast.y;}
+    else if(!_tpan){const r=wrap.getBoundingClientRect();gs.hover=s2t(t.clientX-r.left,t.clientY-r.top);}
+    _tlast={x:t.clientX,y:t.clientY};
+  } else if(e.touches.length===2){
+    const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    if(_ltd)gs.zoom=Math.max(.4,Math.min(5,gs.zoom*(d/_ltd)));_ltd=d;
+    const nc={x:(e.touches[0].clientX+e.touches[1].clientX)/2,y:(e.touches[0].clientY+e.touches[1].clientY)/2};
+    if(_tc){gs.cam.x+=nc.x-_tc.x;gs.cam.y+=nc.y-_tc.y;}_tc=nc;
+  }
 },{passive:false});
-wrap.addEventListener('touchend',()=>{gs.drawing=false;_ltd=null;_tc=null;});
+wrap.addEventListener('touchend',e=>{
+  e.preventDefault();
+  if(!_tpan&&_tstart&&e.changedTouches.length===1){
+    const t=e.changedTouches[0];
+    const r=wrap.getBoundingClientRect();
+    const tile=s2t(t.clientX-r.left,t.clientY-r.top);
+    gs.hover=tile;placeTile(tile.x,tile.y);
+  }
+  gs.drawing=false;_ltd=null;_tc=null;_tpan=false;_tstart=null;_tlast=null;
+},{passive:false});
 
 // ════════════════════════════════════════════════════════════
 //  UI
@@ -1000,6 +1148,13 @@ document.querySelectorAll('.spd-btn').forEach(btn=>{
 document.getElementById('zoom-in').addEventListener('click',()=>gs.zoom=Math.min(5,gs.zoom*1.2));
 document.getElementById('zoom-out').addEventListener('click',()=>gs.zoom=Math.max(.4,gs.zoom/1.2));
 document.getElementById('center-btn').addEventListener('click',center);
+document.querySelectorAll('.map-type-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.map-type-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');currentMapType=parseInt(btn.dataset.mtype);
+  });
+});
+document.getElementById('btn-newmap').addEventListener('click',resetGrid);
 
 const KEY_TOOLS={
   r:'road',j:'rail',k:'station',a:'airport',
@@ -1048,7 +1203,7 @@ ico('ico-bulldoze',(c,s)=>{c.fillStyle='#f5f5f5';c.fillRect(0,0,s,s);c.strokeSty
 //  Loop
 // ════════════════════════════════════════════════════════════
 updateHUD();
-function loop(t){requestAnimationFrame(loop);render();if(gs.speed>0&&t-gs.lastSim>SIM_MS/gs.speed){gs.lastSim=t;simulate();}}
+function loop(t){gs.frame++;requestAnimationFrame(loop);render();if(gs.speed>0&&t-gs.lastSim>SIM_MS/gs.speed){gs.lastSim=t;simulate();}}
 requestAnimationFrame(loop);
 </script>
 </body>
