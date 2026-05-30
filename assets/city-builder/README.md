@@ -7,3 +7,10 @@ Generated with the built-in GPT-image2 workflow on 2026-05-27.
 - `sprites/`: transparent PNG overlays sliced from the chroma-key vehicle/effect sheet.
 
 Runtime usage is wired in `city.html`. The game draws these images first and falls back to the previous Canvas vector drawing if an image is unavailable.
+
+## 2026-05-31 terrain refresh
+
+- `tiles/terrain-forest-gpt-image-2.png`
+- `tiles/terrain-highland-gpt-image-2.png`
+- `tiles/terrain-shoreline-gpt-image-2.png`
+- Matching full-size sources are kept in `sheets/*-source.png`.
