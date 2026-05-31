@@ -136,8 +136,15 @@
       grid-template-columns:repeat(8,1fr);
       border-radius: 12px;
       overflow:hidden;
-      border:1px solid rgba(148,163,184,0.25);
-      background: rgba(0,0,0,0.2);
+      border:0;
+      padding:5.45%;
+      background:
+        linear-gradient(rgba(3,7,18,0.03), rgba(3,7,18,0.03)),
+        url("assets/chess-gpt/chess-board-gpt-image-2.png") center/cover no-repeat,
+        rgba(0,0,0,0.2);
+      box-shadow:
+        inset 0 0 0 1px rgba(148,163,184,0.25),
+        inset 0 14px 42px rgba(2,6,23,0.25);
       touch-action:none;
     }
     .sq{
@@ -151,8 +158,8 @@
       font-weight:900;
       font-variant-emoji:text;
     }
-    .sq.light{ background: linear-gradient(135deg,var(--sq-light),var(--sq-light-2)); }
-    .sq.dark{  background: linear-gradient(135deg,var(--sq-dark),var(--sq-dark-2)); }
+    .sq.light{ background: rgba(248,240,223,0.025); }
+    .sq.dark{  background: rgba(15,23,42,0.045); }
     .sq::after{
       content:"";
       position:absolute;
@@ -193,6 +200,19 @@
          1px  1px 0 rgba(248,250,252,0.60),
          0    2px 0 rgba(0,0,0,0.20),
          0    6px 18px rgba(0,0,0,0.18);
+    }
+    body.assets-ready .piece-glyph{
+      width:96%;
+      height:96%;
+      display:block;
+      background-repeat:no-repeat;
+      background-position:center bottom;
+      background-size:contain;
+      color:transparent;
+      text-shadow:none;
+      font-size:0;
+      filter: drop-shadow(0 9px 10px rgba(2,6,23,0.36));
+      transform: translateY(-2px);
     }
 
     .hint-dot{
@@ -381,6 +401,12 @@
       transition: transform 0.12s ease, background 0.12s ease;
       user-select:none;
     }
+    body.assets-ready .promo .piece-btn.piece-choice-img{
+      color:transparent;
+      background-repeat:no-repeat;
+      background-position:center bottom;
+      background-size:72% 88%;
+    }
     .promo .piece-btn:hover{ transform: translateY(-2px); background: rgba(56,189,248,0.18); }
 
     @media (max-width: 820px){
@@ -434,6 +460,7 @@
         <button class="btn primary" id="btnNew">ニューゲーム</button>
         <button class="btn" id="btnUndo">待った</button>
         <button class="btn" id="btnFlip">盤面反転</button>
+        <button class="btn" id="btnMusic">BGM</button>
       </div>
       <div class="row">
         <button class="btn small" id="btnEasy">Easy</button>
@@ -496,6 +523,21 @@
   };
   const PIECE_VALUE = { P:100, N:320, B:330, R:500, Q:900, K:0 };
   const MATE = 100000;
+  const PIECE_IMAGE_PATHS = {
+    P:"assets/chess-gpt/pieces/white-pawn.png",
+    N:"assets/chess-gpt/pieces/white-knight.png",
+    B:"assets/chess-gpt/pieces/white-bishop.png",
+    R:"assets/chess-gpt/pieces/white-rook.png",
+    Q:"assets/chess-gpt/pieces/white-queen.png",
+    K:"assets/chess-gpt/pieces/white-king.png",
+    p:"assets/chess-gpt/pieces/black-pawn.png",
+    n:"assets/chess-gpt/pieces/black-knight.png",
+    b:"assets/chess-gpt/pieces/black-bishop.png",
+    r:"assets/chess-gpt/pieces/black-rook.png",
+    q:"assets/chess-gpt/pieces/black-queen.png",
+    k:"assets/chess-gpt/pieces/black-king.png"
+  };
+  let chessAssetsReady = false;
 
   // PST indices are a1..h8 (rank 1 -> 8). Values are small.
   const PST = {
@@ -581,6 +623,7 @@
   const btnNormal = document.getElementById("btnNormal");
   const btnHard = document.getElementById("btnHard");
   const btnVsHuman = document.getElementById("btnVsHuman");
+  const btnMusic = document.getElementById("btnMusic");
 
   const pickWhite = document.getElementById("pickWhite");
   const pickBlack = document.getElementById("pickBlack");
@@ -604,6 +647,132 @@
   let pendingPromotion = null;
   let aiThinking = false;
   let tt = new Map();
+
+  function preloadChessAssets(){
+    const entries = Object.entries(PIECE_IMAGE_PATHS);
+    let remaining = entries.length;
+    let failed = false;
+    const done = () => {
+      remaining--;
+      if (remaining === 0 && !failed){
+        chessAssetsReady = true;
+        document.body.classList.add("assets-ready");
+        render();
+      }
+    };
+    for (const [key, src] of entries){
+      const img = new Image();
+      img.onload = done;
+      img.onerror = () => { failed = true; done(); };
+      img.src = src;
+      PIECE_IMAGE_PATHS[key] = src;
+    }
+  }
+
+  const ShogiBgm = (() => {
+    let ctx = null;
+    let master = null;
+    let timer = null;
+    let nextTime = 0;
+    let step = 0;
+    let playing = false;
+    const root = 196;
+    const melody = [0, 3, 5, 7, 10, 7, 5, 3, 0, 5, 7, 12, 10, 7, 3, 5];
+    const bass = [0, 0, -5, -5, -2, -2, -7, -7];
+    const freq = semi => root * Math.pow(2, semi / 12);
+
+    function ensure(){
+      if (ctx) return;
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      master = ctx.createGain();
+      master.gain.value = 0.0;
+      master.connect(ctx.destination);
+    }
+
+    function envGain(time, peak, attack, release){
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, time);
+      gain.gain.exponentialRampToValueAtTime(peak, time + attack);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + release);
+      return gain;
+    }
+
+    function pluck(time, semi, octave, peak, panValue){
+      const osc = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const gain = envGain(time, peak, 0.018, 1.05);
+      const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq(semi + octave * 12), time);
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(1450, time);
+      filter.Q.value = 0.65;
+      osc.connect(filter);
+      filter.connect(gain);
+      if (pan){
+        pan.pan.setValueAtTime(panValue, time);
+        gain.connect(pan);
+        pan.connect(master);
+      } else {
+        gain.connect(master);
+      }
+      osc.start(time);
+      osc.stop(time + 1.08);
+    }
+
+    function drum(time){
+      const osc = ctx.createOscillator();
+      const gain = envGain(time, 0.14, 0.008, 0.22);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(86, time);
+      osc.frequency.exponentialRampToValueAtTime(48, time + 0.18);
+      osc.connect(gain);
+      gain.connect(master);
+      osc.start(time);
+      osc.stop(time + 0.24);
+    }
+
+    function schedule(){
+      if (!playing) return;
+      while (nextTime < ctx.currentTime + 0.45){
+        const beat = step % 16;
+        if (beat % 2 === 0){
+          pluck(nextTime, melody[beat], beat % 8 === 0 ? 1 : 2, 0.105, beat % 4 === 0 ? -0.22 : 0.22);
+        } else if (beat === 3 || beat === 11){
+          pluck(nextTime, melody[beat] + 12, 1, 0.055, 0.34);
+        }
+        if (beat % 4 === 0){
+          pluck(nextTime, bass[Math.floor(beat / 2) % bass.length], 0, 0.08, -0.18);
+          drum(nextTime + 0.012);
+        }
+        if (beat === 6 || beat === 14){
+          pluck(nextTime, melody[beat] + 7, 1, 0.045, -0.36);
+        }
+        nextTime += 0.31;
+        step++;
+      }
+      timer = window.setTimeout(schedule, 90);
+    }
+
+    return {
+      async toggle(){
+        ensure();
+        if (ctx.state === "suspended") await ctx.resume();
+        playing = !playing;
+        master.gain.cancelScheduledValues(ctx.currentTime);
+        master.gain.linearRampToValueAtTime(playing ? 0.34 : 0.0001, ctx.currentTime + 0.18);
+        if (playing){
+          nextTime = ctx.currentTime + 0.06;
+          schedule();
+        } else if (timer){
+          window.clearTimeout(timer);
+          timer = null;
+        }
+        return playing;
+      },
+      isPlaying(){ return playing; }
+    };
+  })();
 
   function opp(side){ return side === "w" ? "b" : "w"; }
   function isUpper(ch){ return ch && ch === ch.toUpperCase(); }
@@ -1155,6 +1324,7 @@
       const glyph = sqEl.firstChild;
       glyph.textContent = p ? PIECE_TO_CHAR[p] : "";
       glyph.className = "piece-glyph" + (p ? (" " + (colorOf(p)==="w" ? "piece-white" : "piece-black")) : "");
+      glyph.style.backgroundImage = p && chessAssetsReady ? `url("${PIECE_IMAGE_PATHS[p]}")` : "";
     }
 
     // selection + hints
@@ -1253,9 +1423,14 @@
     const isWhite = side === "w";
     const options = ["Q","R","B","N"];
     for (const pt of options){
+      const pieceKey = isWhite ? pt : pt.toLowerCase();
       const btn = document.createElement("button");
       btn.className = "piece-btn";
-      btn.textContent = PIECE_TO_CHAR[isWhite ? pt : pt.toLowerCase()];
+      btn.textContent = PIECE_TO_CHAR[pieceKey];
+      if (chessAssetsReady){
+        btn.classList.add("piece-choice-img");
+        btn.style.backgroundImage = `url("${PIECE_IMAGE_PATHS[pieceKey]}")`;
+      }
       btn.addEventListener("click", () => {
         promoOverlay.classList.remove("show");
         const mm = {...pendingPromotion, promotion: pt};
@@ -1449,6 +1624,10 @@
   btnNew.addEventListener("click", () => { startOverlay.style.display = "flex"; });
   btnUndo.addEventListener("click", undo);
   btnFlip.addEventListener("click", () => { flipped = !flipped; buildBoard(); render(); });
+  btnMusic.addEventListener("click", async () => {
+    const playing = await ShogiBgm.toggle();
+    btnMusic.classList.toggle("active", playing);
+  });
   btnEasy.addEventListener("click", () => setDifficulty("easy"));
   btnNormal.addEventListener("click", () => setDifficulty("normal"));
   btnHard.addEventListener("click", () => setDifficulty("hard"));
@@ -1480,6 +1659,7 @@
   });
 
   // init overlay defaults
+  preloadChessAssets();
   setSides("w");
   setDifficulty("normal");
   buildBoard();
