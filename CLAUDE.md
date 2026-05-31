@@ -29,44 +29,72 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 
 ## エージェントハーネス設計
 
-成果物作成は以下の4エージェントのパイプラインで行う（`.claude/agents/` に定義）。
+成果物作成は以下の6エージェントのパイプラインで行う（`.claude/agents/` に定義）。
 
 ### Plannerエージェント (`planner`)
 - 深澤から要件をヒアリングする
 - 要件定義書 → 基本設計書 → 詳細設計書の順で仕様書を作成
 - 必要に応じて市場調査・改善提案を行う
-- 深澤の承認後、Designer/Generatorへ仕様書を引き渡す
+- 深澤の承認後、Graphic-Designer / Music-Generator / Code-Generatorへ仕様書を引き渡す
 
-### Designerエージェント (`designer`)
-- 主にグラフィックを担当する
+### Graphic-Designerエージェント (`graphic-designer`)
+- グラフィックデザイン・画像アセット制作に特化
 - Plannerの要件をもとに、外部ツール連携またはフリー素材の取得/加工で画像を制作する
-- 生成した画像をリポジトリへ追加し、Generatorが実装できる形で引き渡す
+- 生成した画像をリポジトリへ追加し、Code-Generatorが実装できる形で引き渡す
 
-### Generatorエージェント (`generator`)
-- Plannerの仕様書をもとにプログラム・ドキュメント等を実装する
+### Music-Generatorエージェント (`music-generator`)
+- ゲーム音楽・効果音（SE）・ジングルの制作に特化
+- Plannerの要件をもとに、フリー素材収集またはWeb Audio APIプロシージャル生成でオーディオアセットを制作する
+- 音楽ファイル（OGG/MP3）またはWeb Audio API実装コードをCode-Generatorへ引き渡す
+
+### Code-Generatorエージェント (`code-generator`)
+- コードの生成・修正のみを担当（HTML/CSS/JavaScript）
+- Plannerの仕様書と、Graphic-Designer・Music-Generatorからの納品物を組み合わせて実装する
 - 実装完了後はEvaluatorへ成果物を提出する
 - Evaluatorから不合格を受けた場合は修正して再提出する
 - 2回以上同じ理由で不合格になった場合は深澤へ報告・判断を仰ぐ
-- **タイムアウト対策**: 実装規模が大きくタイムアウトが見込まれる場合は、複数のGeneratorエージェントに作業を分割して並行実装する。分割単位はファイル単位またはページセクション単位とし、各エージェントが担当範囲を明示してから着手すること
+- **タイムアウト対策**: 実装規模が大きくタイムアウトが見込まれる場合は、複数のCode-Generatorエージェントに作業を分割して並行実装する。分割単位はファイル単位またはページセクション単位とし、各エージェントが担当範囲を明示してから着手すること
+
+### Testerエージェント (`tester`)
+- Code-GeneratorとPlannerの仕様書を照合してテストケースを作成する
+- 静的解析（Read/Grep）によりテストを実行し、PASS/FAIL判定する
+- テストレポートをEvaluatorへ提出する
+- FAILがある場合はCode-Generatorへフィードバックし修正を依頼する
+- 同一テストで2回以上FAILした場合は深澤へ報告する
+
+### Legal-Checkerエージェント (`legal-checker`)
+- 著作権・ライセンス・利用規約等の法務リスクを確認する特化型エージェント
+- コード・グラフィック・音楽・ライブラリ等の成果物を対象に法務チェックを実施する
+- リスクを RED（即時修正必須）/ YELLOW（要対応）/ GREEN（問題なし）の3段階で分類して報告
+- RED/YELLOWが存在する場合は該当エージェント（Code-Generator / Graphic-Designer / Music-Generator）へ修正を依頼する
+- 単独で実行することも、Evaluatorへの提出前に呼び出すことも可能
 
 ### Evaluatorエージェント (`evaluator`)
-- Generatorの成果物に対し、テストケース作成→静的解析→採点を一括で実施する
-- Phase 1: Must要件をテストケースに変換し、静的解析でPASS/FAIL判定する
-- Phase 2: 全Must要件PASSの場合のみ100点満点で採点する（仕様適合性・動作正確性・コード品質・セキュリティ・デザイン整合性）
+- Code-Generatorの成果物を仕様書と照らし合わせ100点満点で採点する
 - 合格基準: 80点以上 かつ 仕様適合性16点以上（XSS等は即不合格）
-- 不合格時: 具体的なフィードバックをGeneratorへ返す（同一理由2回以上で深澤へ報告）
+- 不合格時: 具体的なフィードバックをCode-Generatorへ返す
 - 合格時: 深澤へ結果報告 → `kai_001` ブランチへコミット＆プッシュ
 
 ### フロー概要
 ```
-深澤 → [Planner] 要件定義・設計書作成
-     → [Designer] グラフィック制作
-     → [Generator] 実装
-     → [Evaluator] テスト実行・採点
-          ↓ 不合格（テストFAIL or 採点80点未満）
-       [Generator] 修正・再提出 → [Evaluator] 再検証
-          ↓ 合格
-       深澤へ報告 → GitHub push (kai_001)
+深澤(PM) → [Planner] 要件定義・設計書作成
+          ├→ [Graphic-Designer] グラフィック制作（並行）
+          ├→ [Music-Generator]  音楽・SE制作（並行）
+          └→ [Code-Generator]   実装（グラフィック・音楽納品後）
+               ↓
+          → [Legal-Checker] 著作権・ライセンス法務チェック ※任意/Evaluator前推奨
+               ↓ RED/YELLOW
+            [該当エージェント] 修正 → [Legal-Checker] 再チェック
+               ↓ GREEN
+          → [Tester] テストケース作成・実行・レポート作成
+               ↓ FAIL
+            [Code-Generator] 修正・再提出 → [Tester] 再テスト
+               ↓ PASS
+          → [Evaluator] 検証・採点
+               ↓ 不合格
+            [Code-Generator] 修正・再提出 → [Evaluator] 再検証
+               ↓ 合格
+            深澤(PM)へ報告 → [PMO] 記録・KPI更新 → GitHub push (kai_001)
 ```
 
 ## 注意事項
@@ -89,7 +117,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `.claudeignore` 記載ファイルは Read 禁止。grep + offset/limit のみ許可
 
 ### エージェント間のデータ受け渡し
-- **Generator** へは変更箇所のみを渡す（ファイル全体を渡さない）
+- **Code-Generator** へは変更箇所のみを渡す（ファイル全体を渡さない）
   - 形式: 「ファイルXのY行目付近をEdit toolで以下に変更」
 - **Evaluator** は `git diff HEAD` で確認する（変更ファイルの全体再読み込み禁止）
   ```bash
@@ -98,7 +126,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
   ```
 - エージェント間のコードブロックにファイル全体を貼ることを禁止
 
-### Generator の出力形式
+### Code-Generator の出力形式
 - コードは **変更箇所スニペット（前後10行含む）** で出力する
 - ファイル全体出力は禁止（「省略なし」ルールより本ルールを優先）
 
