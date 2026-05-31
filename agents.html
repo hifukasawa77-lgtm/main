@@ -413,6 +413,27 @@
     @media (max-width: 320px) {
       .agents-grid { grid-template-columns: 1fr; }
     }
+
+    /* ---- Virtual Office ---- */
+    .office-wrap {
+      width: 100%;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: #0d0d1c;
+      margin-bottom: 8px;
+    }
+    #office-canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .office-hint {
+      text-align: center;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      padding: 4px 12px 12px;
+    }
   </style>
 </head>
 <body>
@@ -773,6 +794,13 @@
     </div><!-- /.flow-wrap -->
   </div><!-- /.flow-container -->
 
+  <!-- ===== Virtual Office ===== -->
+  <h2 class="section-title">Virtual Office</h2>
+  <div class="office-wrap">
+    <canvas id="office-canvas"></canvas>
+  </div>
+  <p class="office-hint">リアルタイムで働いたり、休憩したりしています。クリックで更新。</p>
+
   <footer class="site-footer">
     <p>Built with Claude AI &amp; Canvas API &mdash; <a href="index.html">hide の部屋</a></p>
   </footer>
@@ -817,6 +845,240 @@
 
   resize(); initParticles(); draw();
   window.addEventListener('resize', () => { resize(); initParticles(); });
+})();
+</script>
+
+<script>
+/* ===== Virtual Office Animation ===== */
+(function () {
+  const OW = 900, OH = 530, BX = 645; // canvas size, break room x
+
+  const DESK_DATA = [
+    // Row 1 (y=162): 5 desks
+    { label: 'PMO',        color: '#2dd4bf', dx: 55,  dy: 162 },
+    { label: 'Planner',    color: '#60a5fa', dx: 185, dy: 162 },
+    { label: 'Graphic',    color: '#f472b6', dx: 315, dy: 162 },
+    { label: 'Music',      color: '#22d3ee', dx: 445, dy: 162 },
+    { label: 'Code Gen',   color: '#818cf8', dx: 575, dy: 162 },
+    // Row 2 (y=300): 4 desks
+    { label: 'Legal',      color: '#fbbf24', dx: 95,  dy: 300 },
+    { label: 'Evaluator',  color: '#c084fc', dx: 225, dy: 300 },
+    { label: 'Security',   color: '#f87171', dx: 355, dy: 300 },
+    { label: 'Researcher', color: '#d97706', dx: 485, dy: 300 },
+    // Row 3 (y=438): 4 desks
+    { label: 'Debug',      color: '#fb923c', dx: 95,  dy: 438 },
+    { label: 'Spec',       color: '#5eead4', dx: 225, dy: 438 },
+    { label: 'Achieve',    color: '#facc15', dx: 355, dy: 438 },
+    { label: 'Marketer',   color: '#fb7185', dx: 485, dy: 438 },
+  ];
+
+  const BREAK_SPOTS = [
+    { x: 720, y: 162 }, // coffee machine
+    { x: 695, y: 318 }, // couch left
+    { x: 795, y: 318 }, // couch right
+    { x: 760, y: 430 }, // floor lounge
+    { x: 855, y: 195 }, // window corner
+  ];
+
+  class Agent {
+    constructor(d) {
+      this.label = d.label;
+      this.color = d.color;
+      this.dx = d.dx; this.dy = d.dy;
+      this.seatX = d.dx; this.seatY = d.dy + 22;
+      this.x = this.seatX; this.y = this.seatY;
+      this.tx = this.seatX; this.ty = this.seatY;
+      this.state = 'working';
+      this.timer = 2000 + Math.random() * 10000;
+      this.phase = Math.random() * Math.PI * 2;
+      this.spd = 55 + Math.random() * 25;
+    }
+
+    update(dt) {
+      this.phase += dt * 0.003;
+      this.timer -= dt;
+      const ddx = this.tx - this.x, ddy = this.ty - this.y;
+      const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+      const step = this.spd * dt / 1000;
+      const arrived = dist <= step + 0.5;
+      if (dist > step) { this.x += ddx / dist * step; this.y += ddy / dist * step; }
+      else { this.x = this.tx; this.y = this.ty; }
+
+      switch (this.state) {
+        case 'working':
+          if (this.timer <= 0) {
+            const sp = BREAK_SPOTS[Math.floor(Math.random() * BREAK_SPOTS.length)];
+            this.tx = sp.x; this.ty = sp.y; this.state = 'to_break';
+          }
+          break;
+        case 'to_break':
+          if (arrived) { this.state = 'on_break'; this.timer = 3000 + Math.random() * 7000; }
+          break;
+        case 'on_break':
+          if (this.timer <= 0) { this.tx = this.seatX; this.ty = this.seatY; this.state = 'to_desk'; }
+          break;
+        case 'to_desk':
+          if (arrived) { this.state = 'working'; this.timer = 6000 + Math.random() * 14000; }
+          break;
+      }
+    }
+
+    draw(ctx) {
+      const working = this.state === 'working';
+      const walking = this.state === 'to_break' || this.state === 'to_desk';
+      const bob = working ? Math.sin(this.phase * 2) * 1.5 : 0;
+      ctx.save();
+      ctx.translate(this.x, this.y);
+
+      // Shadow
+      ctx.beginPath(); ctx.ellipse(0, 12, 8, 3, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fill();
+
+      // Legs when walking
+      if (walking) {
+        const sw = Math.sin(this.phase * 8) * 5;
+        ctx.fillStyle = this.color + '44';
+        ctx.fillRect(-5, 3, 4, 8 + sw); ctx.fillRect(1, 3, 4, 8 - sw);
+      }
+
+      // Body
+      ctx.beginPath(); ctx.roundRect(-7, -3, 14, 15, 4);
+      ctx.fillStyle = this.color + '44'; ctx.fill();
+      ctx.strokeStyle = this.color + 'bb'; ctx.lineWidth = 1.5; ctx.stroke();
+
+      // Head
+      ctx.beginPath(); ctx.arc(0, -13 + bob, 9, 0, Math.PI * 2);
+      ctx.fillStyle = this.color + 'cc'; ctx.fill();
+      ctx.strokeStyle = this.color; ctx.lineWidth = 1.5; ctx.stroke();
+
+      // Eyes
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.beginPath(); ctx.arc(-3, -14 + bob, 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(3, -14 + bob, 1.8, 0, Math.PI * 2); ctx.fill();
+
+      // Name
+      ctx.font = 'bold 7.5px "Fira Code", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillText(this.label, 1, -25 + bob);
+      ctx.fillStyle = '#ddd8f0'; ctx.fillText(this.label, 0, -26 + bob);
+
+      // Typing dots
+      if (working && Math.sin(this.phase * 5) > 0.6) {
+        ctx.fillStyle = this.color + '99';
+        [-4, 0, 4].forEach((ox, i) => {
+          const ty2 = Math.sin(this.phase * 5 + i * 1.2) * 2;
+          ctx.beginPath(); ctx.arc(ox, -34 + bob + ty2, 1.8, 0, Math.PI * 2); ctx.fill();
+        });
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawBg(ctx) {
+    ctx.fillStyle = '#0d0d1c'; ctx.fillRect(0, 0, OW, OH);
+    // Grid
+    ctx.strokeStyle = 'rgba(6,182,212,0.05)'; ctx.lineWidth = 1;
+    for (let x = 0; x < OW; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, OH); ctx.stroke(); }
+    for (let y = 0; y < OH; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(OW, y); ctx.stroke(); }
+    // Break room tint
+    ctx.fillStyle = 'rgba(20,184,166,0.04)'; ctx.fillRect(BX, 0, OW - BX, OH);
+    // Divider
+    ctx.strokeStyle = 'rgba(45,212,191,0.25)'; ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath(); ctx.moveTo(BX, 0); ctx.lineTo(BX, OH); ctx.stroke();
+    ctx.setLineDash([]);
+    // Zone labels
+    ctx.font = 'bold 9px "Fira Code", monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(6,182,212,0.28)'; ctx.fillText('OFFICE', BX / 2, 18);
+    ctx.fillStyle = 'rgba(45,212,191,0.28)'; ctx.fillText('BREAK ROOM', BX + (OW - BX) / 2, 18);
+  }
+
+  function drawDesk(ctx, dx, dy, color) {
+    ctx.fillStyle = 'rgba(18,18,36,0.92)'; ctx.strokeStyle = color + '44'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(dx - 30, dy - 16, 60, 32, 5); ctx.fill(); ctx.stroke();
+    // Monitor body
+    ctx.fillStyle = '#0c0c1e'; ctx.fillRect(dx - 13, dy - 26, 26, 18);
+    ctx.strokeStyle = color + '66'; ctx.lineWidth = 1; ctx.strokeRect(dx - 13, dy - 26, 26, 18);
+    // Screen glow
+    ctx.fillStyle = color + '1a'; ctx.fillRect(dx - 11, dy - 24, 22, 14);
+    // Stand
+    ctx.fillStyle = '#1a1a30'; ctx.fillRect(dx - 3, dy - 8, 6, 4);
+    // Keyboard
+    ctx.fillStyle = 'rgba(80,80,120,0.35)'; ctx.fillRect(dx - 11, dy + 1, 22, 7);
+    ctx.strokeStyle = 'rgba(80,80,140,0.3)'; ctx.lineWidth = 0.5; ctx.strokeRect(dx - 11, dy + 1, 22, 7);
+    // Chair
+    ctx.beginPath(); ctx.arc(dx, dy + 26, 10, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(25,25,45,0.85)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(80,80,130,0.25)'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  function drawPlant(ctx, px, py, size) {
+    const offsets = [[0, 0], [-size * 0.5, -size * 0.6], [size * 0.5, -size * 0.6], [0, -size]];
+    offsets.forEach(([ox, oy]) => {
+      ctx.beginPath(); ctx.arc(px + ox, py + oy, size * 0.65, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(20,80,30,0.82)'; ctx.fill();
+    });
+    ctx.fillStyle = 'rgba(90,55,30,0.75)'; ctx.fillRect(px - size * 0.4, py, size * 0.8, size * 0.55);
+  }
+
+  function drawBreakRoom(ctx) {
+    const cmx = 720, cmy = 128;
+    // Coffee machine
+    ctx.fillStyle = '#16162a'; ctx.strokeStyle = 'rgba(251,191,36,0.45)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(cmx - 16, cmy - 22, 32, 44, 4); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cmx, cmy + 8, 7, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(251,191,36,0.12)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(251,191,36,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+    // Steam
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1.5;
+    [cmx - 5, cmx + 3].forEach(sx => {
+      ctx.beginPath(); ctx.moveTo(sx, cmy - 6);
+      ctx.bezierCurveTo(sx - 4, cmy - 18, sx + 4, cmy - 24, sx - 2, cmy - 32); ctx.stroke();
+    });
+    ctx.font = '7px "Fira Code", monospace'; ctx.fillStyle = 'rgba(251,191,36,0.4)';
+    ctx.textAlign = 'center'; ctx.fillText('COFFEE', cmx, cmy + 28);
+
+    // Couch
+    const cx = BX + 115, cy = 320;
+    ctx.fillStyle = 'rgba(38,22,60,0.85)'; ctx.fillRect(cx - 70, cy - 35, 140, 16);
+    ctx.strokeStyle = 'rgba(168,85,247,0.25)'; ctx.lineWidth = 1; ctx.strokeRect(cx - 70, cy - 35, 140, 16);
+    ctx.fillStyle = 'rgba(44,26,72,0.85)'; ctx.fillRect(cx - 70, cy - 19, 140, 50);
+    ctx.strokeRect(cx - 70, cy - 19, 140, 50);
+    ctx.fillStyle = 'rgba(58,34,92,0.65)';
+    ctx.fillRect(cx - 66, cy - 15, 60, 42); ctx.fillRect(cx + 6, cy - 15, 60, 42);
+
+    // Plants
+    drawPlant(ctx, OW - 28, OH - 32, 18);
+    drawPlant(ctx, BX + 18, 54, 13);
+  }
+
+  // --- Init ---
+  const canvas = document.getElementById('office-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  canvas.width = OW; canvas.height = OH;
+
+  const agents = DESK_DATA.map(d => new Agent(d));
+
+  // Click to shuffle timers
+  canvas.addEventListener('click', () => {
+    agents.forEach(a => { if (a.state === 'working') a.timer = Math.random() * 1000; });
+  });
+
+  let last = 0;
+  function loop(ts) {
+    const dt = Math.min(ts - last, 150);
+    last = ts;
+    ctx.clearRect(0, 0, OW, OH);
+    drawBg(ctx);
+    drawBreakRoom(ctx);
+    DESK_DATA.forEach(d => drawDesk(ctx, d.dx, d.dy, d.color));
+    const sorted = [...agents].sort((a, b) => a.y - b.y);
+    sorted.forEach(a => a.update(dt));
+    sorted.forEach(a => a.draw(ctx));
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
 })();
 </script>
 </body>
