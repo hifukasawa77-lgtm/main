@@ -42,8 +42,9 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 
 ### Plannerエージェント (`planner`)
 - 深澤から要件をヒアリングする
+- Researcherから市場調査レポートが渡された場合はそれを要件定義に反映する
+- 市場調査はResearcherの専管。Planner自身は市場調査を行わない
 - 要件定義書 → 基本設計書 → 詳細設計書の順で仕様書を作成
-- 必要に応じて市場調査・改善提案を行う
 - 深澤の承認後、Graphic-Designer / Music-Generator / Code-Generatorへ仕様書を引き渡す
 
 ### Graphic-Designerエージェント (`graphic-designer`)
@@ -57,7 +58,7 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - 音楽ファイル（OGG/MP3）またはWeb Audio API実装コードをCode-Generatorへ引き渡す
 
 ### Code-Generatorエージェント (`code-generator`)
-- コードの生成・修正のみを担当（HTML/CSS/JavaScript）
+- コードの生成・修正のみを担当（言語・環境問わず）
 - Plannerの仕様書と、Graphic-Designer・Music-Generatorからの納品物を組み合わせて実装する
 - 実装完了後はEvaluatorへ成果物を提出する
 - Evaluatorから不合格を受けた場合は修正して再提出する
@@ -82,7 +83,8 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
               [PMO] ← プロジェクト全体を横断モニタリング（常時稼働）
                 │ 進捗/リスク/課題/品質を深澤(PM)へ報告
                 ▼
-深澤(PM) → [Planner] 要件定義・設計書作成
+深澤(PM) → [Researcher] 市場調査（必要な場合）→ [Planner] レポート受け取り
+深澤(PM) → [Planner] 要件定義・設計書作成（市場調査なしの場合）
           ├→ [Graphic-Designer] グラフィック制作（並行）
           ├→ [Music-Generator]  音楽・SE制作（並行）
           └→ [Code-Generator]   実装（グラフィック・音楽納品後）
