@@ -511,14 +511,15 @@
         });
       }
 
-      // 敵の更新
+      // 敵の更新（splice不使用: filter で後処理）
+      const enemiesOutOfBounds = new Set();
       game.enemies.forEach((boss, idx) => {
         if (boss.shootCooldown) boss.shootCooldown--;
         boss.frame++;
 
-        // ボスが画面外に行ったら削除
+        // ボスが画面外に行ったら削除対象としてマーク
         if (boss.x < -100) {
-          game.enemies.splice(idx, 1);
+          enemiesOutOfBounds.add(idx);
           return;
         }
 
@@ -541,6 +542,10 @@
         boss.y += Math.sin(boss.frame * 0.02) * 0.5;
         boss.y = Math.max(30, Math.min(H - 30, boss.y));
       });
+      // 画面外ボスを一括削除
+      if (enemiesOutOfBounds.size > 0) {
+        game.enemies = game.enemies.filter((_, i) => !enemiesOutOfBounds.has(i));
+      }
 
       // 弾の更新
       game.bullets = game.bullets.filter((b) => {
@@ -555,7 +560,9 @@
         return b.x > -50 && b.y > -50 && b.y < H + 50;
       });
 
-      // 衝突判定：プレイヤーの弾 vs ボス
+      // 衝突判定：プレイヤーの弾 vs ボス（filter ベースで splice によるインデックスズレを回避）
+      const hitBullets = new Set();
+      const hitEnemies = new Set();
       game.bullets.forEach((bullet, bIdx) => {
         game.enemies.forEach((boss, eIdx) => {
           const dx = bullet.x - boss.x;
@@ -563,11 +570,11 @@
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist < 30) {
             boss.hp -= 10;
-            game.bullets.splice(bIdx, 1);
+            hitBullets.add(bIdx);
 
             if (boss.hp <= 0) {
               gameState.score += 1000;
-              game.enemies.splice(eIdx, 1);
+              hitEnemies.add(eIdx);
               // 次のステージへ
               if (gameState.stage < 7) {
                 gameState.stage++;
@@ -576,23 +583,33 @@
                 showStageInfo('ALL STAGES CLEARED!');
               }
             }
-            return;
           }
         });
       });
+      game.bullets = game.bullets.filter((_, i) => !hitBullets.has(i));
+      game.enemies = game.enemies.filter((_, i) => !hitEnemies.has(i));
 
-      // 衝突判定：敵の弾 vs プレイヤー
+      // 衝突判定：敵の弾 vs プレイヤー（filter ベースで splice によるインデックスズレを回避）
       if (player.invincible === 0) {
+        let playerHit = false;
+        const hitEnemyBullets = new Set();
         game.enemyBullets.forEach((bullet, idx) => {
           const dx = bullet.x - player.x;
           const dy = bullet.y - player.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist < 12) {
-            gameState.lives--;
-            player.invincible = 120;
-            game.enemyBullets.splice(idx, 1);
+            if (!playerHit) {
+              // 同一フレームで複数ヒットしても被ダメージは1回のみ
+              gameState.lives--;
+              player.invincible = 120;
+              playerHit = true;
+            }
+            hitEnemyBullets.add(idx);
           }
         });
+        if (hitEnemyBullets.size > 0) {
+          game.enemyBullets = game.enemyBullets.filter((_, i) => !hitEnemyBullets.has(i));
+        }
       }
 
       if (player.invincible > 0) player.invincible--;
