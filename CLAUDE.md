@@ -69,7 +69,10 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - 著作権・ライセンス・利用規約等の法務リスクを確認する特化型エージェント
 - コード・グラフィック・音楽・ライブラリ等の成果物を対象に法務チェックを実施する
 - リスクを RED（即時修正必須）/ YELLOW（要対応）/ GREEN（問題なし）の3段階で分類して報告
-- RED/YELLOWが存在する場合は該当エージェント（Code-Generator / Graphic-Designer / Music-Generator）へ修正を依頼する
+- RED/YELLOWが存在する場合は問題の種別に応じて以下へ修正を依頼する:
+  - グラフィック起因の問題 → [Graphic-Designer] へ結果を返す → 修正後に [Code-Generator] へ再連携
+  - 音楽・SE起因の問題 → [Music-Generator] へ結果を返す → 修正後に [Code-Generator] へ再連携
+  - コード起因の問題 → [Code-Generator] へ直接フィードバック
 - 単独で実行することも、Evaluatorへの提出前に呼び出すことも可能
 
 ### Evaluatorエージェント (`evaluator`)
@@ -99,8 +102,12 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
           └→ [Code-Generator]   実装（グラフィック・音楽納品後）
                ↓
           → [Legal-Checker] 著作権・ライセンス法務チェック ※任意/Evaluator前推奨
-               ↓ RED/YELLOW
-            [該当エージェント] 修正 → [Legal-Checker] 再チェック
+               ↓ RED/YELLOW（グラフィック起因）
+            [Graphic-Designer] 修正 → [Code-Generator] へ再連携 → [Legal-Checker] 再チェック
+               ↓ RED/YELLOW（音楽・SE起因）
+            [Music-Generator] 修正 → [Code-Generator] へ再連携 → [Legal-Checker] 再チェック
+               ↓ RED/YELLOW（コード起因）
+            [Code-Generator] 修正 → [Legal-Checker] 再チェック
                ↓ GREEN
           → [Evaluator] 検証・採点
                ↓ 不合格
