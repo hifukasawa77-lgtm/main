@@ -9587,7 +9587,8 @@
         return Array.isArray(arr) ? arr.map(p => normTcPt(p)).filter(Boolean) : [];
       }
       function normTcCurrent(raw) {
-        const src = raw?.currentPosition ?? raw?.center ?? raw?.latestInfo ?? raw?.latest ?? raw;
+        const src = raw?.currentPosition ?? raw?.center ?? raw?.location
+                 ?? raw?.latestInfo ?? raw?.latest ?? raw?.geographicCoordinate ?? raw;
         return normTcPt(src);
       }
       window.initTyphoonSection = async function initTyphoonSection() {
@@ -9625,13 +9626,33 @@
           console.log('[typhoon] tcIds =>', tcIds);
           if (!tcIds.length) { showNoTyphoon(); return; }
 
-          // Step 2: fetch specifications for each typhoon (parallel)
+          // issue フィールドからタイムスタンプ文字列を作成 (e.g. "2026-06-02T18:50:00+09:00" → "20260602185000")
+          const issueMap = {};
+          if (Array.isArray(tcData)) {
+            tcData.forEach(item => {
+              const sid = item.TropicalCyclone || item.id || item.typhoonNumber;
+              if (sid && item.issue) issueMap[sid] = item.issue.replace(/\D/g, '').slice(0, 14);
+            });
+          }
+
+          // Step 2: specifications を逐次URL試行 (specifications.json → タイムスタンプ.json)
           const specResults = await Promise.allSettled(
-            tcIds.map(id =>
-              fetchWithTimeout(`https://www.jma.go.jp/bosai/typhoon/data/${id}/specifications.json`, 8000)
-                .then(r => r.ok ? r.json() : null)
-                .catch(() => null)
-            )
+            tcIds.map(id => {
+              const ts = issueMap[id] || '';
+              const urls = [
+                `https://www.jma.go.jp/bosai/typhoon/data/${id}/specifications.json`,
+                ts ? `https://www.jma.go.jp/bosai/typhoon/data/${id}/${ts}.json` : null,
+              ].filter(Boolean);
+              return urls.reduce(
+                (chain, url) => chain.then(prev => {
+                  if (prev) return prev;
+                  return fetchWithTimeout(url, 8000)
+                    .then(r => { dbg(id + '/' + url.split('/').pop() + ': ' + r.status); return r.ok ? r.json() : null; })
+                    .catch(e => { dbg(id + ' ERR: ' + e.message); return null; });
+                }),
+                Promise.resolve(null)
+              );
+            })
           );
           dbg('specs: ' + JSON.stringify(specResults.map(r => r.value)).substring(0, 200));
           console.log('[typhoon] specResults =>', specResults.map(r => r.value));
