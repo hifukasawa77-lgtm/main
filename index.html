@@ -9533,8 +9533,8 @@
       function drawTyphoonTracks(mapCtx, typhoons) {
         const { ctx, W, toXY } = mapCtx;
         typhoons.forEach(ty => {
-          const color = TYPHOON_CLASS_COLOR[ty.class] || '#f97316';
-          const past = (ty.track || []).filter(p => p.type === 'past' || p.type === 'observation' || !p.type);
+          const color = TYPHOON_CLASS_COLOR[ty.cls || ty.class] || '#f97316';
+          const past = (ty.track || []).filter(p => p && p.lat != null && p.lon != null);
           if (past.length > 1) {
             ctx.strokeStyle = 'rgba(255,150,50,0.65)'; ctx.lineWidth = 1.8; ctx.setLineDash([]);
             ctx.beginPath();
@@ -9547,7 +9547,7 @@
             ctx.strokeStyle = 'rgba(255,180,80,0.75)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
             ctx.beginPath();
             const [cx, cy] = toXY(curPos.lon, curPos.lat); ctx.moveTo(cx, cy);
-            forecast.forEach(({ lat, lon }) => { const [x, y] = toXY(lon, lat); ctx.lineTo(x, y); });
+            forecast.filter(p => p && p.lat != null && p.lon != null).forEach(({ lat, lon }) => { const [x, y] = toXY(lon, lat); ctx.lineTo(x, y); });
             ctx.stroke(); ctx.setLineDash([]);
           }
           if (curPos) {
@@ -9558,9 +9558,29 @@
             ctx.fillStyle = color; ctx.fill();
             ctx.fillStyle = color;
             ctx.font = `bold ${Math.round(W * 0.03)}px sans-serif`; ctx.textAlign = 'center';
-            ctx.fillText(escHtml(ty.name || ty.number || ''), px, py - W * 0.038);
+            ctx.fillText(ty.name || '', px, py - W * 0.038);
           }
         });
+      }
+      // targetTc.json → object keys are typhoon IDs (e.g. "TC2504")
+      // {id}/specifications.json → individual typhoon track + forecast data
+      function normTcPt(p) {
+        if (!p || typeof p !== 'object') return null;
+        const lat = p.lat ?? p.latitude ?? (Array.isArray(p) ? p[0] : null);
+        const lon = p.lon ?? p.longitude ?? (Array.isArray(p) ? p[1] : null);
+        return (lat != null && lon != null) ? { lat: +lat, lon: +lon } : null;
+      }
+      function normTcTrack(raw) {
+        const arr = raw?.track ?? raw?.trackParts ?? raw?.pastTrack ?? raw?.observations ?? [];
+        return Array.isArray(arr) ? arr.map(p => normTcPt(p)).filter(Boolean) : [];
+      }
+      function normTcForecast(raw) {
+        const arr = raw?.forecast ?? raw?.forecastParts ?? raw?.forecastPoints ?? raw?.forecasts ?? [];
+        return Array.isArray(arr) ? arr.map(p => normTcPt(p)).filter(Boolean) : [];
+      }
+      function normTcCurrent(raw) {
+        const src = raw?.currentPosition ?? raw?.center ?? raw?.latestInfo ?? raw?.latest ?? raw;
+        return normTcPt(src);
       }
       window.initTyphoonSection = async function initTyphoonSection() {
         const listEl  = document.getElementById('home-typhoon-list');
@@ -9577,42 +9597,64 @@
           if (badgeEl) badgeEl.style.display = 'none';
         }
         try {
-          const indexRes = await fetchWithTimeout('https://www.jma.go.jp/bosai/typhoon/data/', 8000);
-          if (!indexRes.ok) throw new Error('index');
-          let fileList;
-          const ct = indexRes.headers.get('content-type') || '';
-          if (ct.includes('json')) {
-            fileList = await indexRes.json();
-          } else {
-            const txt = await indexRes.text();
-            fileList = txt.match(/\d{14}\.json/g) || [];
-          }
-          if (!fileList || !fileList.length) throw new Error('no files');
-          const latest = Array.isArray(fileList) ? fileList[fileList.length - 1] : fileList[0];
-          const fname  = (typeof latest === 'string' ? latest : String(latest)).replace(/.*\//, '');
-          const dataRes = await fetchWithTimeout(`https://www.jma.go.jp/bosai/typhoon/data/${fname}`, 8000);
-          if (!dataRes.ok) throw new Error('data');
-          const raw = await dataRes.json();
-          const list = raw.items || raw.typhoons || (Array.isArray(raw) ? raw : []);
-          const active = list.filter(t => t && (t.name || t.number || t.class));
-          if (!active.length) { showNoTyphoon(); return; }
-          if (badgeEl) { badgeEl.textContent = `${active.length}個`; badgeEl.style.display = 'inline'; }
+          // Step 1: get active typhoon IDs from targetTc.json
+          const tcRes = await fetchWithTimeout('https://www.jma.go.jp/bosai/typhoon/data/targetTc.json', 8000);
+          if (!tcRes.ok) throw new Error('targetTc');
+          const tcData = await tcRes.json();
+          // Response is {} or "" when no active typhoons; object with TC-IDs as keys when active
+          const tcIds = (tcData && typeof tcData === 'object' && !Array.isArray(tcData))
+            ? Object.keys(tcData) : [];
+          if (!tcIds.length) { showNoTyphoon(); return; }
+
+          // Step 2: fetch specifications for each typhoon (parallel)
+          const specResults = await Promise.allSettled(
+            tcIds.map(id =>
+              fetchWithTimeout(`https://www.jma.go.jp/bosai/typhoon/data/${id}/specifications.json`, 8000)
+                .then(r => r.ok ? r.json() : null)
+                .catch(() => null)
+            )
+          );
+
+          const typhoons = specResults
+            .map((r, i) => {
+              const spec = r.status === 'fulfilled' ? r.value : null;
+              const base = (tcData[tcIds[i]] && typeof tcData[tcIds[i]] === 'object') ? tcData[tcIds[i]] : {};
+              return spec ? { id: tcIds[i], ...base, ...spec } : (Object.keys(base).length ? { id: tcIds[i], ...base } : null);
+            })
+            .filter(Boolean);
+
+          if (!typhoons.length) { showNoTyphoon(); return; }
+          if (badgeEl) { badgeEl.textContent = `${typhoons.length}個`; badgeEl.style.display = 'inline'; }
+
+          // Normalize and render
+          const normalized = typhoons.map(ty => {
+            const name = ty.name ?? ty.nameJa ?? ty.tcName ?? ty.typhoonName ?? ty.id ?? '';
+            const cls  = ty.class ?? ty.grade ?? ty.tcClass ?? ty.category ?? '台風';
+            const wind = ty.maxWind ?? ty.maxWindSpeed ?? ty.intensity?.maxWind ?? ty.intensity?.maxWindSpeed ?? '';
+            const cur  = normTcCurrent(ty);
+            return {
+              name: escHtml(String(name)),
+              cls:  String(cls),
+              wind: wind ? String(wind) : '',
+              currentPosition: cur,
+              track:    normTcTrack(ty),
+              forecast: normTcForecast(ty),
+            };
+          });
+
           if (listEl) {
-            listEl.innerHTML = active.map(ty => {
-              const pos   = ty.currentPosition || ty.position || {};
-              const intens = ty.intensity || ty.maxWindInfo || {};
-              const wind  = intens.maxWindSpeed || intens.windSpeed || '';
-              const cls   = ty.class || ty.grade || '台風';
-              const clr   = TYPHOON_CLASS_COLOR[cls] || '#f97316';
+            listEl.innerHTML = normalized.map(ty => {
+              const clr = TYPHOON_CLASS_COLOR[ty.cls] || '#f97316';
+              const pos = ty.currentPosition;
               return `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.07)">
-                <span style="color:${clr};font-weight:700">${escHtml(cls)}</span>
-                <span style="font-weight:600;margin-left:4px">${escHtml(ty.name || ty.number || '')}</span>
-                ${wind ? `<span style="color:var(--muted);font-size:0.78rem;margin-left:6px">最大風速 ${wind}m/s</span>` : ''}
-                ${pos.lat && pos.lon ? `<span style="color:var(--muted);font-size:0.76rem;margin-left:6px">${pos.lat}°N ${pos.lon}°E</span>` : ''}
+                <span style="color:${clr};font-weight:700">${ty.cls}</span>
+                <span style="font-weight:600;margin-left:4px">${ty.name}</span>
+                ${ty.wind ? `<span style="color:var(--muted);font-size:0.78rem;margin-left:6px">最大風速 ${ty.wind}m/s</span>` : ''}
+                ${pos ? `<span style="color:var(--muted);font-size:0.76rem;margin-left:6px">${pos.lat}°N ${pos.lon}°E</span>` : ''}
               </div>`;
             }).join('');
           }
-          drawTyphoonTracks(mapCtx, active);
+          drawTyphoonTracks(mapCtx, normalized);
         } catch {
           showNoTyphoon();
         }
