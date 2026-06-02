@@ -70,19 +70,37 @@ const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 
 // ── Layout constants ──────────────────────────────────────────────
-const PW   = 60;   // point width
-const LX   = 10;   // left section start x
-const RX   = 430;  // right section start x
-const BARX = 370;  // bar x start
-const BARW = 60;   // bar width
-const BOFFX= 790;  // bear-off area x start
-const BOFFW= 80;   // bear-off width
-const TY   = 25;   // top board y
-const BY   = 565;  // bottom board y
-const TRIH = 235;  // triangle height
+const PW   = 58;   // point width
+const LX   = 39;   // left section start x
+const RX   = 431;  // right section start x
+const BARX = 386;  // bar x start
+const BARW = 45;   // bar width
+const BOFFX= 778;  // bear-off area x start
+const BOFFW= 77;   // bear-off width
+const TY   = 28;   // top board y
+const BY   = 563;  // bottom board y
+const TRIH = 228;  // triangle height
 const TTIP = TY + TRIH;   // top tip y  = 260
 const BTIP = BY - TRIH;   // bottom tip y = 330
 const CKR  = 21;   // checker radius
+const BOARDW = BOFFX + BOFFW - LX;
+
+const ASSET_PATHS = {
+  board: 'assets/backgammon-gpt/backgammon-board-gpt-image-2.png',
+  checker0: 'assets/backgammon-gpt/pieces/checker-ivory.png',
+  checker1: 'assets/backgammon-gpt/pieces/checker-walnut.png',
+  dice: [
+    null,
+    'assets/backgammon-gpt/pieces/die-1.png',
+    'assets/backgammon-gpt/pieces/die-2.png',
+    'assets/backgammon-gpt/pieces/die-3.png',
+    'assets/backgammon-gpt/pieces/die-4.png',
+    'assets/backgammon-gpt/pieces/die-5.png',
+    'assets/backgammon-gpt/pieces/die-6.png',
+  ],
+};
+const BG_ASSETS = {};
+let assetsReady = false;
 
 // ── Game state ────────────────────────────────────────────────────
 const G = {
@@ -126,31 +144,31 @@ const woodCanvas = {
 };
 let woodReady = false;
 
-const ART = {
-  board: loadArtImage('assets/backgammon/board.png'),
-  checker: [
-    loadArtImage('assets/backgammon/sprites/items/checker-ivory.png'),
-    loadArtImage('assets/backgammon/sprites/items/checker-burgundy.png'),
-  ],
-  dice: {
-    ivory: Array.from({ length: 6 }, (_, i) => loadArtImage(`assets/backgammon/sprites/items/die-ivory-${i + 1}.png`)),
-    burgundy: Array.from({ length: 6 }, (_, i) => loadArtImage(`assets/backgammon/sprites/items/die-burgundy-${i + 1}.png`)),
-  },
-};
-
-function loadArtImage(src) {
-  const img = new Image();
-  img.onload = () => render();
-  img.src = src;
-  return img;
-}
-
-function artReady(img) {
-  return img && img.complete && img.naturalWidth > 0;
-}
-
-function drawAssetCentered(img, x, y, size) {
-  ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
+function preloadBackgammonAssets() {
+  const entries = [
+    ['board', ASSET_PATHS.board],
+    ['checker0', ASSET_PATHS.checker0],
+    ['checker1', ASSET_PATHS.checker1],
+    ...ASSET_PATHS.dice.slice(1).map((src, idx) => [`die${idx + 1}`, src]),
+  ];
+  let remaining = entries.length;
+  let failed = false;
+  return new Promise(resolve => {
+    const done = () => {
+      remaining--;
+      if (remaining === 0) {
+        assetsReady = !failed;
+        resolve(assetsReady);
+      }
+    };
+    for (const [key, src] of entries) {
+      const img = new Image();
+      img.onload = done;
+      img.onerror = () => { failed = true; done(); };
+      img.src = src;
+      BG_ASSETS[key] = img;
+    }
+  });
 }
 
 function initWoodTextures() {
@@ -184,7 +202,7 @@ function initWoodTextures() {
   fCtx.globalAlpha = 1;
 
   // Surface texture (cream/parchment)
-  const sw = 860, sh = BY - TY;
+  const sw = BOARDW, sh = BY - TY;
   const sc = woodCanvas.surface;
   sc.width = sw; sc.height = sh;
   const sCtx = sc.getContext('2d');
@@ -481,22 +499,21 @@ function drawTriangle(pt) {
 
 function drawOneChecker(x, y, player, showCount, sel) {
   const isLight = player === 0;
-  const checkerArt = ART.checker[player];
-
-  if (artReady(checkerArt)) {
+  if (assetsReady) {
+    const img = isLight ? BG_ASSETS.checker0 : BG_ASSETS.checker1;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.38)';
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 3;
+    ctx.drawImage(img, x - CKR - 3, y - CKR - 3, (CKR + 3) * 2, (CKR + 3) * 2);
+    ctx.restore();
     if (sel) {
       ctx.beginPath();
-      ctx.arc(x, y, CKR + 4, 0, Math.PI * 2);
+      ctx.arc(x, y, CKR + 5, 0, Math.PI * 2);
       ctx.strokeStyle = COL.selRing;
       ctx.lineWidth = 3;
-      ctx.shadowColor = COL.selRing;
-      ctx.shadowBlur = 8;
       ctx.stroke();
-      ctx.shadowBlur = 0;
     }
-
-    drawAssetCentered(checkerArt, x, y, CKR * 2.35);
-
     if (showCount > 1) {
       ctx.fillStyle = isLight ? '#4a200a' : '#f0e8d0';
       ctx.font = `bold ${showCount>9?10:13}px monospace`;
@@ -588,19 +605,27 @@ function drawCheckers() {
 
   // Bear-off stacks (visual)
   for (let i=0; i<Math.min(G.borneOff[0],8); i++) {
-    ctx.globalAlpha = 0.4;
-    ctx.beginPath();
-    ctx.arc(boffCX, TY+50+i*18, 12, 0, Math.PI*2);
-    ctx.fillStyle = COL.player;
-    ctx.fill();
+    ctx.globalAlpha = 0.45;
+    if (assetsReady) {
+      ctx.drawImage(BG_ASSETS.checker0, boffCX-14, TY+36+i*18, 28, 28);
+    } else {
+      ctx.beginPath();
+      ctx.arc(boffCX, TY+50+i*18, 12, 0, Math.PI*2);
+      ctx.fillStyle = COL.player;
+      ctx.fill();
+    }
     ctx.globalAlpha = 1;
   }
   for (let i=0; i<Math.min(G.borneOff[1],8); i++) {
-    ctx.globalAlpha = 0.4;
-    ctx.beginPath();
-    ctx.arc(boffCX, BY-55-i*18, 12, 0, Math.PI*2);
-    ctx.fillStyle = COL.ai;
-    ctx.fill();
+    ctx.globalAlpha = 0.45;
+    if (assetsReady) {
+      ctx.drawImage(BG_ASSETS.checker1, boffCX-14, BY-69-i*18, 28, 28);
+    } else {
+      ctx.beginPath();
+      ctx.arc(boffCX, BY-55-i*18, 12, 0, Math.PI*2);
+      ctx.fillStyle = COL.ai;
+      ctx.fill();
+    }
     ctx.globalAlpha = 1;
   }
 }
@@ -655,18 +680,21 @@ function drawDice() {
     const dx = sx + i*(dw+gap);
     const used = G.usedIdx.has(i);
     ctx.globalAlpha = used ? 0.4 : 1;
-    const diceArt = (G.turn === 0 ? ART.dice.ivory : ART.dice.burgundy)[d - 1];
-    if (artReady(diceArt)) {
-      ctx.drawImage(diceArt, dx, sy, dw, dh);
-      ctx.globalAlpha = 1;
-      return;
+    if (assetsReady && BG_ASSETS[`die${d}`]) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.35)';
+      ctx.shadowBlur = 8;
+      ctx.shadowOffsetY = 3;
+      ctx.drawImage(BG_ASSETS[`die${d}`], dx, sy, dw, dh);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = used ? '#c8b890' : '#f5ecd7';
+      ctx.strokeStyle = used ? '#8b6a40' : '#5c2e0a';
+      ctx.lineWidth=1.5;
+      roundRect(dx,sy,dw,dh,7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = used ? '#b0906a' : '#2b1206';
+      drawDicePips(dx,sy,dw,dh,d);
     }
-    ctx.fillStyle = used ? '#c8b890' : '#f5ecd7';
-    ctx.strokeStyle = used ? '#8b6a40' : '#5c2e0a';
-    ctx.lineWidth=1.5;
-    roundRect(dx,sy,dw,dh,7); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = used ? '#b0906a' : '#2b1206';
-    drawDicePips(dx,sy,dw,dh,d);
     ctx.globalAlpha=1;
   });
 }
@@ -721,8 +749,8 @@ function drawUI() {
 }
 
 function drawBoard() {
-  if (artReady(ART.board)) {
-    ctx.drawImage(ART.board, 0, 0, 880, 590);
+  if (assetsReady) {
+    ctx.drawImage(BG_ASSETS.board, 0, 0, 880, 590);
     return;
   }
 
@@ -731,14 +759,14 @@ function drawBoard() {
   else { ctx.fillStyle=COL.bg; ctx.fillRect(0,0,880,590); }
 
   // Board area — parchment surface texture (clipped)
-  roundRect(LX,TY,860,BY-TY,4);
+  roundRect(LX,TY,BOARDW,BY-TY,4);
   ctx.save();
   ctx.clip();
   if (woodReady) ctx.drawImage(woodCanvas.surface, LX, TY);
   else { ctx.fillStyle=COL.board; ctx.fill(); }
   ctx.restore();
   ctx.strokeStyle=COL.boardLine; ctx.lineWidth=3;
-  roundRect(LX,TY,860,BY-TY,4); ctx.stroke();
+  roundRect(LX,TY,BOARDW,BY-TY,4); ctx.stroke();
 
   // Bar
   ctx.fillStyle=COL.bar;
@@ -762,12 +790,11 @@ function drawBoard() {
 
 // ── Title screen ──────────────────────────────────────────────────
 function drawTitle() {
-  if (artReady(ART.board)) {
-    ctx.drawImage(ART.board, 0, 0, 880, 590);
-    ctx.fillStyle = 'rgba(20,8,3,0.62)';
-    ctx.fillRect(0, 0, 880, 590);
-  }
-  else if (woodReady) ctx.drawImage(woodCanvas.frame, 0, 0);
+  if (assetsReady) {
+    ctx.drawImage(BG_ASSETS.board, 0, 0, 880, 590);
+    ctx.fillStyle='rgba(20,8,3,0.66)';
+    ctx.fillRect(0,0,880,590);
+  } else if (woodReady) ctx.drawImage(woodCanvas.frame, 0, 0);
   else { ctx.fillStyle=COL.bg; ctx.fillRect(0,0,880,590); }
 
   // Title
@@ -1010,6 +1037,7 @@ function startGame() {
 }
 
 initWoodTextures();
+preloadBackgammonAssets().then(render);
 render(); // show title
 </script>
 
