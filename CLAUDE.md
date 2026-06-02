@@ -75,11 +75,19 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
   - コード起因の問題 → [Code-Generator] へ直接フィードバック
 - 単独で実行することも、Evaluatorへの提出前に呼び出すことも可能
 
+### Dynamic-Testerエージェント (`dynamic-tester`)
+- Playwright（ヘッドレスChromium）でHTMLファイルを実際に起動し動作確認する品質ゲート
+- 確認内容: JSランタイムエラー・Canvas描画・404アセット・スクリーンショット取得
+- 対象: 変更されたHTMLファイル（`git diff HEAD` から自動検出）
+- PASS時: Evaluatorへ結果サマリーを渡す
+- FAIL時: Code-Generatorへブロッキングフィードバックを返す（Evaluatorには渡さない）
+
 ### Evaluatorエージェント (`evaluator`)
 - Code-Generatorの成果物を仕様書と照らし合わせ100点満点で採点する
 - 合格基準: 80点以上 かつ 仕様適合性16点以上（XSS等は即不合格）
 - 不合格時: 具体的なフィードバックをCode-Generatorへ返す
 - 合格時: 深澤へ結果報告 → `kai_001` ブランチへコミット＆プッシュ → Marketerへ成果物情報を引き渡す（任意）
+- **前提**: Dynamic-TesterのPASS結果を受け取ってから採点を開始する
 
 ### Marketerエージェント (`marketer`)
 - 完成した成果物のマーケティング戦略立案とコンテンツ生成を一貫して担当
@@ -109,6 +117,10 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
                ↓ RED/YELLOW（コード起因）
             [Code-Generator] 修正 → [Legal-Checker] 再チェック
                ↓ GREEN
+          → [Dynamic-Tester] 動的実行チェック（Playwright）※必須
+               ↓ FAIL
+            [Code-Generator] 修正・再提出 → [Dynamic-Tester] 再検証
+               ↓ PASS
           → [Evaluator] 検証・採点
                ↓ 不合格
             [Code-Generator] 修正・再提出 → [Evaluator] 再検証
