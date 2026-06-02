@@ -505,6 +505,11 @@ const BOARD_SIZE = 20;
 const PLAYER_COLORS = ['#06b6d4', '#f87171', '#fbbf24', '#a78bfa'];
 const PLAYER_LABELS = ['1P', '2P', '3P', '4P'];
 const BADGE_CLASSES = ['p1-badge', 'p2-badge', 'p3-badge', 'p4-badge'];
+const BLOKUS_ASSET_PATHS = {
+  board: 'assets/blokus/blokus-board.png',
+  atlas: 'assets/blokus/blokus-atlas.png',
+  manifest: 'assets/blokus/manifest.json'
+};
 // 各プレイヤーの開始コーナー [row, col]
 const CORNER_STARTS = [[0, 0], [0, 19], [19, 19], [19, 0]];
 
@@ -760,6 +765,14 @@ const canvas = document.getElementById('board-canvas');
 const ctx = canvas.getContext('2d');
 let CELL_SIZE = 28;
 let dpr = 1;
+let blokusBoardReady = false;
+const blokusBoardImage = new Image();
+blokusBoardImage.onload = () => {
+  blokusBoardReady = true;
+  if (state) drawBoard();
+  else drawEmptyBoard();
+};
+blokusBoardImage.src = BLOKUS_ASSET_PATHS.board;
 
 function calcCellSize() {
   const available = Math.min(window.innerWidth - 340, window.innerHeight - 160);
@@ -781,14 +794,65 @@ function resizeCanvas() {
 // ============================================================
 //  描画
 // ============================================================
+function drawBoardSurface(targetCtx, cs) {
+  const size = cs * BOARD_SIZE;
+  if (blokusBoardReady && blokusBoardImage.naturalWidth) {
+    targetCtx.drawImage(blokusBoardImage, 0, 0, size, size);
+    targetCtx.fillStyle = 'rgba(4, 6, 18, 0.18)';
+    targetCtx.fillRect(0, 0, size, size);
+    return;
+  }
+
+  const bg = targetCtx.createLinearGradient(0, 0, size, size);
+  bg.addColorStop(0, '#101426');
+  bg.addColorStop(1, '#070914');
+  targetCtx.fillStyle = bg;
+  targetCtx.fillRect(0, 0, size, size);
+}
+
+function drawTileBlock(targetCtx, x, y, size, color, alpha = 1) {
+  const pad = Math.max(1, Math.round(size * 0.08));
+  const radius = Math.max(3, Math.round(size * 0.18));
+  const w = size - pad * 2;
+  const h = size - pad * 2;
+  const rx = x + pad;
+  const ry = y + pad;
+
+  targetCtx.save();
+  targetCtx.globalAlpha *= alpha;
+  targetCtx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+  targetCtx.shadowBlur = Math.max(2, size * 0.12);
+  targetCtx.shadowOffsetY = Math.max(1, size * 0.05);
+
+  const grad = targetCtx.createLinearGradient(rx, ry, rx + w, ry + h);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.16, color);
+  grad.addColorStop(1, color);
+  targetCtx.fillStyle = grad;
+
+  targetCtx.beginPath();
+  targetCtx.roundRect(rx, ry, w, h, radius);
+  targetCtx.fill();
+
+  targetCtx.shadowColor = 'transparent';
+  targetCtx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+  targetCtx.lineWidth = Math.max(1, size * 0.04);
+  targetCtx.stroke();
+
+  targetCtx.fillStyle = 'rgba(255, 255, 255, 0.24)';
+  targetCtx.beginPath();
+  targetCtx.roundRect(rx + pad, ry + pad, Math.max(1, w - pad * 2), Math.max(1, h * 0.28), radius * 0.55);
+  targetCtx.fill();
+  targetCtx.restore();
+}
+
 function drawBoard() {
   if (!state) return;
   const cs = CELL_SIZE;
   const board = state.board;
 
   // 背景
-  ctx.fillStyle = '#0d0d1a';
-  ctx.fillRect(0, 0, cs * BOARD_SIZE, cs * BOARD_SIZE);
+  drawBoardSurface(ctx, cs);
 
   // 開始コーナーマスを薄く着色
   for (let pi = 0; pi < state.playerCount; pi++) {
@@ -802,15 +866,7 @@ function drawBoard() {
     for (let c = 0; c < BOARD_SIZE; c++) {
       const pi = board[r][c];
       if (pi !== null) {
-        ctx.fillStyle = PLAYER_COLORS[pi];
-        ctx.fillRect(c * cs + 1, r * cs + 1, cs - 2, cs - 2);
-        // 内側ボーダー風
-        ctx.fillStyle = 'rgba(0,0,0,0.15)';
-        ctx.fillRect(c * cs + 1, r * cs + 1, cs - 2, 2);
-        ctx.fillRect(c * cs + 1, r * cs + 1, 2, cs - 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.1)';
-        ctx.fillRect(c * cs + cs - 3, r * cs + 1, 2, cs - 2);
-        ctx.fillRect(c * cs + 1, r * cs + cs - 3, cs - 2, 2);
+        drawTileBlock(ctx, c * cs, r * cs, cs, PLAYER_COLORS[pi]);
       }
     }
   }
@@ -851,17 +907,12 @@ function drawPreview() {
     state.board, state.turn, cells, row, col, player.isFirst
   );
 
-  ctx.globalAlpha = valid ? 0.45 : 0.35;
-  ctx.fillStyle = valid ? PLAYER_COLORS[state.turn] : '#ff4444';
-
   for (const [dr, dc] of cells) {
     const r = row + dr, c = col + dc;
     if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
-      ctx.fillRect(c * cs + 1, r * cs + 1, cs - 2, cs - 2);
+      drawTileBlock(ctx, c * cs, r * cs, cs, valid ? PLAYER_COLORS[state.turn] : '#ff4444', valid ? 0.62 : 0.52);
     }
   }
-
-  ctx.globalAlpha = 1;
 }
 
 function hexToRgba(hex, alpha) {
@@ -887,12 +938,10 @@ function drawMiniPiece(miniCtx, cells, color, cellSize) {
   const cssH = miniCtx.canvas.height / localDpr;
 
   miniCtx.clearRect(0, 0, cssW * localDpr, cssH * localDpr);
-  miniCtx.fillStyle = color;
-
   for (const [r, c] of cells) {
     const x = (offsetC + c) * cellSize;
     const y = (offsetR + r) * cellSize;
-    miniCtx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+    drawTileBlock(miniCtx, x, y, cellSize, color);
   }
 }
 
@@ -1326,11 +1375,28 @@ window.addEventListener('resize', () => {
 // ============================================================
 //  初期描画（ゲーム開始前）
 // ============================================================
+function drawEmptyBoard() {
+  drawBoardSurface(ctx, CELL_SIZE);
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  ctx.lineWidth = 1;
+  for (let r = 0; r <= BOARD_SIZE; r++) {
+    ctx.beginPath();
+    ctx.moveTo(0, r * CELL_SIZE);
+    ctx.lineTo(BOARD_SIZE * CELL_SIZE, r * CELL_SIZE);
+    ctx.stroke();
+  }
+  for (let c = 0; c <= BOARD_SIZE; c++) {
+    ctx.beginPath();
+    ctx.moveTo(c * CELL_SIZE, 0);
+    ctx.lineTo(c * CELL_SIZE, BOARD_SIZE * CELL_SIZE);
+    ctx.stroke();
+  }
+}
+
 (function init() {
   resizeCanvas();
   // 空のボード描画
-  ctx.fillStyle = '#0d0d1a';
-  ctx.fillRect(0, 0, CELL_SIZE * BOARD_SIZE, CELL_SIZE * BOARD_SIZE);
+  drawBoardSurface(ctx, CELL_SIZE);
   ctx.strokeStyle = 'rgba(255,255,255,0.07)';
   ctx.lineWidth = 1;
   for (let r = 0; r <= BOARD_SIZE; r++) {
