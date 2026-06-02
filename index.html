@@ -9615,16 +9615,18 @@
           const tcData = await tcRes.json();
           dbg('data: ' + JSON.stringify(tcData).substring(0, 120));
           console.log('[typhoon] targetTc.json =>', tcData);
-          // 各フィールドの実値をデバッグ表示
-          if (Array.isArray(tcData) && tcData[0]) {
-            const d = tcData[0];
-            dbg('keys:' + Object.keys(d).join(','));
-            dbg('TC_field:' + JSON.stringify(d.TropicalCyclone) + ' num:' + JSON.stringify(d.typhoonNumber));
+          // Array形式 / Object形式 / BOM付きキー名すべてに対応
+          // キー名でなく「値スキャン」で TC\d+ を取得（BOM付きキーは item.TropicalCyclone が undefined になるため）
+          function extractTcId(item) {
+            if (typeof item === 'string') return item;
+            const fromVal = Object.values(item).find(v => typeof v === 'string' && /^TC\d+$/.test(v));
+            if (fromVal) return fromVal;
+            const num = Object.values(item).find(v => typeof v === 'string' && /^\d{4}$/.test(v));
+            return num ? 'TC' + num : String(item);
           }
-          // Array形式: ["TC2504"] / Object形式: {"TC2504":{...}} / 空: ""
           let tcIds = [];
           if (Array.isArray(tcData)) {
-            tcIds = tcData.filter(Boolean).map(item => typeof item === 'string' ? item : (item.TropicalCyclone || item.id || item.typhoonNumber || String(item)));
+            tcIds = tcData.filter(Boolean).map(extractTcId);
           } else if (tcData && typeof tcData === 'object') {
             tcIds = Object.keys(tcData);
           }
@@ -9632,12 +9634,13 @@
           console.log('[typhoon] tcIds =>', tcIds);
           if (!tcIds.length) { showNoTyphoon(); return; }
 
-          // issue フィールドからタイムスタンプ文字列を作成 (e.g. "2026-06-02T18:50:00+09:00" → "20260602185000")
+          // issue タイムスタンプから URL を構築（値スキャンで BOM対応）
           const issueMap = {};
           if (Array.isArray(tcData)) {
             tcData.forEach(item => {
-              const sid = item.TropicalCyclone || item.id || item.typhoonNumber;
-              if (sid && item.issue) issueMap[sid] = item.issue.replace(/\D/g, '').slice(0, 14);
+              const sid = extractTcId(item);
+              const iss = Object.values(item).find(v => typeof v === 'string' && /\d{4}-\d{2}-\d{2}T/.test(v));
+              if (sid && iss) issueMap[sid] = iss.replace(/\D/g, '').slice(0, 14);
             });
           }
 
