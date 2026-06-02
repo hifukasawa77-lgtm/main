@@ -4139,6 +4139,19 @@
               <span id="home-quake-time-label"></span>
               <a href="https://www.jma.go.jp/bosai/map.html#5/35/135/&elem=int" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.72rem;text-decoration:none">気象庁 地震情報 →</a>
             </div>
+            <!-- 台風情報セクション -->
+            <div style="border-top:1px solid rgba(255,255,255,0.1);margin-top:10px;padding-top:10px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span style="font-size:0.88rem;font-weight:600">🌀 台風情報</span>
+                <span id="home-typhoon-badge" style="display:none;font-size:0.7rem;background:#f97316;color:#fff;padding:2px 6px;border-radius:8px;font-weight:700"></span>
+              </div>
+              <div id="home-typhoon-list" style="font-size:0.8rem;color:var(--muted);margin-bottom:8px;min-height:18px">読み込み中…</div>
+              <canvas id="home-typhoon-track" width="560" height="360" style="width:100%;border-radius:6px;background:#061624"></canvas>
+              <div style="display:flex;justify-content:flex-end;margin-top:4px">
+                <a href="https://www.jma.go.jp/bosai/typhoon/" target="_blank" rel="noopener"
+                   style="color:var(--accent);font-size:0.72rem;text-decoration:none">気象庁 台風情報 →</a>
+              </div>
+            </div>
           </article>
 
           <!-- 世界時計 -->
@@ -9468,6 +9481,144 @@
       }
       setInterval(initQuakeCard, 10 * 60 * 1000);
 
+      // ─── 台風情報 ────────────────────────────────────────────────
+      const TYPHOON_CLASS_COLOR = {
+        '台風':'#f97316','強い台風':'#ef4444','非常に強い台風':'#9333ea','猛烈な台風':'#dc2626'
+      };
+      const TYPHOON_MAP_ISLANDS = [
+        [[130.4,31.1],[130.1,31.7],[129.8,32.5],[130.3,33.0],[130.8,33.5],[131.2,33.9],[131.5,33.6],[131.7,33.0],[131.1,32.2],[130.6,31.5]],
+        [[132.4,34.0],[133.0,33.6],[133.5,33.5],[134.2,33.6],[134.8,33.9],[134.7,34.2],[134.0,34.4],[133.2,34.3]],
+        [[130.8,34.2],[131.4,34.5],[132.5,34.6],[133.2,35.0],[134.5,35.3],[135.0,35.5],[136.5,36.0],[137.5,36.8],[138.5,37.5],[139.8,38.0],[140.8,39.0],[141.2,40.2],[141.4,41.4],[140.5,41.8],[140.0,40.6],[139.3,39.8],[138.5,38.8],[137.8,38.0],[137.0,37.5],[136.0,36.5],[135.0,35.8],[134.5,35.5],[132.8,35.0],[131.8,34.8],[131.0,34.5]],
+        [[141.3,41.5],[142.0,42.2],[143.0,43.5],[144.5,44.2],[145.5,44.1],[145.0,43.2],[143.5,42.5],[142.5,42.0],[141.8,42.0]],
+        [[121.0,22.0],[121.5,24.0],[122.0,25.0],[121.5,25.3],[120.5,24.0],[120.0,23.0],[120.2,22.0]],
+        [[128.0,35.0],[128.5,34.5],[129.0,35.1],[129.5,36.0],[129.6,37.5],[129.0,38.5],[128.5,38.9],[127.5,38.5],[126.5,37.5],[126.0,36.5],[126.5,35.5],[127.5,35.0]]
+      ];
+      function drawTyphoonBaseMap(canvas) {
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        const MIN_LON = 100, MAX_LON = 165, MIN_LAT = 0, MAX_LAT = 55;
+        function toXY(lon, lat) {
+          return [(lon - MIN_LON) / (MAX_LON - MIN_LON) * W, (1 - (lat - MIN_LAT) / (MAX_LAT - MIN_LAT)) * H];
+        }
+        ctx.fillStyle = '#061624'; ctx.fillRect(0, 0, W, H);
+        ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.font = `${Math.round(W * 0.022)}px sans-serif`;
+        for (let lon = 100; lon <= 165; lon += 10) {
+          ctx.beginPath(); const [x] = toXY(lon, 0);
+          ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+          ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.textAlign = 'center';
+          ctx.fillText(lon + '°E', x, H - 2);
+        }
+        for (let lat = 10; lat <= 50; lat += 10) {
+          ctx.beginPath(); const [, y] = toXY(0, lat);
+          ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+          ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.textAlign = 'left';
+          ctx.fillText(lat + '°N', 2, y - 2);
+        }
+        ctx.strokeStyle = 'rgba(255,220,0,0.18)'; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); const [, tropY] = toXY(0, 23.5);
+        ctx.moveTo(0, tropY); ctx.lineTo(W, tropY); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = '#1e3a2e'; ctx.strokeStyle = '#2d5040'; ctx.lineWidth = 0.8;
+        TYPHOON_MAP_ISLANDS.forEach(pts => {
+          if (pts.length < 3) return;
+          ctx.beginPath();
+          pts.forEach(([ln, lt], i) => { const [x, y] = toXY(ln, lt); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+          ctx.closePath(); ctx.fill(); ctx.stroke();
+        });
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.font = `bold ${Math.round(W * 0.026)}px sans-serif`; ctx.textAlign = 'center';
+        const [jx, jy] = toXY(136.5, 37.5); ctx.fillText('日本', jx, jy);
+        return { ctx, W, H, toXY };
+      }
+      function drawTyphoonTracks(mapCtx, typhoons) {
+        const { ctx, W, toXY } = mapCtx;
+        typhoons.forEach(ty => {
+          const color = TYPHOON_CLASS_COLOR[ty.class] || '#f97316';
+          const past = (ty.track || []).filter(p => p.type === 'past' || p.type === 'observation' || !p.type);
+          if (past.length > 1) {
+            ctx.strokeStyle = 'rgba(255,150,50,0.65)'; ctx.lineWidth = 1.8; ctx.setLineDash([]);
+            ctx.beginPath();
+            past.forEach(({ lat, lon }, i) => { const [x, y] = toXY(lon, lat); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+            ctx.stroke();
+          }
+          const forecast = ty.forecast || ty.forecastPoints || [];
+          const curPos = ty.currentPosition || (past.length ? past[past.length - 1] : null);
+          if (forecast.length > 0 && curPos) {
+            ctx.strokeStyle = 'rgba(255,180,80,0.75)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+            ctx.beginPath();
+            const [cx, cy] = toXY(curPos.lon, curPos.lat); ctx.moveTo(cx, cy);
+            forecast.forEach(({ lat, lon }) => { const [x, y] = toXY(lon, lat); ctx.lineTo(x, y); });
+            ctx.stroke(); ctx.setLineDash([]);
+          }
+          if (curPos) {
+            const [px, py] = toXY(curPos.lon, curPos.lat);
+            ctx.beginPath(); ctx.arc(px, py, W * 0.026, 0, Math.PI * 2);
+            ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+            ctx.beginPath(); ctx.arc(px, py, W * 0.013, 0, Math.PI * 2);
+            ctx.fillStyle = color; ctx.fill();
+            ctx.fillStyle = color;
+            ctx.font = `bold ${Math.round(W * 0.03)}px sans-serif`; ctx.textAlign = 'center';
+            ctx.fillText(escHtml(ty.name || ty.number || ''), px, py - W * 0.038);
+          }
+        });
+      }
+      window.initTyphoonSection = async function initTyphoonSection() {
+        const listEl  = document.getElementById('home-typhoon-list');
+        const badgeEl = document.getElementById('home-typhoon-badge');
+        const canvas  = document.getElementById('home-typhoon-track');
+        if (!canvas) return;
+        const mapCtx = drawTyphoonBaseMap(canvas);
+        function showNoTyphoon() {
+          const { ctx, W, H } = mapCtx;
+          ctx.fillStyle = 'rgba(255,255,255,0.35)';
+          ctx.font = `${Math.round(W * 0.036)}px sans-serif`; ctx.textAlign = 'center';
+          ctx.fillText('現在、発生中の台風はありません', W / 2, H / 2);
+          if (listEl) listEl.textContent = '現在、台風はありません';
+          if (badgeEl) badgeEl.style.display = 'none';
+        }
+        try {
+          const indexRes = await fetchWithTimeout('https://www.jma.go.jp/bosai/typhoon/data/', 8000);
+          if (!indexRes.ok) throw new Error('index');
+          let fileList;
+          const ct = indexRes.headers.get('content-type') || '';
+          if (ct.includes('json')) {
+            fileList = await indexRes.json();
+          } else {
+            const txt = await indexRes.text();
+            fileList = txt.match(/\d{14}\.json/g) || [];
+          }
+          if (!fileList || !fileList.length) throw new Error('no files');
+          const latest = Array.isArray(fileList) ? fileList[fileList.length - 1] : fileList[0];
+          const fname  = (typeof latest === 'string' ? latest : String(latest)).replace(/.*\//, '');
+          const dataRes = await fetchWithTimeout(`https://www.jma.go.jp/bosai/typhoon/data/${fname}`, 8000);
+          if (!dataRes.ok) throw new Error('data');
+          const raw = await dataRes.json();
+          const list = raw.items || raw.typhoons || (Array.isArray(raw) ? raw : []);
+          const active = list.filter(t => t && (t.name || t.number || t.class));
+          if (!active.length) { showNoTyphoon(); return; }
+          if (badgeEl) { badgeEl.textContent = `${active.length}個`; badgeEl.style.display = 'inline'; }
+          if (listEl) {
+            listEl.innerHTML = active.map(ty => {
+              const pos   = ty.currentPosition || ty.position || {};
+              const intens = ty.intensity || ty.maxWindInfo || {};
+              const wind  = intens.maxWindSpeed || intens.windSpeed || '';
+              const cls   = ty.class || ty.grade || '台風';
+              const clr   = TYPHOON_CLASS_COLOR[cls] || '#f97316';
+              return `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.07)">
+                <span style="color:${clr};font-weight:700">${escHtml(cls)}</span>
+                <span style="font-weight:600;margin-left:4px">${escHtml(ty.name || ty.number || '')}</span>
+                ${wind ? `<span style="color:var(--muted);font-size:0.78rem;margin-left:6px">最大風速 ${wind}m/s</span>` : ''}
+                ${pos.lat && pos.lon ? `<span style="color:var(--muted);font-size:0.76rem;margin-left:6px">${pos.lat}°N ${pos.lon}°E</span>` : ''}
+              </div>`;
+            }).join('');
+          }
+          drawTyphoonTracks(mapCtx, active);
+        } catch {
+          showNoTyphoon();
+        }
+      };
+      setInterval(initTyphoonSection, 30 * 60 * 1000);
+
       // ─── 交通情報マップ（Leaflet + 国土地理院タイル + JARTIC交通量API）──
       window.initJarticCanvasMap = function(lat, lon) {
         const mapDiv  = document.getElementById('traffic-leaflet-map');
@@ -10523,6 +10674,7 @@
             initDemographicsCard(),
             initTrainCard(),
             initQuakeCard(),
+            initTyphoonSection(),
             initTrafficCard(),
             initNewsCard(),
             initAINewsCard(),
