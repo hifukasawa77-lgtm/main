@@ -36,8 +36,117 @@
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin integrity="sha384-VQePqH/QE94Buf4g/4MI5NrqDYjdqT7JW6KzhieQUlw6w7U7VD59fPqCAunpXEu6"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.2/babel.min.js" crossorigin integrity="sha384-dqDn4UOhYWNxmtwnMX6yC3WtZZ6Li8rF6rLB7cu0i/R7btvb+p+kObgEHto7VsJK"></script>
   <script type=text/babel>
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
+
+// ── BGM Engine ─────────────────────────────────────────────────────────────
+const ShogiRPGBGM = (function() {
+  'use strict';
+  var LOOK = 0.3, TICK = 100;
+  var N = {
+    D3:146.83, F3:174.61, G3:196.00, A3:220.00, C4:261.63,
+    D4:293.66, E4:329.63, F4:349.23, G4:392.00, A4:440.00,
+    C5:523.25, D5:587.33, E5:659.25, G5:783.99, R:0
+  };
+
+  function note(ctx, freq, t, dur, type, vol, dest) {
+    if (!freq || dur <= 0) return;
+    var osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = type; osc.frequency.value = freq;
+    var atk = Math.min(0.02, dur * 0.1), rel = Math.min(0.06, dur * 0.2);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + atk);
+    g.gain.setValueAtTime(vol, t + dur - rel);
+    g.gain.linearRampToValueAtTime(0, t + dur);
+    osc.connect(g); g.connect(dest);
+    osc.start(t); osc.stop(t + dur + 0.05);
+  }
+
+  function kick(ctx, t, dest) {
+    var osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.frequency.setValueAtTime(140, t);
+    osc.frequency.exponentialRampToValueAtTime(40, t + 0.15);
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    osc.connect(g); g.connect(dest);
+    osc.start(t); osc.stop(t + 0.2);
+  }
+
+  // Title: BPM 72, D minor penta (和風ゆったり), 32 beats
+  var TM = [[N.D4,2],[N.A3,2],[N.F4,2],[N.G4,2],[N.A4,2],[N.G4,2],[N.D4,2],[N.R,2],
+            [N.C4,2],[N.D4,2],[N.F4,2],[N.A4,2],[N.G4,2],[N.F4,2],[N.D4,4]];
+  var TB = [[N.D3,4],[N.A3,4],[N.G3,4],[N.D3,4],[N.C4,4],[N.A3,4],[N.D3,4],[N.A3,4]];
+
+  function schedTitle(ctx, t, dest) {
+    var b = 60/72, c = t, bc = t;
+    TM.forEach(function(m) { note(ctx, m[0], c, m[1]*b*0.85, 'triangle', 0.18, dest); c += m[1]*b; });
+    TB.forEach(function(m) { note(ctx, m[0], bc, m[1]*b*0.9, 'sine',     0.14, dest); bc += m[1]*b; });
+    for (var i=0; i<8; i++) note(ctx, 480, t+i*4*b, 0.06, 'sine', 0.07, dest);
+  }
+
+  // Battle: BPM 116, A minor penta (緊張感), 32 beats
+  var BM = [[N.A4,1],[N.C5,1],[N.D5,2],[N.C5,1],[N.A4,1],[N.G4,2],
+            [N.A4,2],[N.C5,2],[N.A4,1],[N.G4,1],[N.A4,2],
+            [N.D5,2],[N.C5,2],[N.A4,2],[N.G4,2],
+            [N.A4,2],[N.G4,2],[N.F4,2],[N.A4,2]];
+  var BB = [[N.A3,2],[N.C4,2],[N.D4,2],[N.A3,2],[N.G3,2],[N.A3,2],[N.G3,2],[N.A3,2],
+            [N.A3,2],[N.D4,2],[N.C4,2],[N.A3,2],[N.G3,4],[N.A3,4]];
+
+  function schedBattle(ctx, t, dest) {
+    var b = 60/116, c = t, bc = t;
+    BM.forEach(function(m) { note(ctx, m[0], c, m[1]*b*0.75, 'sawtooth', 0.13, dest); c += m[1]*b; });
+    BB.forEach(function(m) { note(ctx, m[0], bc, m[1]*b*0.9,  'sine',    0.15, dest); bc += m[1]*b; });
+    for (var i=0; i<16; i++) kick(ctx, t+i*2*b, dest);
+  }
+
+  // Shop: BPM 96, C major penta (軽快), 32 beats
+  var SM = [[N.C5,1],[N.D5,1],[N.E5,2],[N.G5,2],[N.E5,2],
+            [N.D5,1],[N.C5,1],[N.A4,2],[N.C5,2],[N.D5,2],
+            [N.E5,2],[N.G5,2],[N.E5,2],[N.D5,2],
+            [N.C5,2],[N.A4,2],[N.G4,2],[N.C5,2]];
+  var SB = [[N.C4,2],[N.G3,2],[N.A3,2],[N.G3,2],[N.C4,4],[N.G3,4],
+            [N.C4,2],[N.G3,2],[N.A3,2],[N.G3,2],[N.C4,4],[N.G3,4]];
+
+  function schedShop(ctx, t, dest) {
+    var b = 60/96, c = t, bc = t;
+    SM.forEach(function(m) { note(ctx, m[0], c, m[1]*b*0.7,  'triangle', 0.14, dest); c += m[1]*b; });
+    SB.forEach(function(m) { note(ctx, m[0], bc, m[1]*b*0.9, 'sine',     0.10, dest); bc += m[1]*b; });
+  }
+
+  function dur(pat, bpm) { return pat.reduce(function(s,m){return s+m[1];},0)*60/bpm; }
+
+  function start(ctx, fn, loopDur) {
+    var mg = ctx.createGain();
+    mg.gain.setValueAtTime(0, ctx.currentTime);
+    mg.gain.linearRampToValueAtTime(0.65, ctx.currentTime + 1.0);
+    mg.connect(ctx.destination);
+    var h = {mg:mg, ctx:ctx, next:ctx.currentTime, tid:null, dead:false, dur:loopDur, fn:fn};
+    function tick() {
+      if (h.dead) return;
+      while (h.next < h.ctx.currentTime + LOOK + h.dur) { h.fn(ctx, h.next, mg); h.next += h.dur; }
+      h.tid = setTimeout(tick, TICK);
+    }
+    tick();
+    return h;
+  }
+
+  function stop(h) {
+    if (!h) return;
+    h.dead = true;
+    if (h.tid) clearTimeout(h.tid);
+    var now = h.ctx.currentTime;
+    h.mg.gain.cancelScheduledValues(now);
+    h.mg.gain.setValueAtTime(h.mg.gain.value, now);
+    h.mg.gain.linearRampToValueAtTime(0, now + 1.5);
+  }
+
+  return {
+    startTitle:  function(ctx) { return start(ctx, schedTitle,  dur(TM, 72)); },
+    startBattle: function(ctx) { return start(ctx, schedBattle, dur(BM, 116)); },
+    startShop:   function(ctx) { return start(ctx, schedShop,   dur(SM, 96)); },
+    stop: stop
+  };
+})();
 
 const ShogiRPG = () => {
   const BOARD_SIZE = 9; // 全ステージ9×9固定
@@ -1193,6 +1302,9 @@ const ShogiRPG = () => {
   });
   const [difficulty, setDifficulty] = useState('normal'); // easy, normal, hard
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const bgmCtxRef   = useRef(null);
+  const bgmHandleRef = useRef(null);
+  const bgmPhaseRef  = useRef(null);
   const [dailyMissions, setDailyMissions] = useState({
     lastDate: '',
     missions: [
@@ -2025,6 +2137,25 @@ const ShogiRPG = () => {
       executeAITurn();
     }
   }, [currentTurn, gameState]);
+
+  useEffect(() => {
+    if (!soundEnabled) {
+      if (bgmHandleRef.current) { ShogiRPGBGM.stop(bgmHandleRef.current); bgmHandleRef.current = null; bgmPhaseRef.current = null; }
+      return;
+    }
+    const target = gameState === 'start' ? 'title' : gameState === 'playing' ? 'battle' : gameState === 'shop' ? 'shop' : null;
+    if (target === bgmPhaseRef.current) return;
+    if (bgmHandleRef.current) { ShogiRPGBGM.stop(bgmHandleRef.current); bgmHandleRef.current = null; }
+    if (target) {
+      if (!bgmCtxRef.current) bgmCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      if (bgmCtxRef.current.state === 'suspended') bgmCtxRef.current.resume();
+      const starters = { title: 'startTitle', battle: 'startBattle', shop: 'startShop' };
+      bgmHandleRef.current = ShogiRPGBGM[starters[target]](bgmCtxRef.current);
+      bgmPhaseRef.current = target;
+    } else {
+      bgmPhaseRef.current = null;
+    }
+  }, [gameState, soundEnabled]);
 
   const validMovesList = selectedCell ? getValidMoves(selectedCell.x, selectedCell.y, selectedCell.type) : [];
   const monsterHpPercentage = currentMonster ? (monsterHp / currentMonster.maxHp) * 100 : 0;

@@ -199,6 +199,8 @@
         // ─────────────────────────────────────────────────
         let audioCtx=null, masterGain=null;
         let bgmNodes=[], bgmTimer=null, bgmScheduled=[], bgmStage=0, bgmPlaying=false;
+        let titleBgmPlaying=false, titleBgmNodes=[], titleBgmTimer=null;
+        let titleMelCur=0, titleBassCur=0, titleMelIdx=0, titleBassIdx=0;
         const LOOK=0.15, TICK=0.05;
 
         // 音符・周波数テーブル
@@ -324,6 +326,59 @@
           {bpm:132,melW:'square',bassW:'sawtooth',drum:4,vol:0.16},
           {bpm:184,melW:'square',bassW:'sawtooth',drum:1,vol:0.18}
         ];
+        // タイトル画面BGM (BPM138, Aマイナー, 宇宙テーマ)
+        const TITLE_MEL=[
+          [HZ.A4,2],[HZ.C5,2],[HZ.E5,2],[HZ.G5,2],
+          [HZ.E5,2],[HZ.C5,2],[HZ.A4,2],[HZ._,2],
+          [HZ.G4,2],[HZ.A4,2],[HZ.C5,2],[HZ.E5,2],
+          [HZ.G5,2],[HZ.E5,2],[HZ.A4,4]
+        ]; // 32 beats
+        const TITLE_BASS=[
+          [HZ.A2,4],[HZ.E3,4],[HZ.G2,4],[HZ.A2,4],
+          [HZ.C3,4],[HZ.A2,4],[HZ.E3,4],[HZ.A2,4]
+        ]; // 32 beats
+
+        function stopTitleBGM(){
+          titleBgmPlaying=false;
+          if(titleBgmTimer){clearInterval(titleBgmTimer);titleBgmTimer=null;}
+          titleBgmNodes.forEach(n=>{try{n.stop()}catch{}});
+          titleBgmNodes=[];
+        }
+        function startTitleBGM(){
+          if(!audioCtx||titleBgmPlaying)return;
+          stopTitleBGM();
+          titleBgmPlaying=true;
+          const beatDur=60/138;
+          const now=audioCtx.currentTime;
+          titleMelCur=now;titleBassCur=now;titleMelIdx=0;titleBassIdx=0;
+          function schN(freq,st,dur,wave,vol){
+            if(!freq)return;
+            const osc=audioCtx.createOscillator();
+            osc.type=wave;osc.frequency.value=freq;
+            const g=audioCtx.createGain();g.gain.value=vol;
+            osc.connect(g);g.connect(masterGain);
+            osc.start(st);osc.stop(st+dur);
+            titleBgmNodes.push(osc);
+          }
+          function titleScheduler(){
+            if(!titleBgmPlaying)return;
+            const n=audioCtx.currentTime;
+            while(titleMelCur<n+LOOK){
+              if(titleMelIdx>=TITLE_MEL.length)titleMelIdx=0;
+              const[f,b]=TITLE_MEL[titleMelIdx];const d=beatDur*b;
+              schN(f,titleMelCur,d*0.9,'square',0.14);
+              titleMelCur+=d;titleMelIdx++;
+            }
+            while(titleBassCur<n+LOOK){
+              if(titleBassIdx>=TITLE_BASS.length)titleBassIdx=0;
+              const[f,b]=TITLE_BASS[titleBassIdx];const d=beatDur*b;
+              schN(f,titleBassCur,d*0.95,'sawtooth',0.10);
+              titleBassCur+=d;titleBassIdx++;
+            }
+          }
+          titleScheduler();
+          titleBgmTimer=setInterval(titleScheduler,TICK*1000);
+        }
 
         function initAudio(){
           if(audioCtx) return;
@@ -507,6 +562,7 @@
 
   // ── INIT ──
   function initGame(){
+    stopTitleBGM();
     score=0;lives=3;gameState='title';frame=0;stageFrame=0;
     shotCooldown=0;killCount=0;puCursor=0;shotPressed=false;
     speedLevel=1;missDownLv=0;missUpLv=0;laserLv=0;optionCount=0;barrierHp=0;
@@ -1011,7 +1067,13 @@
     frame++;
     if(cheatNotice>0)cheatNotice--;
     if(gameState==='title'){
-      if(keys.shot&&!shotPressed){shotPressed=true;if(!audioInited){initAudio();audioInited=true;}gameState='intro';resetStage(1);stageFrame=0;}
+      if(audioCtx&&!titleBgmPlaying)startTitleBGM();
+      if(keys.shot&&!shotPressed){
+        shotPressed=true;
+        if(!audioInited){initAudio();audioInited=true;}
+        stopTitleBGM();
+        gameState='intro';resetStage(1);stageFrame=0;
+      }
       if(!keys.shot)shotPressed=false;
       for(const s of stars){s.x-=s.speed;if(s.x<0)s.x+=W;}
     }
