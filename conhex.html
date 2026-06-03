@@ -200,10 +200,14 @@
     width: 18px;
     height: 18px;
     border-radius: 50%;
+    background-image: url('assets/conhex/gpt-image-2-conhex-sprites-atlas.png');
+    background-size: 400% 300%;
+    background-repeat: no-repeat;
+    filter: drop-shadow(0 1px 1px rgba(55, 37, 18, 0.28));
   }
 
-  .swatch.player { background: var(--player); }
-  .swatch.cpu { background: var(--cpu); }
+  .swatch.player { background-position: 66.667% 100%; }
+  .swatch.cpu { background-position: 100% 100%; }
 
   .controls {
     display: grid;
@@ -382,6 +386,37 @@ const COLORS = {
   hint: '#7d8f58',
   text: '#283025'
 };
+const ASSET_PATHS = {
+  board: 'assets/conhex/gpt-image-2-conhex-board-atlas.png',
+  sprites: 'assets/conhex/gpt-image-2-conhex-sprites-atlas.png'
+};
+const BOARD_CELLS = {
+  parchment: [0, 0],
+  board: [1, 0],
+  cell: [2, 0],
+  playerRoute: [0, 1],
+  cpuRoute: [1, 1],
+  line: [2, 1]
+};
+const SPRITE_CELLS = {
+  emptyHole: [0, 0],
+  hint: [1, 0],
+  playerStone: [2, 0],
+  cpuStone: [3, 0],
+  playerMarker: [0, 1],
+  cpuMarker: [1, 1],
+  playerConnected: [2, 1],
+  cpuConnected: [3, 1],
+  playerRoute: [0, 2],
+  cpuRoute: [1, 2],
+  playerLegend: [2, 2],
+  cpuLegend: [3, 2]
+};
+const CONHEX_ASSETS = {
+  board: new Image(),
+  sprites: new Image(),
+  loaded: 0
+};
 
 let cells = [];
 let holes = [];
@@ -391,6 +426,47 @@ let current = PLAYER;
 let gameOver = false;
 let cpuThinking = false;
 let hintHole = null;
+
+function loadConHexAssets() {
+  const onAssetLoad = () => {
+    CONHEX_ASSETS.loaded++;
+    if (holes.length) draw();
+  };
+  CONHEX_ASSETS.board.onload = onAssetLoad;
+  CONHEX_ASSETS.sprites.onload = onAssetLoad;
+  CONHEX_ASSETS.board.src = ASSET_PATHS.board;
+  CONHEX_ASSETS.sprites.src = ASSET_PATHS.sprites;
+}
+
+function imageReady(img) {
+  return img?.complete && img.naturalWidth > 0;
+}
+
+function drawAtlasCell(img, cell, cols, rows, x, y, w, h) {
+  if (!imageReady(img)) return false;
+  const sw = img.naturalWidth / cols;
+  const sh = img.naturalHeight / rows;
+  ctx.drawImage(img, cell[0] * sw, cell[1] * sh, sw, sh, x, y, w, h);
+  return true;
+}
+
+function drawBoardCell(name, x, y, w, h) {
+  return drawAtlasCell(CONHEX_ASSETS.board, BOARD_CELLS[name], 3, 2, x, y, w, h);
+}
+
+function drawSpriteCell(name, x, y, w, h) {
+  return drawAtlasCell(CONHEX_ASSETS.sprites, SPRITE_CELLS[name], 4, 3, x, y, w, h);
+}
+
+function withPath(points, fn) {
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    if (i === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.closePath();
+  fn();
+}
 
 function buildBoard() {
   holes = [];
@@ -476,8 +552,10 @@ function resetGame() {
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#fff8e8';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!drawBoardCell('parchment', 0, 0, canvas.width, canvas.height)) {
+    ctx.fillStyle = '#fff8e8';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
   drawBoardBase();
   drawGoalBands();
 
@@ -485,38 +563,67 @@ function draw() {
   for (const cell of cells) {
     const owner = cellOwners[cell.id];
     const isConnected = connected.has(cell.id);
-    ctx.beginPath();
-    cell.points.forEach((p, i) => {
-      if (i === 0) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
+    const minX = Math.min(...cell.points.map(p => p.x));
+    const maxX = Math.max(...cell.points.map(p => p.x));
+    const minY = Math.min(...cell.points.map(p => p.y));
+    const maxY = Math.max(...cell.points.map(p => p.y));
+    withPath(cell.points, () => {
+      ctx.save();
+      ctx.clip();
+      const drewCell = drawBoardCell('cell', minX - 10, minY - 10, maxX - minX + 20, maxY - minY + 20);
+      if (!drewCell) {
+        ctx.fillStyle = 'rgba(255,255,255,0.03)';
+        ctx.fill();
+      }
+      ctx.restore();
     });
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(255,255,255,0.03)';
-    ctx.fill();
     ctx.lineWidth = 2;
     ctx.strokeStyle = COLORS.line;
-    ctx.stroke();
+    withPath(cell.points, () => ctx.stroke());
     if (owner !== EMPTY) drawCellMarker(cell, owner, isConnected);
   }
 
   for (const hole of holes) {
     const owner = holeOwners[hole.id];
     const isHint = hintHole === hole.id && owner === EMPTY;
-    ctx.beginPath();
-    ctx.arc(hole.x, hole.y, isHint ? 9 : 6.5, 0, Math.PI * 2);
-    ctx.fillStyle = owner === PLAYER ? COLORS.player : owner === CPU ? COLORS.cpu : isHint ? COLORS.hint : COLORS.hole;
-    ctx.fill();
-    ctx.lineWidth = isHint ? 3 : 2;
-    ctx.strokeStyle = isHint ? COLORS.hint : COLORS.holeStroke;
-    ctx.stroke();
+    let sprite = 'emptyHole';
+    let size = 24;
+    if (owner === PLAYER) {
+      sprite = 'playerStone';
+      size = 31;
+    } else if (owner === CPU) {
+      sprite = 'cpuStone';
+      size = 31;
+    } else if (isHint) {
+      sprite = 'hint';
+      size = 34;
+    }
+    if (!drawSpriteCell(sprite, hole.x - size / 2, hole.y - size / 2, size, size)) {
+      ctx.beginPath();
+      ctx.arc(hole.x, hole.y, isHint ? 9 : 6.5, 0, Math.PI * 2);
+      ctx.fillStyle = owner === PLAYER ? COLORS.player : owner === CPU ? COLORS.cpu : isHint ? COLORS.hint : COLORS.hole;
+      ctx.fill();
+      ctx.lineWidth = isHint ? 3 : 2;
+      ctx.strokeStyle = isHint ? COLORS.hint : COLORS.holeStroke;
+      ctx.stroke();
+    }
   }
 }
 
 function drawBoardBase() {
   ctx.save();
-  ctx.fillStyle = COLORS.board;
   roundRect(80, 56, 700, 560, 8);
-  ctx.fill();
+  ctx.clip();
+  if (!drawBoardCell('board', 80, 56, 700, 560)) {
+    ctx.fillStyle = COLORS.board;
+    ctx.fill();
+  }
+  ctx.restore();
+  ctx.save();
+  roundRect(80, 56, 700, 560, 8);
+  ctx.strokeStyle = 'rgba(77, 58, 35, 0.34)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -524,9 +631,16 @@ function drawCellMarker(cell, owner, isConnected) {
   const w = isConnected ? 48 : 42;
   const h = isConnected ? 20 : 17;
   const angle = ((cell.row + cell.col) % 4 === 0 ? -28 : (cell.row + cell.col) % 4 === 1 ? 0 : (cell.row + cell.col) % 4 === 2 ? 27 : 90) * Math.PI / 180;
+  const sprite = owner === PLAYER
+    ? (isConnected ? 'playerConnected' : 'playerMarker')
+    : (isConnected ? 'cpuConnected' : 'cpuMarker');
   ctx.save();
   ctx.translate(cell.x, cell.y);
   ctx.rotate(angle);
+  if (drawSpriteCell(sprite, -w / 2, -h / 2, w, h)) {
+    ctx.restore();
+    return;
+  }
   ctx.fillStyle = owner === PLAYER ? (isConnected ? COLORS.playerDark : COLORS.player) : (isConnected ? COLORS.cpuDark : COLORS.cpu);
   ctx.globalAlpha = isConnected ? 0.98 : 0.9;
   roundRect(-w / 2, -h / 2, w, h, 4);
@@ -555,14 +669,14 @@ function drawGoalBands() {
   ctx.lineWidth = 12;
   ctx.lineCap = 'round';
 
-  drawBand(top, COLORS.cpu, 0, -33);
-  drawBand(bottom, COLORS.cpu, 0, 33);
-  drawBand(left, COLORS.player, -33, 0);
-  drawBand(right, COLORS.player, 33, 0);
+  drawBand(top, COLORS.cpu, 0, -33, 'cpuRoute');
+  drawBand(bottom, COLORS.cpu, 0, 33, 'cpuRoute');
+  drawBand(left, COLORS.player, -33, 0, 'playerRoute');
+  drawBand(right, COLORS.player, 33, 0, 'playerRoute');
   ctx.restore();
 }
 
-function drawBand(list, color, dx, dy) {
+function drawBand(list, color, dx, dy, spriteName) {
   if (!list.length) return;
   const sorted = list.slice().sort((a, b) => dx ? a.y - b.y : a.x - b.x);
   ctx.strokeStyle = color;
@@ -570,6 +684,10 @@ function drawBand(list, color, dx, dy) {
   ctx.moveTo(sorted[0].x + dx, sorted[0].y + dy);
   for (const cell of sorted.slice(1)) ctx.lineTo(cell.x + dx, cell.y + dy);
   ctx.stroke();
+  ctx.globalAlpha = 0.9;
+  for (const cell of sorted) {
+    drawSpriteCell(spriteName, cell.x + dx - 13, cell.y + dy - 13, 26, 26);
+  }
 }
 
 function setStatus(text) {
@@ -802,6 +920,7 @@ newGameBtn.addEventListener('click', resetGame);
 hintBtn.addEventListener('click', showHint);
 difficultySelect.addEventListener('change', resetGame);
 
+loadConHexAssets();
 resetGame();
 </script>
 </body>
