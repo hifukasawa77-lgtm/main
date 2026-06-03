@@ -109,6 +109,7 @@ let paused;
 let charSelectState;
 let roundState;
 let bgmStage = null;
+let bgmPhase = null; // 'title' | 'charselect' | 'battle' | null
 
 // ── Input tracking ─────────────────────────────────────────────────────────
 const keys = {};
@@ -236,9 +237,10 @@ function playSfx(type) {
 
 function startStageBgm(stage) {
   ensureAudio();
-  if (!audioCtx || bgmStage === stage) return;
+  if (!audioCtx || (bgmStage === stage && bgmPhase === 'battle')) return;
   if (bgmTimer) clearInterval(bgmTimer);
   bgmStage = stage;
+  bgmPhase = 'battle';
   bgmStep = 0;
   const patterns = [
     { tempo: 150, bass: [38, 38, 43, 41, 38, 45, 43, 36], lead: [62, 65, 67, 70, 67, 65, 62, 58], wave: 'square' },
@@ -252,6 +254,52 @@ function startStageBgm(stage) {
     playTone(midiToHz(p.bass[i]), 0.16, 'sawtooth', 0.045, bgmGain, -8);
     if (bgmStep % 2 === 0) playTone(midiToHz(p.lead[i]), 0.12, p.wave, 0.035, bgmGain);
     if (bgmStep % 4 === 2) playNoise(0.025, 0.012);
+    bgmStep++;
+  }, interval);
+}
+
+function stopBgm() {
+  if (bgmTimer) { clearInterval(bgmTimer); bgmTimer = null; }
+  bgmPhase = null;
+  bgmStage = null;
+  bgmStep = 0;
+}
+
+function startTitleBgm() {
+  ensureAudio();
+  if (!audioCtx || bgmPhase === 'title') return;
+  if (bgmTimer) clearInterval(bgmTimer);
+  bgmPhase = 'title';
+  bgmStep = 0;
+  // A minor penta: A3=57, C4=60, D4=62, E4=64, G4=67, A4=69
+  const mel = [57, 60, 62, 64, 67, 69, 67, 64];
+  const interval = 60000 / 88 / 2;
+  bgmTimer = setInterval(() => {
+    if (!audioCtx || gameState !== 'title') return;
+    const i = bgmStep % 8;
+    playTone(midiToHz(mel[i]), 0.3, 'triangle', 0.028, bgmGain);
+    if (bgmStep % 4 === 0) playTone(midiToHz(mel[i] - 12), 0.28, 'sine', 0.022, bgmGain);
+    if (bgmStep % 4 === 0) playTone(80, 0.12, 'sine', 0.018, masterGain);
+    bgmStep++;
+  }, interval);
+}
+
+function startCharSelectBgm() {
+  ensureAudio();
+  if (!audioCtx || bgmPhase === 'charselect') return;
+  if (bgmTimer) clearInterval(bgmTimer);
+  bgmPhase = 'charselect';
+  bgmStep = 0;
+  // E minor / A minor penta energetic: E4=64, G4=67, A4=69, C5=72, D5=74
+  const mel  = [64, 67, 69, 72, 74, 72, 69, 67];
+  const bass = [52, 55, 52, 55, 52, 55, 52, 55];
+  const interval = 60000 / 104 / 2;
+  bgmTimer = setInterval(() => {
+    if (!audioCtx || gameState !== 'charselect') return;
+    const i = bgmStep % 8;
+    playTone(midiToHz(mel[i]),  0.14, 'square',   0.025, bgmGain);
+    if (bgmStep % 2 === 0) playTone(midiToHz(bass[i]), 0.18, 'sawtooth', 0.020, bgmGain);
+    if (bgmStep % 4 === 0) playNoise(0.02, 0.010);
     bgmStep++;
   }, interval);
 }
@@ -1677,6 +1725,10 @@ function update() {
   frameCount++;
   if (shakeTimer > 0) shakeTimer--;
   updateParticles();
+
+  if (gameState === 'title' && bgmPhase !== 'title') startTitleBgm();
+  else if (gameState === 'charselect' && bgmPhase !== 'charselect') startCharSelectBgm();
+  else if (gameState !== 'battle' && gameState !== 'title' && gameState !== 'charselect' && bgmPhase !== null) stopBgm();
 
   if (gameState === 'battle' && p1 && p2) {
     startStageBgm(currentStage);
