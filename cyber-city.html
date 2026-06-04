@@ -64,6 +64,20 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--sky);color:var
 #toast.err{background:rgba(229,57,53,.92)}
 #toast.ok{background:rgba(67,160,71,.92)}
 
+/* Event Panel */
+#event-panel{
+  position:absolute;right:8px;top:118px;
+  width:158px;max-height:260px;overflow-y:auto;
+  z-index:30;pointer-events:none;
+}
+.ev-item{
+  background:rgba(0,0,20,.84);
+  border-left:3px solid var(--ev-color,#aaa);
+  color:#eee;font-size:11px;
+  padding:4px 7px;margin-bottom:4px;border-radius:3px;
+  display:flex;align-items:center;gap:5px;
+}
+
 /* Controls */
 #ctrl{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:4px}
 .ctrl-btn{
@@ -161,6 +175,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--sky);color:var
 <div id="canvas-wrap">
   <canvas id="city-canvas"></canvas>
   <div id="toast"></div>
+  <div id="event-panel"></div>
   <div id="minimap-wrap"><canvas id="minimap" width="100" height="100"></canvas></div>
   <div id="ctrl">
     <button class="ctrl-btn" id="zoom-in">+</button>
@@ -226,6 +241,36 @@ const TOOL_TYPE={
 };
 
 // ════════════════════════════════════════════════════════════
+//  イベントシステム定数
+// ════════════════════════════════════════════════════════════
+const EV={
+  EARTHQUAKE:'earthquake',TSUNAMI:'tsunami',TYPHOON:'typhoon',FIRE:'fire',
+  CRIME:'crime',TRAFFIC:'traffic',
+  BLACKOUT:'blackout',WATER_BREAK:'water_break',GAS_LEAK:'gas_leak',
+  BOOM:'boom',RECESSION:'recession',SUBSIDY:'subsidy',
+};
+const EV_CHANCE={
+  earthquake:0.04,tsunami:0.02,typhoon:0.07,fire:0.12,
+  crime:0.15,traffic:0.10,
+  blackout:0.06,water_break:0.05,gas_leak:0.04,
+  boom:0.05,recession:0.04,subsidy:0.03,
+};
+const EV_INFO={
+  earthquake:{icon:'🌍',label:'地震発生！',color:'#ff8800',severity:3},
+  tsunami:   {icon:'🌊',label:'津波警報！',color:'#0066ff',severity:3},
+  typhoon:   {icon:'🌀',label:'台風接近！',color:'#8800ff',severity:2},
+  fire:      {icon:'🔥',label:'火災発生！',color:'#ff3300',severity:2},
+  crime:     {icon:'🚨',label:'犯罪発生！',color:'#ff0055',severity:1},
+  traffic:   {icon:'🚗',label:'交通事故！',color:'#ff8800',severity:1},
+  blackout:  {icon:'⚡',label:'停電発生！',color:'#ffcc00',severity:2},
+  water_break:{icon:'💧',label:'断水発生！',color:'#00aaff',severity:1},
+  gas_leak:  {icon:'💨',label:'ガス漏れ！',color:'#88ff00',severity:2},
+  boom:      {icon:'📈',label:'好景気到来！',color:'#00ff88',severity:0},
+  recession: {icon:'📉',label:'不景気…',  color:'#aaaaaa',severity:1},
+  subsidy:   {icon:'🏛️',label:'補助金支給！',color:'#ffd700',severity:0},
+};
+
+// ════════════════════════════════════════════════════════════
 //  Grid
 // ════════════════════════════════════════════════════════════
 function mkTile(type,terrain=TR.GRASS){
@@ -242,6 +287,18 @@ const gs={
   cam:{x:0,y:0},zoom:1.6,
   hover:null,dragging:false,dragPt:null,drawing:false,lastSim:0,
 };
+
+// イベント状態変数
+let fireTiles=[];        // [{x,y,life,spreadTimer}]
+let activeEvents=[];     // [{type,ttl,label,color,icon}]
+let shakeFrames=0;
+let rainParticles=[];    // [{x,y,len,spd}]
+let tsunamiWave=null;    // null | {progress}
+let gasLeakTiles=new Set();
+let economicMod=1.0;
+let economicModTurns=0;
+let covCache={};         // simulate()後に更新するカバレッジキャッシュ
+let trafficPenaltyTurns=0;
 
 // ════════════════════════════════════════════════════════════
 //  Terrain generation
@@ -860,6 +917,11 @@ function drawMinimap(){
 function render(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   ctx.fillStyle='#a8d8ea';ctx.fillRect(0,0,canvas.width,canvas.height);
+  // 地震シェイク
+  if(shakeFrames>0){
+    ctx.save();
+    ctx.translate(Math.sin(shakeFrames*1.4)*3,Math.cos(shakeFrames*1.1)*2);
+  }
   const size=ts();
   for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
     const px=gs.cam.x+x*size,py=gs.cam.y+y*size;
@@ -895,7 +957,123 @@ function render(){
     ctx.strokeStyle='rgba(41,121,255,.85)';ctx.lineWidth=2.5;
     ctx.setLineDash([4,3]);ctx.strokeRect(px+1.5,py+1.5,size-3,size-3);ctx.setLineDash([]);
   }
+  // イベントエフェクト描画
+  drawFireEffects();
+  if(rainParticles.length) drawRainOverlay();
+  if(tsunamiWave) drawTsunamiWave();
+  if(gasLeakTiles.size) drawGasLeakOverlay();
+  // シェイク解除
+  if(shakeFrames>0){ ctx.restore(); shakeFrames--; }
   drawMinimap();
+}
+
+function drawFireEffects(){
+  if(fireTiles.length===0)return;
+  const size=ts();
+  ctx.save();
+  for(const f of fireTiles){
+    const px=gs.cam.x+f.x*size,py=gs.cam.y+f.y*size;
+    if(px+size<0||py+size<0||px>canvas.width||py>canvas.height)continue;
+    const t=gs.frame;
+    // 複数の炎三角形を描く
+    for(let k=0;k<5;k++){
+      const ox=px+size*(0.2+k*0.13);
+      const fw=size*0.14;
+      const fh=size*(0.45+0.18*Math.sin(t*0.2+k*1.3));
+      const a=0.55+0.3*Math.sin(t*0.3+k);
+      ctx.globalAlpha=a;
+      // 外炎（赤）
+      ctx.fillStyle='#ff4400';
+      ctx.beginPath();
+      ctx.moveTo(ox,py+size*0.85);
+      ctx.lineTo(ox-fw,py+size*0.85);
+      ctx.lineTo(ox-fw*0.5+fw*0.3*Math.sin(t*0.4+k),py+size*0.85-fh);
+      ctx.closePath();ctx.fill();
+      // 内炎（黄）
+      ctx.fillStyle='#ffcc00';
+      ctx.beginPath();
+      ctx.moveTo(ox,py+size*0.85);
+      ctx.lineTo(ox-fw*0.5,py+size*0.85);
+      ctx.lineTo(ox-fw*0.25+fw*0.15*Math.sin(t*0.5+k),py+size*0.85-fh*0.6);
+      ctx.closePath();ctx.fill();
+    }
+    // 黒煙
+    ctx.globalAlpha=0.22;
+    ctx.fillStyle='#111';
+    ctx.beginPath();ctx.arc(px+size*0.5,py+size*0.2,size*0.3,0,Math.PI*2);ctx.fill();
+  }
+  ctx.globalAlpha=1;ctx.restore();
+}
+
+function drawRainOverlay(){
+  ctx.save();ctx.strokeStyle='rgba(200,230,255,0.5)';ctx.lineWidth=1;
+  for(const p of rainParticles){
+    ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(p.x-4,p.y+p.len);ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawTsunamiWave(){
+  if(!tsunamiWave)return;
+  const prog=tsunamiWave.progress;
+  const W=canvas.width,H=canvas.height;
+  ctx.save();
+  // 波帯（上から流れてくる青い半透明帯）
+  ctx.fillStyle='rgba(0,80,220,0.22)';
+  ctx.fillRect(0,Math.max(0,prog-80),W,Math.min(100,prog+80));
+  // 波頭ライン
+  ctx.strokeStyle='rgba(100,180,255,0.7)';ctx.lineWidth=3;
+  ctx.beginPath();
+  for(let px=0;px<=W;px+=8){
+    const wy=prog+Math.sin(px*0.05+gs.frame*0.08)*6;
+    if(px===0)ctx.moveTo(px,wy);else ctx.lineTo(px,wy);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawGasLeakOverlay(){
+  ctx.save();
+  const size=ts();
+  ctx.globalAlpha=0.18+0.06*Math.sin(gs.frame*0.1);
+  ctx.fillStyle='#88ff44';
+  for(const key of gasLeakTiles){
+    const [gx,gy]=key.split(',').map(Number);
+    const px=gs.cam.x+gx*size,py=gs.cam.y+gy*size;
+    if(px+size<0||py+size<0||px>canvas.width||py>canvas.height)continue;
+    ctx.beginPath();ctx.arc(px+size/2,py+size/2,size*0.55,0,Math.PI*2);ctx.fill();
+  }
+  ctx.globalAlpha=1;ctx.restore();
+}
+
+function updateFireSystem(){
+  for(let i=fireTiles.length-1;i>=0;i--){
+    const f=fireTiles[i];
+    f.life--;f.spreadTimer++;
+    // 消防署カバレッジ内なら消火速度2倍
+    if(covCache.fire?.[f.y]?.[f.x]) f.life-=1;
+    if(f.life<=0){
+      if(grid[f.y][f.x].type!==T.EMPTY){
+        grid[f.y][f.x].type=T.EMPTY;grid[f.y][f.x].level=0;
+        showToast('🔥 建物が焼失しました','err');
+      }
+      fireTiles.splice(i,1);continue;
+    }
+    // 延焼（spreadTimer>90 かつ最大12個）
+    if(f.spreadTimer>90&&fireTiles.length<12){
+      const dirs=[[0,1],[0,-1],[1,0],[-1,0]];
+      for(const [dx,dy] of dirs){
+        const nx=f.x+dx,ny=f.y+dy;
+        if(nx<0||ny<0||nx>=GRID||ny>=GRID)continue;
+        const nt=grid[ny][nx];
+        if([T.RESIDENTIAL,T.COMMERCIAL,T.INDUSTRIAL].includes(nt.type)
+           &&!fireTiles.find(ft=>ft.x===nx&&ft.y===ny)){
+          fireTiles.push({x:nx,y:ny,life:120,spreadTimer:0});
+          f.spreadTimer=0;break;
+        }
+      }
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1038,10 +1216,29 @@ function simulate(){
       happySum+=Math.max(0,Math.min(100,h));happyN++;
     }
   }
+  // カバレッジキャッシュを更新（updateFireSystem等で参照）
+  covCache=cov;
+
+  // 経済修正適用
+  if(economicModTurns>0){
+    income=Math.round(income*economicMod);
+    economicModTurns--;
+    if(economicModTurns===0)economicMod=1.0;
+  }
+  // 交通事故ペナルティ
+  if(trafficPenaltyTurns>0){ income=Math.round(income*0.9); trafficPenaltyTurns--; }
+
   const net=income-expense;
   gs.funds+=net;gs.income=net;gs.population=pop;
   gs.happiness=happyN>0?Math.min(100,Math.round(happySum/happyN)):100;
   gs.year++;updateHUD();
+
+  // ランダムイベント発生判定（speed>0のときのみ）
+  if(gs.speed>0){
+    for(const [evType,chance] of Object.entries(EV_CHANCE)){
+      if(Math.random()<chance){ triggerEvent(evType); break; }
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1059,9 +1256,134 @@ function updateHUD(){
   document.getElementById('hv-year').textContent=gs.year;
 }
 let _tt=null;
-function showToast(txt,kind=''){
+function showToast(txt,kind='',duration=3000){
   const el=document.getElementById('toast');el.textContent=txt;el.className='show'+(kind?' '+kind:'');
-  clearTimeout(_tt);_tt=setTimeout(()=>el.className='',3000);
+  clearTimeout(_tt);_tt=setTimeout(()=>el.className='',duration);
+}
+
+// ════════════════════════════════════════════════════════════
+//  イベントシステム
+// ════════════════════════════════════════════════════════════
+function triggerEvent(type){
+  const info=EV_INFO[type];
+  if(!info)return;
+  showToast(info.icon+' '+info.label, info.severity>=2?'err':'ok', 5000);
+  applyEventDamage(type);
+  activeEvents.push({type,ttl:10,label:info.label,color:info.color,icon:info.icon});
+  updateEventPanel();
+}
+
+function applyEventDamage(type){
+  const buildTypes=new Set([T.RESIDENTIAL,T.COMMERCIAL,T.INDUSTRIAL,T.PARK,
+    T.POLICE,T.FIRE,T.HOSPITAL,T.SCHOOL,T.STADIUM,T.AIRPORT,T.STATION,
+    T.POWER,T.THERMAL,T.NUCLEAR]);
+
+  if(type===EV.EARTHQUAKE){
+    shakeFrames=45;
+    for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
+      const t=grid[y][x];
+      if(t.type===T.ROAD && Math.random()<0.10){ t.type=T.EMPTY; t.level=0; }
+      else if(buildTypes.has(t.type) && Math.random()<0.05 && t.level>1) t.level--;
+    }
+    gs.funds=Math.max(0,gs.funds-Math.floor(1000+Math.random()*3000));
+  }
+  else if(type===EV.TSUNAMI){
+    tsunamiWave={progress:-80};
+    // 沿岸3タイル以内の建物を破壊
+    for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
+      let nearSea=false;
+      for(let dy=-3;dy<=3&&!nearSea;dy++)for(let dx=-3;dx<=3&&!nearSea;dx++){
+        const ny2=y+dy,nx2=x+dx;
+        if(ny2>=0&&ny2<GRID&&nx2>=0&&nx2<GRID&&grid[ny2][nx2].terrain===TR.SEA) nearSea=true;
+      }
+      if(nearSea && buildTypes.has(grid[y][x].type)){
+        grid[y][x].type=T.EMPTY; grid[y][x].level=0;
+      }
+    }
+  }
+  else if(type===EV.TYPHOON){
+    rainParticles=Array.from({length:80},()=>({
+      x:Math.random()*1600,y:Math.random()*900,len:8+Math.random()*8,spd:6+Math.random()*4,
+    }));
+    // 全域8%でlevel--
+    for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
+      const t=grid[y][x];
+      if(buildTypes.has(t.type)&&t.level>1&&Math.random()<0.08) t.level--;
+    }
+    gs.funds=Math.max(0,gs.funds-Math.floor(500+Math.random()*2000));
+    setTimeout(()=>{ rainParticles=[]; },15000);
+  }
+  else if(type===EV.FIRE){
+    // 建物タイルからランダムに1個選んで着火
+    const candidates=[];
+    for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
+      if([T.RESIDENTIAL,T.COMMERCIAL,T.INDUSTRIAL].includes(grid[y][x].type)) candidates.push({x,y});
+    }
+    if(candidates.length>0){
+      const c=candidates[Math.floor(Math.random()*candidates.length)];
+      if(!fireTiles.find(f=>f.x===c.x&&f.y===c.y))
+        fireTiles.push({x:c.x,y:c.y,life:150,spreadTimer:0});
+    }
+  }
+  else if(type===EV.CRIME){
+    // 警察カバレッジ外の住宅を最大3個ペナルティ
+    const victims=[];
+    for(let y=0;y<GRID&&victims.length<3;y++)for(let x=0;x<GRID&&victims.length<3;x++){
+      if(grid[y][x].type===T.RESIDENTIAL&&!(covCache.police?.[y]?.[x])) victims.push({x,y});
+    }
+    gs.happiness=Math.max(0,gs.happiness-5*Math.max(1,victims.length));
+  }
+  else if(type===EV.TRAFFIC){
+    trafficPenaltyTurns=3;
+    gs.happiness=Math.max(0,gs.happiness-4);
+  }
+  else if(type===EV.BLACKOUT){
+    // ランダムな送電線タイルを1本断線
+    const powerlines=[];
+    for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
+      if(grid[y][x].util.powerline) powerlines.push({x,y});
+    }
+    if(powerlines.length>0){
+      const p=powerlines[Math.floor(Math.random()*powerlines.length)];
+      grid[p.y][p.x].util.powerline=false;
+    }
+    gs.happiness=Math.max(0,gs.happiness-6);
+  }
+  else if(type===EV.WATER_BREAK){
+    const waterPipes=[];
+    for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
+      if(grid[y][x].util.water) waterPipes.push({x,y});
+    }
+    if(waterPipes.length>0){
+      const p=waterPipes[Math.floor(Math.random()*waterPipes.length)];
+      grid[p.y][p.x].util.water=false;
+    }
+    gs.happiness=Math.max(0,gs.happiness-8);
+  }
+  else if(type===EV.GAS_LEAK){
+    const gx=Math.floor(Math.random()*GRID),gy=Math.floor(Math.random()*GRID);
+    for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+      const nx2=gx+dx,ny2=gy+dy;
+      if(nx2>=0&&nx2<GRID&&ny2>=0&&ny2<GRID) gasLeakTiles.add(nx2+','+ny2);
+    }
+    gs.happiness=Math.max(0,gs.happiness-10);
+    setTimeout(()=>{
+      for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++) gasLeakTiles.delete((gx+dx)+','+(gy+dy));
+    },20000);
+  }
+  else if(type===EV.BOOM){ economicMod=1.4; economicModTurns=4; }
+  else if(type===EV.RECESSION){ economicMod=0.65; economicModTurns=4; }
+  else if(type===EV.SUBSIDY){ gs.funds+=Math.floor(3000+Math.random()*7000); }
+
+  updateHUD();
+}
+
+function updateEventPanel(){
+  const panel=document.getElementById('event-panel');
+  if(!panel)return;
+  panel.innerHTML=activeEvents.map(e=>
+    `<div class="ev-item" style="--ev-color:${e.color}">${e.icon} ${e.label}</div>`
+  ).join('');
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1259,7 +1581,21 @@ ico('ico-bulldoze',(c,s)=>{c.fillStyle='#f5f5f5';c.fillRect(0,0,s,s);c.strokeSty
 //  Loop
 // ════════════════════════════════════════════════════════════
 updateHUD();
-function loop(t){gs.frame++;requestAnimationFrame(loop);render();if(gs.speed>0&&t-gs.lastSim>SIM_MS/gs.speed){gs.lastSim=t;simulate();}}
+function loop(t){
+  gs.frame++;
+  requestAnimationFrame(loop);
+  // 毎フレーム更新
+  updateFireSystem();
+  for(const p of rainParticles){ p.y+=p.spd; if(p.y>canvas.height){ p.y=-20; p.x=Math.random()*canvas.width; } }
+  if(tsunamiWave){ tsunamiWave.progress+=4; if(tsunamiWave.progress>canvas.height+100) tsunamiWave=null; }
+  if(gs.frame%60===0){
+    activeEvents.forEach(e=>e.ttl--);
+    activeEvents=activeEvents.filter(e=>e.ttl>0);
+    updateEventPanel();
+  }
+  render();
+  if(gs.speed>0&&t-gs.lastSim>SIM_MS/gs.speed){gs.lastSim=t;simulate();}
+}
 requestAnimationFrame(loop);
 </script>
 </body>
