@@ -540,6 +540,7 @@
       actors: loadImage("assets/black-fang/actors.png"),
       jackActions: loadImage("assets/black-fang/jack-actions.png"),
       kotaroActions: loadImage("assets/black-fang/kotaro-actions.png"),
+      kotaroCommandActions: loadImage("assets/black-fang/kotaro-command-actions.png"),
       walkCycle: loadImage("assets/black-fang/walk-cycle.png"),
       props: loadImage("assets/black-fang/props.png")
     };
@@ -580,6 +581,49 @@
       weapon: [3, 1],
       super: [4, 1]
     };
+
+    const kotaroCommandActionCells = {
+      punch: [0, 0],
+      backfist: [1, 0],
+      roundhouse: [2, 0],
+      lowKick: [3, 0],
+      kusarigama: [0, 1],
+      kasumi: [1, 1],
+      iai: [2, 1],
+      tenshin: [3, 1],
+      shingan: [0, 2],
+      itto: [1, 2],
+      musou: [2, 2],
+      ready: [3, 2]
+    };
+
+    const kotaroMoveDefs = {
+      punch: { label: "パンチ", command: "J", cell: kotaroCommandActionCells.punch, duration: 250, active: 180, reach: 80, damageBonus: 0, knockback: 12, drawSize: 180, spark: "#ffe18b" },
+      backfist: { label: "裏拳", command: "後 + J", cell: kotaroCommandActionCells.backfist, duration: 310, active: 230, reach: 90, damageBonus: 3, knockback: 16, drawSize: 184, spark: "#fff3bb" },
+      roundhouse: { label: "回し蹴り", command: "前 + J", cell: kotaroCommandActionCells.roundhouse, duration: 380, active: 270, reach: 104, damageBonus: 6, knockback: 22, drawSize: 190, spark: "#ffe18b" },
+      lowKick: { label: "下段蹴り", command: "下 + J", cell: kotaroCommandActionCells.lowKick, duration: 360, active: 260, reach: 98, height: 34, yOffset: 10, damageBonus: 4, knockback: 18, drawSize: 192, spark: "#ffd36c" },
+      kusarigama: { label: "鎖鎌投げ", command: "下・前 + L", cell: kotaroCommandActionCells.kusarigama, duration: 620, active: 470, reach: 152, damageBonus: 9, knockback: 24, cooldown: 760, drawSize: 214, spark: "#baf2ff" },
+      kasumi: { label: "霞斬り", command: "下・前 + J", cell: kotaroCommandActionCells.kasumi, duration: 540, active: 410, reach: 136, damageBonus: 11, knockback: 28, cooldown: 460, drawSize: 214, spark: "#7ed9ff" },
+      iai: { label: "居合抜き", command: "L", cell: kotaroCommandActionCells.iai, duration: 560, active: 420, reach: 124, damageBonus: 13, knockback: 30, cooldown: 980, drawSize: 204, spark: "#d7f6ff" },
+      tenshin: { label: "転身脚", command: "上・前 + J", cell: kotaroCommandActionCells.tenshin, duration: 520, active: 390, reach: 116, damageBonus: 9, knockback: 24, cooldown: 520, drawSize: 204, spark: "#c7edff" },
+      shingan: { label: "奥義・心眼", command: "下・下 + L", cell: kotaroCommandActionCells.shingan, duration: 560, active: 0, reach: 0, damageBonus: 0, cooldown: 1300, drawSize: 210, noHit: true },
+      itto: { label: "奥義・一刀両断", command: "下・前・下・前 + L", cell: kotaroCommandActionCells.itto, duration: 760, active: 560, reach: 188, height: 58, damageBonus: 30, knockback: 44, cooldown: 2100, drawSize: 232, spark: "#9ee9ff" },
+      musou: { label: "奥義・無双剣", command: "前・後・前 + L", cell: kotaroCommandActionCells.musou, duration: 820, active: 610, reach: 164, height: 60, damageBonus: 22, knockback: 34, cooldown: 1900, drawSize: 228, spark: "#d9f8ff" }
+    };
+
+    const kotaroCommandList = [
+      ["J", "パンチ"],
+      ["後+J", "裏拳"],
+      ["前+J", "回し蹴り"],
+      ["下+J", "下段蹴り"],
+      ["下前+J", "霞斬り"],
+      ["上前+J", "転身脚"],
+      ["L", "居合抜き"],
+      ["下前+L", "鎖鎌投げ"],
+      ["下下+L", "心眼"],
+      ["下前下前+L", "一刀両断"],
+      ["前後前+L", "無双剣"]
+    ];
 
     const walkCells = {
       jack: [[0, 0], [0, 1]],
@@ -796,6 +840,7 @@
         props: [],
         projectiles: [],
         sparks: [],
+        commandBuffer: [],
         activeWave: 0,
         stageClearDelay: 0
       };
@@ -820,6 +865,7 @@
         attacking: 0,
         attackType: "",
         attackHit: false,
+        kotaroMove: "",
         combo: 0,
         comboUntil: 0,
         specialCooldown: 0,
@@ -919,6 +965,95 @@
       checkStageClear(dt, stage);
     }
 
+    function directionFromKey(key) {
+      if (key === "ArrowLeft" || key === "a") return "left";
+      if (key === "ArrowRight" || key === "d") return "right";
+      if (key === "ArrowUp" || key === "w") return "up";
+      if (key === "ArrowDown" || key === "s") return "down";
+      return "";
+    }
+
+    function recordDirectionalInput(key) {
+      if (!state || state.mode !== "play") return;
+      const dir = directionFromKey(key);
+      if (!dir) return;
+      const t = now();
+      const buffer = state.commandBuffer;
+      const last = buffer[buffer.length - 1];
+      if (!last || last.dir !== dir || t - last.t > 90) {
+        buffer.push({ dir, t });
+      }
+      while (buffer.length > 10) buffer.shift();
+    }
+
+    function relativeDirection(dir, facing) {
+      if (dir === "left") return facing < 0 ? "F" : "B";
+      if (dir === "right") return facing > 0 ? "F" : "B";
+      if (dir === "up") return "U";
+      if (dir === "down") return "D";
+      return "";
+    }
+
+    function commandEndsWith(pattern, facing, maxAge = 900) {
+      const t = now();
+      const tokens = state.commandBuffer
+        .filter(entry => t - entry.t <= maxAge)
+        .map(entry => relativeDirection(entry.dir, facing));
+      if (tokens.length < pattern.length) return false;
+      const start = tokens.length - pattern.length;
+      return pattern.every((token, i) => tokens[start + i] === token);
+    }
+
+    function clearCommandBuffer() {
+      state.commandBuffer.length = 0;
+    }
+
+    function chooseKotaroMove(button, player) {
+      if (state.heroKey !== "kotaro" || player.attacking > 0 || player.z > 0) return "";
+      const facing = player.facing;
+      if (button === "j") {
+        if (commandEndsWith(["D", "F"], facing)) return "kasumi";
+        if (commandEndsWith(["U", "F"], facing)) return "tenshin";
+        if (commandEndsWith(["D"], facing)) return "lowKick";
+        if (commandEndsWith(["F"], facing)) return "roundhouse";
+        if (commandEndsWith(["B"], facing)) return "backfist";
+        return "punch";
+      }
+      if (button === "l") {
+        if (player.specialCooldown > 0) return "";
+        if (commandEndsWith(["D", "F", "D", "F"], facing, 1300)) return "itto";
+        if (commandEndsWith(["F", "B", "F"], facing, 1100)) return "musou";
+        if (commandEndsWith(["D", "D"], facing, 900)) return "shingan";
+        if (commandEndsWith(["D", "F"], facing)) return "kusarigama";
+        return "iai";
+      }
+      return "";
+    }
+
+    function startKotaroMove(player, moveId) {
+      const move = kotaroMoveDefs[moveId];
+      if (!move) return false;
+      if (move.cooldown && player.specialCooldown > 0) {
+        showMessage("気を整えろ", 420);
+        clearCommandBuffer();
+        return true;
+      }
+      player.attacking = move.duration;
+      player.attackType = moveId;
+      player.kotaroMove = moveId;
+      player.attackHit = Boolean(move.noHit);
+      player.combo = 0;
+      player.comboUntil = 0;
+      if (move.cooldown) player.specialCooldown = move.cooldown;
+      if (moveId === "shingan") {
+        player.invuln = Math.max(player.invuln, 760);
+        addSpark(player.x, player.y - 58, "#7ed9ff", 18);
+      }
+      showMessage(`${move.label}  ${move.command}`, 720);
+      clearCommandBuffer();
+      return true;
+    }
+
     function updatePlayer(player, dt, stage) {
       let mx = 0;
       let my = 0;
@@ -949,6 +1084,7 @@
         }
       }
       player.attacking = Math.max(0, player.attacking - dt);
+      if (player.attacking === 0) player.kotaroMove = "";
       player.specialCooldown = Math.max(0, player.specialCooldown - dt);
       player.invuln = Math.max(0, player.invuln - dt);
       player.hurt = Math.max(0, player.hurt - dt);
@@ -963,17 +1099,23 @@
         player.attackHit = false;
       }
       if (pressedTap("j") && player.attacking === 0) {
-        player.combo = player.comboUntil > 0 ? (player.combo + 1) % 3 : 0;
-        player.comboUntil = 700;
-        player.attacking = player.combo === 2 ? 360 : 250;
-        player.attackType = player.combo === 2 ? "combo" : "punch";
-        player.attackHit = false;
+        const kotaroMove = chooseKotaroMove("j", player);
+        if (!kotaroMove || !startKotaroMove(player, kotaroMove)) {
+          player.combo = player.comboUntil > 0 ? (player.combo + 1) % 3 : 0;
+          player.comboUntil = 700;
+          player.attacking = player.combo === 2 ? 360 : 250;
+          player.attackType = player.combo === 2 ? "combo" : "punch";
+          player.attackHit = false;
+        }
       }
       if (pressedTap("l") && player.specialCooldown === 0 && player.attacking === 0) {
-        player.attacking = 560;
-        player.attackType = "special";
-        player.attackHit = false;
-        player.specialCooldown = 1450;
+        const kotaroMove = chooseKotaroMove("l", player);
+        if (!kotaroMove || !startKotaroMove(player, kotaroMove)) {
+          player.attacking = 560;
+          player.attackType = "special";
+          player.attackHit = false;
+          player.specialCooldown = 1450;
+        }
       }
       if (player.attacking > 0 && !player.attackHit && player.attacking < attackActiveWindow(player.attackType)) {
         resolvePlayerAttack(player);
@@ -982,6 +1124,7 @@
     }
 
     function attackActiveWindow(type) {
+      if (kotaroMoveDefs[type]) return kotaroMoveDefs[type].active;
       if (type === "special") return 420;
       if (type === "jump") return 330;
       if (type === "combo") return 250;
@@ -990,25 +1133,29 @@
 
     function resolvePlayerAttack(player) {
       const def = state.heroDef;
-      const reach = def.reach + (player.attackType === "special" ? 36 : 0) + (player.attackType === "jump" ? 28 : 0);
-      const damage = def.attack + (player.attackType === "special" ? 14 : 0) + (player.attackType === "jump" ? 6 : 0) + (player.attackType === "combo" ? 7 : 0);
+      const kotaroMove = kotaroMoveDefs[player.attackType];
+      if (kotaroMove?.noHit) return;
+      const reach = kotaroMove?.reach ?? (def.reach + (player.attackType === "special" ? 36 : 0) + (player.attackType === "jump" ? 28 : 0));
+      const damage = def.attack + (kotaroMove?.damageBonus ?? 0) + (player.attackType === "special" ? 14 : 0) + (player.attackType === "jump" ? 6 : 0) + (player.attackType === "combo" ? 7 : 0);
+      const arcHeight = kotaroMove?.height ?? 48;
+      const arcY = player.y + (kotaroMove?.yOffset ?? 0);
       const arc = {
         x: player.x + player.facing * reach * 0.55,
-        y: player.y,
+        y: arcY,
         w: reach,
-        h: 48
+        h: arcHeight
       };
       let landed = false;
       for (const enemy of state.enemies) {
         if (enemy.dead || enemy.invuln > 0) continue;
-        if (Math.abs(enemy.y - player.y) < 44 && Math.abs(enemy.x - arc.x) < (arc.w * 0.62 + enemy.w * 0.45)) {
+        if (Math.abs(enemy.y - arc.y) < arc.h && Math.abs(enemy.x - arc.x) < (arc.w * 0.62 + enemy.w * 0.45)) {
           damageEnemy(enemy, damage, player.facing, player.attackType);
           landed = true;
         }
       }
       for (const prop of state.props) {
         if (prop.broken || prop.hp > 900) continue;
-        if (Math.abs(prop.y - player.y) < 72 && Math.abs(prop.x - arc.x) < arc.w * 0.62 + 32) {
+        if (Math.abs(prop.y - arc.y) < 72 && Math.abs(prop.x - arc.x) < arc.w * 0.62 + 32) {
           prop.hp -= damage;
           addSpark(prop.x, prop.y - 40, "#f6c21a", 8);
           if (prop.hp <= 0) breakProp(prop);
@@ -1022,11 +1169,12 @@
 
     function damageEnemy(enemy, amount, dir, type) {
       const def = enemyDefs[enemy.type];
+      const kotaroMove = kotaroMoveDefs[type];
       enemy.hp -= amount;
       enemy.hurt = 220;
       enemy.invuln = 120;
-      enemy.x += dir * (type === "special" ? 26 : 12);
-      addSpark(enemy.x, enemy.y - enemy.h * 0.7, type === "special" ? "#7ed9ff" : "#ffe18b", 12);
+      enemy.x += dir * (kotaroMove?.knockback ?? (type === "special" ? 26 : 12));
+      addSpark(enemy.x, enemy.y - enemy.h * 0.7, kotaroMove?.spark ?? (type === "special" ? "#7ed9ff" : "#ffe18b"), kotaroMove ? 16 : 12);
       if (enemy.hp <= 0) {
         enemy.dead = true;
         enemy.death = 760;
@@ -1408,6 +1556,15 @@
     function drawPlayer(p) {
       const flash = p.invuln > 0 && Math.floor(now() / 80) % 2 === 0;
       drawShadow(p.x, p.y, p.w, p.z);
+      const kotaroMove = kotaroMoveDefs[p.kotaroMove];
+      if (state.heroKey === "kotaro" && kotaroMove && p.attacking > 0) {
+        drawAtlasCell(assets.kotaroCommandActions, 4, 3, kotaroMove.cell, p.x, p.y - p.z + 3, kotaroMove.drawSize || 200, kotaroMove.drawSize || 200, {
+          flip: p.facing < 0,
+          alpha: flash ? 0.46 : 1,
+          rotation: p.hurt > 0 ? -0.08 * p.facing : 0
+        });
+        return;
+      }
       if (p.moving && p.z === 0 && p.attacking === 0 && p.hurt === 0) {
         const frame = Math.floor((p.walkClock || 0) / 170) % 2;
         const size = state.heroKey === "kotaro" ? 154 : state.heroKey === "mike" ? 150 : 148;
@@ -1652,6 +1809,7 @@
       ctx.fillStyle = "#f4f0dd";
       ctx.font = "bold 18px Meiryo";
       ctx.fillText(stage.title, 28, 92);
+      if (state.heroKey === "kotaro") drawKotaroCommandPanel();
       if (state.message && now() < state.messageUntil) {
         ctx.fillStyle = "rgba(0,0,0,0.68)";
         ctx.fillRect(220, 78, 520, 38);
@@ -1673,6 +1831,36 @@
         ctx.fillText(boss.label, 244, 505);
         drawBar(360, 495, 360, 8, boss.hp / boss.maxHp, "#e84122");
       }
+    }
+
+    function drawKotaroCommandPanel() {
+      const x = 676;
+      const y = 116;
+      const w = 254;
+      const h = 176;
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.58)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = "rgba(246,194,26,0.74)";
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = "#f6c21a";
+      ctx.font = "bold 13px Meiryo";
+      ctx.fillText("コタロウ コマンド", x + 12, y + 20);
+      ctx.fillStyle = "#d7edf8";
+      ctx.font = "11px Meiryo";
+      ctx.fillText("前/後 = 向いている方向基準", x + 12, y + 38);
+      ctx.font = "bold 11px Meiryo";
+      kotaroCommandList.forEach(([command, label], i) => {
+        const col = i < 6 ? 0 : 1;
+        const row = col === 0 ? i : i - 6;
+        const tx = x + 12 + col * 120;
+        const ty = y + 58 + row * 19;
+        ctx.fillStyle = "#f6c21a";
+        ctx.fillText(command, tx, ty);
+        ctx.fillStyle = "#f4f0dd";
+        ctx.fillText(label, tx + 54, ty);
+      });
+      ctx.restore();
     }
 
     function drawBar(x, y, w, h, pct, color) {
@@ -1711,7 +1899,10 @@
     function setKey(key, down) {
       const normalized = key.length === 1 ? key.toLowerCase() : key;
       const entry = keys.get(normalized) || { down: false, used: false };
-      if (down && !entry.down) entry.used = false;
+      if (down && !entry.down) {
+        entry.used = false;
+        recordDirectionalInput(normalized);
+      }
       entry.down = down;
       if (!down) entry.used = false;
       keys.set(normalized, entry);
