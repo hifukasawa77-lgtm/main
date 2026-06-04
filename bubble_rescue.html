@@ -113,6 +113,12 @@ const ITEM_SCORE = { coin:10, chest:50, ladder:5, tool:20, bomb:0, hammer:0, bal
 // Phase 8-1: 危険アイテム種別
 const HAZARD_TYPES = new Set(['bomb', 'hammer']);
 const MAX_LIVES = 3;
+const GNOME_CHARS = [
+  { name:'Speedy', hatColor:'#cc3333', bodyColor:'#3344cc', speedMult:1.3, jumpMult:1.0, avoidHazard:true,  scoreMult:1.0 },
+  { name:'Jumpy',  hatColor:'#33aa33', bodyColor:'#884422', speedMult:1.0, jumpMult:1.4, avoidHazard:true,  scoreMult:1.0 },
+  { name:'Braver', hatColor:'#5555dd', bodyColor:'#338866', speedMult:1.0, jumpMult:1.0, avoidHazard:false, scoreMult:1.0 },
+  { name:'Lucky',  hatColor:'#dddd33', bodyColor:'#8a5522', speedMult:1.0, jumpMult:1.0, avoidHazard:true,  scoreMult:1.5 },
+];
 
 // === キャンバス ===
 const canvas = document.getElementById('c');
@@ -471,12 +477,30 @@ let shakeFrames = 0, shakeAmt = 0;
 let rings = [];
 
 // === チュートリアル ===
-let tutorialTimer = 0;
-const TUTORIAL_DURATION = 240;
+let tutorialStep = -1;
+let tutorialActive = false;
+const TUTORIAL_STEPS = [
+  { title:'泡を割ろう',         desc:'画面をクリック / タップすると\n玉を投げて泡を割れます！',   icon:'ball' },
+  { title:'小人を操作しよう',   desc:'矢印キーまたは小人の近くを\nタップして方向を指示。\nドラッグで経路を引けます。', icon:null },
+  { title:'アイテムを集めよう', desc:'コイン・宝箱・ツールを拾うと\nスコアがアップ！\nコンボで倍率上昇！',         icon:'coin' },
+  { title:'危険を回避しよう',   desc:'爆弾・ハンマーに触れると\n小人が消えます！\n（Braverは恐れ知らず）',     icon:'bomb' },
+  { title:'ゴール条件',         desc:'目標個数を集めると\nステージクリア！\n全10ステージに挑戦しよう！',  icon:'chest' },
+];
 
 // D4: 背景色スムーズ遷移
 let bgTransProgress = 1.0;
 let prevBgColor = null;
+
+// === タイトルアニメーション ===
+const titleBubbles = Array.from({length:15}, (_, i) => ({
+  x: Math.random() * 480,
+  y: 640 + Math.random() * 200,
+  r: 12 + Math.random() * 28,
+  vx: (Math.random() - 0.5) * 0.5,
+  vy: -(0.5 + Math.random() * 0.8),
+  alpha: 0.15 + Math.random() * 0.30,
+}));
+let titleGnomeX = 240, titleGnomeDir = 1;
 
 // E3: エンドレスモード
 let isEndless = false;
@@ -505,7 +529,9 @@ function makeBubble() {
   };
 }
 
-function makeGnome(x) {
+function makeGnome(x, charIdx) {
+  const ci = (charIdx !== undefined) ? charIdx % 4 : gnomes.length % 4;
+  const ch = GNOME_CHARS[ci];
   return {
     x, y: GROUND_Y - 5,
     vx: 0, vy: 0,
@@ -517,11 +543,15 @@ function makeGnome(x) {
     state: 'idle',
     waypoints: [],
     rawPath: null,
-    jumpBoost: 1.0,
+    jumpBoost: ch.jumpMult,
     jumpCooldown: 0,
     waypointTimer: 0,
-    hatColor: ['#cc3333','#33aa33','#5555dd'][gnomes.length % 3],
-    bodyColor: ['#3344cc','#884422','#338866'][gnomes.length % 3],
+    hatColor: ch.hatColor,
+    bodyColor: ch.bodyColor,
+    charName: ch.name,
+    speedMult: ch.speedMult,
+    avoidHazard: ch.avoidHazard,
+    scoreMult: ch.scoreMult,
     expression: 'normal', expressionTimer: 0,
   };
 }
@@ -657,7 +687,8 @@ function collectItem(it, gnome) {
   comboTimer = COMBO_WINDOW;
   const comboMult = Math.min(4, 1 + (comboCount - 1) * 0.5);
   const baseScore = ITEM_SCORE[it.type] || 0;
-  const earned = Math.round(baseScore * comboMult);
+  const scoreMult = gnome ? (gnome.scoreMult || 1.0) : 1.0;
+  const earned = Math.round(baseScore * comboMult * scoreMult);
   score += earned;
   itemsCollected++;
   if (it.type === 'tool') gnome.jumpBoost = Math.min(2.0, gnome.jumpBoost + 0.3);
@@ -797,8 +828,8 @@ function updateGnomeAI(g, idx) {
   const isTouchCtrl = touchControlActive && idx === touchControlledGnomeIdx;
   if (isKbCtrl || isTouchCtrl) {
     g.climbing = false; g.descending = false;
-    if (playerControl.left)       { g.vx = -PLAYER_SPEED; g.state = 'walk'; }
-    else if (playerControl.right) { g.vx =  PLAYER_SPEED; g.state = 'walk'; }
+    if (playerControl.left)       { g.vx = -PLAYER_SPEED * (g.speedMult || 1); g.state = 'walk'; }
+    else if (playerControl.right) { g.vx =  PLAYER_SPEED * (g.speedMult || 1); g.state = 'walk'; }
     else { g.vx = 0; g.state = 'idle'; }
     if (g.onLadder) {
       if (playerControl.up)   { g.climbing = true; }
@@ -842,7 +873,7 @@ function updateGnomeAI(g, idx) {
     // 坂として歩けるか判定（dx方向の傾斜が緩やかなら坂歩き）
     const onSlope = g.rawPath && getPathYAtX(g.rawPath, g.x) !== null;
 
-    g.vx = Math.sign(dx) * Math.min(2.0, d * 0.1) * 1.5;
+    g.vx = Math.sign(dx) * Math.min(2.0, d * 0.1) * 1.5 * (g.speedMult || 1);
     if (dy < -20 && g.onLadder) {
       g.climbing = true;
     } else if (dy < -8 && !onSlope && g.onGround && g.jumpCooldown === 0) {
@@ -869,7 +900,7 @@ function updateGnomeAI(g, idx) {
     }
     if (nearestFallen && nearestFallenDist < 320) {
       g.climbing = false;
-      g.vx = Math.sign(nearestFallen.x - g.x) * 1.4;
+      g.vx = Math.sign(nearestFallen.x - g.x) * 1.4 * (g.speedMult || 1);
       g.state = 'walk';
       return;
     }
@@ -908,7 +939,7 @@ function updateGnomeAI(g, idx) {
       // 直接ジャンプ
       g.climbing = false;
       const dx = best.x - g.x, absDx = Math.abs(dx);
-      g.vx = absDx > 5 ? Math.sign(dx) * 1.4 : 0;
+      g.vx = absDx > 5 ? Math.sign(dx) * 1.4 * (g.speedMult || 1) : 0;
       g.state = absDx > 5 ? 'walk' : 'idle';
       const dy = g.y - best.y;
       if (absDx < best.radius + 15 && dy > 10 && dy < 140 * g.jumpBoost
@@ -921,7 +952,7 @@ function updateGnomeAI(g, idx) {
       const dxToLad = targetLad.x - g.x;
       const ladTopY = targetLad.bottomY - targetLad.height;
       if (Math.abs(dxToLad) > 8 && (g.onGround || !g.onLadder)) {
-        g.vx = Math.sign(dxToLad) * 1.4; g.state = 'walk'; g.climbing = false;
+        g.vx = Math.sign(dxToLad) * 1.4 * (g.speedMult || 1); g.state = 'walk'; g.climbing = false;
       } else {
         g.vx = 0;
         if (g.y > ladTopY + 4) {
@@ -930,7 +961,7 @@ function updateGnomeAI(g, idx) {
           // 梯子の先端に到達 → 泡に向かってジャンプ
           g.climbing = false;
           const dx = best.x - g.x, absDx = Math.abs(dx);
-          g.vx = absDx > 5 ? Math.sign(dx) * 1.4 : 0;
+          g.vx = absDx > 5 ? Math.sign(dx) * 1.4 * (g.speedMult || 1) : 0;
           const dy = g.y - best.y;
           if (absDx < best.radius + 20 && dy > 0 && g.jumpCooldown === 0) {
             g.vy = -Math.min(10, Math.sqrt(dy * 0.16) + 3) * g.jumpBoost;
@@ -943,20 +974,32 @@ function updateGnomeAI(g, idx) {
   }
 
   // 3. 落下アイテムを拾いに行く（梯子含む）
+  // Braver以外は近くに危険アイテムがあれば逃げる
+  if (g.avoidHazard !== false) {
+    for (const it of items) {
+      if (it.collected || !it.landed || !HAZARD_TYPES.has(it.type)) continue;
+      if (Math.abs(it.x - g.x) < 70 && Math.abs(it.y - g.y) < 60) {
+        g.vx = Math.sign(g.x - it.x) * 1.6 * (g.speedMult || 1);
+        g.state = 'walk';
+        return;
+      }
+    }
+  }
   let nearItem = null, nearDist = Infinity;
   for (const it of items) {
     if (it.collected || !it.landed) continue;
+    if (g.avoidHazard !== false && HAZARD_TYPES.has(it.type)) continue;
     const d = Math.abs(it.x - g.x);
     if (d < nearDist) { nearDist = d; nearItem = it; }
   }
   if (nearItem && nearDist < 220) {
-    g.vx = Math.sign(nearItem.x - g.x) * 1.2;
+    g.vx = Math.sign(nearItem.x - g.x) * 1.2 * (g.speedMult || 1);
     g.state = 'walk';
     return;
   }
 
   // 4. アイドル（ランダム徘徊）
-  if (frameCount % 110 === idx * 37 % 110) g.vx = (Math.random() - 0.5) * 1.4;
+  if (frameCount % 110 === idx * 37 % 110) g.vx = (Math.random() - 0.5) * 1.4 * (g.speedMult || 1);
   g.state = Math.abs(g.vx) > 0.1 ? 'walk' : 'idle';
 }
 
@@ -1234,6 +1277,131 @@ function drawBackground() {
     ctx.fillStyle = `rgba(220,240,255,${a})`;
     ctx.fillRect(sx, sy, 2, 2);
   }
+  drawStageTheme(Math.min(4, Math.floor(stage / 2)));
+}
+
+function drawStageTheme(themeId) {
+  ctx.save();
+  ctx.globalAlpha *= bgTransProgress;
+  if (themeId === 0) {
+    // 森林テーマ（Stage 1-2）
+    const trees = [55, 130, 230, 335, 420];
+    for (let i = 0; i < trees.length; i++) {
+      const tx = trees[i];
+      const th = 70 + (i % 3) * 20;
+      ctx.fillStyle = '#1e1a08';
+      ctx.fillRect(tx - 5, H - 130 - th + 40, 10, th);
+      for (let k = 0; k < 3; k++) {
+        const ofs = k * 18;
+        ctx.fillStyle = k === 0 ? '#0a2a0a' : k === 1 ? '#0d3a0d' : '#0f4a0f';
+        ctx.beginPath();
+        ctx.moveTo(tx, H - 130 - th + ofs - 12);
+        ctx.lineTo(tx - 18 + k * 3, H - 130 - th + ofs + 24);
+        ctx.lineTo(tx + 18 - k * 3, H - 130 - th + ofs + 24);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    // 遠景の丘
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = `rgba(8,30,8,${0.25 + i * 0.08})`;
+      ctx.beginPath();
+      ctx.arc(90 + i * 150, H - 90, 100 + i * 30, Math.PI, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (themeId === 1) {
+    // 洞窟テーマ（Stage 3-4）
+    const stalacs = [30,70,115,160,215,270,320,370,415,455];
+    for (let i = 0; i < stalacs.length; i++) {
+      const sx = stalacs[i];
+      const sl = 24 + (i % 4) * 14;
+      ctx.fillStyle = i % 2 === 0 ? '#3a3058' : '#4a4070';
+      ctx.beginPath();
+      ctx.moveTo(sx - 9, 48);
+      ctx.lineTo(sx + 9, 48);
+      ctx.lineTo(sx, 48 + sl);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // 石積み地面
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 14; col++) {
+        const rx = col * 35 + (row % 2 === 0 ? 0 : 17);
+        const ry = H - 110 + row * 14;
+        ctx.fillStyle = row % 2 === 0 ? 'rgba(50,50,70,0.30)' : 'rgba(60,60,85,0.25)';
+        ctx.fillRect(rx, ry, 33, 12);
+        ctx.strokeStyle = 'rgba(20,20,40,0.35)';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(rx, ry, 33, 12);
+      }
+    }
+  } else if (themeId === 2) {
+    // お城テーマ（Stage 5-6）
+    ctx.globalAlpha *= 0.22;
+    for (let row = 0; row < Math.floor(H / 16); row++) {
+      for (let col = 0; col < Math.floor(W / 24) + 1; col++) {
+        const rx = col * 24 + (row % 2 === 0 ? 0 : 12);
+        const ry = 48 + row * 16;
+        ctx.strokeStyle = '#7a5030';
+        ctx.lineWidth = 0.8;
+        ctx.strokeRect(rx, ry, 22, 14);
+      }
+    }
+    ctx.globalAlpha /= 0.22;
+    // 塔シルエット（左右）
+    for (const tx of [0, W - 38]) {
+      ctx.fillStyle = 'rgba(30,15,5,0.45)';
+      ctx.fillRect(tx, 48, 38, H);
+      // 城壁の凸部
+      for (let k = 0; k < 3; k++) {
+        ctx.fillRect(tx + k * 14, 34, 11, 18);
+      }
+    }
+  } else if (themeId === 3) {
+    // 空中テーマ（Stage 7-8）
+    const clouds = [
+      { bx:60,  by:90,  rx:55, ry:22 },
+      { bx:200, by:120, rx:45, ry:18 },
+      { bx:340, by:80,  rx:60, ry:25 },
+      { bx:110, by:155, rx:35, ry:14 },
+      { bx:390, by:150, rx:40, ry:16 },
+    ];
+    for (const c of clouds) {
+      const cx = ((c.bx + frameCount * 0.18) % (W + 120)) - 60;
+      ctx.globalAlpha *= 0.55;
+      ctx.fillStyle = '#b8d4f8';
+      for (let k = 0; k < 3; k++) {
+        ctx.beginPath();
+        ctx.ellipse(cx + k * 18 - 18, c.by, c.rx * (0.6 + k * 0.2), c.ry * (0.7 + k * 0.15), 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha /= 0.55;
+    }
+  } else if (themeId === 4) {
+    // 火山テーマ（Stage 9-10）
+    // 岩山シルエット
+    const mountains = [{x:60,w:140,h:160},{x:240,w:120,h:130},{x:380,w:110,h:150}];
+    for (const m of mountains) {
+      ctx.fillStyle = 'rgba(40,8,2,0.50)';
+      ctx.beginPath();
+      ctx.moveTo(m.x - m.w / 2, H - 100);
+      ctx.quadraticCurveTo(m.x, H - 100 - m.h, m.x + m.w / 2, H - 100);
+      ctx.fill();
+    }
+    // 溶岩ライン（sin波）
+    ctx.strokeStyle = '#ff4400';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = '#ff6600';
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    for (let px = 0; px <= W; px += 4) {
+      const py = H - 105 + Math.sin((px * 0.035) + frameCount * 0.04) * 7;
+      if (px === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  ctx.restore();
 }
 
 function drawGround() {
@@ -1456,6 +1624,17 @@ function drawGnome(g) {
   const x = Math.round(g.x), y = Math.round(g.y);
   const bob = g.state === 'walk' ? Math.sin(frameCount * 0.28) * 1.5 : 0;
   const ay = y + bob; // animation y offset applied to body
+
+  // キャラ名ネームタグ
+  if (g.charName) {
+    ctx.save();
+    ctx.font = 'bold 7px monospace';
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = g.hatColor || '#ffffff';
+    ctx.fillText(g.charName, x, ay - GNOME_H - 22);
+    ctx.restore();
+  }
 
   // プレイヤー操作中インジケータ
   const gnomeIdx = gnomes.indexOf(g);
@@ -1942,99 +2121,164 @@ function drawPauseOverlay() {
   ctx.restore();
 }
 
-// C2: 初回チュートリアルオーバーレイ
+// C2: 初回チュートリアルオーバーレイ（5ステップ式）
 function drawTutorialOverlay() {
+  if (!tutorialActive || tutorialStep < 0) return;
+  const step = TUTORIAL_STEPS[tutorialStep];
   ctx.save();
-  ctx.fillStyle = 'rgba(0,0,30,0.80)';
+  // 半透明オーバーレイ
+  ctx.fillStyle = 'rgba(0,0,30,0.88)';
   ctx.fillRect(0, 0, W, H);
+
+  // スキップ（右上）
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(150,180,255,0.7)';
+  ctx.fillText('スキップ ▶▶', W - 12, 22);
+
+  // ステップインジケーター（●5個）
+  for (let i = 0; i < TUTORIAL_STEPS.length; i++) {
+    ctx.beginPath();
+    ctx.arc(W / 2 + (i - 2) * 16, H * 0.20, 4, 0, Math.PI * 2);
+    ctx.fillStyle = i === tutorialStep ? '#aaeeff' : 'rgba(170,238,255,0.30)';
+    ctx.fill();
+  }
+
+  // タイトル
   ctx.textAlign = 'center';
+  ctx.font = 'bold 17px monospace';
   ctx.fillStyle = '#aaeeff';
-  ctx.font = 'bold 16px monospace';
-  ctx.fillText('操作ガイド', W / 2, H * 0.22);
-  const tips = [
-    ['👆 タップ',   '泡を割る'],
-    ['👆 ドラッグ', '小人に経路を指示'],
-    ['🐦 カラス',   '小人を吹き飛ばす'],
-    ['⚡ 雷',       '小人が即死'],
-    ['💣 爆弾',     '落下に注意！'],
-  ];
-  ctx.font = '13px monospace';
-  tips.forEach(([icon, desc], i) => {
-    ctx.fillStyle = '#ffd700';
-    ctx.textAlign = 'right';
-    ctx.fillText(icon, W / 2 - 5, H * 0.33 + i * 22);
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'left';
-    ctx.fillText(desc, W / 2 + 5, H * 0.33 + i * 22);
-  });
-  ctx.globalAlpha = Math.min(1, tutorialTimer / 40);
-  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#aaaaaa' : '#666688';
-  ctx.textAlign = 'center';
-  ctx.font = '11px monospace';
-  ctx.fillText('タップでスキップ', W / 2, H * 0.80);
+  ctx.fillText(step.title, W / 2, H * 0.28);
+
+  // アイコン
+  if (step.icon) {
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    drawItemIcon(W / 2, H * 0.44, step.icon, 26);
+    ctx.restore();
+  }
+
+  // 説明文（改行対応）
+  const lines = step.desc.split('\n');
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = '#e0e8ff';
+  const startY = step.icon ? H * 0.56 : H * 0.44;
+  lines.forEach((line, i) => ctx.fillText(line, W / 2, startY + i * 20));
+
+  // 「次へ」ボタン
+  const btnX = W * 0.55, btnY = H * 0.78, btnW = W * 0.34, btnH = 32;
+  const isLast = tutorialStep >= TUTORIAL_STEPS.length - 1;
+  ctx.fillStyle = isLast ? 'rgba(0,200,120,0.25)' : 'rgba(0,150,220,0.25)';
+  ctx.beginPath();
+  ctx.roundRect(btnX - btnW / 2, btnY - btnH / 2, btnW, btnH, 8);
+  ctx.fill();
+  ctx.strokeStyle = isLast ? '#00cc78' : '#00aaff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = isLast ? '#00ff99' : '#aaeeff';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText(isLast ? 'はじめる！' : '次へ ▶', btnX, btnY + 5);
+
   ctx.restore();
 }
 
 function drawTitle() {
   drawBackground();
-  // アニメーション泡
-  for (let i = 0; i < 6; i++) {
-    const bx = ((i * 83 + frameCount * 0.4) % W + W) % W;
-    const by = ((H * 0.8 - frameCount * 0.6 + i * 110) % H + H) % H;
+
+  // 泡アニメーション背景
+  for (const b of titleBubbles) {
     ctx.save();
-    ctx.globalAlpha = 0.35 + 0.15 * Math.sin(frameCount * 0.03 + i);
+    ctx.globalAlpha = b.alpha + 0.08 * Math.sin(frameCount * 0.04 + b.r);
+    const grad = ctx.createRadialGradient(b.x - b.r * 0.3, b.y - b.r * 0.3, 1, b.x, b.y, b.r);
+    grad.addColorStop(0, 'rgba(200,240,255,0.5)');
+    grad.addColorStop(0.7, 'rgba(100,200,255,0.15)');
+    grad.addColorStop(1, 'rgba(80,180,255,0.0)');
     ctx.beginPath();
-    ctx.arc(bx, by, 18 + i * 5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(150,220,255,0.9)';
-    ctx.lineWidth = 1.5;
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(160,230,255,0.5)';
+    ctx.lineWidth = 1;
     ctx.stroke();
     ctx.restore();
   }
+
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#aaddff';
-  ctx.font = 'bold 15px monospace';
-  ctx.fillText('🫧  BUBBLE', W / 2, H * 0.25);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 26px monospace';
-  ctx.fillText('RESCUE CLIMBER', W / 2, H * 0.33);
-  ctx.fillStyle = '#88bbdd';
-  ctx.font = '13px monospace';
-  ctx.fillText('バブル・レスキュー・クライマー', W / 2, H * 0.41);
 
-  // デモ小人
-  const demoG = {
-    x: W / 2, y: H * 0.62,
-    state:'idle', hatColor:'#cc3333', bodyColor:'#3344cc'
-  };
-  drawGnome(demoG);
+  // ロゴ（虹色グラデーション + 浮遊）
+  const logoY = H * 0.22 + Math.sin(frameCount * 0.04) * 6;
+  ctx.save();
+  ctx.font = 'bold 13px monospace';
+  const subGrad = ctx.createLinearGradient(W * 0.2, 0, W * 0.8, 0);
+  subGrad.addColorStop(0, '#aaeeff');
+  subGrad.addColorStop(1, '#88ccff');
+  ctx.fillStyle = subGrad;
+  ctx.fillText('🫧  B U B B L E', W / 2, logoY);
+  ctx.restore();
 
-  // Phase 5: ハイスコア表示
+  ctx.save();
+  ctx.font = 'bold 27px monospace';
+  const rainbowGrad = ctx.createLinearGradient(W * 0.1, 0, W * 0.9, 0);
+  rainbowGrad.addColorStop(0,    '#ff6b6b');
+  rainbowGrad.addColorStop(0.18, '#ffa500');
+  rainbowGrad.addColorStop(0.35, '#ffd700');
+  rainbowGrad.addColorStop(0.52, '#7fff00');
+  rainbowGrad.addColorStop(0.68, '#00cfff');
+  rainbowGrad.addColorStop(0.85, '#a78bfa');
+  rainbowGrad.addColorStop(1,    '#ff6b6b');
+  ctx.fillStyle = rainbowGrad;
+  ctx.shadowColor = 'rgba(100,200,255,0.5)';
+  ctx.shadowBlur = 10;
+  ctx.fillText('RESCUE CLIMBER', W / 2, logoY + 30);
+  ctx.restore();
+
+  ctx.fillStyle = 'rgba(160,200,230,0.75)';
+  ctx.font = '12px monospace';
+  ctx.fillText('バブル・レスキュー・クライマー', W / 2, logoY + 50);
+
+  // ハイスコアTOP3
   if (HiScore.scores[0] > 0) {
-    ctx.font = 'bold 12px monospace';
+    ctx.font = 'bold 11px monospace';
     ['#ffd700','#cccccc','#cd7f32'].forEach((col, i) => {
       if (HiScore.scores[i] > 0) {
         ctx.fillStyle = col;
-        ctx.fillText(['🥇','🥈','🥉'][i] + ' ' + HiScore.scores[i], W / 2, H * 0.50 + i * 15);
+        ctx.fillText(['🥇','🥈','🥉'][i] + '  ' + HiScore.scores[i], W / 2, H * 0.46 + i * 16);
       }
     });
   }
 
-  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#ffffff' : '#66aaff';
-  ctx.font = '16px monospace';
-  ctx.fillText('クリック / タップ でスタート', W / 2, H * 0.62);
+  // 小人プレビュー（左右に歩く）
+  const demoG = {
+    x: titleGnomeX, y: H * 0.62,
+    vx: titleGnomeDir * 0.5,
+    state: 'walk',
+    hatColor: GNOME_CHARS[(Math.floor(frameCount / 120)) % 4].hatColor,
+    bodyColor: GNOME_CHARS[(Math.floor(frameCount / 120)) % 4].bodyColor,
+    charName: GNOME_CHARS[(Math.floor(frameCount / 120)) % 4].name,
+    expression: 'normal',
+  };
+  drawGnome(demoG);
 
-  // Phase 7: チュートリアル操作ヒント
-  const tips = [
-    '泡をクリックで割る → アイテムが落下',
-    '小人がアイテムを拾う → スコア加算',
-    '泡を見逃すとライフ(♥)が減少',
-    '小人をドラッグ → 経路を指示できる',
-  ];
-  ctx.fillStyle = '#8899bb';
-  ctx.font = '11px monospace';
-  tips.forEach((t, i) => {
-    ctx.fillText(t, W / 2, H * 0.72 + i * 16);
-  });
+  // PLAYボタン（パルスアニメ）
+  const btnW2 = 160, btnH2 = 38, btnX2 = W / 2, btnY2 = H * 0.72;
+  const pulse = 1.5 + 2 * Math.abs(Math.sin(frameCount * 0.07));
+  ctx.save();
+  ctx.strokeStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#aaeeff' : '#66aaff';
+  ctx.lineWidth = pulse;
+  ctx.fillStyle = 'rgba(0,100,200,0.18)';
+  ctx.beginPath();
+  ctx.roundRect(btnX2 - btnW2 / 2, btnY2 - btnH2 / 2, btnW2, btnH2, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = (Math.floor(frameCount / 22) % 2 === 0) ? '#ffffff' : '#aaeeff';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('▶  PLAY', btnX2, btnY2 + 6);
+  ctx.restore();
+
+  // キャラクター紹介
+  ctx.fillStyle = 'rgba(120,160,200,0.70)';
+  ctx.font = '10px monospace';
+  ctx.fillText('Speedy / Jumpy / Braver / Lucky', W / 2, H * 0.84);
   ctx.textAlign = 'left';
 }
 
@@ -2136,8 +2380,21 @@ function handlePlayClick(pos) {
   if (pos.y < 42 && Math.abs(pos.x - getPauseButtonX()) < 20) {
     state = 'pause'; return;
   }
-  // C2: チュートリアルスキップ
-  if (tutorialTimer > 0) { tutorialTimer = 0; return; }
+  // C2: チュートリアル操作（次へ / スキップ）
+  if (tutorialActive) {
+    const finishTutorial = () => {
+      tutorialActive = false; tutorialStep = -1;
+      localStorage.setItem('brc_tutorial_done', '1');
+    };
+    // スキップ判定（右上エリア: x > W-100, y < 36）
+    if (pos.x > W - 100 && pos.y < 36) { finishTutorial(); return; }
+    // 次へボタン判定（中央下: x ∈ [W*0.38, W*0.72], y ∈ [H*0.74, H*0.82]）
+    if (pos.x >= W * 0.38 && pos.x <= W * 0.72 && pos.y >= H * 0.74 && pos.y <= H * 0.82) {
+      tutorialStep++;
+      if (tutorialStep >= TUTORIAL_STEPS.length) finishTutorial();
+    }
+    return;
+  }
   // C3: ミュートボタン判定（ヒット半径拡大: 18→30）
   const maxLives = STAGE_CFG[stage].lives || MAX_LIVES;
   const muteX = W - 18 - maxLives * 22 - 22;
@@ -2326,7 +2583,7 @@ function initStage() {
   stageStartTime = Date.now();
   bonusPopups = [];
   for (let i = 0; i < cfg.gnomes; i++) {
-    gnomes.push(makeGnome(80 + i * Math.floor((W - 160) / Math.max(1, cfg.gnomes - 1))));
+    gnomes.push(makeGnome(80 + i * Math.floor((W - 160) / Math.max(1, cfg.gnomes - 1)), i));
   }
 
   // 浮遊ブロックを生成（1～5個、ステージが進むほど増加）
@@ -2358,18 +2615,25 @@ function initGame() {
   comboCount = 0; comboTimer = 0;
   bonusPopups = [];
   initStage();
-  // C2: 初回チュートリアル
-  if (!localStorage.getItem('brc_tutorial')) {
-    tutorialTimer = TUTORIAL_DURATION;
-    localStorage.setItem('brc_tutorial', '1');
+  // C2: 初回チュートリアル（旧キー互換含む）
+  if (!localStorage.getItem('brc_tutorial_done') && !localStorage.getItem('brc_tutorial')) {
+    tutorialStep = 0;
+    tutorialActive = true;
   }
 }
 
 // === メインループ ===
 function update() {
   frameCount++;
-  if (tutorialTimer > 0) tutorialTimer--;
   if (bgTransProgress < 1) bgTransProgress = Math.min(1, bgTransProgress + 1 / 60);
+  if (state === 'title') {
+    for (const b of titleBubbles) {
+      b.x += b.vx; b.y += b.vy;
+      if (b.y < -b.r * 2) { b.y = 660 + Math.random() * 100; b.x = Math.random() * 480; }
+    }
+    titleGnomeX += 1.2 * titleGnomeDir;
+    if (titleGnomeX > 400 || titleGnomeX < 80) titleGnomeDir *= -1;
+  }
   if (state !== 'play') return;
   const cfg = STAGE_CFG[stage];
 
@@ -2487,7 +2751,7 @@ function render() {
   drawHUDBar();
 
   if (state === 'pause') drawPauseOverlay();
-  if (state === 'play' && tutorialTimer > 0) drawTutorialOverlay();
+  if (state === 'play' && tutorialActive) drawTutorialOverlay();
 
   ctx.restore();
 }
