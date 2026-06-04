@@ -539,6 +539,7 @@
       bgPort: loadImage("assets/black-fang/bg-port.png"),
       actors: loadImage("assets/black-fang/actors.png"),
       jackActions: loadImage("assets/black-fang/jack-actions.png"),
+      jackCommandActions: loadImage("assets/black-fang/jack-command-actions.png"),
       kotaroActions: loadImage("assets/black-fang/kotaro-actions.png"),
       kotaroCommandActions: loadImage("assets/black-fang/kotaro-command-actions.png"),
       walkCycle: loadImage("assets/black-fang/walk-cycle.png"),
@@ -581,6 +582,33 @@
       weapon: [3, 1],
       super: [4, 1]
     };
+
+    const jackCommandActionCells = {
+      punch: [0, 0],
+      combination: [1, 0],
+      backElbow: [2, 0],
+      lowKick: [0, 1],
+      nightstick: [1, 1],
+      jumpUpper: [2, 1]
+    };
+
+    const jackMoveDefs = {
+      punch: { label: "パンチ", command: "J", cell: jackCommandActionCells.punch, duration: 250, active: 180, reach: 72, damageBonus: 0, knockback: 12, drawSize: 186, spark: "#ffe18b" },
+      combination: { label: "コンビネーション", command: "前・前 + J", cell: jackCommandActionCells.combination, duration: 430, active: 310, reach: 96, damageBonus: 8, knockback: 22, cooldown: 380, drawSize: 210, spark: "#c8ecff" },
+      backElbow: { label: "バックエルボー", command: "後 + L", cell: jackCommandActionCells.backElbow, duration: 440, active: 330, reach: 102, damageBonus: 12, knockback: 30, cooldown: 820, drawSize: 204, spark: "#f7f7ff" },
+      lowKick: { label: "下段蹴り", command: "下 + J", cell: jackCommandActionCells.lowKick, duration: 360, active: 260, reach: 96, height: 34, yOffset: 10, damageBonus: 5, knockback: 18, drawSize: 208, spark: "#ffd36c" },
+      nightstick: { label: "警棒", command: "L", cell: jackCommandActionCells.nightstick, duration: 560, active: 420, reach: 122, damageBonus: 15, knockback: 32, cooldown: 1050, drawSize: 210, spark: "#e7edf7" },
+      jumpUpper: { label: "ジャンプアッパー", command: "上・前 + J", cell: jackCommandActionCells.jumpUpper, duration: 620, active: 450, reach: 108, height: 62, yOffset: -16, damageBonus: 14, knockback: 34, cooldown: 880, drawSize: 220, spark: "#9ee9ff", lift: true }
+    };
+
+    const jackCommandList = [
+      ["J", "パンチ"],
+      ["前前+J", "コンビネーション"],
+      ["下+J", "下段蹴り"],
+      ["上前+J", "ジャンプアッパー"],
+      ["L", "警棒"],
+      ["後+L", "バックエルボー"]
+    ];
 
     const kotaroCommandActionCells = {
       punch: [0, 0],
@@ -865,6 +893,7 @@
         attacking: 0,
         attackType: "",
         attackHit: false,
+        jackMove: "",
         kotaroMove: "",
         combo: 0,
         comboUntil: 0,
@@ -1008,6 +1037,47 @@
       state.commandBuffer.length = 0;
     }
 
+    function chooseJackMove(button, player) {
+      if (state.heroKey !== "jack" || player.attacking > 0 || player.z > 0) return "";
+      const facing = player.facing;
+      if (button === "j") {
+        if (commandEndsWith(["F", "F"], facing, 650)) return "combination";
+        if (commandEndsWith(["U", "F"], facing)) return "jumpUpper";
+        if (commandEndsWith(["D"], facing)) return "lowKick";
+        return "punch";
+      }
+      if (button === "l") {
+        if (player.specialCooldown > 0) return "";
+        if (commandEndsWith(["B"], facing)) return "backElbow";
+        return "nightstick";
+      }
+      return "";
+    }
+
+    function startJackMove(player, moveId) {
+      const move = jackMoveDefs[moveId];
+      if (!move) return false;
+      if (move.cooldown && player.specialCooldown > 0) {
+        showMessage("息を整えろ", 420);
+        clearCommandBuffer();
+        return true;
+      }
+      player.attacking = move.duration;
+      player.attackType = moveId;
+      player.jackMove = moveId;
+      player.attackHit = false;
+      player.combo = 0;
+      player.comboUntil = 0;
+      if (move.cooldown) player.specialCooldown = move.cooldown;
+      if (move.lift) {
+        player.z = Math.max(player.z, 10);
+        player.vz = 5.4;
+      }
+      showMessage(`${move.label}  ${move.command}`, 720);
+      clearCommandBuffer();
+      return true;
+    }
+
     function chooseKotaroMove(button, player) {
       if (state.heroKey !== "kotaro" || player.attacking > 0 || player.z > 0) return "";
       const facing = player.facing;
@@ -1054,6 +1124,12 @@
       return true;
     }
 
+    function playerMoveDef(type) {
+      if (state.heroKey === "jack") return jackMoveDefs[type] || null;
+      if (state.heroKey === "kotaro") return kotaroMoveDefs[type] || null;
+      return null;
+    }
+
     function updatePlayer(player, dt, stage) {
       let mx = 0;
       let my = 0;
@@ -1084,6 +1160,7 @@
         }
       }
       player.attacking = Math.max(0, player.attacking - dt);
+      if (player.attacking === 0) player.jackMove = "";
       if (player.attacking === 0) player.kotaroMove = "";
       player.specialCooldown = Math.max(0, player.specialCooldown - dt);
       player.invuln = Math.max(0, player.invuln - dt);
@@ -1099,22 +1176,28 @@
         player.attackHit = false;
       }
       if (pressedTap("j") && player.attacking === 0) {
-        const kotaroMove = chooseKotaroMove("j", player);
-        if (!kotaroMove || !startKotaroMove(player, kotaroMove)) {
-          player.combo = player.comboUntil > 0 ? (player.combo + 1) % 3 : 0;
-          player.comboUntil = 700;
-          player.attacking = player.combo === 2 ? 360 : 250;
-          player.attackType = player.combo === 2 ? "combo" : "punch";
-          player.attackHit = false;
+        const jackMove = chooseJackMove("j", player);
+        if (!(jackMove && startJackMove(player, jackMove))) {
+          const kotaroMove = chooseKotaroMove("j", player);
+          if (!kotaroMove || !startKotaroMove(player, kotaroMove)) {
+            player.combo = player.comboUntil > 0 ? (player.combo + 1) % 3 : 0;
+            player.comboUntil = 700;
+            player.attacking = player.combo === 2 ? 360 : 250;
+            player.attackType = player.combo === 2 ? "combo" : "punch";
+            player.attackHit = false;
+          }
         }
       }
       if (pressedTap("l") && player.specialCooldown === 0 && player.attacking === 0) {
-        const kotaroMove = chooseKotaroMove("l", player);
-        if (!kotaroMove || !startKotaroMove(player, kotaroMove)) {
-          player.attacking = 560;
-          player.attackType = "special";
-          player.attackHit = false;
-          player.specialCooldown = 1450;
+        const jackMove = chooseJackMove("l", player);
+        if (!(jackMove && startJackMove(player, jackMove))) {
+          const kotaroMove = chooseKotaroMove("l", player);
+          if (!kotaroMove || !startKotaroMove(player, kotaroMove)) {
+            player.attacking = 560;
+            player.attackType = "special";
+            player.attackHit = false;
+            player.specialCooldown = 1450;
+          }
         }
       }
       if (player.attacking > 0 && !player.attackHit && player.attacking < attackActiveWindow(player.attackType)) {
@@ -1124,7 +1207,8 @@
     }
 
     function attackActiveWindow(type) {
-      if (kotaroMoveDefs[type]) return kotaroMoveDefs[type].active;
+      const move = playerMoveDef(type);
+      if (move) return move.active;
       if (type === "special") return 420;
       if (type === "jump") return 330;
       if (type === "combo") return 250;
@@ -1133,12 +1217,12 @@
 
     function resolvePlayerAttack(player) {
       const def = state.heroDef;
-      const kotaroMove = kotaroMoveDefs[player.attackType];
-      if (kotaroMove?.noHit) return;
-      const reach = kotaroMove?.reach ?? (def.reach + (player.attackType === "special" ? 36 : 0) + (player.attackType === "jump" ? 28 : 0));
-      const damage = def.attack + (kotaroMove?.damageBonus ?? 0) + (player.attackType === "special" ? 14 : 0) + (player.attackType === "jump" ? 6 : 0) + (player.attackType === "combo" ? 7 : 0);
-      const arcHeight = kotaroMove?.height ?? 48;
-      const arcY = player.y + (kotaroMove?.yOffset ?? 0);
+      const move = playerMoveDef(player.attackType);
+      if (move?.noHit) return;
+      const reach = move?.reach ?? (def.reach + (player.attackType === "special" ? 36 : 0) + (player.attackType === "jump" ? 28 : 0));
+      const damage = def.attack + (move?.damageBonus ?? 0) + (player.attackType === "special" ? 14 : 0) + (player.attackType === "jump" ? 6 : 0) + (player.attackType === "combo" ? 7 : 0);
+      const arcHeight = move?.height ?? 48;
+      const arcY = player.y + (move?.yOffset ?? 0);
       const arc = {
         x: player.x + player.facing * reach * 0.55,
         y: arcY,
@@ -1169,12 +1253,12 @@
 
     function damageEnemy(enemy, amount, dir, type) {
       const def = enemyDefs[enemy.type];
-      const kotaroMove = kotaroMoveDefs[type];
+      const move = playerMoveDef(type);
       enemy.hp -= amount;
       enemy.hurt = 220;
       enemy.invuln = 120;
-      enemy.x += dir * (kotaroMove?.knockback ?? (type === "special" ? 26 : 12));
-      addSpark(enemy.x, enemy.y - enemy.h * 0.7, kotaroMove?.spark ?? (type === "special" ? "#7ed9ff" : "#ffe18b"), kotaroMove ? 16 : 12);
+      enemy.x += dir * (move?.knockback ?? (type === "special" ? 26 : 12));
+      addSpark(enemy.x, enemy.y - enemy.h * 0.7, move?.spark ?? (type === "special" ? "#7ed9ff" : "#ffe18b"), move ? 16 : 12);
       if (enemy.hp <= 0) {
         enemy.dead = true;
         enemy.death = 760;
@@ -1556,6 +1640,15 @@
     function drawPlayer(p) {
       const flash = p.invuln > 0 && Math.floor(now() / 80) % 2 === 0;
       drawShadow(p.x, p.y, p.w, p.z);
+      const jackMove = jackMoveDefs[p.jackMove];
+      if (state.heroKey === "jack" && jackMove && p.attacking > 0) {
+        drawAtlasCell(assets.jackCommandActions, 3, 2, jackMove.cell, p.x, p.y - p.z + 3, jackMove.drawSize || 204, jackMove.drawSize || 204, {
+          flip: p.facing < 0,
+          alpha: flash ? 0.46 : 1,
+          rotation: p.hurt > 0 ? -0.08 * p.facing : 0
+        });
+        return;
+      }
       const kotaroMove = kotaroMoveDefs[p.kotaroMove];
       if (state.heroKey === "kotaro" && kotaroMove && p.attacking > 0) {
         drawAtlasCell(assets.kotaroCommandActions, 4, 3, kotaroMove.cell, p.x, p.y - p.z + 3, kotaroMove.drawSize || 200, kotaroMove.drawSize || 200, {
@@ -1809,6 +1902,7 @@
       ctx.fillStyle = "#f4f0dd";
       ctx.font = "bold 18px Meiryo";
       ctx.fillText(stage.title, 28, 92);
+      if (state.heroKey === "jack") drawJackCommandPanel();
       if (state.heroKey === "kotaro") drawKotaroCommandPanel();
       if (state.message && now() < state.messageUntil) {
         ctx.fillStyle = "rgba(0,0,0,0.68)";
@@ -1831,6 +1925,36 @@
         ctx.fillText(boss.label, 244, 505);
         drawBar(360, 495, 360, 8, boss.hp / boss.maxHp, "#e84122");
       }
+    }
+
+    function drawJackCommandPanel() {
+      const x = 650;
+      const y = 116;
+      const w = 280;
+      const h = 126;
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.58)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = "rgba(46,139,255,0.78)";
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = "#f6c21a";
+      ctx.font = "bold 13px Meiryo";
+      ctx.fillText("ジャック コマンド", x + 12, y + 20);
+      ctx.fillStyle = "#d7edf8";
+      ctx.font = "11px Meiryo";
+      ctx.fillText("前/後 = 向いている方向基準", x + 12, y + 38);
+      ctx.font = "bold 11px Meiryo";
+      jackCommandList.forEach(([command, label], i) => {
+        const col = i < 3 ? 0 : 1;
+        const row = col === 0 ? i : i - 3;
+        const tx = x + 12 + col * 134;
+        const ty = y + 58 + row * 19;
+        ctx.fillStyle = "#f6c21a";
+        ctx.fillText(command, tx, ty);
+        ctx.fillStyle = "#f4f0dd";
+        ctx.fillText(label, tx + 50, ty);
+      });
+      ctx.restore();
     }
 
     function drawKotaroCommandPanel() {
