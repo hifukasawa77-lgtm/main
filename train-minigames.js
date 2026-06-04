@@ -94,6 +94,22 @@ function tcCall(fn, ...args) {
   return window.TC[fn](...args);
 }
 
+const trainImageCache = {};
+
+function loadTrainImage(train, onReady) {
+  if (!train || !train.imagePath) return null;
+  const cached = trainImageCache[train.imagePath];
+  if (cached && cached.complete && cached.naturalWidth > 0) return cached;
+
+  const img = cached || new Image();
+  if (!cached) {
+    trainImageCache[train.imagePath] = img;
+    img.src = train.imagePath;
+  }
+  img.onload = () => onReady && onReady(img);
+  return null;
+}
+
 function playSE(name) {
   tcCall('playSE', name);
 }
@@ -149,7 +165,7 @@ function initStampRally() {
   mapWrap.style.cssText = 'position:relative;width:100%;max-width:600px;margin:0 auto;user-select:none;';
 
   const mapImg = mkEl('img');
-  mapImg.src = 'assets/trains/ui/japan-map.svg';
+  mapImg.src = 'assets/trains/generated/ui/japan-map.png';
   mapImg.alt = '日本地図';
   mapImg.style.cssText = 'width:100%;display:block;';
   mapWrap.appendChild(mapImg);
@@ -187,8 +203,8 @@ function initStampRally() {
       // スタンプアイコン（SVG参照）
       const icon = mkEl('img');
       icon.src = stamped
-        ? 'assets/trains/ui/stamp-done.svg'
-        : 'assets/trains/ui/stamp-empty.svg';
+        ? 'assets/trains/generated/ui/stamp-done.png'
+        : 'assets/trains/generated/ui/stamp-empty.png';
       icon.alt = stamped ? 'スタンプ済み' : '未スタンプ';
       icon.style.cssText = `width:32px;height:32px;filter:${stamped ? 'none' : 'grayscale(1) opacity(.55)'};`;
       pin.appendChild(icon);
@@ -553,6 +569,32 @@ function initQuiz() {
     ctx.clearRect(0, 0, W, H);
 
     const alpha = revealAlpha !== undefined ? revealAlpha : 0;
+    const trainImg = loadTrainImage(train, () => drawSilhouette(canvas, train, _unused, revealAlpha));
+
+    if (trainImg) {
+      const maxW = W * 0.86;
+      const maxH = H * 0.62;
+      const ratio = Math.min(maxW / trainImg.naturalWidth, maxH / trainImg.naturalHeight);
+      const iw = trainImg.naturalWidth * ratio;
+      const ih = trainImg.naturalHeight * ratio;
+      const ix = (W - iw) / 2;
+      const iy = (H - ih) / 2 + 8;
+
+      ctx.save();
+      ctx.drawImage(trainImg, ix, iy, iw, ih);
+      ctx.globalCompositeOperation = 'source-in';
+      ctx.fillStyle = '#222';
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+
+      if (alpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(trainImg, ix, iy, iw, ih);
+        ctx.restore();
+      }
+      return;
+    }
 
     // 車体（角丸矩形）
     const bodyColor = alpha > 0 ? interpolateColor('#333', getTrainColor(train), alpha) : '#333';
@@ -648,7 +690,7 @@ function initSugoroku() {
   mapWrap.style.cssText = 'position:relative;width:100%;max-width:600px;margin:0 auto;';
 
   const mapImg = mkEl('img');
-  mapImg.src = 'assets/trains/ui/japan-map.svg';
+  mapImg.src = 'assets/trains/generated/ui/japan-map.png';
   mapImg.alt = '日本地図';
   mapImg.style.cssText = 'width:100%;display:block;opacity:.85;';
   mapWrap.appendChild(mapImg);
@@ -776,7 +818,7 @@ function initSugoroku() {
   diceWrap.style.cssText = 'display:flex;align-items:center;gap:16px;justify-content:center;margin-bottom:16px;';
 
   const diceImg = mkEl('img');
-  diceImg.src = 'assets/trains/ui/dice.svg';
+  diceImg.src = 'assets/trains/generated/ui/dice.png';
   diceImg.alt = 'さいころ';
   diceImg.style.cssText = 'width:72px;height:72px;cursor:pointer;transition:transform .15s;';
   diceImg.id = 'dice-img';
