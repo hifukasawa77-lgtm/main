@@ -367,6 +367,47 @@
       font-weight: 700;
     }
 
+    .diff-easy  { color: #4de6b0 !important; text-shadow: 3px 3px 0 #0a4030 !important; }
+    .diff-normal { color: var(--gold) !important; }
+    .diff-hard  { color: #ff6060 !important; text-shadow: 3px 3px 0 #4a0808 !important; }
+
+    .continue-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 40;
+      background: rgba(0,0,0,0.82);
+      align-items: center;
+      justify-content: center;
+    }
+    .continue-overlay.is-visible { display: flex; }
+    .continue-panel {
+      background: linear-gradient(180deg,#111620,#070a10);
+      border: 2px solid #c8a84b;
+      border-radius: 10px;
+      padding: 32px 52px;
+      text-align: center;
+      color: #fbfbf7;
+      font-family: "Courier New", monospace;
+    }
+    .continue-panel h2 {
+      font-family: Impact, "Arial Black", sans-serif;
+      font-size: 42px;
+      color: #c8a84b;
+      letter-spacing: 4px;
+      margin: 0 0 8px;
+    }
+    .continue-count {
+      font-family: Impact, "Arial Black", sans-serif;
+      font-size: 80px;
+      color: #ff6060;
+      line-height: 1;
+      margin: 0 0 8px;
+      transition: color 0.3s;
+    }
+    .continue-count.urgent { color: #ff2020; }
+    .continue-left { font-size: 14px; color: #8bc1ff; margin: 0 0 20px; }
+
     .select-step-header {
       display: flex;
       align-items: center;
@@ -641,6 +682,27 @@
               </button>
             </div>
           </div>
+          <!-- Step 1b: difficulty select -->
+          <div id="difficultySelectStep" style="display:none">
+            <div class="select-step-header">
+              <button class="back-btn" id="backToModeFromDiff">← BACK</button>
+              <p class="mode-step-label">DIFFICULTY</p>
+            </div>
+            <div class="mode-buttons diff-buttons">
+              <button class="mode-btn diff-btn" data-diff="easy">
+                <span class="mode-title diff-easy">EASY</span>
+                <small>敵が弱い・コンテニュー5回</small>
+              </button>
+              <button class="mode-btn diff-btn" data-diff="normal">
+                <span class="mode-title diff-normal">NORMAL</span>
+                <small>標準難易度・コンテニュー5回</small>
+              </button>
+              <button class="mode-btn diff-btn" data-diff="hard">
+                <span class="mode-title diff-hard">HARD</span>
+                <small>敵が強い・コンテニュー5回</small>
+              </button>
+            </div>
+          </div>
           <!-- Step 2+: character select (shared for P1 and P2/AI) -->
           <div id="fighterSelectStep" style="display:none">
             <div class="select-step-header">
@@ -694,6 +756,15 @@
         </div>
       </div>
 
+      <div id="continueOverlay" class="continue-overlay">
+        <div class="continue-panel">
+          <h2>CONTINUE?</h2>
+          <div id="continueCount" class="continue-count">9</div>
+          <p id="continueLeft" class="continue-left">残り <span id="continueRemain">5</span> 回</p>
+          <button class="arcade-button" id="continueBtn">CONTINUE</button>
+        </div>
+      </div>
+
       <div id="gameOver" class="game-over">
         <div class="result-panel">
           <h2 id="resultTitle">GAME OVER</h2>
@@ -729,14 +800,19 @@
     const pauseLayer = document.getElementById("pause");
     const resumeButton = document.getElementById("resume");
     const restartButton = document.getElementById("restart");
+    const continueOverlay = document.getElementById("continueOverlay");
+    const continueCountEl = document.getElementById("continueCount");
+    const continueRemainEl = document.getElementById("continueRemain");
+    const continueBtn = document.getElementById("continueBtn");
 
     const W = canvas.width;
     const H = canvas.height;
     const keys = new Map();
     const keys2 = new Map();
-    let _selectStep = "mode"; // "mode" | "p1" | "p2"
+    let _selectStep = "mode"; // "mode" | "difficulty" | "p1" | "p2"
     let _pendingMode = "1p";
     let _pendingHero1 = "";
+    let _pendingDiff = "normal";
     let _aiThinkTimer = 0;
     let _aiInputs = { mx: 0, my: 0, attack: false, jump: false, special: false };
     const laneTop = 355;
@@ -1713,6 +1789,12 @@
       }
     };
 
+    const DIFF_MULT = {
+      easy:   { hp: 0.65, atk: 0.65, speed: 0.80 },
+      normal: { hp: 1.0,  atk: 1.0,  speed: 1.0  },
+      hard:   { hp: 1.45, atk: 1.45, speed: 1.25 }
+    };
+
     let state = makeInitialState();
     let lastFrame = now();
 
@@ -1726,6 +1808,9 @@
         camera: 0,
         score: 0,
         lives: 3,
+        difficulty: "normal",
+        continues: 0,
+        continueTimer: 0,
         time: 85,
         timeTick: 0,
         message: "",
@@ -1768,10 +1853,11 @@
       };
     }
 
-    function bootHero(hero1Key, gameMode, hero2Key) {
+    function bootHero(hero1Key, gameMode, hero2Key, difficulty) {
       state = makeInitialState(hero1Key);
       state.mode = "play";
       state.gameMode = gameMode || "1p";
+      state.difficulty = difficulty || "normal";
       state.player = makePlayerObj(hero1Key, 140, 408);
       if (gameMode !== "1p" && hero2Key) {
         state.heroKey2 = hero2Key;
@@ -1824,8 +1910,10 @@
       const stage = stages[state.stageIndex];
       const wave = stage.waves[state.activeWave];
       if (!wave) return;
+      const mult = DIFF_MULT[state.difficulty] || DIFF_MULT.normal;
       for (const [type, x] of wave.enemies) {
         const def = enemyDefs[type];
+        const scaledHp = Math.round(def.hp * mult.hp);
         state.enemies.push({
           kind: "enemy",
           type,
@@ -1837,8 +1925,10 @@
           w: def.big ? 62 : 42,
           h: def.big ? 92 : 70,
           facing: -1,
-          hp: def.hp,
-          maxHp: def.hp,
+          hp: scaledHp,
+          maxHp: scaledHp,
+          speed: def.speed * mult.speed,
+          attack: def.attack * mult.atk,
           attackCooldown: rand(220, 760),
           attacking: 0,
           attackHit: false,
@@ -1853,7 +1943,31 @@
       state.activeWave += 1;
     }
 
+    function doContinue() {
+      const p = state._continuePlayer || state.player;
+      p.hp = p.maxHp;
+      p.x = Math.max(80, p.x - 80);
+      p.invuln = 1800;
+      state.lives = 3;
+      state.continues += 1;
+      state._continuePlayer = null;
+      state.mode = "play";
+      continueOverlay.classList.remove("is-visible");
+      showMessage("CONTINUE!", 1100);
+    }
+
     function update(dt) {
+      if (state.mode === "continue") {
+        state.continueTimer -= dt;
+        const sec = Math.ceil(state.continueTimer / 1000);
+        continueCountEl.textContent = Math.max(0, sec);
+        continueCountEl.classList.toggle("urgent", sec <= 3);
+        if (state.continueTimer <= 0) {
+          continueOverlay.classList.remove("is-visible");
+          endGame(false);
+        }
+        return;
+      }
       if (state.mode !== "play" || state.paused) return;
       const player = state.player;
       const stage = stages[state.stageIndex];
@@ -2379,7 +2493,7 @@
             vx: enemy.facing * (def.projectileKind === "bullet" ? 7.4 : def.projectileKind === "bomb" ? 4.2 : 5.2),
             vy: def.projectileKind === "bomb" ? rand(-1.8, -1.1) : rand(-0.25, 0.25),
             life: def.projectileKind === "gas" ? 1800 : 1500,
-            damage: def.attack + 3,
+            damage: (enemy.attack ?? def.attack) + 3,
             owner: "enemy",
             kind: def.projectileKind || "knife"
           });
@@ -2391,7 +2505,7 @@
         if (enemy.attacking > 0) {
           if (!enemy.attackHit && enemy.attacking < (def.bike ? 560 : 300)) {
             if (absDx < def.range + (def.bike ? 42 : 0) && absDy < 42) {
-              damageSomePlayer(player, def.attack + (def.bike ? 5 : 0), enemy.facing);
+              damageSomePlayer(player, (enemy.attack ?? def.attack) + (def.bike ? 5 : 0), enemy.facing);
               enemy.attackHit = true;
             }
           }
@@ -2411,8 +2525,9 @@
           enemy._target = player; // remember which player triggered attack
         } else {
           const targetY = player.y + Math.sin((now() / 420) + enemy.aiSeed) * 28;
-          let mx = Math.sign(dx) * def.speed;
-          let my = Math.sign(targetY - enemy.y) * def.speed * 0.42;
+          const spd = enemy.speed ?? def.speed;
+          let mx = Math.sign(dx) * spd;
+          let my = Math.sign(targetY - enemy.y) * spd * 0.42;
           if (absDx < def.range * 0.8) mx = 0;
           enemy.moving = Math.abs(mx) > 0.01 || Math.abs(my) > 0.01;
           if (enemy.moving) enemy.walkClock = (enemy.walkClock || 0) + dt;
@@ -2440,6 +2555,14 @@
           player.x = Math.max(80, player.x - 120);
           player.invuln = 1600;
           showMessage("STAND UP!", 1100);
+        } else if (state.continues < 5) {
+          state.mode = "continue";
+          state.continueTimer = 9000;
+          state._continuePlayer = player;
+          continueOverlay.classList.add("is-visible");
+          continueCountEl.textContent = "9";
+          continueCountEl.classList.remove("urgent");
+          continueRemainEl.textContent = 5 - state.continues;
         } else {
           endGame(false);
         }
@@ -3524,29 +3647,54 @@
 
     // ---- Select screen UI ----
     const modeSelectStep = document.getElementById("modeSelectStep");
+    const difficultySelectStep = document.getElementById("difficultySelectStep");
     const fighterSelectStep = document.getElementById("fighterSelectStep");
     const fighterStepLabel = document.getElementById("fighterStepLabel");
     const p2ControlsHint = document.getElementById("p2ControlsHint");
     const backToModeBtn = document.getElementById("backToModeBtn");
+    const backToModeFromDiff = document.getElementById("backToModeFromDiff");
 
     function showModeStep() {
       _selectStep = "mode";
       modeSelectStep.style.display = "";
+      difficultySelectStep.style.display = "none";
+      fighterSelectStep.style.display = "none";
+    }
+    function showDiffStep() {
+      _selectStep = "difficulty";
+      modeSelectStep.style.display = "none";
+      difficultySelectStep.style.display = "";
       fighterSelectStep.style.display = "none";
     }
 
-    document.querySelectorAll(".mode-btn").forEach(btn => {
+    document.querySelectorAll(".mode-btn:not(.diff-btn)").forEach(btn => {
       btn.addEventListener("click", () => {
         _pendingMode = btn.dataset.mode;
+        showDiffStep();
+      });
+    });
+
+    document.querySelectorAll(".diff-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        _pendingDiff = btn.dataset.diff;
         _selectStep = "p1";
-        modeSelectStep.style.display = "none";
+        difficultySelectStep.style.display = "none";
         fighterSelectStep.style.display = "";
         fighterStepLabel.textContent = "1P キャラクター";
         p2ControlsHint.style.display = "none";
       });
     });
 
-    backToModeBtn.addEventListener("click", showModeStep);
+    backToModeFromDiff.addEventListener("click", showModeStep);
+    backToModeBtn.addEventListener("click", () => {
+      if (_selectStep === "p2") {
+        _selectStep = "p1";
+        fighterStepLabel.textContent = "1P キャラクター";
+        p2ControlsHint.style.display = "none";
+      } else {
+        showDiffStep();
+      }
+    });
 
     document.querySelectorAll(".fighter").forEach(button => {
       button.addEventListener("click", () => {
@@ -3554,30 +3702,33 @@
         if (_selectStep === "p1") {
           _pendingHero1 = heroKey;
           if (_pendingMode === "1p") {
-            bootHero(_pendingHero1, "1p", null);
+            bootHero(_pendingHero1, "1p", null, _pendingDiff);
           } else {
             _selectStep = "p2";
             fighterStepLabel.textContent = _pendingMode === "2p" ? "2P キャラクター" : "AI キャラクター";
             p2ControlsHint.style.display = _pendingMode === "2p" ? "" : "none";
           }
         } else if (_selectStep === "p2") {
-          bootHero(_pendingHero1, _pendingMode, heroKey);
+          bootHero(_pendingHero1, _pendingMode, heroKey, _pendingDiff);
         }
       });
     });
+
+    continueBtn.addEventListener("click", doContinue);
 
     restartButton.addEventListener("click", () => {
       Snd.stopBGM();
       showModeStep();
       select.style.display = "grid";
       gameOver.classList.remove("is-visible");
+      continueOverlay.classList.remove("is-visible");
       state = makeInitialState();
     });
 
     resumeButton.addEventListener("click", () => togglePause(false));
 
     function togglePause(force) {
-      if (state.mode !== "play") return;
+      if (state.mode !== "play" && state.mode !== "continue") return;
       state.paused = typeof force === "boolean" ? force : !state.paused;
       pauseLayer.classList.toggle("is-visible", state.paused);
       if (state.paused) Snd.pauseBGM(); else Snd.resumeBGM();
@@ -3588,6 +3739,9 @@
       const kl = k.toLowerCase();
       if (["arrowup","arrowdown","arrowleft","arrowright"," ","j","k","l","p","a","s","d","w","u","i","o"].includes(kl) || k.startsWith("Arrow")) {
         event.preventDefault();
+      }
+      if (state?.mode === "continue" && ["j","k","l"," "].includes(kl)) {
+        doContinue(); return;
       }
       if (kl === "p") {
         togglePause();
