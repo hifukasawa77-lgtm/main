@@ -1850,6 +1850,7 @@
         enemies: [],
         props: [],
         projectiles: [],
+        droppedWeapons: [],
         sparks: [],
         commandBuffer: [],
         activeWave: 0,
@@ -1879,6 +1880,7 @@
         combo: 0, comboUntil: 0,
         specialCooldown: 0,
         jumpAttack: 0,
+        heldWeapon: null,
         hurt: 0
       };
     }
@@ -1912,6 +1914,7 @@
       state.time = stage.time || 85;
       state.enemies = [];
       state.projectiles = [];
+      state.droppedWeapons = [];
       state.sparks = [];
       state.props = stage.props.map(([type, x, y], i) => ({
         id: `${type}-${i}`,
@@ -2022,6 +2025,7 @@
       updateEnemies(dt);
       updateProjectiles(dt);
       updateProps(dt);
+      updateDroppedWeapons(dt);
       updateSparks(dt);
       updateCamera(stage);
       checkStageClear(dt, stage);
@@ -2363,21 +2367,25 @@
         player.attackHit = false;
       }
       if (pressedTap("j") && player.attacking === 0) {
-        const jackMove = chooseJackMove("j", player);
-        if (!(jackMove && startJackMove(player, jackMove))) {
-          const mikeMove = chooseMikeMove("j", player);
-          if (!(mikeMove && startMikeMove(player, mikeMove))) {
-            const kotaroMove = chooseKotaroMove("j", player);
-            if (!(kotaroMove && startKotaroMove(player, kotaroMove))) {
-              const sofiaMove = chooseSofiaMove("j", player);
-              if (!(sofiaMove && startSofiaMove(player, sofiaMove))) {
-                const diegoMove = chooseDiegoMove("j", player);
-                if (!diegoMove || !startDiegoMove(player, diegoMove)) {
-                  player.combo = player.comboUntil > 0 ? (player.combo + 1) % 3 : 0;
-                  player.comboUntil = 700;
-                  player.attacking = player.combo === 2 ? 360 : 250;
-                  player.attackType = player.combo === 2 ? "combo" : "punch";
-                  player.attackHit = false;
+        if (player.heldWeapon) {
+          useHeldWeapon(player, state.heroDef);
+        } else {
+          const jackMove = chooseJackMove("j", player);
+          if (!(jackMove && startJackMove(player, jackMove))) {
+            const mikeMove = chooseMikeMove("j", player);
+            if (!(mikeMove && startMikeMove(player, mikeMove))) {
+              const kotaroMove = chooseKotaroMove("j", player);
+              if (!(kotaroMove && startKotaroMove(player, kotaroMove))) {
+                const sofiaMove = chooseSofiaMove("j", player);
+                if (!(sofiaMove && startSofiaMove(player, sofiaMove))) {
+                  const diegoMove = chooseDiegoMove("j", player);
+                  if (!diegoMove || !startDiegoMove(player, diegoMove)) {
+                    player.combo = player.comboUntil > 0 ? (player.combo + 1) % 3 : 0;
+                    player.comboUntil = 700;
+                    player.attacking = player.combo === 2 ? 360 : 250;
+                    player.attackType = player.combo === 2 ? "combo" : "punch";
+                    player.attackHit = false;
+                  }
                 }
               }
             }
@@ -2414,6 +2422,8 @@
     function attackActiveWindow(type) {
       const move = playerMoveDef(type);
       if (move) return move.active;
+      if (type === "weapon_pipe") return 220;
+      if (type === "weapon_whip") return 260;
       if (type === "special") return 420;
       if (type === "jump") return 330;
       if (type === "combo") return 250;
@@ -2424,9 +2434,11 @@
       const def = heroDef || state.heroDef;
       const move = playerMoveDef(player.attackType);
       if (move?.noHit) return;
-      const reach = move?.reach ?? (def.reach + (player.attackType === "special" ? 36 : 0) + (player.attackType === "jump" ? 28 : 0));
+      const isWeaponPipe = player.attackType === "weapon_pipe";
+      const isWeaponWhip = player.attackType === "weapon_whip";
+      const reach = move?.reach ?? (isWeaponPipe ? 90 : isWeaponWhip ? 115 : (def.reach + (player.attackType === "special" ? 36 : 0) + (player.attackType === "jump" ? 28 : 0)));
       const powerBonus = player.powerUp > 0 ? 8 : 0;
-      const damage = def.attack + powerBonus + (move?.damageBonus ?? 0) + (player.attackType === "special" ? 14 : 0) + (player.attackType === "jump" ? 6 : 0) + (player.attackType === "combo" ? 7 : 0);
+      const damage = isWeaponPipe ? 20 : isWeaponWhip ? 14 : (def.attack + powerBonus + (move?.damageBonus ?? 0) + (player.attackType === "special" ? 14 : 0) + (player.attackType === "jump" ? 6 : 0) + (player.attackType === "combo" ? 7 : 0));
       const arcHeight = move?.height ?? 48;
       const arcY = player.y + (move?.yOffset ?? 0);
       const arc = {
@@ -2474,6 +2486,29 @@
         enemy.z = 1;
         state.score += def.score;
         showMessage(`${enemy.label} 撃破`, 900);
+        // Weapon drop
+        const WEAPON_DROP_MAP = {
+          knife:   { w: 'knife',     p: 0.68 },
+          gunner:  { w: 'gun',       p: 0.55 },
+          sniper:  { w: 'gun',       p: 0.55 },
+          chain:   { w: 'whip',      p: 0.52 },
+          rodman:  { w: 'whip',      p: 0.42 },
+          bulldog: { w: 'iron_pipe', p: 0.45 },
+          tanktop: { w: 'iron_pipe', p: 0.45 },
+          hammer:  { w: 'iron_pipe', p: 0.55 },
+          driller: { w: 'iron_pipe', p: 0.55 }
+        };
+        const dropEntry = WEAPON_DROP_MAP[enemy.type];
+        let dropType = null;
+        if (dropEntry && !def.boss) {
+          if (Math.random() < dropEntry.p) dropType = dropEntry.w;
+        } else if (!def.boss && Math.random() < 0.14) {
+          const misc = ['iron_pipe', 'knife', 'whip', 'gun'];
+          dropType = misc[Math.floor(Math.random() * misc.length)];
+        }
+        if (dropType) {
+          state.droppedWeapons.push({ type: dropType, x: enemy.x, y: enemy.y, life: 12000, bobPhase: Math.random() * Math.PI * 2 });
+        }
       }
     }
 
@@ -2623,6 +2658,16 @@
             }
           }
         }
+        if (p.owner === "player") {
+          for (const en of state.enemies) {
+            if (en.dead || en.invuln > 0) continue;
+            if (Math.abs(p.x - en.x) < 30 && Math.abs((p.y + 38) - en.y) < 44) {
+              damageEnemy(en, p.damage, Math.sign(p.vx), "punch");
+              p.life = 0;
+              break;
+            }
+          }
+        }
       }
       state.projectiles = state.projectiles.filter(p => p.life > 0);
     }
@@ -2680,6 +2725,86 @@
           showMessage("HOT DOG +20", 900);
           item.life = 0;
         }
+      }
+    }
+
+    function updateDroppedWeapons(dt) {
+      const players = [state.player, state.player2].filter(Boolean);
+      for (const w of state.droppedWeapons) {
+        w.life -= dt;
+      }
+      for (const player of players) {
+        if (player.heldWeapon) continue;
+        for (const w of state.droppedWeapons) {
+          if (w.life <= 0) continue;
+          if (Math.abs(w.x - player.x) < 38 && Math.abs(w.y - player.y) < 44) {
+            const AMMO = { gun: 6, knife: 1, iron_pipe: 5, whip: 5 };
+            player.heldWeapon = { type: w.type, ammo: AMMO[w.type] };
+            const WEAPON_NAMES = { gun: '拳銃 GET!', knife: 'ナイフ GET!', iron_pipe: '鉄パイプ GET!', whip: 'ムチ GET!' };
+            showMessage(WEAPON_NAMES[w.type], 1200);
+            Snd.playPickup();
+            w.life = 0;
+            break;
+          }
+        }
+      }
+      state.droppedWeapons = state.droppedWeapons.filter(w => w.life > 0);
+    }
+
+    function useHeldWeapon(player, heroDef) {
+      const w = player.heldWeapon;
+      if (!w || w.ammo <= 0) { player.heldWeapon = null; return; }
+      if (w.type === 'gun') {
+        Snd.playSwing("metal");
+        state.projectiles.push({
+          x: player.x + player.facing * 30,
+          y: player.y - 44,
+          vx: player.facing * 8.5,
+          vy: rand(-0.15, 0.15),
+          life: 900,
+          damage: 18,
+          owner: "player",
+          kind: "bullet"
+        });
+        player.attacking = 220;
+        player.attackType = "punch";
+        player.attackHit = true;
+        addSpark(player.x + player.facing * 58, player.y - 44, "#ffe18b", 14);
+        w.ammo--;
+        if (w.ammo <= 0) { player.heldWeapon = null; showMessage("弾切れ！", 800); }
+      } else if (w.type === 'knife') {
+        Snd.playSwing("kick");
+        state.projectiles.push({
+          x: player.x + player.facing * 24,
+          y: player.y - 40,
+          vx: player.facing * 7.2,
+          vy: rand(-0.2, 0.2),
+          life: 800,
+          damage: 16,
+          owner: "player",
+          kind: "knife"
+        });
+        player.attacking = 260;
+        player.attackType = "punch";
+        player.attackHit = true;
+        w.ammo--;
+        player.heldWeapon = null;
+      } else if (w.type === 'iron_pipe') {
+        Snd.playSwing("metal");
+        player.attacking = 300;
+        player.attackType = "weapon_pipe";
+        player.attackHit = false;
+        addSpark(player.x + player.facing * 58, player.y - 36, "#aaaacc", 10);
+        w.ammo--;
+        if (w.ammo <= 0) { player.heldWeapon = null; showMessage("鉄パイプ 破壊！", 800); }
+      } else if (w.type === 'whip') {
+        Snd.playSwing("chain");
+        player.attacking = 340;
+        player.attackType = "weapon_whip";
+        player.attackHit = false;
+        addSpark(player.x + player.facing * 72, player.y - 30, "#cc9944", 8);
+        w.ammo--;
+        if (w.ammo <= 0) { player.heldWeapon = null; showMessage("ムチ 破壊！", 800); }
       }
     }
 
@@ -2781,6 +2906,7 @@
 
       const drawables = [
         ...state.props.filter(p => !p.broken),
+        ...state.droppedWeapons.map(w => ({ ...w, _droppedWeapon: true })),
         ...state.projectiles,
         ...state.enemies,
         state.player,
@@ -2790,6 +2916,7 @@
       for (const item of drawables) {
         if (item.kind === "player") drawPlayer(item);
         else if (item.kind === "enemy") drawEnemy(item);
+        else if (item._droppedWeapon) drawDroppedWeapon(item);
         else if (item.owner) drawProjectile(item);
         else drawProp(item);
       }
@@ -3235,6 +3362,63 @@
       }
     }
 
+    function drawDroppedWeapon(w) {
+      const bob = Math.sin(now() / 380 + w.bobPhase) * 4;
+      const alpha = w.life < 2000 ? w.life / 2000 : 1;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(w.x, w.y - 12 + bob);
+      if (w.type === 'gun') {
+        ctx.fillStyle = "#2a2a2a";
+        ctx.fillRect(-14, -6, 28, 11);
+        ctx.fillStyle = "#888";
+        ctx.fillRect(8, -10, 6, 6);
+        ctx.fillStyle = "#f6c21a";
+        ctx.font = "bold 10px Courier New";
+        ctx.textAlign = "center";
+        ctx.fillText("GUN", 0, 20);
+      } else if (w.type === 'knife') {
+        ctx.rotate(0.4);
+        ctx.fillStyle = "#c0c0c0";
+        ctx.fillRect(-3, -20, 6, 20);
+        ctx.fillStyle = "#8a5a2a";
+        ctx.fillRect(-5, 0, 10, 8);
+        ctx.fillStyle = "#f6c21a";
+        ctx.font = "bold 10px Courier New";
+        ctx.textAlign = "center";
+        ctx.fillText("KNIFE", 4, 30);
+      } else if (w.type === 'iron_pipe') {
+        ctx.rotate(-0.2);
+        ctx.strokeStyle = "#9a9ab0";
+        ctx.lineWidth = 7;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(-22, -6);
+        ctx.lineTo(22, -6);
+        ctx.stroke();
+        ctx.strokeStyle = "#c8c8d8";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.fillStyle = "#aaaacc";
+        ctx.font = "bold 10px Courier New";
+        ctx.textAlign = "center";
+        ctx.fillText("PIPE", 0, 16);
+      } else if (w.type === 'whip') {
+        ctx.strokeStyle = "#8a5a2a";
+        ctx.lineWidth = 4;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(-24, -2);
+        ctx.quadraticCurveTo(0, -18 + Math.sin(now() / 200) * 5, 24, 4);
+        ctx.stroke();
+        ctx.fillStyle = "#cc9944";
+        ctx.font = "bold 10px Courier New";
+        ctx.textAlign = "center";
+        ctx.fillText("WHIP", 0, 20);
+      }
+      ctx.restore();
+    }
+
     function drawSparks() {
       for (const s of state.sparks) {
         drawAtlasCell(assets.props, 4, 2, propCells.impact, s.x, s.y + 10, 22, 22, {
@@ -3317,6 +3501,20 @@
         ctx.font = "bold 14px Meiryo";
         ctx.fillText(boss.label, 244, 505);
         drawBar(360, 495, 360, 8, boss.hp / boss.maxHp, "#e84122");
+      }
+      const hw = state.player.heldWeapon;
+      if (hw) {
+        const WEAPON_ICONS = { gun: '拳銃', knife: 'ナイフ', iron_pipe: '鉄パイプ', whip: 'ムチ' };
+        const AMMO_COLORS = { gun: '#f6c21a', knife: '#c0c0c0', iron_pipe: '#aaaacc', whip: '#cc9944' };
+        ctx.fillStyle = "rgba(0,0,0,0.72)";
+        ctx.fillRect(150, 46, 190, 24);
+        ctx.strokeStyle = AMMO_COLORS[hw.type];
+        ctx.lineWidth = 1;
+        ctx.strokeRect(150, 46, 190, 24);
+        ctx.fillStyle = AMMO_COLORS[hw.type];
+        ctx.font = "bold 13px Meiryo";
+        ctx.textAlign = "left";
+        ctx.fillText(`${WEAPON_ICONS[hw.type]}  ×${hw.ammo}`, 162, 63);
       }
     }
 
