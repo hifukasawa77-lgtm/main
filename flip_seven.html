@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flip Seven</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080810;--surface:rgba(255,255,255,0.05);--border:rgba(255,255,255,0.1);
+  --accent:#60a8ff;--accent2:#a060ff;--success:#60ffb0;--danger:#ff6060;
+  --warn:#ffc060;--text:#e0e8ff;--muted:#6070a0;
+}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+canvas#bg{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
+#app{position:relative;z-index:1;min-height:100vh}
+#toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.8);
+  background:rgba(8,8,20,0.97);border:1.5px solid var(--accent);border-radius:14px;
+  padding:14px 36px;font-size:1.6rem;font-weight:900;color:var(--accent);
+  pointer-events:none;opacity:0;transition:all 0.25s;z-index:200;text-align:center}
+#toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+
+/* ---- SETUP ---- */
+.setup{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.setup-title{font-size:clamp(2.8rem,8vw,5.5rem);font-weight:900;letter-spacing:.12em;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+.setup-sub{color:var(--muted);font-size:.95rem;margin-bottom:36px;letter-spacing:.05em}
+.glass{background:var(--surface);border:1px solid var(--border);
+  backdrop-filter:blur(12px);border-radius:16px;padding:28px;width:100%;max-width:430px;margin-bottom:18px}
+.row{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.row:last-child{margin-bottom:0}
+label{color:var(--muted);font-size:.88rem}
+select{background:rgba(255,255,255,0.07);color:var(--text);border:1px solid var(--border);
+  border-radius:6px;padding:6px 12px;font-size:.88rem;cursor:pointer;outline:none}
+select:focus{border-color:var(--accent)}
+.btn{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border:none;
+  border-radius:10px;padding:13px 40px;font-size:1.05rem;font-weight:700;cursor:pointer;
+  letter-spacing:.06em;transition:opacity .18s,transform .1s}
+.btn:hover{opacity:.88;transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.rule-text{font-size:.82rem;color:var(--muted);line-height:1.75}
+.rule-text b{color:#80a8e0}
+
+/* ---- GAME ---- */
+.game{display:flex;flex-direction:column;min-height:100vh;max-width:1100px;margin:0 auto;padding:10px;gap:10px}
+.hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:9px 16px;background:var(--surface);border:1px solid var(--border);border-radius:12px}
+.hdr-title{font-weight:900;font-size:1.15rem;letter-spacing:.1em;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hdr-info{display:flex;gap:18px;font-size:.83rem;color:var(--muted)}
+.hdr-info b{color:var(--text)}
+.cpu-grid{display:grid;gap:10px}
+.cpu-grid.g1{grid-template-columns:1fr}
+.cpu-grid.g2{grid-template-columns:1fr 1fr}
+.cpu-grid.g3{grid-template-columns:1fr 1fr 1fr}
+.parea{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:13px;transition:border-color .3s,box-shadow .3s}
+.parea.cur{border-color:var(--accent);box-shadow:0 0 18px rgba(96,168,255,.18)}
+.parea.bust{opacity:.5}
+.parea.done{border-color:rgba(96,255,176,.35)}
+.phdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap}
+.pname{font-weight:700;font-size:.93rem}
+.tag{font-size:.7rem;padding:2px 9px;border-radius:20px;font-weight:600;white-space:nowrap}
+.tag-cur{background:rgba(96,168,255,.2);color:var(--accent)}
+.tag-pass{background:rgba(96,255,176,.2);color:var(--success)}
+.tag-bust{background:rgba(255,96,96,.2);color:var(--danger)}
+.tag-wait{background:rgba(255,255,255,.07);color:var(--muted)}
+.tag-f7{background:rgba(255,192,96,.2);color:var(--warn)}
+.tag-sc{background:rgba(208,160,64,.2);color:#d0a040;font-size:.65rem;padding:2px 7px}
+.pscore{display:flex;gap:14px;font-size:.78rem;color:var(--muted);margin-bottom:9px;flex-wrap:wrap}
+.pscore b{color:var(--text)}
+.cards-row{display:flex;flex-wrap:wrap;gap:5px;min-height:56px;align-items:center}
+/* cards */
+.c{width:48px;height:68px;border-radius:7px;display:inline-flex;flex-direction:column;
+  align-items:center;justify-content:center;font-weight:800;border-width:1.5px;border-style:solid}
+.cn{background:linear-gradient(160deg,#0d1a35,#0a1220);border-color:#2a5090;color:#80b8ff;font-size:1.1rem}
+.cn[data-v="0"]{border-color:#404050;color:#808090}
+.cn[data-v="1"]{border-color:#2050a0;color:#6090d0}
+.cn[data-v="2"]{border-color:#2060a8;color:#70a0d8}
+.cn[data-v="3"]{border-color:#3060b0;color:#70a8e8}
+.cn[data-v="4"]{border-color:#5030a0;color:#9060d0}
+.cn[data-v="5"]{border-color:#6030a8;color:#a060d8}
+.cn[data-v="6"]{border-color:#7030b0;color:#b070e0}
+.cn[data-v="7"]{border-color:#107888;color:#40c8d8}
+.cn[data-v="8"]{border-color:#1088a0;color:#50d0e8}
+.cn[data-v="9"]{border-color:#10a0b8;color:#60e0f0}
+.cn[data-v="10"]{border-color:#904020;color:#d07040;font-size:.95rem}
+.cn[data-v="11"]{border-color:#a03010;color:#e06030;font-size:.95rem}
+.cn[data-v="12"]{border-color:#c02010;color:#ff7060;font-size:.95rem}
+.cm{background:linear-gradient(160deg,#0d2518,#081510);border-color:#1a7040;color:#60d890;font-size:.75rem;font-weight:900}
+.ca-freeze{background:linear-gradient(160deg,#0d2535,#081520);border-color:#1a7090;color:#60d8f0;font-size:.62rem;text-align:center;line-height:1.3}
+.ca-flip3{background:linear-gradient(160deg,#1a0d35,#100820);border-color:#6030b0;color:#b070f0;font-size:.62rem;text-align:center;line-height:1.3}
+.ca-sc{background:linear-gradient(160deg,#2a1a05,#1a0f02);border-color:#907020;color:#d0a040;font-size:.62rem;text-align:center;line-height:1.3}
+/* human area */
+.human-area{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:15px;transition:border-color .3s,box-shadow .3s}
+.human-area.cur{border-color:var(--accent);box-shadow:0 0 22px rgba(96,168,255,.22)}
+.human-area.bust{opacity:.55}
+.human-area.done{border-color:rgba(96,255,176,.4)}
+.controls{display:flex;gap:10px;margin-top:14px;align-items:center;flex-wrap:wrap}
+.btn-draw{background:linear-gradient(135deg,#1a4a8a,#0d2a5a);border:1.5px solid var(--accent);color:var(--accent);
+  padding:11px 26px;font-size:.97rem;font-weight:700;border-radius:8px;cursor:pointer;
+  letter-spacing:.04em;transition:background .15s}
+.btn-draw:hover:not(:disabled){background:linear-gradient(135deg,#2a6ab0,#1a4a8a)}
+.btn-pass{background:linear-gradient(135deg,#1a4a2a,#0d2a1a);border:1.5px solid var(--success);color:var(--success);
+  padding:11px 26px;font-size:.97rem;font-weight:700;border-radius:8px;cursor:pointer;
+  letter-spacing:.04em;transition:background .15s}
+.btn-pass:hover:not(:disabled){background:linear-gradient(135deg,#2a6a40,#1a4a2a)}
+button:disabled{opacity:.35;cursor:not-allowed}
+.score-hint{font-size:.82rem;color:var(--muted);margin-left:auto}
+.score-hint b{font-size:1.05rem;color:var(--success)}
+/* log */
+.log{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:10px 14px;font-size:.8rem;color:var(--muted);max-height:96px;overflow-y:auto}
+.le{padding:1px 0;line-height:1.55}
+.le-bust{color:var(--danger)}
+.le-f7{color:var(--warn);font-weight:700}
+.le-pass{color:var(--success)}
+.le-act{color:#b070f0}
+
+/* ---- ROUND END ---- */
+.rend{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center}
+.rend-title{font-size:1.9rem;font-weight:900;color:var(--accent);margin-bottom:6px}
+.rtable{width:100%;max-width:500px;border-collapse:collapse;
+  background:rgba(255,255,255,.03);border-radius:10px;overflow:hidden;margin:22px 0}
+.rtable th{color:var(--muted);font-size:.75rem;font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}
+.rtable td{padding:9px 12px;font-size:.92rem}
+.rtable tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+.bar-wrap{width:100%;height:6px;background:rgba(255,255,255,.08);border-radius:3px;margin-top:5px}
+.bar{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .8s ease}
+/* ---- GAME OVER ---- */
+.gover{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center}
+.winner{font-size:clamp(2rem,6vw,4rem);font-weight:900;
+  background:linear-gradient(135deg,#ffc060,#ff9020);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+@media(max-width:600px){.cpu-grid.g2,.cpu-grid.g3{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="app"></div>
+<div id="toast"></div>
+<script>
+/* ==================== BACKGROUND ==================== */
+(function(){
+  const cv=document.getElementById('bg'),cx=cv.getContext('2d');
+  let W,H,pts;
+  function resize(){W=cv.width=innerWidth;H=cv.height=innerHeight}
+  function init(){pts=Array.from({length:55},()=>({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.8+.4,dx:(Math.random()-.5)*.25,dy:-Math.random()*.4-.08,a:Math.random()*.35+.08}))}
+  function draw(){
+    cx.clearRect(0,0,W,H);
+    pts.forEach(p=>{p.x+=p.dx;p.y+=p.dy;if(p.y<-5){p.y=H+5;p.x=Math.random()*W}
+      cx.beginPath();cx.arc(p.x,p.y,p.r,0,Math.PI*2);cx.fillStyle=`rgba(96,168,255,${p.a})`;cx.fill()});
+    requestAnimationFrame(draw)
+  }
+  resize();init();draw();window.addEventListener('resize',()=>{resize();init()})
+})();
+
+/* ==================== DECK ==================== */
+function mkDeck(){
+  const d=[];
+  for(let v=0;v<=12;v++){const n=v===0?1:v;for(let i=0;i<n;i++)d.push({t:'n',v})}
+  [2,4,6,8,10].forEach(v=>d.push({t:'m',v}));
+  d.push({t:'m',v:'x2'});
+  for(let i=0;i<3;i++){d.push({t:'a',n:'freeze'});d.push({t:'a',n:'flip3'});d.push({t:'a',n:'sc'})}
+  return shuffle(d)
+}
+function shuffle(a){const b=[...a];for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]]}return b}
+
+/* ==================== STATE ==================== */
+let G={phase:'setup'};
+
+function mkPlayer(name,isHuman,ai='med'){
+  return{name,isHuman,ai,total:0,nums:[],mods:[],sc:false,bust:false,passed:false,f7:false,rScore:0}
+}
+function resetRound(p){p.nums=[];p.mods=[];p.sc=false;p.bust=false;p.passed=false;p.f7=false;p.rScore=0}
+function isActive(p){return!p.bust&&!p.passed}
+
+function calcScore(p){
+  if(p.bust)return 0;
+  let s=p.nums.reduce((a,v)=>a+v,0),x2=false;
+  p.mods.forEach(m=>{if(m==='x2')x2=true;else s+=m});
+  if(x2)s*=2;
+  if(p.f7)s+=15;
+  return Math.max(0,s)
+}
+
+/* ==================== LOG ==================== */
+function log(msg,type=''){G.log.unshift({msg,type});if(G.log.length>40)G.log.pop()}
+
+/* ==================== INIT ==================== */
+function initGame(np,target){
+  const aiLevels=['safe','med','risky'];
+  const aiNames=['CPU A','CPU B','CPU C'];
+  const players=[mkPlayer('あなた',true)];
+  for(let i=0;i<np-1;i++)players.push(mkPlayer(aiNames[i],false,aiLevels[i]));
+  G={phase:'play',deck:[],players,round:0,cur:0,target,log:[],ft:0,waiting:false};
+  startRound()
+}
+
+function startRound(){
+  G.round++;G.deck=mkDeck();G.players.forEach(resetRound);
+  G.log=[];G.ft=0;G.cur=0;G.waiting=false;
+  log(`=== ラウンド ${G.round} 開始 ===`);
+  beginTurn()
+}
+
+function beginTurn(){
+  render();
+  const p=G.players[G.cur];
+  if(p.isHuman){G.waiting=true;render()}
+  else setTimeout(aiTurn,800)
+}
+
+/* ==================== CARD PROCESSING ==================== */
+// returns: 'ok'|'bust'|'freeze'|'f7'|'ft'
+function processCard(p,card){
+  if(card.t==='n'){
+    if(p.nums.includes(card.v)){
+      if(p.sc){p.sc=false;log(`${p.name}: ✨セカンドチャンス発動！${card.v}を回避`,'act');return'ok'}
+      p.bust=true;log(`${p.name}: 💥バスト！(${card.v}が重複) → 0点`,'bust');return'bust'
+    }
+    p.nums.push(card.v);p.nums.sort((a,b)=>a-b);
+    log(`${p.name}: ${card.v} を取得 (${p.nums.length}枚)`);
+    if(p.nums.length>=7){p.f7=true;p.passed=true;log(`🎉 ${p.name}: FLIP SEVEN！+15ボーナス！`,'f7');return'f7'}
+    return'ok'
+  }
+  if(card.t==='m'){
+    p.mods.push(card.v);
+    log(`${p.name}: 修正 ${card.v==='x2'?'×2':'+'+card.v} 取得`,'act');return'ok'
+  }
+  if(card.t==='a'){
+    if(card.n==='freeze'){p.passed=true;log(`${p.name}: ❄フリーズ！強制パス`,'act');return'freeze'}
+    if(card.n==='flip3'){log(`${p.name}: 🎴フリップスリー！3枚追加ドロー`,'act');return'ft'}
+    if(card.n==='sc'){p.sc=true;log(`${p.name}: ✨セカンドチャンス取得`,'act');return'ok'}
+  }
+  return'ok'
+}
+
+function popCard(){if(G.deck.length===0)return null;return G.deck.pop()}
+
+/* ==================== HUMAN ==================== */
+function humanDraw(){
+  if(!G.waiting)return;
+  G.waiting=false;
+  const p=G.players[G.cur];
+  const card=popCard();
+  if(!card){endRound();return}
+  const r=processCard(p,card);
+  afterDraw(r,true)
+}
+
+function humanPass(){
+  if(!G.waiting)return;
+  G.waiting=false;
+  const p=G.players[G.cur];
+  p.passed=true;log(`${p.name}: パス確定 (${calcScore(p)}点)`,'pass');
+  render();setTimeout(advanceTurn,500)
+}
+
+function afterDraw(r,isHuman){
+  if(r==='f7'){render();showToast('🎉 FLIP SEVEN!','#ffc060');setTimeout(endRound,1600);return}
+  if(r==='bust'){showToast('💥 バスト！','#ff6060');render();setTimeout(advanceTurn,900);return}
+  if(r==='freeze'){render();setTimeout(advanceTurn,700);return}
+  if(r==='ft'){G.ft=3;render();setTimeout(doFlipThree,600);return}
+  render();
+  if(isHuman){G.waiting=true;render()}
+  else setTimeout(aiTurn,800)
+}
+
+/* ==================== FLIP THREE ==================== */
+function doFlipThree(){
+  const p=G.players[G.cur];
+  if(G.ft<=0||p.bust||p.passed){
+    G.ft=0;
+    if(!p.bust&&!p.passed){
+      if(p.isHuman){G.waiting=true;render()}
+      else setTimeout(aiTurn,700)
+    }else{render();setTimeout(advanceTurn,500)}
+    return
+  }
+  const card=popCard();
+  if(!card){G.ft=0;endRound();return}
+  const r=processCard(p,card);G.ft--;
+  if(r==='f7'){G.ft=0;render();showToast('🎉 FLIP SEVEN!','#ffc060');setTimeout(endRound,1600);return}
+  if(r==='bust'||r==='freeze'){
+    G.ft=0;if(r==='bust')showToast('💥 バスト！','#ff6060');
+    render();setTimeout(advanceTurn,900);return
+  }
+  if(r==='ft')G.ft+=3;
+  render();setTimeout(doFlipThree,650)
+}
+
+/* ==================== AI ==================== */
+function aiTurn(){
+  const p=G.players[G.cur];
+  if(!isActive(p)){advanceTurn();return}
+  if(aiDecide(p)){
+    const card=popCard();
+    if(!card){endRound();return}
+    const r=processCard(p,card);
+    afterDraw(r,false)
+  }else{
+    p.passed=true;log(`${p.name}: パス確定 (${calcScore(p)}点)`,'pass');
+    render();setTimeout(advanceTurn,600)
+  }
+}
+
+function aiDecide(p){
+  const dSize=G.deck.length;if(dSize===0)return false;
+  const danger=new Set(p.nums);
+  const bustCards=G.deck.filter(c=>c.t==='n'&&danger.has(c.v)).length;
+  const prob=bustCards/dSize;
+  let thr={safe:.14,med:.27,risky:.43}[p.ai]||.27;
+  const cur=calcScore(p);
+  if(p.total+cur>G.target*.85)thr*=.65;
+  if(p.nums.length<=3&&prob<.25)thr*=1.4;
+  if(p.sc)thr*=1.25;
+  return prob<thr||p.nums.length<2
+}
+
+/* ==================== ADVANCE / END ==================== */
+function advanceTurn(){
+  const active=G.players.filter(isActive);
+  if(active.length===0){endRound();return}
+  let next=(G.cur+1)%G.players.length,tries=0;
+  while(!isActive(G.players[next])){next=(next+1)%G.players.length;if(++tries>G.players.length){endRound();return}}
+  G.cur=next;beginTurn()
+}
+
+function endRound(){
+  G.phase='rend';
+  G.players.forEach(p=>{p.rScore=calcScore(p);p.total+=p.rScore});
+  const winners=G.players.filter(p=>p.total>=G.target);
+  if(winners.length){G.phase='gover';G.winner=winners.reduce((b,p)=>p.total>b.total?p:b)}
+  render()
+}
+
+/* ==================== TOAST ==================== */
+function showToast(msg,col='#60a8ff'){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.style.color=col;t.style.borderColor=col;
+  t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800)
+}
+
+/* ==================== RENDER ==================== */
+function cardHTML_n(v){return`<div class="c cn" data-v="${v}">${v}</div>`}
+function cardHTML_m(m){const d=m==='x2'?'×2':'+'+m;return`<div class="c cm">${d}</div>`}
+function cardHTML_a(n){
+  const mp={freeze:'❄<br>フリーズ',flip3:'🎴<br>フリップ3',sc:'✨<br>セカンド'};
+  return`<div class="c ca-${n}">${mp[n]}</div>`
+}
+function playerCards(p){
+  let h='<div class="cards-row">';
+  p.nums.forEach(v=>h+=cardHTML_n(v));
+  p.mods.forEach(m=>h+=cardHTML_m(m));
+  h+='</div>';return h
+}
+function statusTag(p,idx){
+  if(p.f7)return'<span class="tag tag-f7">🎉FLIP7!</span>';
+  if(p.bust)return'<span class="tag tag-bust">💥バスト</span>';
+  if(p.passed)return'<span class="tag tag-pass">✓パス</span>';
+  if(idx===G.cur)return'<span class="tag tag-cur">▶ターン</span>';
+  return'<span class="tag tag-wait">待機中</span>';
+}
+function areaClass(p,idx){
+  let c='parea';
+  if(idx===G.cur&&isActive(p))c+=' cur';
+  if(p.bust)c+=' bust';
+  if(p.passed&&!p.bust)c+=' done';
+  return c
+}
+
+function render(){
+  const app=document.getElementById('app');
+  if(G.phase==='setup'){app.innerHTML=renderSetup();return}
+  if(G.phase==='gover'){app.innerHTML=renderGameOver();return}
+  if(G.phase==='rend'){app.innerHTML=renderRoundEnd();return}
+  app.innerHTML=renderGame()
+}
+
+function renderSetup(){return`
+<div class="setup">
+  <div class="setup-title">FLIP SEVEN</div>
+  <div class="setup-sub">Push Your Luck — 7枚で役を揃えろ</div>
+  <div class="glass">
+    <div class="row"><label>プレイヤー数</label>
+      <select id="pCount">
+        <option value="2">2人（CPU×1）</option>
+        <option value="3">3人（CPU×2）</option>
+        <option value="4" selected>4人（CPU×3）</option>
+      </select></div>
+    <div class="row"><label>勝利点数</label>
+      <select id="tScore">
+        <option value="100">100点（短め）</option>
+        <option value="200" selected>200点（標準）</option>
+        <option value="300">300点（長め）</option>
+      </select></div>
+  </div>
+  <div class="glass rule-text">
+    <b>ルール</b><br>
+    カードを引いて手札を増やせ。同じ数字が出たら<b style="color:var(--danger)">バスト（0点）</b>。<br>
+    7種類の異なる数字を揃えたら <b style="color:var(--warn)">FLIP SEVEN（+15ボーナス）</b>。<br>
+    先に目標点数に達したプレイヤーの勝利。<br><br>
+    <b>特殊カード</b>　❄フリーズ: 強制パス　🎴フリップ3: 3枚連続ドロー　✨セカンドチャンス: バスト1回防止<br><br>
+    <b>キー操作</b>　Space / → = ドロー　Enter / ← = パス
+  </div>
+  <button class="btn" onclick="startGame()">ゲーム開始</button>
+</div>`}
+
+function renderGame(){
+  const me=G.players[0],cpus=G.players.slice(1);
+  const myTurn=G.cur===0&&G.waiting;
+  const gc=['g1','g2','g3'][cpus.length-1]||'g1';
+  const myScore=calcScore(me);
+  const cpuHTML=cpus.map((p,i)=>{
+    const idx=i+1,rs=calcScore(p);
+    return`<div class="${areaClass(p,idx)}">
+      <div class="phdr">
+        <span class="pname">${p.name}</span>${statusTag(p,idx)}
+        ${p.sc?'<span class="tag tag-sc">✨SC</span>':''}
+      </div>
+      <div class="pscore">
+        <span>合計 <b>${p.total}</b>点</span>
+        <span>今回 <b style="color:${p.bust?'var(--danger)':'var(--success)'}">${p.bust?0:rs}</b>点</span>
+      </div>
+      ${playerCards(p)}
+    </div>`}).join('');
+  const logHTML=G.log.slice(0,8).map(e=>`<div class="le le-${e.type}">${e.msg}</div>`).join('');
+  const myAreaClass='human-area'+(myTurn?' cur':me.bust?' bust':me.passed?' done':'');
+  return`<div class="game">
+    <div class="hdr">
+      <span class="hdr-title">FLIP SEVEN</span>
+      <div class="hdr-info">
+        <span>ラウンド <b>${G.round}</b></span>
+        <span>山札 <b>${G.deck.length}</b>枚</span>
+        <span>目標 <b>${G.target}</b>点</span>
+      </div>
+    </div>
+    <div class="cpu-grid ${gc}">${cpuHTML}</div>
+    <div class="${myAreaClass}">
+      <div class="phdr">
+        <span class="pname" style="font-size:1rem">あなた</span>${statusTag(me,0)}
+        ${me.sc?'<span class="tag tag-sc">✨SC</span>':''}
+      </div>
+      <div class="pscore">
+        <span>合計 <b style="font-size:1.05rem">${me.total}</b>点</span>
+        <span>今回 <b style="font-size:1.05rem;color:${me.bust?'var(--danger)':'var(--success)'}">${me.bust?0:myScore}</b>点</span>
+      </div>
+      ${playerCards(me)}
+      ${myTurn?`<div class="controls">
+        <button class="btn-draw" onclick="humanDraw()">ドロー 🎴</button>
+        <button class="btn-pass" onclick="humanPass()">パス ✓</button>
+        <div class="score-hint">確定: <b>${myScore}</b>点</div>
+      </div>`:`<div style="margin-top:12px;color:var(--muted);font-size:.83rem">
+        ${me.bust?'💥 バスト':me.passed?'✓ パス確定':'CPUのターン中...'}
+      </div>`}
+    </div>
+    <div class="log">${logHTML||'<div class="le">ゲーム開始！</div>'}</div>
+  </div>`
+}
+
+function renderRoundEnd(){
+  const sorted=[...G.players].sort((a,b)=>b.rScore-a.rScore);
+  const f7p=G.players.find(p=>p.f7);
+  const rows=sorted.map(p=>`<tr>
+    <td style="font-weight:700">${p.f7?'🎉 ':p.bust?'💥 ':''}${p.name}</td>
+    <td style="color:var(--muted);font-size:.78rem">${p.nums.join(', ')||'—'}</td>
+    <td style="color:var(--muted);font-size:.78rem">${p.mods.map(m=>m==='x2'?'×2':'+'+m).join(' ')||'—'}</td>
+    <td style="text-align:right;font-weight:700;color:${p.rScore>0?'var(--success)':'var(--danger)'}">
+      ${p.rScore>0?'+':''}${p.rScore}</td>
+    <td style="text-align:right;font-weight:700">${p.total}</td>
+  </tr>`).join('');
+  const bars=G.players.map(p=>`<div style="margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:3px">
+      <span>${p.name}</span><span><b>${p.total}</b> / ${G.target}</span>
+    </div>
+    <div class="bar-wrap"><div class="bar" style="width:${Math.min(100,(p.total/G.target)*100)}%"></div></div>
+  </div>`).join('');
+  return`<div class="rend">
+    <div class="rend-title">${f7p?`🎉 FLIP SEVEN — ${f7p.name}！`:`ラウンド ${G.round} 終了`}</div>
+    <p style="color:var(--muted);margin-bottom:20px;font-size:.88rem">全プレイヤーがパスまたはバスト</p>
+    <table class="rtable">
+      <thead><tr>
+        <th>名前</th><th>数字</th><th>修正</th>
+        <th style="text-align:right">取得</th><th style="text-align:right">累計</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="width:100%;max-width:480px;margin-bottom:26px">${bars}</div>
+    <button class="btn" onclick="startRound()">次のラウンドへ →</button>
+  </div>`
+}
+
+function renderGameOver(){
+  const w=G.winner||G.players.reduce((b,p)=>p.total>b.total?p:b);
+  const sorted=[...G.players].sort((a,b)=>b.total-a.total);
+  const medals=['🥇','🥈','🥉','4th'];
+  return`<div class="gover">
+    <div style="font-size:1.1rem;color:var(--muted);margin-bottom:8px">🏆 ゲーム終了</div>
+    <div class="winner">${w.name} の勝利！</div>
+    <div style="font-size:1.05rem;color:var(--text);margin:10px 0 30px">${w.total}点</div>
+    <div style="width:100%;max-width:400px;margin-bottom:30px">
+      ${sorted.map((p,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;
+        padding:11px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+        <span style="color:${i===0?'var(--warn)':'var(--muted)'}">${medals[i]} ${p.name}</span>
+        <span style="font-weight:700;font-size:1.05rem">${p.total}点</span>
+      </div>`).join('')}
+    </div>
+    <button class="btn" onclick="location.reload()">もう一度プレイ</button>
+  </div>`
+}
+
+/* ==================== EVENTS ==================== */
+function startGame(){
+  const np=parseInt(document.getElementById('pCount').value);
+  const ts=parseInt(document.getElementById('tScore').value);
+  initGame(np,ts)
+}
+
+document.addEventListener('keydown',e=>{
+  if(G.phase==='play'&&G.waiting){
+    if(e.code==='Space'||e.code==='ArrowRight'){e.preventDefault();humanDraw()}
+    if(e.code==='Enter'||e.code==='ArrowLeft'){e.preventDefault();humanPass()}
+  }
+  if(G.phase==='rend'&&e.code==='Enter'){e.preventDefault();startRound()}
+})
+
+render()
+</script>
+</body>
+</html>
