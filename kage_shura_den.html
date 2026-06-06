@@ -68,7 +68,9 @@
   <div id="caption">
     <span class="ttl">影修羅伝 — KAGE SHURA DEN</span><br>
     <b>STAGE 1：月夜の竹林 / Moonlit Bamboo Grove</b><br>
-    ← → / A D：移動 Move　｜　SPACE / Z / ↑：超大跳躍 Great Leap（長押しで高く / hold to jump higher）　｜　ENTER：一時停止 Pause
+    ← → / A D：移動 Move　｜　SPACE / Z / ↑：超大跳躍 Great Leap（長押しで高く / hold for higher）<br>
+    X / J：斬撃 Slash　｜　C / K：必殺・不動明王の炎 Special（明王ゲージ満タンで / when KI is full）　｜　ENTER：一時停止 Pause　｜　M：消音 Mute<br>
+    敵を踏んでも倒せる Stomp foes from above／竹の足場には跳ね竹・落ちる竹あり spring &amp; falling bamboo
   </div>
 
 <script>
@@ -108,6 +110,8 @@ function pollGamepad(){
     'ArrowUp':    !!(b[12]?.pressed || ax[1] < -DZ),
     'Space':      !!(b[0]?.pressed),
     'KeyZ':       !!(b[0]?.pressed),
+    'GP_attack':  !!(b[2]?.pressed),
+    'GP_special': !!(b[3]?.pressed),
     'Enter':      !!(b[9]?.pressed),
   };
   for(const [code,pressed] of Object.entries(map)){
@@ -127,6 +131,8 @@ function isJustPressed(code){ if(keyPress[code]){ keyPress[code]=false; return t
 function isConfirmPressed(){ return isJustPressed('Space')||isJustPressed('KeyZ')||isJustPressed('Enter'); }
 function jumpHeld(){ return keys.Space || keys.KeyZ || keys.ArrowUp; }
 function moveAxisInput(){ return (keys.ArrowRight||keys.KeyD?1:0) - (keys.ArrowLeft||keys.KeyA?1:0); }
+function attackPressed(){ return isJustPressed('KeyX')||isJustPressed('KeyJ')||isJustPressed('GP_attack'); }
+function specialPressed(){ return isJustPressed('KeyC')||isJustPressed('KeyK')||isJustPressed('GP_special'); }
 
 // ---------- タッチUI / Touch controls ----------
 (function setupTouch(){
@@ -237,23 +243,34 @@ const stage = {
   goal:  { x: 3110, y: 260, w: 22, h: 120 },
   platforms: [
     // type: ground(竹林の地面) / bamboo(竹の横足場) / branch(細枝=oneway)
+    //       spring(跳ね竹) / falling(踏むと落ちる竹)
     { x:0,    y:432, w:560, h:48, type:'ground' },
     { x:620,  y:372, w:70,  h:12, type:'bamboo' },
     { x:760,  y:312, w:64,  h:12, type:'bamboo', oneway:true },
     { x:910,  y:252, w:80,  h:12, type:'branch', oneway:true },
-    { x:1080, y:330, w:64,  h:12, type:'bamboo' },
+    { x:1080, y:330, w:64,  h:12, type:'spring' },               // 跳ね竹 / spring
     { x:1230, y:268, w:64,  h:12, type:'branch', oneway:true },
-    { x:1360, y:200, w:72,  h:12, type:'branch', oneway:true },
-    { x:1520, y:300, w:90,  h:14, type:'bamboo' },
+    { x:1360, y:170, w:72,  h:12, type:'branch', oneway:true },
+    { x:1520, y:300, w:90,  h:14, type:'falling' },              // 落ちる竹 / falling
     { x:1680, y:392, w:220, h:88, type:'ground' },
     { x:1980, y:330, w:64,  h:12, type:'bamboo', oneway:true },
-    { x:2120, y:262, w:64,  h:12, type:'branch', oneway:true },
+    { x:2120, y:262, w:64,  h:12, type:'falling' },              // 落ちる竹 / falling
     { x:2270, y:196, w:76,  h:12, type:'branch', oneway:true },
-    { x:2440, y:270, w:70,  h:12, type:'bamboo' },
+    { x:2440, y:270, w:70,  h:12, type:'spring' },               // 跳ね竹 / spring
     { x:2600, y:344, w:80,  h:12, type:'bamboo', oneway:true },
     { x:2760, y:392, w:200, h:88, type:'ground' },
     { x:3010, y:300, w:64,  h:12, type:'branch', oneway:true },
     { x:3080, y:380, w:160, h:100, type:'ground' },
+  ],
+  // 敵配置 / enemy spawns — type: bandit(地上の野盗) / yokai(浮遊する物の怪)
+  enemies: [
+    { x:360,  y:400, type:'bandit' },
+    { x:1180, y:300, type:'yokai'  },
+    { x:1760, y:360, type:'bandit' },
+    { x:1820, y:360, type:'bandit' },
+    { x:2150, y:210, type:'yokai'  },
+    { x:2820, y:360, type:'bandit' },
+    { x:2900, y:300, type:'yokai'  },
   ],
 };
 let platforms = stage.platforms;
@@ -277,7 +294,7 @@ const PHYS = {
   MOVE_ACCEL:0.7, MOVE_MAX:2.6, FRICTION:0.78, AIR_FRICTION:0.90,
   JUMP_V:-9.6, JUMP_CUT:0.45, COYOTE_MAX:6, BUFFER_MAX:6,
 };
-const ANIM_SPEED = { idle:18, run:5, jump:99, fall:99 };
+const ANIM_SPEED = { idle:18, run:5, jump:99, fall:99, attack:99, special:99, hurt:99 };
 
 // ---------- プレイヤー（忍者） / Player (ninja) ----------
 class Player {
@@ -288,13 +305,37 @@ class Player {
     this.onGround=false; this.coyote=0; this.jumpBuffer=0;
     this.state='idle'; this.animFrame=0; this.animTimer=0;
     this.hp=3; this.maxHp=3; this.invuln=0;
-    this.spirit=0; // 明王の力ゲージ（拡張用） / mantra-king spirit gauge (future use)
+    this.spirit=0; // 明王の力ゲージ / mantra-king spirit gauge
     this.wasFalling=false;
+    this.attackTimer=0; this.attackCD=0; this.hurtTimer=0;
+    this.specialTimer=0; this.swingHits=null;
   }
   update(){
+    // --- 必殺発動 special (consumes full spirit) ---
+    if(specialPressed() && this.spirit>=100 && this.specialTimer<=0) triggerSpecial();
+    if(this.specialTimer>0) this.specialTimer--;
+
+    // --- 斬撃 attack ---
+    if(this.attackCD>0) this.attackCD--;
+    if(this.attackTimer>0) this.attackTimer--;
+    if(attackPressed() && this.attackCD<=0 && this.specialTimer<=0){
+      this.attackTimer=14; this.attackCD=22; this.swingHits=new Set();
+      spawnParticles(this.x+(this.dir==='right'?this.w+6:-6), this.y+this.h*0.4, '#d9d2c2', 4, 1.2, 1.6, 12);
+      triggerShake(1.5,4); playSFX('slash');
+    }
+    // 攻撃判定（発生フレーム中のみ） attack hitbox active window
+    if(this.attackTimer>=6 && this.swingHits){
+      const hb = this.attackBox();
+      for(const e of enemies){
+        if(e.dead || this.swingHits.has(e)) continue;
+        if(aabb(hb,e)){ e.takeDamage(1, this.x); this.swingHits.add(e); }
+      }
+    }
+
     // --- 横移動 horizontal ---
     const ix = moveAxisInput();
-    if(ix){ this.vx += ix*PHYS.MOVE_ACCEL; this.dir = ix>0?'right':'left'; }
+    if(this.hurtTimer>0){ this.hurtTimer--; } // ノックバック中は操作減衰
+    else if(ix){ this.vx += ix*PHYS.MOVE_ACCEL; this.dir = ix>0?'right':'left'; }
     this.vx *= this.onGround ? PHYS.FRICTION : PHYS.AIR_FRICTION;
     this.vx = clamp(this.vx, -PHYS.MOVE_MAX, PHYS.MOVE_MAX);
     if(Math.abs(this.vx) < 0.02) this.vx = 0;
@@ -318,58 +359,222 @@ class Player {
     this.wasFalling = this.vy > 1.5;
 
     // --- 軸分離移動＋AABB axis-separated movement ---
-    this.moveAxis('x', this.vx);
+    resolveSolids(this, 'x', this.vx);
     const wasGround = this.onGround;
     this.onGround = false;
-    this.moveAxis('y', this.vy);
-    if(this.onGround && !wasGround && this.wasFalling){
+    const landed = resolveSolids(this, 'y', this.vy);
+    if(this.onGround){ this.coyote=PHYS.COYOTE_MAX; }
+    if(landed) this.onLanded(landed, wasGround);
+
+    if(this.invuln>0) this.invuln--;
+    this.updateState(ix);
+    if(this.spirit < 100) this.spirit += 0.06;
+  }
+  attackBox(){
+    const reach=14, h=12;
+    return { x: this.dir==='right' ? this.x+this.w-2 : this.x-reach+2, y:this.y+1, w:reach, h:h };
+  }
+  onLanded(p, wasGround){
+    // ギミック竹 gimmick platforms
+    if(p.type==='spring'){
+      this.vy = -14; this.onGround=false; this.coyote=0;
+      spawnParticles(this.x+this.w/2, this.y+this.h, '#5fa048', 8, 1.4, 2.2, 16);
+      triggerShake(2,6); playSFX('spring');
+      return;
+    }
+    if(p.type==='falling' && p.fstate==='idle'){ p.fstate='shaking'; p.timer=42; }
+    if(!wasGround && this.wasFalling){
       spawnJumpDust(this.x+this.w/2, this.y+this.h);
       if(Math.random()<0.6) ambient.push({ x:this.x+rnd(0,this.w), y:this.y+this.h, vx:0, vy:-0.2,
         life:60, maxLife:60, kind:'firefly', size:2, color:'#9fd8e8' });
       playSFX('land');
     }
-    if(this.invuln>0) this.invuln--;
-    this.updateState(ix);
-    if(this.spirit < 100) this.spirit += 0.08;
   }
-  moveAxis(axis, amt){
-    const prevBottom = this.y + this.h; // for one-way
-    if(axis==='x') this.x += amt; else this.y += amt;
-    for(const p of platforms){
-      if(!aabb(this,p)) continue;
-      if(axis==='x'){
-        if(p.oneway) continue; // ワンウェイは横では止めない
-        if(amt>0) this.x = p.x - this.w; else if(amt<0) this.x = p.x + p.w;
-        this.vx = 0;
-      } else {
-        if(p.oneway){
-          // 下降中かつ直前は足場上端より上にいた場合のみ着地
-          if(!(amt>0 && prevBottom <= p.y + 1)) continue;
-          this.y = p.y - this.h; this.vy=0; this.onGround=true; this.coyote=PHYS.COYOTE_MAX;
-        } else if(amt>0){
-          this.y = p.y - this.h; this.vy=0; this.onGround=true; this.coyote=PHYS.COYOTE_MAX;
-        } else {
-          this.y = p.y + p.h; this.vy=0;
-        }
-      }
-    }
+  hurt(dir){
+    if(this.invuln>0) return;
+    this.hp--; this.invuln=70; this.hurtTimer=16;
+    this.vx = dir*2.4; this.vy = -3.2;
+    triggerShake(4,12); playSFX('hurt');
+    spawnParticles(this.x+this.w/2, this.y+this.h/2, '#c0303a', 8, 1.4, 2, 18);
+    if(this.hp<=0){ gameState='GAMEOVER'; stopBgm(); playSFX('over'); }
   }
   updateState(ix){
     let st;
-    if(!this.onGround) st = this.vy < 0 ? 'jump' : 'fall';
+    if(this.specialTimer>0) st='special';
+    else if(this.attackTimer>0) st='attack';
+    else if(this.hurtTimer>0) st='hurt';
+    else if(!this.onGround) st = this.vy < 0 ? 'jump' : 'fall';
     else st = Math.abs(this.vx) > 0.3 ? 'run' : 'idle';
     if(st !== this.state){ this.state = st; this.animTimer=0; this.animFrame=0; }
     if(++this.animTimer >= ANIM_SPEED[this.state]){ this.animTimer=0; this.animFrame++; }
   }
   draw(){
-    if(this.invuln>0 && this.invuln%6 < 3) return; // 点滅 blink
-    drawNinja(Math.round(this.x-camera.x), Math.round(this.y-camera.y), this.dir, this.state, this.animFrame);
+    if(this.invuln>0 && this.invuln%6 < 3 && this.specialTimer<=0) return; // 点滅 blink
+    const px = Math.round(this.x-camera.x), py = Math.round(this.y-camera.y);
+    // 斬撃エフェクト slash arc
+    if(this.attackTimer>=6){
+      const t = (14-this.attackTimer)/8;
+      const hb = this.attackBox();
+      ctx.globalAlpha = 0.8*(1-t);
+      ctx.strokeStyle = '#eef2f6'; ctx.lineWidth = 2;
+      const cx = Math.round((this.dir==='right'?this.x+this.w:this.x)-camera.x);
+      const cy = Math.round(this.y+this.h/2-camera.y);
+      ctx.beginPath();
+      const a0 = this.dir==='right' ? -1.1 : Math.PI+1.1;
+      const a1 = this.dir==='right' ? 1.1 : Math.PI-1.1;
+      ctx.arc(cx, cy, 13, lerp(a0,a1,t), lerp(a0,a1,t)+0.5*(this.dir==='right'?1:-1));
+      ctx.stroke();
+      ctx.globalAlpha = 1; ctx.lineWidth = 1;
+    }
+    drawNinja(px, py, this.dir, this.state, this.animFrame);
   }
 }
 
-// ---------- 拡張フック（必殺・敵） / Extension hooks (future) ----------
-function triggerSpecial(){ /* 明王の必殺技 — 次段階で実装 / mantra-king special, TODO */ }
-const enemies = []; // class Enemy{} — 次段階 / future
+// ---------- 共有物理: 固体/ワンウェイ衝突 / Shared collision ----------
+// passthrough（上からのみ着地、横/下は素通り）: oneway / spring / falling / branch
+function isPassThrough(p){ return p.oneway || p.type==='spring' || p.type==='falling'; }
+function platSolidNow(p){ return !(p.type==='falling' && (p.fstate==='falling' || p.fstate==='gone')); }
+// e に onGround を設定し、着地した platform を返す（無ければ null）
+function resolveSolids(e, axis, amt, allowDrop){
+  const prevBottom = (axis==='y') ? (e.y + e.h - amt) : (e.y + e.h);
+  if(axis==='x') e.x += amt; else e.y += amt;
+  let landed = null;
+  for(const p of platforms){
+    if(!platSolidNow(p)) continue;
+    if(!aabb(e,p)) continue;
+    if(axis==='x'){
+      if(isPassThrough(p)) continue; // 横では止めない
+      if(amt>0) e.x = p.x - e.w; else if(amt<0) e.x = p.x + p.w;
+      e.vx = 0;
+    } else {
+      if(isPassThrough(p)){
+        if(!(amt>0 && prevBottom <= p.y + 1)) continue; // 上から降下中のみ着地
+      }
+      if(amt>0){ e.y = p.y - e.h; e.vy=0; e.onGround=true; landed=p; }
+      else { e.y = p.y + p.h; e.vy=0; }
+    }
+  }
+  return landed;
+}
+
+// ---------- 必殺技（不動明王の炎） / Special: Acala's flame ----------
+let flashTimer = 0; // 画面フラッシュ残フレーム
+function triggerSpecial(){
+  if(player.spirit < 100) return;
+  player.spirit = 0;
+  player.specialTimer = 26; player.attackTimer = 0;
+  flashTimer = 14; triggerShake(6,18); playSFX('special');
+  const cx = player.x+player.w/2, cy = player.y+player.h/2;
+  // 炎パーティクル flame burst
+  for(let i=0;i<46;i++) spawnParticles(cx, cy, (i%2)?'#e9663a':'#ffd24a', 1, 1.7, 3.2, 26+Math.random()*14);
+  // 広範囲一掃 wide AoE
+  for(const e of enemies){
+    if(e.dead) continue;
+    if(Math.hypot((e.x+e.w/2)-cx, (e.y+e.h/2)-cy) < 96) e.takeDamage(99, player.x);
+  }
+}
+
+// ---------- 敵 / Enemies ----------
+const enemies = [];
+const ENEMY_DEF = {
+  bandit: { w:13, h:14, hp:2, speed:0.6, gravity:true,  sight:140 },
+  yokai:  { w:12, h:14, hp:1, speed:0.55, gravity:false, sight:200 },
+};
+class Enemy {
+  constructor(x,y,type){
+    const d = ENEMY_DEF[type] || ENEMY_DEF.bandit;
+    this.type=type; this.x=x; this.y=y; this.w=d.w; this.h=d.h;
+    this.vx=0; this.vy=0; this.dir=-1; this.onGround=false;
+    this.hp=d.hp; this.def=d; this.dead=false; this.hitFlash=0;
+    this.t = Math.random()*Math.PI*2; this.homeY = y;
+  }
+  update(){
+    if(this.dead) return;
+    if(this.hitFlash>0) this.hitFlash--;
+    const d = this.def;
+    const dx = (player.x+player.w/2) - (this.x+this.w/2);
+    const dist = Math.abs(dx);
+    if(this.type==='bandit'){
+      // 視界内なら追跡、外なら巡回 chase or patrol
+      if(dist < d.sight) this.dir = dx>0?1:-1;
+      this.vx = this.dir * d.speed;
+      this.vy = Math.min(this.vy + PHYS.GRAVITY, PHYS.MAX_FALL);
+      resolveSolids(this, 'x', this.vx);
+      this.onGround=false;
+      resolveSolids(this, 'y', this.vy);
+      // 崖際で反転（巡回時のみ） turn at ledge
+      if(this.onGround && dist >= d.sight){
+        const aheadX = this.dir>0 ? this.x+this.w+2 : this.x-2;
+        if(!groundBelow(aheadX, this.y+this.h+2)) this.dir *= -1;
+      }
+      // 壁で反転 turn at wall
+      if(this.vx===0 && this.onGround) this.dir *= -1;
+    } else { // yokai: 浮遊して緩やかに接近 float & drift toward player
+      this.t += 0.05;
+      this.dir = dx>0?1:-1;
+      const tx = (dist < d.sight) ? this.dir*d.speed : 0;
+      this.vx = lerp(this.vx, tx, 0.04);
+      this.x += this.vx;
+      this.y = this.homeY + Math.sin(this.t)*10 - (dist<d.sight? clamp((player.y-this.homeY)*0.02,-14,14) : 0);
+    }
+    // プレイヤー接触 contact with player
+    if(aabb(this, player)){
+      const stomping = player.vy > 1.2 && (player.y + player.h - player.vy) <= this.y + 4;
+      if(stomping){ this.takeDamage(99, this.x); player.vy = -6; player.coyote=0; playSFX('stomp'); }
+      else player.hurt(dx>0?-1:1);
+    }
+  }
+  takeDamage(dmg, fromX){
+    if(this.dead) return;
+    this.hp -= dmg; this.hitFlash = 6;
+    spawnParticles(this.x+this.w/2, this.y+this.h/2, '#c0303a', 5, 1.2, 1.8, 14);
+    if(this.hp <= 0){
+      this.dead = true;
+      spawnParticles(this.x+this.w/2, this.y+this.h/2, this.type==='yokai'?'#9fd8e8':'#7a1f26', 12, 1.6, 2.4, 22);
+      for(let i=0;i<2;i++) ambient.push({ x:this.x+rnd(0,this.w), y:this.y+rnd(0,this.h), vx:rnd(-0.2,0.2), vy:-0.3,
+        life:80, maxLife:80, kind:'firefly', size:2, color:'#9fd8e8' });
+      player.spirit = clamp(player.spirit + 25, 0, 100);
+      triggerShake(2,6); playSFX('enemyDown');
+    }
+  }
+  draw(){
+    if(this.dead) return;
+    drawEnemy(this);
+  }
+}
+// 指定点の少し下に固体足場があるか（崖検知） solid ground just below a point
+function groundBelow(wx, wy){
+  for(const p of platforms){ if(!platSolidNow(p)) continue;
+    if(wx >= p.x && wx <= p.x+p.w && wy >= p.y && wy <= p.y+8) return true; }
+  return false;
+}
+function updateEnemies(){
+  for(let i=enemies.length-1;i>=0;i--){
+    const e = enemies[i];
+    e.update();
+    if(e.dead) enemies.splice(i,1);
+  }
+}
+
+// ---------- ギミック竹の状態管理 / Gimmick platform state ----------
+function initPlatforms(){
+  for(const p of platforms){
+    if(p.type==='falling'){ p.origY = p.y; p.fstate='idle'; p.timer=0; }
+  }
+}
+function updatePlatforms(){
+  for(const p of platforms){
+    if(p.type!=='falling') continue;
+    if(p.fstate==='shaking'){
+      if(--p.timer<=0){ p.fstate='falling'; p.vy=0; }
+    } else if(p.fstate==='falling'){
+      p.vy = Math.min((p.vy||0)+0.5, 10); p.y += p.vy;
+      if(p.y > stage.h + 60){ p.fstate='gone'; p.timer=150; }
+    } else if(p.fstate==='gone'){
+      if(--p.timer<=0){ p.y = p.origY; p.vy=0; p.fstate='idle'; }
+    }
+  }
+}
 
 // ---------- ドット忍者スプライト / Procedural ninja sprite ----------
 // パレット参照グリッド（16x16基準、見た目）/ palette grid
@@ -524,6 +729,60 @@ const NINJA = {
     "....kk....kk....",
     "................",
   ]],
+  attack: [[
+    "................",
+    "......kkkk......",
+    ".....kddddk.....",
+    ".....krmmrk.....",
+    ".....kseesk.....",
+    ".....kddddk.....",
+    "......kkkk..s...",
+    ".....kkkkkksss..",  // 刀を前へ blade thrust
+    "....kkmkkmkksss.",
+    "....kkmkkmkk.s..",
+    "....k.kkkk.k....",
+    "......kkkk......",
+    ".....kk..kk.....",
+    "....kk....kk....",
+    "...kk......kk...",
+    "................",
+  ]],
+  special: [[
+    ".......oo.......",
+    "...o..kkkk..o...",
+    "...o.kddddk.o...",
+    "..o..krrrrk..o..",  // 明王の怒り crimson rage
+    "....rkseeskr....",
+    "...o.kddddk.o...",
+    "..o.k.kkkk.k.o..",
+    "..kkkkkkkkkkk...",
+    "...kkmrrmkk.....",
+    "....kkrrkk.o....",
+    "..o.k.kkkk.k....",
+    "......kkkk......",
+    ".....kk..kk.....",
+    "....kk....kk....",
+    "...kk......kk...",
+    "................",
+  ]],
+  hurt: [[
+    "................",
+    ".....kkkk.......",
+    "....kddddk......",
+    "....krmmrk......",
+    "....ksseesk.....",
+    "....kddddk......",
+    ".....kkkk.......",
+    "...kkkkkkk......",
+    "..kkmkkmkk......",
+    "...kkmkkmkk.....",
+    "...k.kkkk.k.....",
+    ".....kkkk.......",
+    ".....kk.kk......",
+    "....kk...kk.....",
+    "...kk.....kk....",
+    "................",
+  ]],
 };
 function drawSpriteGrid(grid, px, py, flip){
   const n = grid.length;
@@ -548,6 +807,42 @@ function drawNinja(px, py, dir, state, frame){
   ctx.fillRect(ox+3, oy+1, 10, 7);
   ctx.globalAlpha = 1;
   drawSpriteGrid(grid, ox, oy, dir==='left');
+}
+
+// ---------- 敵スプライト（手続き描画） / Enemy sprites ----------
+function drawEnemy(e){
+  const x = Math.round(e.x-camera.x), y = Math.round(e.y-camera.y);
+  if(x > BASE_W+20 || x+e.w < -20) return;
+  const flash = e.hitFlash>0 && e.hitFlash%2===0;
+  if(e.type==='bandit'){
+    // 笠をかぶった野盗 bandit with straw hat
+    ctx.fillStyle = flash ? '#ffffff' : '#26211a';
+    ctx.fillRect(x+1, y+5, e.w-2, e.h-5);           // 胴 body
+    ctx.fillStyle = flash ? '#ffffff' : '#3a3228';
+    ctx.fillRect(x-1, y+2, e.w+2, 4);               // 笠 hat brim
+    ctx.fillRect(x+e.w/2-2, y, 4, 3);               // 笠の頂 hat top
+    ctx.fillStyle = flash ? '#ffffff' : '#7a1f26';
+    ctx.fillRect(x+2, y+7, e.w-4, 2);               // 帯 sash (dark red)
+    // 眼光 eye glow
+    ctx.fillStyle = '#e8d27a'; ctx.fillRect(e.dir>0?x+e.w-3:x+2, y+5, 1, 1);
+    // 刀 blade
+    ctx.fillStyle = '#9aa0a8';
+    if(e.dir>0) ctx.fillRect(x+e.w, y+8, 5, 1); else ctx.fillRect(x-5, y+8, 5, 1);
+  } else { // yokai: 提灯お化け floating lantern-ghost
+    ctx.globalCompositeOperation='lighter';
+    ctx.globalAlpha = 0.5 + 0.3*Math.sin(e.t*2);
+    ctx.fillStyle = '#3a6c8c';
+    ctx.fillRect(x-2, y-2, e.w+4, e.h+4);
+    ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
+    ctx.fillStyle = flash ? '#ffffff' : '#1c2e3a';  // 提灯本体 lantern body
+    ctx.fillRect(x+1, y+1, e.w-2, e.h-3);
+    ctx.fillStyle = flash ? '#ffffff' : '#0d1820';
+    ctx.fillRect(x, y+4, e.w, 1); ctx.fillRect(x, y+8, e.w, 1); // 骨組み ribs
+    // 不気味な眼と口 eerie face
+    ctx.fillStyle = '#9fd8e8';
+    ctx.fillRect(x+3, y+4, 2, 2); ctx.fillRect(x+e.w-5, y+4, 2, 2);
+    ctx.fillStyle = '#c0303a'; ctx.fillRect(x+4, y+9, e.w-8, 2);
+  }
 }
 
 // ---------- 多層パララックス背景 / Parallax layers ----------
@@ -645,7 +940,8 @@ function drawBambooField(ox, oy, count, color, thick, alpha){
 // ---------- 足場描画 / Platforms ----------
 function drawPlatforms(){
   for(const p of platforms){
-    const x = Math.round(p.x - camera.x), y = Math.round(p.y - camera.y);
+    if(p.type==='falling' && p.fstate==='gone') continue; // 落下消滅中は描かない
+    let x = Math.round(p.x - camera.x), y = Math.round(p.y - camera.y);
     if(x > BASE_W || x+p.w < 0) continue;
     if(p.type==='ground'){
       // 苔むした土 + 竹の根本 mossy ground
@@ -659,6 +955,21 @@ function drawPlatforms(){
       ctx.fillStyle = '#4f8c3c'; ctx.fillRect(x, y, p.w, 3);
       ctx.fillStyle = '#244a1c'; ctx.fillRect(x, y+p.h-3, p.w, 3);
       ctx.fillStyle = '#5fa048'; for(let nx=x+6; nx<x+p.w; nx+=16){ ctx.fillRect(nx, y, 2, p.h); } // 節
+    } else if(p.type==='spring'){
+      // 跳ね竹（しなる若竹） springy young bamboo
+      ctx.fillStyle = '#2f7a3a'; ctx.fillRect(x, y, p.w, p.h);
+      ctx.fillStyle = '#7fe06a'; ctx.fillRect(x, y, p.w, 2);           // 鮮やかな上端
+      ctx.fillStyle = '#1c5226'; ctx.fillRect(x, y+p.h-3, p.w, 3);
+      ctx.fillStyle = '#b6f59a';                                       // 反発マーク ▲▲
+      for(let ax=x+4; ax<x+p.w-3; ax+=12){ ctx.fillRect(ax+1, y+3, 2,1); ctx.fillRect(ax, y+4, 4,1); }
+    } else if(p.type==='falling'){
+      // 落ちる竹（ひび割れ） cracked falling bamboo — 振動 shaking
+      if(p.fstate==='shaking'){ x += (Math.random()<0.5?-1:1); }
+      ctx.fillStyle = '#6b5a3a'; ctx.fillRect(x, y, p.w, p.h);
+      ctx.fillStyle = '#8a7548'; ctx.fillRect(x, y, p.w, 2);
+      ctx.fillStyle = '#3a2f1c'; ctx.fillRect(x, y+p.h-3, p.w, 3);
+      ctx.fillStyle = '#241c10';                                       // ひび cracks
+      for(let cx=x+5; cx<x+p.w-2; cx+=11){ ctx.fillRect(cx, y+2, 1, p.h-4); ctx.fillRect(cx+2, y+4, 1, 3); }
     } else { // branch (oneway)
       ctx.fillStyle = '#3f6730'; ctx.fillRect(x, y, p.w, p.h);
       ctx.fillStyle = '#54863f'; ctx.fillRect(x, y, p.w, 2);
@@ -723,9 +1034,14 @@ function drawHUD(){
     ctx.fillRect(hx,hy+2,9,3); ctx.fillRect(hx+1,hy+5,7,2); ctx.fillRect(hx+3,hy+7,3,2);
   }
   // 明王ゲージ spirit gauge
+  const full = player.spirit >= 100;
   ctx.fillStyle = '#1a1620'; ctx.fillRect(8, 18, 62, 4);
-  ctx.fillStyle = '#7fb0c0'; ctx.fillRect(9, 19, Math.round(60*player.spirit/100), 2);
-  ctx.fillStyle = '#cfd2da'; pixelText('明王 / KI', 8, 26, '#8a8fa0');
+  ctx.fillStyle = full ? '#e9663a' : '#7fb0c0'; ctx.fillRect(9, 19, Math.round(60*player.spirit/100), 2);
+  if(full && Math.floor(animClock*0.1)%2===0) pixelText('明王 必殺可 / SPECIAL READY (C)', 8, 26, '#e9663a');
+  else pixelText('明王 / KI', 8, 26, '#8a8fa0');
+  // 敵残数 enemies left
+  pixelText('残敵 / FOES: '+enemies.filter(e=>!e.dead).length, BASE_W-8, 8, '#8a8fa0', 'right');
+  if(audioMuted) pixelText('🔇 MUTE (M)', BASE_W-8, 18, '#8a8fa0', 'right');
 }
 // 簡易ピクセル文字（CanvasのfillTextを小サイズで） small text
 function pixelText(str, x, y, color, align){
@@ -786,11 +1102,11 @@ function checkStageBounds(){
   // 落下死 fall death
   if(player.y > stage.h + 40){
     player.hp--; triggerShake(4,12); playSFX('hurt');
-    if(player.hp <= 0){ gameState='GAMEOVER'; playSFX('over'); }
+    if(player.hp <= 0){ gameState='GAMEOVER'; stopBgm(); playSFX('over'); }
     else respawn();
   }
   // ゴール goal
-  if(aabb(player, stage.goal)){ gameState='CLEAR'; playSFX('clear'); }
+  if(aabb(player, stage.goal)){ gameState='CLEAR'; stopBgm(); playSFX('clear'); }
 }
 function respawn(){
   player.x = stage.spawn.x; player.y = stage.spawn.y;
@@ -801,38 +1117,111 @@ function respawn(){
 function startGame(){
   player.reset(stage.spawn.x, stage.spawn.y);
   particles.length = 0; ambient.length = 0;
+  flashTimer = 0;
+  initPlatforms();
+  // 敵を配置データから生成 spawn enemies
+  enemies.length = 0;
+  for(const s of stage.enemies) enemies.push(new Enemy(s.x, s.y, s.type));
   camera.x = clamp(player.x - BASE_W*0.42, 0, stage.w-BASE_W);
   camera.y = clamp(player.y - BASE_H*0.55, 0, stage.h-BASE_H);
   gameState = 'PLAYING';
+  startBgm();
 }
 function loadStage(n){ /* stages[n] 差し替え用フック / future multi-stage */ }
 
-// ---------- Web Audio（簡易SE） / minimal procedural SFX ----------
-let audioCtx = null, isAudioInitialized = false;
+// ---------- Web Audio（SE＋プロシージャルBGM） / procedural SFX & BGM ----------
+let audioCtx = null, isAudioInitialized = false, masterGain = null, audioMuted = false;
 function initAudio(){
   if(isAudioInitialized) return;
-  try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); isAudioInitialized = true; }catch(e){ isAudioInitialized = true; }
+  try{
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = audioMuted ? 0 : 1;
+    masterGain.connect(audioCtx.destination);
+  }catch(e){ audioCtx = null; }
+  isAudioInitialized = true;
+}
+function toggleMute(){
+  audioMuted = !audioMuted;
+  if(masterGain) masterGain.gain.value = audioMuted ? 0 : 1;
 }
 function tone(freq, dur, type, vol, slideTo){
   if(!audioCtx) return;
   const t = audioCtx.currentTime;
   const o = audioCtx.createOscillator(), g = audioCtx.createGain();
   o.type = type||'square'; o.frequency.setValueAtTime(freq, t);
-  if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t+dur);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(1,slideTo), t+dur);
   g.gain.setValueAtTime(vol||0.12, t);
   g.gain.exponentialRampToValueAtTime(0.001, t+dur);
-  o.connect(g); g.connect(audioCtx.destination);
+  o.connect(g); g.connect(masterGain||audioCtx.destination);
   o.start(t); o.stop(t+dur);
+}
+// ノイズ的バースト（斬撃・着地） noise burst for slashes/impacts
+function noise(dur, vol, hp){
+  if(!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const n = Math.floor(audioCtx.sampleRate*dur);
+  const buf = audioCtx.createBuffer(1, n, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for(let i=0;i<n;i++) data[i] = (Math.random()*2-1)*(1-i/n);
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const g = audioCtx.createGain(); g.gain.value = vol||0.1;
+  const f = audioCtx.createBiquadFilter(); f.type='highpass'; f.frequency.value = hp||800;
+  src.connect(f); f.connect(g); g.connect(masterGain||audioCtx.destination);
+  src.start(t);
 }
 function playSFX(name){
   if(!audioCtx) return;
   switch(name){
-    case 'jump':  tone(300, 0.18, 'square', 0.10, 620); break;
-    case 'land':  tone(160, 0.10, 'sine',   0.08, 90);  break;
-    case 'hurt':  tone(220, 0.22, 'sawtooth',0.12, 80); break;
-    case 'over':  tone(180, 0.6,  'sawtooth',0.12, 60); break;
-    case 'clear': tone(440, 0.16, 'triangle',0.12, 660); setTimeout(()=>tone(660,0.3,'triangle',0.12,880),140); break;
+    case 'jump':     tone(300, 0.18, 'square', 0.10, 620); break;
+    case 'land':     tone(160, 0.10, 'sine',   0.08, 90);  break;
+    case 'hurt':     tone(220, 0.22, 'sawtooth',0.12, 80); break;
+    case 'over':     tone(180, 0.6,  'sawtooth',0.12, 60); break;
+    case 'clear':    tone(440, 0.16, 'triangle',0.12, 660); setTimeout(()=>tone(660,0.3,'triangle',0.12,880),140); break;
+    case 'slash':    noise(0.12, 0.12, 1800); tone(520,0.08,'square',0.05,300); break;
+    case 'special':  tone(110,0.7,'sawtooth',0.14,55); noise(0.5,0.12,400); setTimeout(()=>tone(330,0.4,'triangle',0.10,520),60); break;
+    case 'enemyDown':tone(200,0.18,'square',0.10,70); noise(0.15,0.08,600); break;
+    case 'spring':   tone(260,0.22,'sine',0.12,720); break;
+    case 'stomp':    tone(180,0.10,'square',0.10,90); noise(0.08,0.08,500); break;
   }
+}
+// --- プロシージャルBGM（都節音階の緩やかなループ） procedural dark BGM ---
+let bgmTimer = null, bgmStep = 0, bgmDrone = null, bgmDroneGain = null;
+// 都節音階（陰旋法）: 例 D, Eb, G, A, Bb（Hzは概算） miyako-bushi scale
+const BGM_NOTES = [146.83, 155.56, 196.00, 220.00, 233.08, 293.66, 311.13];
+const BGM_SEQ = [0,2,1,3, 4,3,2,0, 5,4,3,2, 1,2,0,-1]; // -1 = 休符 rest
+function startBgm(){
+  if(!audioCtx || bgmTimer) return;
+  // 低いドローン low drone
+  bgmDrone = audioCtx.createOscillator(); bgmDroneGain = audioCtx.createGain();
+  bgmDrone.type='sine'; bgmDrone.frequency.value = 73.42; // D2
+  bgmDroneGain.gain.value = 0.05;
+  bgmDrone.connect(bgmDroneGain); bgmDroneGain.connect(masterGain||audioCtx.destination);
+  bgmDrone.start();
+  bgmStep = 0;
+  bgmTimer = setInterval(()=>{
+    if(!audioCtx) return;
+    const idx = BGM_SEQ[bgmStep % BGM_SEQ.length];
+    if(idx >= 0){
+      const f = BGM_NOTES[idx];
+      // 尺八風（ビブラート付きtriangle） shakuhachi-ish
+      const t = audioCtx.currentTime;
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain(), v = audioCtx.createOscillator(), vg = audioCtx.createGain();
+      o.type='triangle'; o.frequency.value = f;
+      v.type='sine'; v.frequency.value = 5; vg.gain.value = f*0.012; // vibrato
+      v.connect(vg); vg.connect(o.frequency);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.07, t+0.08);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+0.55);
+      o.connect(g); g.connect(masterGain||audioCtx.destination);
+      o.start(t); v.start(t); o.stop(t+0.6); v.stop(t+0.6);
+    }
+    bgmStep++;
+  }, 520);
+}
+function stopBgm(){
+  if(bgmTimer){ clearInterval(bgmTimer); bgmTimer = null; }
+  if(bgmDrone){ try{ bgmDrone.stop(); }catch(e){} bgmDrone = null; }
 }
 
 // ---------- ループ / Main loop ----------
@@ -842,20 +1231,26 @@ const player = new Player();
 
 function update(){
   animClock++;
+  if(isJustPressed('KeyM')) toggleMute();
   if(gameState === 'TITLE'){ if(isConfirmPressed()) startGame(); }
   else if(gameState === 'GAMEOVER'){ if(isConfirmPressed()){ startGame(); } }
-  else if(gameState === 'CLEAR'){ if(isConfirmPressed()){ gameState='TITLE'; } }
-  else if(gameState === 'PAUSE'){ if(isJustPressed('Enter')) gameState='PLAYING'; }
+  else if(gameState === 'CLEAR'){ if(isConfirmPressed()){ gameState='TITLE'; stopBgm(); } }
+  else if(gameState === 'PAUSE'){
+    if(isJustPressed('Enter')){ gameState='PLAYING'; if(masterGain&&!audioMuted) masterGain.gain.value=1; }
+  }
   else if(gameState === 'PLAYING'){
-    if(isJustPressed('Enter')){ gameState='PAUSE'; return; }
+    if(isJustPressed('Enter')){ gameState='PAUSE'; if(masterGain) masterGain.gain.value=0.0001; return; }
     updatePlaying();
   }
 }
 function updatePlaying(){
   player.update();
+  updatePlatforms();
+  updateEnemies();
   updateCamera();
   updateAmbience();
   updateParticles();
+  if(flashTimer>0) flashTimer--;
   checkStageBounds();
 }
 function draw(){
@@ -865,9 +1260,17 @@ function draw(){
   ctx.translate(Math.round(sh.x), Math.round(sh.y));
   drawParallax();
   drawPlatforms();
+  drawEnemies();
   drawAmbience();      // 蛍など（プレイヤー奥〜手前まとめて発光）
   player.draw();
   drawParticles();
+  // 必殺フラッシュ special flash overlay
+  if(flashTimer>0){
+    ctx.globalAlpha = (flashTimer/14)*0.7;
+    ctx.fillStyle = flashTimer>7 ? '#ffffff' : '#c0303a';
+    ctx.fillRect(0,0,BASE_W,BASE_H);
+    ctx.globalAlpha = 1;
+  }
   drawForeground();
   ctx.restore();
   drawHUD();
@@ -875,6 +1278,7 @@ function draw(){
   else if(gameState === 'GAMEOVER') drawGameOverOverlay();
   else if(gameState === 'CLEAR') drawClearOverlay();
 }
+function drawEnemies(){ for(const e of enemies) e.draw(); }
 function loop(){ pollGamepad(); update(); draw(); requestAnimationFrame(loop); }
 loop();
 </script>
