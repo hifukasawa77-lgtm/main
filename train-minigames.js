@@ -110,7 +110,7 @@ function loadTrainImage(train, onReady) {
   return null;
 }
 
-function playSE(name) {
+function _playSE(name) {
   tcCall('playSE', name);
 }
 
@@ -321,7 +321,7 @@ function initStampRally() {
       const fb = document.getElementById('stamp-feedback');
 
       if (hit) {
-        playSE('stamp');
+        _playSE('stamp');
         tcCall('addCoins', 30);
         stampedSet.add(st.id);
         saveStamps(stampedSet);
@@ -343,7 +343,7 @@ function initStampRally() {
           card.appendChild(bonus);
         }
       } else {
-        playSE('wrong');
+        _playSE('wrong');
         fb.textContent = 'おしい！ もう一度！';
         fb.style.color = '#e53935';
         // 再アニメ
@@ -504,7 +504,7 @@ function initQuiz() {
 
   function onAnswer(isCorrect, correct, canvas, clickedBtn, grid) {
     if (isCorrect) {
-      playSE('correct');
+      _playSE('correct');
       tcCall('addCoins', COIN_CORRECT);
       clickedBtn.style.background = '#4CAF50';
       clickedBtn.style.color = '#fff';
@@ -521,7 +521,7 @@ function initQuiz() {
 
       showResult(true, correct);
     } else {
-      playSE('wrong');
+      _playSE('wrong');
       tcCall('addCoins', COIN_WRONG);
       clickedBtn.style.background = '#e53935';
       clickedBtn.style.color = '#fff';
@@ -861,7 +861,7 @@ function initSugoroku() {
     if (rolling) return;
     rolling = true;
     rollBtn.disabled = true;
-    playSE('dice');
+    _playSE('dice');
 
     // サイコロアニメ（300ms ランダム切り替え）
     let elapsed = 0;
@@ -919,21 +919,21 @@ function initSugoroku() {
     switch (sq.type) {
       case 'normal': {
         tcCall('addCoins', sq.coins);
-        playSE('coin');
+        _playSE('coin');
         if (sq.trainId && TC) tcCall('addOwnedTrain', sq.trainId);
         addLog(`【${sq.name}】 コイン+${sq.coins}${sq.trainId ? ' でんしゃゲット！' : ''}`);
         break;
       }
       case 'bonus': {
         tcCall('addCoins', sq.coins);
-        playSE('coin');
+        _playSE('coin');
         addLog(`【${sq.name}】 ボーナス！ コイン+${sq.coins}`);
         showSquareToast(`ボーナス！ コイン+${sq.coins}`, '#FFD700');
         break;
       }
       case 'event': {
         tcCall('addCoins', sq.coins);
-        playSE('coin');
+        _playSE('coin');
         if (sq.trainId && TC) tcCall('addOwnedTrain', sq.trainId);
         addLog(`【${sq.name}】 イベント！ コイン+${sq.coins} でんしゃゲット！`);
         showSquareToast(`イベント！ コイン+${sq.coins}`, '#FF8C00');
@@ -942,7 +942,7 @@ function initSugoroku() {
       }
       case 'special': {
         tcCall('addCoins', sq.coins);
-        playSE('coin');
+        _playSE('coin');
         if (sq.trainId && TC) tcCall('addOwnedTrain', sq.trainId);
         addLog(`【${sq.name}】 スペシャル！ コイン+${sq.coins} レジェンドゲット！`);
         showSquareToast(`スペシャル！ コイン+${sq.coins}`, '#9d00ff');
@@ -951,13 +951,13 @@ function initSugoroku() {
       }
       case 'return': {
         tcCall('addCoins', sq.coins);
-        playSE('coin');
+        _playSE('coin');
         addLog(`【${sq.name}】 かえりみち コイン+${sq.coins}`);
         break;
       }
       case 'goal': {
         tcCall('addCoins', sq.coins);
-        playSE('coin');
+        _playSE('coin');
         if (sq.trainId && TC) tcCall('addOwnedTrain', sq.trainId);
         addLog(`【ゴール！】 コイン+${sq.coins} おめでとう！`);
         showSquareToast(`ゴール！ コイン+${sq.coins}`, '#4CAF50');
