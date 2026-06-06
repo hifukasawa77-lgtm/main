@@ -86,7 +86,87 @@
 const BASE_W = 320, BASE_H = 180;
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-ctx.imageSmoothingEnabled = false; // ★ドット絵 / pixel art
+ctx.imageSmoothingEnabled = true;
+
+function loadArt(src){
+  const img = new Image();
+  img.src = src;
+  return img;
+}
+function loadChromaAtlas(src){
+  const atlas = { image:null };
+  const img = new Image();
+  img.onload = ()=>{
+    const c=document.createElement('canvas');
+    c.width=img.naturalWidth; c.height=img.naturalHeight;
+    const g=c.getContext('2d',{willReadFrequently:true});
+    g.drawImage(img,0,0);
+    const pixels=g.getImageData(0,0,c.width,c.height);
+    for(let i=0;i<pixels.data.length;i+=4){
+      const r=pixels.data[i], green=pixels.data[i+1], b=pixels.data[i+2];
+      if(green>145 && r<120 && b<140 && green-r>50 && green-b>40) pixels.data[i+3]=0;
+      else if(green>r+24 && green>b+24) pixels.data[i+1]=Math.min(green,Math.max(r,b)+16);
+    }
+    g.putImageData(pixels,0,0);
+    atlas.image=c;
+  };
+  img.src=src;
+  return atlas;
+}
+const ART = {
+  title: loadArt('assets/kage-shura-gpt/kage-shura-title-art.png'),
+  stages: [
+    loadArt('assets/kage-shura-gpt/stages/stage-1-moonlit-bamboo.png'),
+    loadArt('assets/kage-shura-gpt/stages/stage-2-snowbound-shrine.png')
+  ],
+  actors: {
+    idle: loadArt('assets/kage-shura-gpt/actors/hero-idle.png'),
+    run: loadArt('assets/kage-shura-gpt/actors/hero-run.png'),
+    jump: loadArt('assets/kage-shura-gpt/actors/hero-jump.png'),
+    fall: loadArt('assets/kage-shura-gpt/actors/hero-jump.png'),
+    attack: loadArt('assets/kage-shura-gpt/actors/hero-attack.png'),
+    special: loadArt('assets/kage-shura-gpt/actors/hero-special.png'),
+    hurt: loadArt('assets/kage-shura-gpt/actors/hero-idle.png'),
+    bandit: loadArt('assets/kage-shura-gpt/actors/bandit.png'),
+    yokai: loadArt('assets/kage-shura-gpt/actors/yokai.png'),
+    boss: loadArt('assets/kage-shura-gpt/actors/boss-oni.png')
+  },
+  props: {
+    ground: loadArt('assets/kage-shura-gpt/props/ground.png'),
+    bamboo: loadArt('assets/kage-shura-gpt/props/bamboo.png'),
+    branch: loadArt('assets/kage-shura-gpt/props/branch.png'),
+    spring: loadArt('assets/kage-shura-gpt/props/spring.png'),
+    falling: loadArt('assets/kage-shura-gpt/props/falling.png'),
+    scroll: loadArt('assets/kage-shura-gpt/props/scroll.png'),
+    heal: loadArt('assets/kage-shura-gpt/props/heal.png'),
+    spirit: loadArt('assets/kage-shura-gpt/props/spirit.png')
+  },
+  effects: loadChromaAtlas('assets/kage-shura-gpt/source/kage-shura-effects-atlas-source.png')
+};
+
+function artReady(img){ return img && img.complete && img.naturalWidth; }
+function drawArt(img, x, y, w, h, flip){
+  if(!artReady(img)) return false;
+  ctx.save();
+  if(flip){
+    ctx.translate(x+w, y);
+    ctx.scale(-1,1);
+    ctx.drawImage(img,0,0,w,h);
+  }else{
+    ctx.drawImage(img,x,y,w,h);
+  }
+  ctx.restore();
+  return true;
+}
+function drawAtlasCell(atlas,index,x,y,w,h){
+  const img=atlas&&atlas.image;
+  if(!img) return false;
+  const col=index%4, row=Math.floor(index/4);
+  const sx=Math.round(col*img.width/4), sy=Math.round(row*img.height/2);
+  const sw=Math.round((col+1)*img.width/4)-sx, sh=Math.round((row+1)*img.height/2)-sy;
+  ctx.drawImage(img,sx,sy,sw,sh,x,y,w,h);
+  return true;
+}
 
 const clamp = (v,a,b)=> v<a?a : v>b?b : v;
 const lerp  = (a,b,t)=> a+(b-a)*t;
@@ -264,7 +344,7 @@ const THEMES = {
            pBody:'#3a6b2e',pTop:'#4f8c3c',pShade:'#244a1c',pNode:'#5fa048',
            bBody:'#3f6730',bTop:'#54863f',leaf:'#2c5520' },
   },
-  yashiro: { // ステージ2：屍雪の古社（しかゆきのふるやしろ）
+  yashiro: { // ステージ2：雪晴れの古社
     sky:['#0a0c16','#16141f','#241a22'], moon:'#c85048', moonStyle:'blood',
     mountain:'#10131e',
     far:{ color:'#1a2130', thick:1, alpha:0.5, count:14 },
@@ -312,8 +392,8 @@ const stages = [
       { x:1760, y:360, type:'spirit' }, { x:2300, y:174, type:'scroll' },
     ],
   },
-  { // STAGE 2 — 屍雪の古社 / Snowbound Shrine of the Dead（ボス戦）
-    name:'屍雪の古社 / Snowbound Shrine', theme:'yashiro',
+  { // STAGE 2 — 雪晴れの古社 / Snowbound Shrine
+    name:'雪晴れの古社 / Snowbound Shrine', theme:'yashiro',
     w: 3000, h: 480, spawn:{ x:40, y:360 }, goal:{ x:2900, y:280, w:22, h:120 },
     boss:{ x:2480, y:300, type:'oni' }, // 大鬼「業螺王」 / great oni boss
     bossArena:2150,                      // この地点を越えるとボス起動 / boss triggers past here
@@ -587,6 +667,11 @@ function drawSpecialFx(){
   if(!specialFx) return;
   const fx = specialFx, t = 1 - fx.timer/fx.maxTimer;
   const cx = Math.round(fx.cx-camera.x), cy = Math.round(fx.cy-camera.y);
+  ctx.globalAlpha=0.75*(1-t);
+  if(fx.type==='flame') drawAtlasCell(ART.effects,3,cx-48,cy-48,96,96);
+  else if(fx.type==='gale') drawAtlasCell(ART.effects,4,cx+(fx.dir>0?0:-110),cy-28,110,56);
+  else drawAtlasCell(ART.effects,5,cx-48,cy-58,96,96);
+  ctx.globalAlpha=1;
   ctx.globalCompositeOperation='lighter';
   if(fx.type==='flame'){
     ctx.globalAlpha = 0.5*(1-t); ctx.strokeStyle = fx.color; ctx.lineWidth=2;
@@ -729,6 +814,12 @@ function drawItems(){
   for(const it of items){
     const x = Math.round(it.x-camera.x), y = Math.round(it.y-camera.y + Math.sin(it.t||0)*2);
     if(x > BASE_W+10 || x < -10) continue;
+    const itemArt = ART.props[it.type];
+    if(artReady(itemArt)){
+      const size = it.type==='scroll' ? 16 : 14;
+      drawArt(itemArt,x-3,y-4,size,size,false);
+      continue;
+    }
     ctx.globalCompositeOperation='lighter';
     ctx.globalAlpha = 0.4 + 0.25*Math.sin((it.t||0)*1.5);
     ctx.fillStyle = it.type==='scroll'?'#e9d27a':(it.type==='heal'?'#c0303a':'#7fb0c0');
@@ -764,6 +855,7 @@ function updateProjectiles(){
 function drawProjectiles(){
   for(const pr of projectiles){
     const x=Math.round(pr.x-camera.x), y=Math.round(pr.y-camera.y);
+    if(drawAtlasCell(ART.effects,1,x-pr.r-2,y-pr.r-2,pr.r*2+4,pr.r*2+4)) continue;
     ctx.globalCompositeOperation='lighter';
     ctx.globalAlpha=0.5; ctx.fillStyle='#e9663a'; ctx.fillRect(x-pr.r,y-pr.r,pr.r*2,pr.r*2);
     ctx.globalAlpha=1; ctx.fillStyle='#ffd24a'; ctx.fillRect(x-1,y-1,3,3);
@@ -841,6 +933,17 @@ class Boss {
     if(this.dead) return;
     const x=Math.round(this.x-camera.x), y=Math.round(this.y-camera.y);
     const flash = this.hitFlash>0 && this.hitFlash%2===0;
+    if(artReady(ART.actors.boss)){
+      if(this.phase==='charge'){
+        ctx.globalAlpha=0.22;
+        drawArt(ART.actors.boss,x-this.dir*7,y-17,48,58,this.dir<0);
+        ctx.globalAlpha=1;
+      }
+      if(flash) ctx.globalAlpha=0.55;
+      drawArt(ART.actors.boss,x-9,y-17,48,58,this.dir<0);
+      ctx.globalAlpha=1;
+      return;
+    }
     // 大鬼の体 oni body
     ctx.fillStyle = flash?'#ffffff':'#5a2330'; ctx.fillRect(x+2, y+8, this.w-4, this.h-8);
     ctx.fillStyle = flash?'#ffffff':'#7a1f26'; ctx.fillRect(x+4, y+2, this.w-8, 10); // 頭 head
@@ -1079,6 +1182,9 @@ function drawSpriteGrid(grid, px, py, flip){
   }
 }
 function drawNinja(px, py, dir, state, frame){
+  const art = ART.actors[state] || ART.actors.idle;
+  const bob = state==='run' ? Math.sin(frame*1.7)*1.2 : 0;
+  if(drawArt(art,px-8,py-18+bob,state==='attack'||state==='special'?34:26,34,dir==='left')) return;
   const frames = NINJA[state] || NINJA.idle;
   const grid = frames[frame % frames.length];
   // スプライトは16x16、当たり判定(10x14)に合わせて少し左上にずらす
@@ -1096,6 +1202,14 @@ function drawEnemy(e){
   const x = Math.round(e.x-camera.x), y = Math.round(e.y-camera.y);
   if(x > BASE_W+20 || x+e.w < -20) return;
   const flash = e.hitFlash>0 && e.hitFlash%2===0;
+  const enemyArt = e.type==='bandit' ? ART.actors.bandit : ART.actors.yokai;
+  if(artReady(enemyArt)){
+    if(flash) ctx.globalAlpha=0.5;
+    const w=e.type==='bandit'?25:22, h=e.type==='bandit'?29:26;
+    drawArt(enemyArt,x-(w-e.w)/2,y-(h-e.h),w,h,e.dir<0);
+    ctx.globalAlpha=1;
+    return;
+  }
   if(e.type==='bandit'){
     // 笠をかぶった野盗 bandit with straw hat
     ctx.fillStyle = flash ? '#ffffff' : '#26211a';
@@ -1138,6 +1252,11 @@ const layers = [
   { factor:0.70, draw:(ox,oy)=>{ const m=TH().mid; drawBambooField(ox,oy, m.count, m.color, m.thick, m.alpha); } },
 ];
 function drawParallax(){
+  const stageArt = ART.stages[currentStage];
+  if(artReady(stageArt)){
+    ctx.drawImage(stageArt,0,0,BASE_W,BASE_H);
+    return;
+  }
   for(const L of layers){
     const ox = Math.round(-camera.x * L.factor);
     const oy = Math.round(-camera.y * L.factor * 0.5);
@@ -1227,6 +1346,19 @@ function drawPlatforms(){
     if(p.type==='falling' && p.fstate==='gone') continue; // 落下消滅中は描かない
     let x = Math.round(p.x - camera.x), y = Math.round(p.y - camera.y);
     if(x > BASE_W || x+p.w < 0) continue;
+    const propArt = ART.props[p.type] || ART.props.branch;
+    if(artReady(propArt)){
+      if(p.type==='falling' && p.fstate==='shaking') x += (Math.random()<0.5?-1:1);
+      if(p.type==='ground'){
+        const tileW=64, artH=28;
+        for(let tx=0;tx<p.w;tx+=tileW){
+          drawArt(propArt,x+tx,y-10,Math.min(tileW,p.w-tx),artH,false);
+        }
+      }else{
+        drawArt(propArt,x,y-5,p.w,Math.max(12,p.h+6),false);
+      }
+      continue;
+    }
     if(p.type==='ground'){
       // 地面（竹林=苔土／古社=雪石） ground
       ctx.fillStyle = P.groundBody; ctx.fillRect(x, y, p.w, p.h);
@@ -1263,6 +1395,7 @@ function drawPlatforms(){
   }
   // ゴール（明王の鳥居/篝火） goal — torii-ish gate
   const gx = Math.round(stage.goal.x - camera.x), gy = Math.round(stage.goal.y - camera.y);
+  if(drawAtlasCell(ART.effects,0,gx-11,gy-3,44,stage.goal.h+6)) return;
   ctx.fillStyle = '#7a1f26';
   ctx.fillRect(gx, gy, stage.goal.w, stage.goal.h);
   ctx.fillRect(gx-6, gy, stage.goal.w+12, 6);
@@ -1278,21 +1411,9 @@ function drawPlatforms(){
 // ---------- 前景（手前の竹・霧オーバーレイ） / Foreground ----------
 let mistScroll = 0;
 function drawForeground(){
-  // 手前の暗い竹シルエット near bamboo silhouette (factor≈1.0, ぼんやり)
-  ctx.globalAlpha = 0.5;
-  ctx.fillStyle = TH().fg;
-  const ox = -camera.x;
-  const tileW = 150;
-  for(let sx = (ox % tileW) - tileW; sx < BASE_W + tileW; sx += tileW){
-    const tileIndex = Math.round((sx - (ox % tileW)) / tileW);
-    const seed = tileIndex*53;
-    const bx = Math.round(sx + seeded(seed)*tileW);
-    ctx.fillRect(bx, 0, 4 + Math.round(seeded(seed+1)*3), BASE_H);
-  }
-  ctx.globalAlpha = 1;
-  // 霧オーバーレイ moving mist
+  // Soft atmospheric mist over the generated stage art.
   mistScroll += 0.15;
-  ctx.globalAlpha = 0.07;
+  ctx.globalAlpha = 0.04;
   const g = ctx.createLinearGradient(0,BASE_H*0.4,0,BASE_H);
   g.addColorStop(0,'rgba(176,184,200,0)');
   g.addColorStop(1,'rgba(176,184,200,1)');
@@ -1300,10 +1421,10 @@ function drawForeground(){
   const off = Math.sin(mistScroll*0.05)*10;
   ctx.fillRect(off, BASE_H*0.4, BASE_W, BASE_H*0.6);
   ctx.globalAlpha = 1;
-  // 画面端ビネット vignette
+  // Gentle edge shading keeps the HUD readable without darkening the scene.
   const vg = ctx.createRadialGradient(BASE_W/2,BASE_H/2,40, BASE_W/2,BASE_H/2,200);
   vg.addColorStop(0,'rgba(0,0,0,0)');
-  vg.addColorStop(1,'rgba(0,0,0,0.55)');
+  vg.addColorStop(1,'rgba(20,28,36,0.16)');
   ctx.fillStyle = vg; ctx.fillRect(0,0,BASE_W,BASE_H);
 }
 
@@ -1311,8 +1432,9 @@ function drawForeground(){
 function drawHUD(){
   // HP（命） hearts
   for(let i=0;i<player.maxHp;i++){
-    ctx.fillStyle = i < player.hp ? '#c0303a' : '#33232a';
     const hx = 8 + i*11, hy = 8;
+    if(i < player.hp && drawAtlasCell(ART.effects,6,hx-1,hy-1,10,10)) continue;
+    ctx.fillStyle = i < player.hp ? '#c0303a' : '#33232a';
     ctx.fillRect(hx+1,hy,3,3); ctx.fillRect(hx+5,hy,3,3);
     ctx.fillRect(hx,hy+2,9,3); ctx.fillRect(hx+1,hy+5,7,2); ctx.fillRect(hx+3,hy+7,3,2);
   }
@@ -1356,10 +1478,16 @@ function bigText(str, x, y, color, size){
 
 // ---------- タイトル / オーバーレイ ----------
 function drawTitle(){
-  drawSkyGradient();
-  drawMoon(0,0);
-  drawBambooField(0,0,22,'#0c1810',1,0.5);
-  drawBambooField(0,0,26,'#13241a',2,0.7);
+  if(artReady(ART.title)){
+    ctx.drawImage(ART.title,0,0,BASE_W,BASE_H);
+    ctx.fillStyle='rgba(20,35,50,0.16)';
+    ctx.fillRect(0,0,BASE_W,BASE_H);
+  }else{
+    drawSkyGradient();
+    drawMoon(0,0);
+    drawBambooField(0,0,22,'#0c1810',1,0.5);
+    drawBambooField(0,0,26,'#13241a',2,0.7);
+  }
   // タイトル文字
   ctx.globalCompositeOperation='lighter';
   ctx.globalAlpha = 0.25; ctx.fillStyle='#c0303a';
