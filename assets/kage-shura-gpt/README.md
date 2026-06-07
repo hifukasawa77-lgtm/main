@@ -1,5 +1,8 @@
 # Kage Shura Den GPT Image 2 Assets
 
+Each stage uses ten distinct 16:9 GPT Image 2 backgrounds from `stages/screens/`.
+The screens are adjacent world tiles with a continuous full-width ground plane.
+
 `kage_shura_den.html` 用に GPT Image 2 で描き直した画像アセットです。
 
 ビジュアル方針は明るい和風伝奇・時代劇アクションです。ダークファンタジー、ホラー、ゴア、サイバーパンク表現は使用していません。
