@@ -104,7 +104,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--sky);color:var
 <div id="app">
 <div id="hud">
   <span class="hud-title">🏙️ CITY BUILDER</span>
-  <span class="stat"><span class="stat-lbl">💰 資金</span><span class="stat-val" id="hv-funds">$10,000</span></span>
+  <span class="stat"><span class="stat-lbl">💰 資金</span><span class="stat-val" id="hv-funds">$1,000,000</span></span>
   <span class="stat"><span class="stat-lbl">👥 人口</span><span class="stat-val" id="hv-pop">0</span></span>
   <span class="stat"><span class="stat-lbl">😊 幸福</span><span class="stat-val" id="hv-happy">100%</span></span>
   <span class="stat"><span class="stat-lbl">📈 収入</span><span class="stat-val" id="hv-income">$0</span></span>
@@ -115,6 +115,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--sky);color:var
   <div>
     <div class="tg-label">道路・交通</div>
     <button class="tool-btn active" data-tool="road"><canvas class="tool-icon" id="ico-road"></canvas>道路<span class="tool-cost">$50</span></button>
+    <button class="tool-btn" data-tool="bridge"><canvas class="tool-icon" id="ico-bridge"></canvas>橋<span class="tool-cost">$120</span></button>
     <button class="tool-btn" data-tool="rail"><canvas class="tool-icon" id="ico-rail"></canvas>線路<span class="tool-cost">$80</span></button>
     <button class="tool-btn" data-tool="station"><canvas class="tool-icon" id="ico-station"></canvas>駅<span class="tool-cost">$1,000</span></button>
     <button class="tool-btn" data-tool="airport"><canvas class="tool-icon" id="ico-airport"></canvas>空港<span class="tool-cost">$5,000</span></button>
@@ -163,7 +164,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--sky);color:var
   <div id="tips">
     右ドラッグ/1本指ドラッグ: 移動<br>
     ホイール/2本指ピンチ: ズーム<br>
-    R線 J路 K駅 A空港<br>
+    R道 U橋 J線 K駅 A空港<br>
     H住 C商 I工 P公園<br>
     Q警 F消 M病 O学<br>
     D競 E発 T火力 N原子<br>
@@ -215,7 +216,7 @@ const MAP_PRESETS=[
 ];
 
 const COSTS={
-  road:50,rail:80,station:1000,airport:5000,
+  road:50,bridge:120,rail:80,station:1000,airport:5000,
   residential:200,commercial:400,industrial:300,park:100,
   police:600,fire:500,hospital:800,school:400,stadium:2000,
   power:1000,thermal:2000,nuclear:10000,
@@ -234,7 +235,7 @@ const POP_LV=[0,14,32,60];
 
 const UTIL_TOOLS=new Set(['powerline','gas','water','sewer']);
 const TOOL_TYPE={
-  road:T.ROAD,rail:T.RAIL,station:T.STATION,airport:T.AIRPORT,
+  road:T.ROAD,bridge:T.ROAD,rail:T.RAIL,station:T.STATION,airport:T.AIRPORT,
   residential:T.RESIDENTIAL,commercial:T.COMMERCIAL,industrial:T.INDUSTRIAL,park:T.PARK,
   police:T.POLICE,fire:T.FIRE,hospital:T.HOSPITAL,school:T.SCHOOL,stadium:T.STADIUM,
   power:T.POWER,thermal:T.THERMAL,nuclear:T.NUCLEAR,
@@ -250,10 +251,10 @@ const EV={
   BOOM:'boom',RECESSION:'recession',SUBSIDY:'subsidy',
 };
 const EV_CHANCE={
-  earthquake:0.04,tsunami:0.02,typhoon:0.07,fire:0.12,
-  crime:0.15,traffic:0.10,
-  blackout:0.06,water_break:0.05,gas_leak:0.04,
-  boom:0.05,recession:0.04,subsidy:0.03,
+  earthquake:0.015,tsunami:0.008,typhoon:0.03,fire:0.05,
+  crime:0.06,traffic:0.04,
+  blackout:0.025,water_break:0.02,gas_leak:0.015,
+  boom:0.05,recession:0.025,subsidy:0.03,
 };
 const EV_INFO={
   earthquake:{icon:'🌍',label:'地震発生！',color:'#ff8800',severity:3},
@@ -276,13 +277,13 @@ const EV_INFO={
 function mkTile(type,terrain=TR.GRASS){
   return{type,terrain,level:type===0?0:1,powered:false,road:false,rail:false,
     gasAccess:false,waterAccess:false,sewerAccess:false,
-    pollution:0,growTimer:0,
+    pollution:0,growTimer:0,stadiumOf:null,
     util:{gas:false,water:false,powerline:false,sewer:false}};
 }
 const grid=Array.from({length:GRID},()=>Array.from({length:GRID},()=>mkTile(T.EMPTY)));
 
 const gs={
-  funds:10000,year:1,population:0,happiness:100,income:0,
+  funds:1000000,year:1,population:0,happiness:100,income:0,
   tool:'road',speed:1,frame:0,
   cam:{x:0,y:0},zoom:1.6,
   hover:null,dragging:false,dragPt:null,drawing:false,lastSim:0,
@@ -357,7 +358,7 @@ function resetGrid(){
   for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++)grid[y][x]=mkTile(T.EMPTY);
   generateTerrain(currentMapType);
   center();
-  Object.assign(gs,{funds:10000,year:1,population:0,happiness:100,income:0,lastSim:0,frame:0});
+  Object.assign(gs,{funds:1000000,year:1,population:0,happiness:100,income:0,lastSim:0,frame:0});
   updateHUD();
 }
 generateTerrain(0);
@@ -493,7 +494,33 @@ function drawEmpty(c,s,tx,ty){
   grass(c,s);
 }
 
+function drawBridge(c,s,tx,ty){
+  const tr=grid[ty][tx].terrain;
+  if(tr===TR.RIVER)river(c,s);else sea(c,s,tx,ty);
+  const L=tx>0&&grid[ty][tx-1].type===T.ROAD,R=tx<GRID-1&&grid[ty][tx+1].type===T.ROAD;
+  const U=ty>0&&grid[ty-1][tx].type===T.ROAD,D=ty<GRID-1&&grid[ty+1][tx].type===T.ROAD;
+  const horiz=(L||R)||!(U||D);
+  const mid=s/2,hw=s*.34;
+  // 橋桁（デッキ）
+  c.fillStyle='#a8a29e';
+  if(horiz)c.fillRect(0,mid-hw,s,hw*2);else c.fillRect(mid-hw,0,hw*2,s);
+  c.fillStyle='#78716c';
+  if(horiz){c.fillRect(0,mid-hw,s,s*.05);c.fillRect(0,mid+hw-s*.05,s,s*.05);}
+  else     {c.fillRect(mid-hw,0,s*.05,s);c.fillRect(mid+hw-s*.05,0,s*.05,s);}
+  // 支柱（橋脚）
+  c.fillStyle='#57534e';
+  if(horiz){c.fillRect(s*.22,mid-hw-s*.06,s*.06,s*.06);c.fillRect(s*.72,mid-hw-s*.06,s*.06,s*.06);
+            c.fillRect(s*.22,mid+hw,s*.06,s*.06);c.fillRect(s*.72,mid+hw,s*.06,s*.06);}
+  else     {c.fillRect(mid-hw-s*.06,s*.22,s*.06,s*.06);c.fillRect(mid-hw-s*.06,s*.72,s*.06,s*.06);
+            c.fillRect(mid+hw,s*.22,s*.06,s*.06);c.fillRect(mid+hw,s*.72,s*.06,s*.06);}
+  // 中央線
+  c.strokeStyle='#fff';c.lineWidth=Math.max(.8,s*.025);c.setLineDash([s*.12,s*.1]);
+  c.beginPath();
+  if(horiz){c.moveTo(0,mid);c.lineTo(s,mid);}else{c.moveTo(mid,0);c.lineTo(mid,s);}
+  c.stroke();c.setLineDash([]);
+}
 function drawRoad(c,s,tx,ty){
+  if(grid[ty][tx].terrain===TR.RIVER||grid[ty][tx].terrain===TR.SEA){drawBridge(c,s,tx,ty);return;}
   const L=tx>0&&grid[ty][tx-1].type===T.ROAD,R=tx<GRID-1&&grid[ty][tx+1].type===T.ROAD;
   const U=ty>0&&grid[ty-1][tx].type===T.ROAD,D=ty<GRID-1&&grid[ty+1][tx].type===T.ROAD;
   const assetKey=(L||R)&&(U||D)?'roadX':((U||D)&&!(L||R)?'roadV':'roadH');
@@ -821,6 +848,19 @@ function drawSchool(c,s){
   c.strokeStyle='#fff';c.lineWidth=1;c.beginPath();c.arc(bx-2+bw*.5,by-2+bh*.9,s*.08,0,Math.PI);c.stroke();
 }
 
+function drawStadiums(){
+  // スタジアムは2x2マス分の合成スプライトとして起点マスから描画する
+  const size=ts(),big=size*2;
+  for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
+    const t=grid[y][x];
+    if(t.type!==T.STADIUM||t.stadiumOf)continue;
+    const px=gs.cam.x+x*size,py=gs.cam.y+y*size;
+    if(px+big<0||py+big<0||px>canvas.width||py>canvas.height)continue;
+    ctx.save();ctx.translate(px,py);
+    drawStadium(ctx,big);
+    ctx.restore();
+  }
+}
 function drawStadium(c,s){
   if(drawAsset(c,'stadium',s))return;
   grass(c,s);
@@ -945,17 +985,19 @@ function render(){
       case T.FIRE:        drawFire(ctx,size);break;
       case T.HOSPITAL:    drawHospital(ctx,size);break;
       case T.SCHOOL:      drawSchool(ctx,size);break;
-      case T.STADIUM:     drawStadium(ctx,size);break;
+      case T.STADIUM:     drawEmpty(ctx,size,x,y);break; // 本体は2x2の合成スプライトで別途描画
     }
     if(t.util.gas||t.util.water||t.util.powerline||t.util.sewer)drawUtilOverlay(ctx,size,t,x,y);
     ctx.restore();
   }
+  drawStadiums();
   // Hover
   if(gs.hover&&gs.hover.x>=0&&gs.hover.y>=0&&gs.hover.x<GRID&&gs.hover.y<GRID){
     const {x,y}=gs.hover;
     const px=gs.cam.x+x*size,py=gs.cam.y+y*size;
+    const hoverSize=gs.tool==='stadium'?size*2:size;
     ctx.strokeStyle='rgba(41,121,255,.85)';ctx.lineWidth=2.5;
-    ctx.setLineDash([4,3]);ctx.strokeRect(px+1.5,py+1.5,size-3,size-3);ctx.setLineDash([]);
+    ctx.setLineDash([4,3]);ctx.strokeRect(px+1.5,py+1.5,hoverSize-3,hoverSize-3);ctx.setLineDash([]);
   }
   // イベントエフェクト描画
   drawFireEffects();
@@ -1120,7 +1162,7 @@ function bfsRail(){
 function covMap(type,radius){
   const m=Array.from({length:GRID},()=>new Array(GRID).fill(0));
   for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
-    if(grid[y][x].type!==type)continue;
+    if(grid[y][x].type!==type||grid[y][x].stadiumOf)continue;
     for(let dy=-radius;dy<=radius;dy++)for(let dx=-radius;dx<=radius;dx++){
       const ny=y+dy,nx=x+dx;
       if(ny>=0&&nx>=0&&ny<GRID&&nx<GRID)m[ny][nx]++;
@@ -1182,6 +1224,7 @@ function simulate(){
   let income=0,expense=0,pop=0,happySum=0,happyN=0;
   for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){
     const t=grid[y][x];if(t.type===T.EMPTY)continue;
+    if(t.stadiumOf)continue; // スタジアム2x2の付随マスは収支・成長判定の対象外
     expense+=(EXPENSE_T[t.type]||0)*(t.level||1);
     // Utility tile annual cost
     if(t.util.powerline)expense+=2;if(t.util.gas)expense+=1;if(t.util.water)expense+=1;if(t.util.sewer)expense+=1;
@@ -1310,7 +1353,8 @@ function applyEventDamage(type){
         if(ny2>=0&&ny2<GRID&&nx2>=0&&nx2<GRID&&grid[ny2][nx2].terrain===TR.SEA) nearSea=true;
       }
       if(nearSea && buildTypes.has(grid[y][x].type)){
-        grid[y][x].type=T.EMPTY; grid[y][x].level=0;
+        if(grid[y][x].type===T.STADIUM) removeStadium(x,y);
+        else { grid[y][x].type=T.EMPTY; grid[y][x].level=0; }
       }
     }
   }
@@ -1402,18 +1446,73 @@ function updateEventPanel(){
 // ════════════════════════════════════════════════════════════
 //  Place tile / utility
 // ════════════════════════════════════════════════════════════
+// スタジアムは2x2の複合施設のため、どのマスが選ばれても4マス揃えて撤去する
+function removeStadium(tx,ty){
+  const t=grid[ty][tx];
+  if(t.type!==T.STADIUM)return;
+  const ax=t.stadiumOf?t.stadiumOf.x:tx, ay=t.stadiumOf?t.stadiumOf.y:ty;
+  for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++){
+    const gx=ax+dx,gy=ay+dy;
+    if(gx<0||gy<0||gx>=GRID||gy>=GRID)continue;
+    const gt=grid[gy][gx];
+    if(gt.type!==T.STADIUM)continue;
+    grid[gy][gx]=mkTile(T.EMPTY,gt.terrain);
+  }
+}
 function placeTile(tx,ty){
   if(tx<0||ty<0||tx>=GRID||ty>=GRID)return;
   const t=grid[ty][tx];
-  if(gs.tool!=='bulldoze'&&t.terrain===TR.SEA)return;
+  const onWater=t.terrain===TR.SEA||t.terrain===TR.RIVER;
+  if(gs.tool!=='bulldoze'){
+    // 橋は水上にのみ、それ以外の建物・道路等は海・川には建設不可
+    if(gs.tool==='bridge'){ if(!onWater){showToast('🌉 橋は海・川の上にのみ設置できます','err');return;} }
+    else if(onWater){ showToast('🌊 海・川には建設できません','err');return; }
+  }
 
   if(gs.tool==='bulldoze'){
     const hasUtil=t.util.gas||t.util.water||t.util.powerline||t.util.sewer;
     if(t.type===T.EMPTY&&!hasUtil)return;
     if(gs.funds<COSTS.bulldoze){showToast('💸 資金不足！','err');return;}
     gs.funds-=COSTS.bulldoze;
+    if(t.type===T.STADIUM){
+      removeStadium(tx,ty);
+      updateHUD();return;
+    }
     const savedTerrain=t.terrain;
     grid[ty][tx]=mkTile(T.EMPTY,savedTerrain);
+    updateHUD();return;
+  }
+
+  if(gs.tool==='stadium'){
+    // スタジアムは2x2(4マス)の複合施設として設置する
+    const ax=tx,ay=ty;
+    if(ax+1>=GRID||ay+1>=GRID){showToast('⚠️ 設置スペース不足（2x2必要）','err');return;}
+    const cells=[[ax,ay],[ax+1,ay],[ax,ay+1],[ax+1,ay+1]];
+    for(const[gx,gy]of cells){
+      const gt=grid[gy][gx];
+      if(gt.type!==T.EMPTY||gt.terrain===TR.SEA||gt.terrain===TR.RIVER){
+        showToast('⚠️ スタジアムには2x2の更地が必要です','err');return;
+      }
+    }
+    const cost=COSTS.stadium;
+    if(gs.funds<cost){showToast('💸 資金不足！','err');return;}
+    gs.funds-=cost;
+    for(const[gx,gy]of cells){
+      grid[gy][gx]=mkTile(T.STADIUM);
+      if(gx!==ax||gy!==ay)grid[gy][gx].stadiumOf={x:ax,y:ay};
+    }
+    updateHUD();return;
+  }
+
+  if(gs.tool==='bridge'){
+    // 橋は水上の地形（海・川）を保持したまま道路として設置する（地形を更地化しない）
+    if(t.type===T.ROAD)return;
+    const cost=COSTS.bridge;
+    if(gs.funds<cost){showToast('💸 資金不足！','err');return;}
+    gs.funds-=cost;
+    const savedUtil={...t.util},savedTerrain=t.terrain;
+    grid[ty][tx]=mkTile(T.ROAD,savedTerrain);
+    grid[ty][tx].util=savedUtil;
     updateHUD();return;
   }
 
@@ -1526,7 +1625,7 @@ document.querySelectorAll('.map-type-btn').forEach(btn=>{
 document.getElementById('btn-newmap').addEventListener('click',resetGrid);
 
 const KEY_TOOLS={
-  r:'road',j:'rail',k:'station',a:'airport',
+  r:'road',u:'bridge',j:'rail',k:'station',a:'airport',
   h:'residential',c:'commercial',i:'industrial',p:'park',
   q:'police',f:'fire',m:'hospital',o:'school',d:'stadium',
   e:'power',t:'thermal',n:'nuclear',
@@ -1569,6 +1668,7 @@ mm.addEventListener('touchend',e=>{
 function ico(id,fn){const el=document.getElementById(id);if(!el)return;el.width=22;el.height=22;fn(el.getContext('2d'),22);}
 
 ico('ico-road',(c,s)=>{c.fillStyle='#7ec850';c.fillRect(0,0,s,s);c.fillStyle='#888';c.fillRect(0,s*.34,s,s*.3);c.fillRect(s*.34,0,s*.3,s);c.strokeStyle='#fff';c.lineWidth=1.2;c.setLineDash([s*.1,s*.08]);c.beginPath();c.moveTo(0,s*.5);c.lineTo(s,s*.5);c.stroke();c.setLineDash([]);});
+ico('ico-bridge',(c,s)=>{c.fillStyle='#1e6fa8';c.fillRect(0,0,s,s);c.fillStyle='#a8a29e';c.fillRect(0,s*.4,s,s*.2);c.fillStyle='#78716c';c.fillRect(0,s*.4,s,s*.04);c.fillRect(0,s*.56,s,s*.04);c.fillStyle='#57534e';[.18,.42,.66].forEach(p=>{c.fillRect(s*p,s*.6,s*.06,s*.18);});c.strokeStyle='#fff';c.lineWidth=1;c.setLineDash([s*.12,s*.08]);c.beginPath();c.moveTo(0,s*.5);c.lineTo(s,s*.5);c.stroke();c.setLineDash([]);});
 ico('ico-rail',(c,s)=>{c.fillStyle='#c8a96e';c.fillRect(0,0,s,s);c.fillStyle='#aaa';c.fillRect(0,s*.26,s,s*.1);c.fillRect(0,s*.62,s,s*.1);c.fillStyle='#8b6914';for(let i=0;i<4;i++)c.fillRect(s*(.1+i*.22),s*.22,s*.1,s*.56);});
 ico('ico-station',(c,s)=>{c.fillStyle='#7ec850';c.fillRect(0,0,s,s);c.fillStyle='#e8e8e0';c.fillRect(s*.1,s*.08,s*.8,s*.35);c.fillStyle='#c0b040';c.fillRect(s*.1,s*.08,s*.8,s*.08);c.fillStyle='#d0d0d0';c.fillRect(s*.05,s*.44,s*.9,s*.48);c.fillStyle='#2979ff';c.fillRect(s*.25,s*.5,s*.5,s*.14);});
 ico('ico-airport',(c,s)=>{c.fillStyle='#7ec850';c.fillRect(0,0,s,s);c.fillStyle='#555';c.fillRect(0,s*.52,s,s*.08);c.fillStyle='#d8dde4';c.fillRect(s*.1,s*.08,s*.8,s*.3);c.fillStyle='#e8e8e8';c.beginPath();c.ellipse(s*.5,s*.58,s*.15,s*.05,0,0,Math.PI*2);c.fill();c.beginPath();c.moveTo(s*.4,s*.54);c.lineTo(s*.36,s*.44);c.lineTo(s*.46,s*.52);c.closePath();c.fill();c.beginPath();c.moveTo(s*.6,s*.54);c.lineTo(s*.64,s*.44);c.lineTo(s*.54,s*.52);c.closePath();c.fill();});
