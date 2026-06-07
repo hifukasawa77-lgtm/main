@@ -210,6 +210,8 @@
     background: #426f8f;
   }
 
+  .diff-mode { grid-template-columns: repeat(3, 1fr); }
+
   .log {
     min-height: 86px;
     color: var(--muted);
@@ -261,6 +263,15 @@
         </div>
 
         <div class="panel">
+          <h2>CPUの強さ</h2>
+          <div class="mode diff-mode" id="diffMode">
+            <button class="diff-btn" data-diff="easy">Easy</button>
+            <button class="diff-btn active" data-diff="normal">Normal</button>
+            <button class="diff-btn" data-diff="hard">Hard</button>
+          </div>
+        </div>
+
+        <div class="panel">
           <h2>操作</h2>
           <div class="mode">
             <button id="moveMode" class="active">駒を動かす</button>
@@ -305,6 +316,7 @@
   const vWallBtn = document.getElementById('vWall');
   const newGameBtn = document.getElementById('newGame');
   const hintBtn = document.getElementById('hint');
+  const diffButtons = document.querySelectorAll('.diff-btn');
 
   const N = 9;
   const margin = 56;
@@ -326,6 +338,7 @@
   let hWalls = new Set();
   let vWalls = new Set();
   let turn = 'human';
+  let difficulty = 'normal'; // 'easy' | 'normal' | 'hard'
   let mode = 'move';
   let wallOrientation = 'h';
   let gameOver = false;
@@ -536,7 +549,12 @@
     const beforeCpu = shortestPath('cpu');
     let placed = false;
 
-    if (players.cpu.walls > 0 && beforeHuman <= beforeCpu + 1) {
+    const considerWall =
+      difficulty === 'easy' ? (players.cpu.walls > 0 && beforeHuman <= beforeCpu && Math.random() < 0.35) :
+      difficulty === 'hard' ? (players.cpu.walls > 0 && beforeHuman <= beforeCpu + 2) :
+      (players.cpu.walls > 0 && beforeHuman <= beforeCpu + 1);
+
+    if (considerWall) {
       const candidates = [];
       for (let r = 0; r < N - 1; r++) {
         for (let c = 0; c < N - 1; c++) {
@@ -551,7 +569,8 @@
       }
       candidates.sort((a, b) => b.score - a.score);
       const best = candidates[0];
-      if (best && best.score > beforeHuman - beforeCpu) {
+      const requiredGain = difficulty === 'hard' ? 0 : (beforeHuman - beforeCpu);
+      if (best && best.score > requiredGain) {
         placed = placeWall(best.r, best.c, best.o, 'cpu');
         if (placed) log(`CPUが${best.o === 'h' ? '横' : '縦'}壁を置きました。`);
       }
@@ -559,8 +578,27 @@
 
     if (!placed) {
       const moves = legalMoves('cpu');
-      moves.sort((a, b) => Math.abs(a.r - players.cpu.goal) - Math.abs(b.r - players.cpu.goal));
-      const next = moves[0];
+      let next;
+      if (difficulty === 'easy' && Math.random() < 0.4) {
+        next = moves[Math.floor(Math.random() * moves.length)];
+      } else if (difficulty === 'hard') {
+        let bestMove = moves[0];
+        let bestDist = Infinity;
+        for (const m of moves) {
+          const savedR = players.cpu.r;
+          const savedC = players.cpu.c;
+          players.cpu.r = m.r;
+          players.cpu.c = m.c;
+          const dist = shortestPath('cpu');
+          players.cpu.r = savedR;
+          players.cpu.c = savedC;
+          if (dist < bestDist) { bestDist = dist; bestMove = m; }
+        }
+        next = bestMove;
+      } else {
+        moves.sort((a, b) => Math.abs(a.r - players.cpu.goal) - Math.abs(b.r - players.cpu.goal));
+        next = moves[0];
+      }
       movePawn('cpu', next.r, next.c);
       if (!gameOver) log('CPUが駒を進めました。');
     }
@@ -713,6 +751,13 @@
   vWallBtn.addEventListener('click', () => { wallOrientation = 'v'; updateHud(); });
   newGameBtn.addEventListener('click', reset);
   hintBtn.addEventListener('click', () => { showHints = !showHints; draw(); });
+
+  diffButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      difficulty = btn.dataset.diff;
+      diffButtons.forEach(b => b.classList.toggle('active', b === btn));
+    });
+  });
 
   reset();
 })();
