@@ -1,7 +1,7 @@
 # Kage Shura Den GPT Image 2 Assets
 
-Each stage uses ten distinct 16:9 GPT Image 2 backgrounds from `stages/screens/`.
-The screens are adjacent world tiles with a continuous full-width ground plane.
+Each stage uses ten distinct 1280x720 GPT Image 2 backgrounds from `stages/screens/`.
+The screens use full-frame crossfades so transitions remain seamless over the continuous ground plane.
 
 `kage_shura_den.html` 用に GPT Image 2 で描き直した画像アセットです。
 
