@@ -5650,10 +5650,10 @@
       };
 
       async function initWeatherCard() {
-        let lat = 35.83, lon = 139.87, city = '三郷市';
+        let lat = 35.83, lon = 139.87, city = '三郷市', muniCd = '';
         try {
           const loc = await getWeatherLocation();
-          lat = loc.lat; lon = loc.lon; city = loc.city;
+          lat = loc.lat; lon = loc.lon; city = loc.city; muniCd = loc.muniCd || '';
         } catch {}
         const titleEl = document.getElementById('home-weather-city-title');
         if (titleEl) titleEl.textContent = `🌤 ${city}の天気`;
@@ -5692,7 +5692,7 @@
           const tomorrowMinNum = Number.isFinite(Number(tomorrowMin)) ? Number(tomorrowMin) : temp - 3;
 
           const pollen = await getPollenForecast({
-            lat, lon,
+            lat, lon, muniCd,
             humidity,
             wind: windSpeed,
             tomorrowMax: tomorrowMaxNum,
@@ -5725,8 +5725,9 @@
               <div class="weather-index-item"><div class="wi-name">🥵 熱中症</div><div class="wi-val">${escHtml(heatStroke)}</div></div>
               <div class="weather-index-item"><div class="wi-name">👕 洗濯物</div><div class="wi-val">${escHtml(laundry)}</div></div>
               <div class="weather-index-item"><div class="wi-name">☀️ 紫外線</div><div class="wi-val">${escHtml(uvLabel)}</div></div>
-              <div class="weather-index-item"><div class="wi-name">🌸 花粉</div><div class="wi-val">${escHtml(pollen.label)}</div></div>
+              <div class="weather-index-item"><div class="wi-name">🌸 花粉</div><div class="wi-val" title="${escHtml(pollen.source)}">${escHtml(pollen.label)}</div></div>
             </div>
+            <div class="local-pop-source">花粉 出典: ${escHtml(pollen.source)}</div>
           `;
 
           // 時間別気温グラフ描画
@@ -5838,7 +5839,50 @@
         return '非常に多い';
       }
 
+      function pollenLabelFromPeak(peak) {
+        if (peak >= 80) return '非常に多い';
+        if (peak >= 30) return '多い';
+        if (peak >= 10) return 'やや多い';
+        if (peak >= 3) return 'やや少ない';
+        return '少ない';
+      }
+
+      async function getWeathernewsPollen(muniCd) {
+        if (!/^\d{5}$/.test(String(muniCd || ''))) throw new Error('pollen-no-municd');
+        const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
+        const target = `https://wxtech.weathernews.com/opendata/v1/pollen?citycode=${muniCd}&start=${today}&end=${today}`;
+        const data = await fetchJsonWithProxies(target);
+
+        // レスポンス形式は実機確認できなかったため、想定しうる構造を防御的に走査する
+        const records = Array.isArray(data) ? data
+          : Array.isArray(data?.data) ? data.data
+          : Array.isArray(data?.pollen) ? data.pollen
+          : Array.isArray(data?.result) ? data.result
+          : Array.isArray(data?.values) ? data.values
+          : null;
+        if (!records || !records.length) throw new Error('pollen-no-records');
+
+        const values = [];
+        records.forEach((r) => {
+          ['value', 'count', 'pollen', 'total', 'level', 'index'].forEach((k) => {
+            const v = Number(r?.[k]);
+            if (Number.isFinite(v)) values.push(v);
+          });
+        });
+        if (!values.length) throw new Error('pollen-no-values');
+
+        const peak = Math.max(...values);
+        return {
+          label: `${pollenLabelFromPeak(peak)}（実測ピーク ${fmtNum(peak, 1)}）`,
+          source: 'ウェザーニューズ ポールンロボ（実測値）',
+        };
+      }
+
       async function getPollenForecast(params) {
+        try {
+          return await getWeathernewsPollen(params.muniCd);
+        } catch (e) {}
+
         try {
           const api = 'https://air-quality-api.open-meteo.com/v1/air-quality'
             + `?latitude=${params.lat || 35.83}&longitude=${params.lon || 139.87}`
@@ -5860,14 +5904,9 @@
 
           if (!values.length) throw new Error('no-pollen-data');
           const peak = Math.max(...values);
-          let label = '少ない';
-          if (peak >= 80) label = '非常に多い';
-          else if (peak >= 30) label = '多い';
-          else if (peak >= 10) label = 'やや多い';
-          else if (peak >= 3) label = 'やや少ない';
 
           return {
-            label: `${label}（予測ピーク ${fmtNum(peak, 1)}）`,
+            label: `${pollenLabelFromPeak(peak)}（予測ピーク ${fmtNum(peak, 1)}）`,
             source: 'Open-Meteo 花粉データ',
           };
         } catch (e) {
