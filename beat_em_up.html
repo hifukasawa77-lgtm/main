@@ -889,6 +889,9 @@
       actors: loadImage("assets/black-fang/actors-alpha.png"),
       blackFangEnemies: loadImage("assets/black-fang/black-fang-enemies-redraw-atlas-alpha.png"),
       blackFangBosses: loadImage("assets/black-fang/black-fang-bosses-redraw-atlas-alpha.png"),
+      enemyAttacksA: loadImage("assets/black-fang/enemy-attacks-01-10-alpha.png"),
+      enemyAttacksB: loadImage("assets/black-fang/enemy-attacks-11-20-alpha.png"),
+      bossAttacks: loadImage("assets/black-fang/boss-attacks-alpha.png"),
       extraEnemies: loadImage("assets/black-fang/missing-enemies-atlas-alpha.png"),
       jackActions: loadImage("assets/black-fang/jack-actions.png"),
       jackCommandActions: loadImage("assets/black-fang/jack-command-actions.png"),
@@ -966,6 +969,38 @@
       kingDragon1: [0, 1],
       kingDragon2: [1, 1],
       kingDragon3: [2, 1]
+    };
+
+    const enemyAttackCells = {
+      spike: ["A", 0],
+      bossSpike: ["A", 0],
+      scrapper: ["A", 1],
+      bulldog: ["A", 2],
+      bossBulldog: ["A", 2],
+      knife: ["A", 3],
+      viper: ["A", 4],
+      madDog: ["A", 5],
+      chain: ["A", 6],
+      bomber: ["A", 7],
+      gunner: ["A", 8],
+      rodman: ["A", 9],
+      tanktop: ["B", 0],
+      sunglasses: ["B", 1],
+      juggler: ["B", 2],
+      elekiman: ["B", 3],
+      fire: ["B", 4],
+      sniper: ["B", 5],
+      shieldman: ["B", 6],
+      driller: ["B", 7],
+      hammer: ["B", 8],
+      doctor: ["B", 9]
+    };
+
+    const bossAttackCells = {
+      tigerLee: 0,
+      raven: 1,
+      carmilla: 2,
+      hammer: 3
     };
 
     const propCells = {
@@ -2682,11 +2717,13 @@
           if (enemy.bikeCharge <= 0 && absDx < 540) {
             enemy.attacking = 760;
             enemy.attackHit = false;
+            enemy.attackVariant = nextEnemyAttackVariant(enemy, 1);
             enemy.bikeCharge = rand(1800, 2600);
           }
         }
 
         if (def.projectile && enemy.attackCooldown === 0 && absDx > 140 && absDx < 520 && absDy < 52) {
+          enemy.attackVariant = projectileAttackVariant(enemy);
           state.projectiles.push({
             x: enemy.x + enemy.facing * 28,
             y: enemy.y - 42,
@@ -2721,6 +2758,7 @@
         if (absDx < def.range && absDy < 36 && enemy.attackCooldown === 0) {
           enemy.attacking = def.slide ? 420 : def.big ? 520 : 360;
           enemy.attackHit = false;
+          enemy.attackVariant = nextEnemyAttackVariant(enemy);
           enemy.attackCooldown = def.cooldown + rand(0, 460);
           enemy._target = player; // remember which player triggered attack
         } else {
@@ -2737,6 +2775,29 @@
         }
       }
       state.enemies = state.enemies.filter(enemy => !enemy.dead || enemy.death > 0);
+    }
+
+    function nextEnemyAttackVariant(enemy, preferred = null) {
+      const bossCell = bossAttackCells[enemy.type];
+      if (bossCell !== undefined) {
+        if (preferred !== null) return preferred;
+        return ((enemy.attackVariant ?? -1) + 1) % 4;
+      }
+      const cell = enemyAttackCells[enemy.type];
+      if (!cell) return 0;
+      if (preferred !== null) return preferred;
+      const next = ((enemy.attackVariant ?? -1) + 1) % 3;
+      return next;
+    }
+
+    function projectileAttackVariant(enemy) {
+      if (enemy.type === "raven") return Math.random() < 0.5 ? 1 : 3;
+      if (enemy.type === "carmilla") return Math.random() < 0.45 ? 0 : Math.random() < 0.75 ? 1 : 3;
+      if (enemy.type === "sniper" || enemy.type === "gunner") return Math.random() < 0.55 ? 0 : 1;
+      if (enemy.type === "doctor") return Math.random() < 0.5 ? 0 : 2;
+      if (enemy.type === "elekiman") return Math.random() < 0.55 ? 0 : 1;
+      if (enemy.type === "fire") return Math.random() < 0.55 ? 0 : 1;
+      return 0;
     }
 
     function damageSomePlayer(player, amount, dir) {
@@ -3322,6 +3383,50 @@
         ? def.bike ? 190 : def.big ? (def.boss ? 198 : 182) : def.boss ? 178 : 158
         : def.big ? (def.boss ? 178 : 154) : def.boss ? 146 : 126;
       drawShadow(e.x, e.y, e.w, e.z);
+      const bossAttackCell = bossAttackCells[e.type];
+      if (bossAttackCell !== undefined && e.attacking > 0 && !e.dead) {
+        const row = clamp(e.attackVariant ?? 0, 0, 3);
+        const bossAttackSizes = {
+          tigerLee: [250, 230],
+          raven: [274, 236],
+          carmilla: [260, 230],
+          hammer: [286, 252]
+        };
+        const [attackW, attackH] = bossAttackSizes[e.type] || [250, 230];
+        const drawnBossAttack = drawAtlasCell(assets.bossAttacks, 4, 4, [bossAttackCell, row], e.x, e.y - e.z + 5, attackW, attackH, {
+          flip: e.facing < 0,
+          alpha: e.hurt > 0 && Math.floor(now() / 60) % 2 === 0 ? 0.72 : 1,
+          rotation: e.dead ? -Math.PI / 2.8 : e.hurt > 0 ? 0.08 * e.facing : 0
+        });
+        if (drawnBossAttack) {
+          ctx.save();
+          ctx.translate(e.x, e.y - e.z);
+          drawEnemyHp(e, def);
+          ctx.restore();
+          return;
+        }
+      }
+      const attackCell = enemyAttackCells[e.type];
+      if (attackCell && e.attacking > 0 && !e.dead) {
+        const attackAsset = attackCell[0] === "A" ? assets.enemyAttacksA : assets.enemyAttacksB;
+        const row = clamp(e.attackVariant ?? 0, 0, 2);
+        const attackW = def.bike ? 222 : def.big ? 214 : def.boss ? 202 : 184;
+        const attackH = def.bike ? 214 : def.big ? 226 : def.boss ? 218 : 206;
+        const drawnAttack = drawAtlasCell(attackAsset, 10, 3, [attackCell[1], row], e.x, e.y - e.z + 7, attackW, attackH, {
+          flip: e.facing < 0,
+          alpha: e.hurt > 0 && Math.floor(now() / 60) % 2 === 0 ? 0.72 : 1,
+          rotation: e.dead ? -Math.PI / 2.8 : e.hurt > 0 ? 0.08 * e.facing : 0
+        });
+        if (drawnAttack) {
+          if (def.boss || e.hp < e.maxHp) {
+            ctx.save();
+            ctx.translate(e.x, e.y - e.z);
+            drawEnemyHp(e, def);
+            ctx.restore();
+          }
+          return;
+        }
+      }
       if (!redrawnBossCell && !redrawnCell && !extraCell && e.moving && e.attacking === 0 && e.hurt === 0 && !e.dead) {
         const frame = Math.floor(((e.walkClock || 0) + e.aiSeed * 80) / 190) % 2;
         const walkSize = def.big ? (def.boss ? 178 : 158) : def.boss ? 148 : 130;
