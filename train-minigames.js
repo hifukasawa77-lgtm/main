@@ -489,7 +489,7 @@ function initQuiz() {
 
     let answered = false;
     choices.forEach(ch => {
-      const btn = mkEl('button', {}, ch.name || ch.id);
+      const btn = mkEl('button', {}, ch.nameKana || ch.id);
       btn.style.cssText = btStyle('#87CEEB') + 'min-height:64px;font-size:15px;white-space:normal;word-break:break-all;';
       btn.addEventListener('click', () => {
         if (answered) return;
@@ -528,7 +528,7 @@ function initQuiz() {
 
       // 正解ボタンをハイライト
       Array.from(grid.children).forEach(b => {
-        if ((b.textContent || '') === (correct.name || correct.id)) {
+        if ((b.textContent || '') === (correct.nameKana || correct.id)) {
           b.style.background = '#4CAF50';
           b.style.color = '#fff';
         }
@@ -547,7 +547,7 @@ function initQuiz() {
     if (isCorrect) {
       res.innerHTML = `<p style="font-size:20px;color:#4CAF50;font-weight:700;">せいかい！ コイン+${COIN_CORRECT}</p>`;
     } else {
-      res.innerHTML = `<p style="font-size:18px;color:#e53935;font-weight:700;">こたえはこれだよ！</p><p style="font-size:15px;color:#333;">${escHtml(correct.name || correct.id)}</p><p style="font-size:14px;color:#888;">コイン+${COIN_WRONG}</p>`;
+      res.innerHTML = `<p style="font-size:18px;color:#e53935;font-weight:700;">こたえはこれだよ！</p><p style="font-size:15px;color:#333;">${escHtml(correct.nameKana || correct.id)}</p><p style="font-size:14px;color:#888;">コイン+${COIN_WRONG}</p>`;
     }
 
     const nextBtn = mkEl('button', {}, 'つぎのもんだいへ');
