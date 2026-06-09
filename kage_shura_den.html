@@ -27,7 +27,7 @@
   }
   #gameCanvas{
     width:100%; height:100%; display:block;
-    image-rendering:pixelated; image-rendering:crisp-edges;
+    image-rendering:auto;
     background:#0a0a14;
   }
   /* --- Mobile virtual pad --- */
@@ -58,7 +58,7 @@
 </head>
 <body>
   <div id="gameWrap">
-    <canvas id="gameCanvas" width="320" height="180"></canvas>
+    <canvas id="gameCanvas" width="960" height="540"></canvas>
     <div id="touchUI">
       <div class="tbtn" id="tLeft">◀</div>
       <div class="tbtn" id="tRight">▶</div>
@@ -83,10 +83,12 @@
    ========================================================================= */
 
 // ---------- 基盤 / Foundation ----------
-const BASE_W = 320, BASE_H = 180;
+const BASE_W = 320, BASE_H = 180, RENDER_SCALE = 3;
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 ctx.imageSmoothingEnabled = true;
+ctx.imageSmoothingQuality = 'high';
+ctx.setTransform(RENDER_SCALE,0,0,RENDER_SCALE,0,0);
 
 function loadArt(src){
   const img = new Image();
@@ -145,40 +147,6 @@ const ART = {
 };
 
 function artReady(img){ return img && img.complete && img.naturalWidth; }
-const stagePanoramas = [null,null];
-function getStagePanorama(index){
-  if(stagePanoramas[index]) return stagePanoramas[index];
-  const images=ART.stages[index];
-  if(!images||!images.every(artReady)) return null;
-  const world=stages[index];
-  const tileW=world.w/images.length;
-  const blendW=Math.min(64,Math.floor(tileW*0.22));
-  const panorama=document.createElement('canvas');
-  panorama.width=world.w; panorama.height=BASE_H;
-  const g=panorama.getContext('2d');
-  for(let i=0;i<images.length;i++){
-    const x=Math.round(i*tileW);
-    const right=Math.round((i+1)*tileW);
-    g.drawImage(images[i],x,0,right-x+1,BASE_H);
-  }
-  for(let i=1;i<images.length;i++){
-    const left=images[i-1], right=images[i];
-    const seam=Math.round(i*tileW);
-    const leftSpan=left.naturalWidth*blendW/tileW;
-    const rightSpan=right.naturalWidth*blendW/tileW;
-    for(let bx=0;bx<blendW;bx++){
-      const t=bx/Math.max(1,blendW-1);
-      const dx=Math.round(seam-blendW/2+bx);
-      g.globalAlpha=1-t;
-      g.drawImage(left,left.naturalWidth-leftSpan+leftSpan*t,0,1,left.naturalHeight,dx,0,1,BASE_H);
-      g.globalAlpha=t;
-      g.drawImage(right,rightSpan*t,0,1,right.naturalHeight,dx,0,1,BASE_H);
-    }
-  }
-  g.globalAlpha=1;
-  stagePanoramas[index]=panorama;
-  return panorama;
-}
 function drawArt(img, x, y, w, h, flip){
   if(!artReady(img)) return false;
   ctx.save();
@@ -1213,7 +1181,8 @@ function drawSpriteGrid(grid, px, py, flip){
 function drawNinja(px, py, dir, state, frame){
   const art = ART.actors[state] || ART.actors.idle;
   const bob = state==='run' ? Math.sin(frame*1.7)*1.2 : 0;
-  if(drawArt(art,px-8,py-18+bob,state==='attack'||state==='special'?34:26,34,dir==='left')) return;
+  const action=state==='attack'||state==='special';
+  if(drawArt(art,px-(action?20:14),py-32+bob,action?50:38,48,dir==='left')) return;
   const frames = NINJA[state] || NINJA.idle;
   const grid = frames[frame % frames.length];
   // スプライトは16x16、当たり判定(10x14)に合わせて少し左上にずらす
@@ -1281,9 +1250,22 @@ const layers = [
   { factor:0.70, draw:(ox,oy)=>{ const m=TH().mid; drawBambooField(ox,oy, m.count, m.color, m.thick, m.alpha); } },
 ];
 function drawParallax(){
-  const panorama=getStagePanorama(currentStage);
-  if(panorama){
-    ctx.drawImage(panorama,camera.x,0,BASE_W,BASE_H,0,0,BASE_W,BASE_H);
+  const images=ART.stages[currentStage];
+  if(images&&images.some(artReady)){
+    const position=clamp(camera.x/BASE_W,0,images.length-1);
+    const index=Math.floor(position);
+    const linear=position-index;
+    const mix=linear*linear*(3-2*linear);
+    const current=images[index];
+    const next=images[Math.min(index+1,images.length-1)];
+    ctx.fillStyle=currentStage===0?'#17324d':'#dce8f3';
+    ctx.fillRect(0,0,BASE_W,BASE_H);
+    if(artReady(current)) ctx.drawImage(current,0,0,BASE_W,BASE_H);
+    if(next!==current&&artReady(next)){
+      ctx.globalAlpha=mix;
+      ctx.drawImage(next,0,0,BASE_W,BASE_H);
+      ctx.globalAlpha=1;
+    }
     return;
   }
   for(const L of layers){
