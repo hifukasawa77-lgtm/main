@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GameKit Starter | ゲームテンプレート</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --accent-cyan: #22d3ee;
+    --accent-purple: #a78bfa;
+    --text: #e2e8f0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 12px;
+  }
+  canvas {
+    max-width: 96vw;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--bg);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  }
+  .hint { font-size: 13px; color: #94a3b8; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<p class="hint">移動: 矢印 / WASD ・ 決定: クリック or Space &nbsp;|&nbsp; Move: Arrows / WASD ・ Confirm: Click or Space</p>
+
+<script src="gamekit.js"></script>
+<script>
+'use strict';
+
+const W = 960, H = 540;
+const game = new GameKit.Engine(document.getElementById('game'), { width: W, height: H });
+const save = new GameKit.Save('gamekit-template');
+
+/* ---------- タイトル / Title ---------- */
+class TitleScene extends GameKit.Scene {
+  enter() {
+    this.particles = new GameKit.Particles(W, H, { count: 70 });
+    this.t = 0;
+  }
+  update(dt, game) {
+    this.t += dt;
+    this.particles.update(dt);
+    if (game.input.justPressed('Space') || game.input.pointer.justPressed) {
+      game.audio.jingle([{ f: 523, d: 0.1 }, { f: 659, d: 0.1 }, { f: 784, d: 0.18 }]);
+      game.changeScene(new PlayScene());
+    }
+  }
+  draw(ctx) {
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(0, 0, W, H);
+    this.particles.draw(ctx);
+
+    GameKit.UI.glassPanel(ctx, W / 2 - 260, H / 2 - 110, 520, 220);
+    GameKit.UI.text(ctx, 'GAMEKIT STARTER', W / 2, H / 2 - 78, {
+      font: 'bold 40px "Segoe UI", sans-serif', color: '#22d3ee',
+    });
+    GameKit.UI.text(ctx, 'ゲームテンプレート', W / 2, H / 2 - 28, { color: '#a78bfa', font: '18px sans-serif' });
+    const blink = Math.sin(this.t * 4) > -0.3;
+    if (blink) {
+      GameKit.UI.text(ctx, 'クリック / Space でスタート — Click / Space to Start', W / 2, H / 2 + 40);
+    }
+    GameKit.UI.text(ctx, 'HIGH SCORE: ' + (save.get('hiscore', 0)), W / 2, H / 2 + 78, { color: '#94a3b8', font: '14px sans-serif' });
+  }
+}
+
+/* ---------- プレイ / Play ---------- */
+class PlayScene extends GameKit.Scene {
+  enter() {
+    this.player = { x: W / 2, y: H / 2, r: 14, speed: 260 };
+    this.orbs = [];
+    this.score = 0;
+    this.timeLeft = 30;
+    this.particles = new GameKit.Particles(W, H, { count: 40 });
+    for (let i = 0; i < 5; i++) this.spawnOrb();
+  }
+  spawnOrb() {
+    this.orbs.push({
+      x: GameKit.MathX.rand(40, W - 40),
+      y: GameKit.MathX.rand(40, H - 40),
+      r: 9,
+      hue: Math.random() < 0.5 ? '#22d3ee' : '#a78bfa',
+    });
+  }
+  update(dt, game) {
+    this.particles.update(dt);
+    this.timeLeft -= dt;
+    if (this.timeLeft <= 0) {
+      const hi = save.get('hiscore', 0);
+      if (this.score > hi) save.set('hiscore', this.score);
+      game.audio.jingle([{ f: 784, d: 0.12 }, { f: 659, d: 0.12 }, { f: 523, d: 0.25 }]);
+      game.changeScene(new TitleScene());
+      return;
+    }
+
+    const ax = game.input.axis();
+    const len = Math.hypot(ax.x, ax.y) || 1; // 斜め移動の速度補正
+    this.player.x = GameKit.MathX.clamp(this.player.x + (ax.x / len) * this.player.speed * dt, this.player.r, W - this.player.r);
+    this.player.y = GameKit.MathX.clamp(this.player.y + (ax.y / len) * this.player.speed * dt, this.player.r, H - this.player.r);
+
+    for (let i = this.orbs.length - 1; i >= 0; i--) {
+      if (GameKit.Collision.circles(this.player, this.orbs[i])) {
+        this.orbs.splice(i, 1);
+        this.score += 10;
+        game.audio.beep(880, 0.08, 'triangle');
+        this.spawnOrb();
+      }
+    }
+  }
+  draw(ctx) {
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(0, 0, W, H);
+    this.particles.draw(ctx);
+
+    for (const o of this.orbs) {
+      ctx.fillStyle = o.hue;
+      ctx.beginPath();
+      ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const p = this.player;
+    const grad = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, p.r);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(1, '#22d3ee');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    GameKit.UI.glassPanel(ctx, 16, 14, 230, 64);
+    GameKit.UI.text(ctx, 'SCORE / スコア: ' + this.score, 131, 24, { font: '15px sans-serif' });
+    GameKit.UI.text(ctx, 'TIME / 残り: ' + Math.ceil(this.timeLeft) + 's', 131, 48, { font: '15px sans-serif', color: '#a78bfa' });
+  }
+}
+
+game.changeScene(new TitleScene());
+game.start();
+</script>
+</body>
+</html>

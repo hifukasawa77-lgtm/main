@@ -21,6 +21,12 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - ライブラリを追加する場合はCDN経由、ビルドツール不使用
 - ゲーム系はCanvas APIのみで完結させる方針
 
+## GameKit（ゲーム制作フレームワーク）
+- 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
+- スターター: `gamekit/template.html` をリポジトリ直下にコピーして開始する
+- `/new-game` スキルでエージェントパイプライン一式（仕様→アセット→実装→テスト→採点）を起動できる
+- 画像生成はAPIキー不要のMCPコネクタ（Adobe / Canva / Figma）またはプロシージャル生成を使う（`.claude/agents/graphic-designer.md` 参照）
+
 ## Git
 - メインブランチ: `main`
 - 作業ブランチ: `kai_001`
