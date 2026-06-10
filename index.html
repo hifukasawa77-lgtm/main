@@ -12348,7 +12348,7 @@
       // ── Constants ────────────────────────────────────────────
       const STATE_KEY = 'hide-agent-state-v1';
       const MAX_TURNS = 20;
-      const TYPE_SPEED_MS = 14;
+      const TYPE_SPEED_MS = 10;
 
       // ── Game Registry ────────────────────────────────────────
       const GAMES = [
@@ -12629,28 +12629,44 @@
         }
       };
 
+      // 事前正規化済みインテント辞書（detectIntent 等での重複normalize呼び出しを回避）
+      const INTENT_DICT_NORM = {};
+      for (const lang in INTENT_DICT) {
+        INTENT_DICT_NORM[lang] = {};
+        for (const intent in INTENT_DICT[lang]) {
+          INTENT_DICT_NORM[lang][intent] = INTENT_DICT[lang][intent].map(([kw, w]) => [normalize(String(kw)), w]);
+        }
+      }
+
       // ── AI Agent 設定 ──────────────────────────────────────
       // Cloudflare Worker URL を設定（README: cloudflare-worker/README.md）
       const AGENT_PROXY_URL = 'https://ai-proxy.hi-fukasawa77.workers.dev';
 
       async function askGemini(userText, historyTurns) {
         if (!AGENT_PROXY_URL) throw new Error('no-key');
-        const res = await fetch(AGENT_PROXY_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: userText,
-            history: (historyTurns || []).slice(-4).map(m => ({
-              role: m.role,
-              text: m.text,
-            })),
-          }),
-        });
-        if (!res.ok) throw new Error('proxy-http-' + res.status);
-        const data = await res.json();
-        const text = data?.text;
-        if (!text) throw new Error('proxy-empty');
-        return text.trim();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        try {
+          const res = await fetch(AGENT_PROXY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: userText,
+              history: (historyTurns || []).slice(-4).map(m => ({
+                role: m.role,
+                text: m.text,
+              })),
+            }),
+            signal: controller.signal,
+          });
+          if (!res.ok) throw new Error('proxy-http-' + res.status);
+          const data = await res.json();
+          const text = data?.text;
+          if (!text) throw new Error('proxy-empty');
+          return text.trim();
+        } finally {
+          clearTimeout(timeout);
+        }
       }
 
       // ── Utilities ────────────────────────────────────────────
@@ -12715,13 +12731,11 @@
       function detectIntent(text, lang) {
         const t = normalize(text);
         if (!t) return { name: null, score: 0 };
-        const dict = INTENT_DICT[lang] || INTENT_DICT.ja;
+        const dict = INTENT_DICT_NORM[lang] || INTENT_DICT_NORM.ja;
         const scores = {};
         for (const intent in dict) {
           let s = 0;
-          for (const pair of dict[intent]) {
-            const kw = String(pair[0]).toLowerCase();
-            const w = pair[1];
+          for (const [kw, w] of dict[intent]) {
             if (!kw) continue;
             if (t.indexOf(kw) !== -1) s += w;
           }
@@ -12983,8 +12997,14 @@
         if (on && messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
+      let scrollScheduled = false;
       function scrollToBottom() {
-        if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+        if (!messagesEl || scrollScheduled) return;
+        scrollScheduled = true;
+        requestAnimationFrame(() => {
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+          scrollScheduled = false;
+        });
       }
 
       function renderMessage(role, content) {
@@ -13120,15 +13140,15 @@
             const progress = text.length > 1 ? i / text.length : 0.5;
             let delay;
             if (ch === '。' || ch === '！' || ch === '？') {
-              delay = TYPE_SPEED_MS * 5;      // 句点・感嘆符で長めの間
+              delay = TYPE_SPEED_MS * 3.5;    // 句点・感嘆符で長めの間
             } else if (ch === '、' || ch === '…') {
-              delay = TYPE_SPEED_MS * 3;      // 読点で短めの間
+              delay = TYPE_SPEED_MS * 2.2;    // 読点で短めの間
             } else if (ch === '\n') {
-              delay = TYPE_SPEED_MS * 6;      // 改行で最長の間
+              delay = TYPE_SPEED_MS * 4;      // 改行で最長の間
             } else if (progress < 0.15) {
               delay = TYPE_SPEED_MS * 0.6;    // 冒頭15%は速め
             } else if (progress > 0.80) {
-              delay = TYPE_SPEED_MS * 1.8;    // 末尾20%はゆっくり
+              delay = TYPE_SPEED_MS * 1.4;    // 末尾20%はゆっくり
             } else {
               delay = TYPE_SPEED_MS;          // 中間は通常速度
             }
@@ -13465,7 +13485,7 @@
           try {
             const reply = await askGemini(text, State.history);
             setTyping(false);
-            await botSay(reply);
+            await botSay(reply, { delay: 0 });
             renderChips(defaultChips());
           } catch (e) {
             setTyping(false);
@@ -13475,14 +13495,14 @@
         } else {
           // 全インテントのスコアを計算して最も近い3候補を提示
           const isJa = State.lang === 'ja';
-          const dict = INTENT_DICT[isJa ? 'ja' : 'en'] || INTENT_DICT.ja;
+          const dict = INTENT_DICT_NORM[isJa ? 'ja' : 'en'] || INTENT_DICT_NORM.ja;
           const labels = INTENT_CHIP_LABELS[isJa ? 'ja' : 'en'] || INTENT_CHIP_LABELS.ja;
           const nt = normalize(text);
           const scores = {};
           for (const intent in dict) {
             let s = 0;
             for (const [kw, w] of dict[intent]) {
-              if (nt.includes(normalize(kw))) s += w;
+              if (nt.includes(kw)) s += w;
             }
             if (s > 0) scores[intent] = s;
           }
