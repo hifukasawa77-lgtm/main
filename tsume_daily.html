@@ -1,0 +1,1440 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="詰将棋デイリー / Tsume Daily — 1日1問の詰将棋。毎日自動生成、ストリーク＆シェア対応。">
+<title>詰将棋デイリー | Tsume Daily</title>
+<!-- ===== 1. HTML構造 ===== -->
+<!-- ===== 2. CSS ===== -->
+<style>
+/* ===== 2. CSS: テーマ変数 ===== */
+:root{
+  --bg:#05060a;
+  --text:#e7ecf3;
+  --dim:#8b95a5;
+  --cyan:#22d3ee;
+  --cyan-soft:rgba(34,211,238,.14);
+  --purple:#a78bfa;
+  --purple-soft:rgba(167,139,250,.18);
+  --glass:rgba(255,255,255,.045);
+  --glass-border:rgba(255,255,255,.12);
+  --cell-line:rgba(34,211,238,.22);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic UI",system-ui,sans-serif;
+  -webkit-tap-highlight-color:transparent;
+  min-width:360px;
+}
+#bg{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;}
+#app{
+  position:relative;z-index:1;
+  max-width:560px;margin:0 auto;
+  padding:14px 12px 40px;
+  display:flex;flex-direction:column;gap:14px;
+}
+.hidden{display:none !important;}
+.dim{color:var(--dim);}
+.small-note{font-size:.74rem;line-height:1.5;text-align:center;}
+
+/* ===== Glassmorphism カード ===== */
+.glass{
+  background:var(--glass);
+  border:1px solid var(--glass-border);
+  border-radius:16px;
+  backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+  box-shadow:0 6px 24px rgba(0,0,0,.35);
+}
+.card{padding:14px 16px;}
+
+/* ===== ヘッダ ===== */
+header .title-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+header h1{font-size:1.25rem;letter-spacing:.06em;
+  background:linear-gradient(90deg,var(--cyan),var(--purple));
+  -webkit-background-clip:text;background-clip:text;color:transparent;}
+.hdr-btns{display:flex;gap:8px;}
+.icon-btn{
+  min-width:44px;min-height:44px;border-radius:12px;cursor:pointer;
+  background:var(--glass);border:1px solid var(--glass-border);
+  color:var(--text);font-size:.95rem;
+}
+.icon-btn:hover{border-color:var(--cyan);}
+.meta-row{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap;}
+.badge{
+  font-size:.8rem;padding:3px 10px;border-radius:999px;
+  border:1px solid var(--glass-border);background:rgba(255,255,255,.03);
+}
+.badge.accent{border-color:var(--cyan);color:var(--cyan);}
+
+/* ===== バナー / トースト ===== */
+.banner{
+  padding:10px 14px;border-radius:12px;font-size:.85rem;
+  background:rgba(167,139,250,.12);border:1px solid var(--purple);
+}
+.toast{
+  position:fixed;left:50%;bottom:28px;transform:translateX(-50%);
+  background:rgba(10,12,20,.92);border:1px solid var(--cyan);
+  color:var(--text);padding:10px 18px;border-radius:12px;font-size:.9rem;
+  z-index:60;max-width:90vw;text-align:center;
+}
+
+/* ===== プレイビュー ===== */
+.status-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+#missIndicator{font-size:1.05rem;letter-spacing:.25em;color:var(--dim);}
+#missIndicator .lit{color:var(--purple);}
+.btn{
+  min-height:44px;padding:8px 16px;border-radius:12px;cursor:pointer;
+  background:var(--glass);border:1px solid var(--glass-border);
+  color:var(--text);font-size:.9rem;
+}
+.btn:hover{border-color:var(--cyan);}
+.btn.primary{border-color:var(--cyan);background:var(--cyan-soft);}
+.btn:disabled{opacity:.45;cursor:default;}
+.btn-row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:12px;}
+
+/* ===== 盤面（shogi.html DOMグリッド方式を流用） ===== */
+#boardWrap{display:flex;justify-content:center;}
+#board{
+  width:min(92vw,480px);aspect-ratio:1/1;
+  display:grid;grid-template-columns:repeat(9,1fr);grid-template-rows:repeat(9,1fr);
+  border:2px solid var(--cell-line);border-radius:8px;overflow:hidden;
+  background:rgba(12,16,26,.72);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+}
+#board.shake{animation:shake .35s;}
+@keyframes shake{
+  0%,100%{transform:translateX(0);}
+  20%{transform:translateX(-7px);}40%{transform:translateX(7px);}
+  60%{transform:translateX(-5px);}80%{transform:translateX(5px);}
+}
+.cell{
+  position:relative;display:flex;align-items:center;justify-content:center;
+  border-right:1px solid var(--cell-line);border-bottom:1px solid var(--cell-line);
+  cursor:pointer;user-select:none;
+}
+.cell:nth-child(9n){border-right:none;}
+.cell:nth-last-child(-n+9){border-bottom:none;}
+.cell.sel{outline:2px solid var(--cyan);outline-offset:-2px;background:var(--cyan-soft);}
+.cell.vmove{background:var(--cyan-soft);}
+.cell.vcap{background:var(--purple-soft);}
+.cell.chk{outline:2px solid var(--purple);outline-offset:-2px;}
+.cell.hint{outline:2px dashed var(--purple);outline-offset:-3px;background:var(--purple-soft);}
+.piece{
+  font-size:clamp(15px,4.6vw,26px);font-weight:700;line-height:1;
+  color:var(--text);text-shadow:0 1px 2px rgba(0,0,0,.6);
+}
+.piece.p2{transform:rotate(180deg);color:#cfc4f5;}
+.dot{width:25%;height:25%;border-radius:50%;background:var(--cyan);opacity:.55;}
+
+/* ===== 持ち駒トレイ ===== */
+#handTray{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.tray-label{font-size:.8rem;color:var(--dim);white-space:nowrap;}
+#handPieces{display:flex;gap:8px;flex-wrap:wrap;}
+.hand-piece{
+  position:relative;min-width:44px;min-height:44px;border-radius:10px;cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid var(--glass-border);
+  color:var(--text);font-size:1.15rem;font-weight:700;
+}
+.hand-piece.sel-drop{outline:2px solid var(--cyan);outline-offset:-2px;background:var(--cyan-soft);}
+.hand-piece.hint{outline:2px dashed var(--purple);outline-offset:-2px;background:var(--purple-soft);}
+.hand-count{
+  position:absolute;right:2px;bottom:2px;font-size:.62rem;color:var(--cyan);font-weight:400;
+}
+.hand-none{font-size:.85rem;color:var(--dim);}
+
+.msg{text-align:center;font-size:.92rem;min-height:1.4em;}
+
+/* ===== 完了ビュー / モーダル ===== */
+#doneView{text-align:center;}
+#doneView h2,#soonView h2{font-size:1.15rem;margin-bottom:8px;}
+.emoji-grid{font-size:1.5rem;letter-spacing:.1em;margin:8px 0;}
+.countdown{
+  font-size:1.9rem;font-variant-numeric:tabular-nums;letter-spacing:.08em;
+  color:var(--cyan);margin:6px 0 4px;
+}
+#soonView{text-align:center;padding:30px 16px;}
+
+.modal-bg{
+  position:fixed;inset:0;z-index:50;
+  background:rgba(3,4,8,.66);
+  display:flex;align-items:center;justify-content:center;padding:16px;
+}
+.modal{
+  width:100%;max-width:420px;max-height:86vh;overflow-y:auto;
+  padding:22px 20px;text-align:center;
+}
+.modal h2{font-size:1.2rem;margin-bottom:10px;}
+.modal h3{font-size:.9rem;color:var(--dim);margin:14px 0 4px;}
+.solution{font-size:1rem;letter-spacing:.05em;line-height:1.7;}
+.modal.small{max-width:300px;}
+#copyArea{
+  width:100%;margin-top:10px;padding:10px;border-radius:10px;resize:none;
+  background:rgba(255,255,255,.05);border:1px solid var(--glass-border);
+  color:var(--text);font-size:.85rem;line-height:1.5;
+}
+.stats-grid{
+  display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px;
+}
+.stat-box{padding:12px 8px;border-radius:12px;background:rgba(255,255,255,.04);
+  border:1px solid var(--glass-border);}
+.stat-val{font-size:1.45rem;color:var(--cyan);font-variant-numeric:tabular-nums;}
+.stat-label{font-size:.72rem;color:var(--dim);margin-top:3px;}
+
+@media (max-width:380px){
+  header h1{font-size:1.05rem;}
+  .btn{padding:8px 10px;font-size:.82rem;}
+}
+@media (prefers-reduced-motion: reduce){
+  #board.shake{animation:none;}
+}
+</style>
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+<div id="app">
+  <header class="glass card">
+    <div class="title-row">
+      <h1 data-i18n="title">詰将棋デイリー</h1>
+      <div class="hdr-btns">
+        <button id="statsBtn" class="icon-btn" aria-label="Statistics">&#128202;</button>
+        <button id="langBtn" class="icon-btn" aria-label="Language">EN</button>
+      </div>
+    </div>
+    <div class="meta-row">
+      <span id="puzzleNo" class="badge">#–</span>
+      <span id="pliesLabel" class="badge accent">–</span>
+      <span id="dateLabel" class="dim">–</span>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <main style="display:flex;flex-direction:column;gap:14px;">
+    <section id="playView" class="hidden" style="display:flex;flex-direction:column;gap:12px;">
+      <div class="status-row">
+        <div id="missIndicator" aria-label="mistakes"></div>
+        <button id="hintBtn" class="btn"><span data-i18n="hint">ヒント</span> &#128161;</button>
+      </div>
+      <div id="boardWrap"><div id="board"></div></div>
+      <div id="handTray" class="glass card">
+        <span class="tray-label" data-i18n="yourHand">攻方持ち駒</span>
+        <div id="handPieces"></div>
+      </div>
+      <p id="msgLine" class="msg" aria-live="polite"></p>
+      <p id="legend" class="dim small-note hidden"></p>
+    </section>
+
+    <section id="doneView" class="glass card hidden">
+      <h2 id="doneTitle"></h2>
+      <p id="doneEmoji" class="emoji-grid"></p>
+      <p id="doneStreak"></p>
+      <p class="dim" style="margin-top:10px;"><span data-i18n="nextIn">次の問題まで</span></p>
+      <p id="countdown" class="countdown">--:--:--</p>
+      <button id="reloadBtn" class="btn primary hidden" data-i18n="reload">新しい問題へ</button>
+      <div class="btn-row">
+        <button id="shareBtn2" class="btn primary" data-i18n="share">シェア（コピー）</button>
+        <button id="xBtn2" class="btn" data-i18n="shareX">Xでシェア</button>
+        <button id="replayBtn" class="btn" data-i18n="replay">リプレイ ▶</button>
+      </div>
+    </section>
+
+    <section id="soonView" class="glass card hidden">
+      <h2 data-i18n="comingSoon">公開前です</h2>
+      <p class="dim" data-i18n="soonNote">公開日: 2026-07-01（JST）</p>
+    </section>
+  </main>
+
+  <footer class="dim small-note" data-i18n="footer">問題は毎日自動生成（既存作品の転載なし）</footer>
+</div>
+
+<!-- 結果モーダル -->
+<div id="resultModal" class="modal-bg hidden" role="dialog" aria-modal="true" aria-labelledby="resultTitle">
+  <div class="modal glass">
+    <h2 id="resultTitle"></h2>
+    <p id="resultEmoji" class="emoji-grid"></p>
+    <p id="resultStreak"></p>
+    <h3 data-i18n="solutionLabel">正解手順</h3>
+    <p id="solutionLine" class="solution"></p>
+    <div class="btn-row">
+      <button id="shareBtn" class="btn primary" data-i18n="share">シェア（コピー）</button>
+      <button id="xBtn" class="btn" data-i18n="shareX">Xでシェア</button>
+    </div>
+    <div class="btn-row">
+      <button id="resultStatsBtn" class="btn" data-i18n="statsTitle">統計</button>
+      <button id="resultCloseBtn" class="btn" data-i18n="close">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- 統計モーダル -->
+<div id="statsModal" class="modal-bg hidden" role="dialog" aria-modal="true">
+  <div class="modal glass">
+    <h2 data-i18n="statsTitle">統計</h2>
+    <div id="statsGrid" class="stats-grid"></div>
+    <div class="btn-row"><button id="statsCloseBtn" class="btn" data-i18n="close">閉じる</button></div>
+  </div>
+</div>
+
+<!-- 成り確認モーダル -->
+<div id="promModal" class="modal-bg hidden" role="dialog" aria-modal="true">
+  <div class="modal glass small">
+    <h2 data-i18n="promote">成りますか？</h2>
+    <div class="btn-row">
+      <button id="promYes" class="btn primary" data-i18n="promYes">成る</button>
+      <button id="promNo" class="btn" data-i18n="promNo">不成</button>
+    </div>
+  </div>
+</div>
+
+<!-- クリップボードフォールバック -->
+<div id="copyModal" class="modal-bg hidden" role="dialog" aria-modal="true">
+  <div class="modal glass">
+    <h2 data-i18n="copyManual">下のテキストをコピーしてください</h2>
+    <textarea id="copyArea" readonly rows="6"></textarea>
+    <div class="btn-row"><button id="copyCloseBtn" class="btn" data-i18n="close">閉じる</button></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden" aria-live="polite"></div>
+
+<script id="pure-logic">
+"use strict";
+/* 純粋ロジック層: DOM非依存（Nodeでの単体検証用に分離） */
+
+// ===== 3. I18N =====
+const I18N = {
+  ja: {
+    title:'詰将棋デイリー', mate1:'1手詰', mate3:'3手詰',
+    yourHand:'攻方持ち駒', none:'なし',
+    hint:'ヒント', hintUsed:'ヒント使用済み',
+    yourMove:'あなたの番です — 王手で詰ませよう', thinking:'受方の応手…',
+    mistake:'その手では詰みません', cleared:'クリア！', failed:'失敗…',
+    solutionLabel:'正解手順', share:'シェア（コピー）', shareX:'Xでシェア', replay:'リプレイ ▶',
+    statsTitle:'統計', close:'閉じる', nextIn:'次の問題まで', reload:'新しい問題へ',
+    copied:'コピーしました', copyManual:'下のテキストをコピーしてください',
+    promote:'成りますか？', promYes:'成る', promNo:'不成',
+    noSave:'⚠ 記録が保存されません（プライベートモード等）',
+    comingSoon:'公開前です', soonNote:'公開日: 2026-07-01（JST）',
+    played:'挑戦', clearRate:'クリア率', curStreak:'連続日数', maxStreak:'最長連続', avgMiss:'平均ミス', clearedDays:'クリア',
+    doneCleared:'本日クリア！', doneFailed:'本日は失敗…',
+    footer:'問題は毎日自動生成（既存作品の転載なし）',
+    legend:''
+  },
+  en: {
+    title:'Tsume Daily', mate1:'Mate in 1', mate3:'Mate in 3',
+    yourHand:'Your hand', none:'None',
+    hint:'Hint', hintUsed:'Hint used',
+    yourMove:'Your move — give check and mate!', thinking:'Opponent is moving…',
+    mistake:'Not the mating move', cleared:'Cleared!', failed:'Failed…',
+    solutionLabel:'Solution', share:'Share (copy)', shareX:'Share on X', replay:'Replay ▶',
+    statsTitle:'Stats', close:'Close', nextIn:'Next puzzle in', reload:'Load new puzzle',
+    copied:'Copied!', copyManual:'Copy the text below',
+    promote:'Promote?', promYes:'Promote', promNo:'Keep',
+    noSave:"⚠ Stats won't be saved (private mode?)",
+    comingSoon:'Coming soon', soonNote:'Launch: 2026-07-01 (JST)',
+    played:'Played', clearRate:'Clear rate', curStreak:'Streak', maxStreak:'Max streak', avgMiss:'Avg. misses', clearedDays:'Cleared',
+    doneCleared:'Cleared today!', doneFailed:'Failed today…',
+    footer:'Puzzles are generated daily by algorithm (no copied compositions)',
+    legend:'玉=King 飛=Rook 角=Bishop 金=Gold 銀=Silver 桂=kNight 香=Lance 歩=Pawn ／ rotated = opponent'
+  }
+};
+
+// ===== 4. SEEDED RANDOM =====
+const EPOCH = '2026-07-01'; // 公開予定日（リリース時に確定）
+
+function getJSTDateString(now) {
+  if (now === undefined) now = Date.now();
+  // 端末タイムゾーン非依存: UTC+9時間ずらしたUTC成分を読む
+  const d = new Date(now + 9 * 3600 * 1000);
+  return d.getUTCFullYear() + '-' +
+    String(d.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getUTCDate()).padStart(2, '0');
+}
+function parseDateStr(s) {
+  const a = s.split('-');
+  return { y: +a[0], m: +a[1], d: +a[2] };
+}
+function getPuzzleNumber(dateStr) {
+  const { y, m, d } = parseDateStr(dateStr);
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(2026, 6, 1)) / 86400000) + 1;
+}
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function createRng(dateStr, attempt) {
+  return mulberry32(fnv1a('tsumeDaily:' + dateStr + ':' + attempt));
+}
+function getPlies(dateStr) {
+  // 難度カレンダー（PM承認）: 平日=1手詰 / 土日=3手詰
+  const { y, m, d } = parseDateStr(dateStr);
+  const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=日 6=土
+  return (day === 0 || day === 6) ? 3 : 1;
+}
+function msUntilNextJSTMidnight(now) {
+  if (now === undefined) now = Date.now();
+  const j = now + 9 * 3600 * 1000;
+  return (Math.floor(j / 86400000) + 1) * 86400000 - j;
+}
+function prevDateStr(s) {
+  const { y, m, d } = parseDateStr(s);
+  const dt = new Date(Date.UTC(y, m - 1, d) - 86400000);
+  return dt.getUTCFullYear() + '-' +
+    String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(dt.getUTCDate()).padStart(2, '0');
+}
+
+// ===== 5. SHOGI CORE =====
+// 以下 inB / rawMoves / findKing / inCheck / clone / validMoves_board /
+// inPromZone / mustProm は shogi.html (457-537行) からの無改修コピー
+function inB(r,c){return r>=0&&r<9&&c>=0&&c<9;}
+
+function rawMoves(b,r,c){
+  const pc=b[r][c]; if(!pc)return[];
+  const {t,p}=pc, fd=p===1?-1:1, ms=[];
+  function slide(dr,dc){
+    let rr=r+dr,cc=c+dc;
+    while(inB(rr,cc)){
+      const tg=b[rr][cc];
+      if(tg){if(tg.p!==p)ms.push([rr,cc]);break;}
+      ms.push([rr,cc]); rr+=dr; cc+=dc;
+    }
+  }
+  function step(dr,dc){
+    const rr=r+dr,cc=c+dc;
+    if(inB(rr,cc)&&(!b[rr][cc]||b[rr][cc].p!==p))ms.push([rr,cc]);
+  }
+  function gold(){step(fd,0);step(0,-1);step(0,1);step(-fd,0);step(fd,-1);step(fd,1);}
+  switch(t){
+    case'FU':step(fd,0);break;
+    case'KYO':slide(fd,0);break;
+    case'KEI':step(fd*2,-1);step(fd*2,1);break;
+    case'GIN':step(fd,-1);step(fd,0);step(fd,1);step(-fd,-1);step(-fd,1);break;
+    case'KIN':case'TO':case'NKYO':case'NKEI':case'NGIN':gold();break;
+    case'KAKU':slide(-1,-1);slide(-1,1);slide(1,-1);slide(1,1);break;
+    case'HI':slide(-1,0);slide(1,0);slide(0,-1);slide(0,1);break;
+    case'RYUMA':slide(-1,-1);slide(-1,1);slide(1,-1);slide(1,1);step(-1,0);step(1,0);step(0,-1);step(0,1);break;
+    case'RYUO':slide(-1,0);slide(1,0);slide(0,-1);slide(0,1);step(-1,-1);step(-1,1);step(1,-1);step(1,1);break;
+    case'OU':for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++)if(dr||dc)step(dr,dc);break;
+  }
+  return ms;
+}
+
+function findKing(b,p){
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++)if(b[r][c]&&b[r][c].t==='OU'&&b[r][c].p===p)return[r,c];
+  return null;
+}
+
+function inCheck(b,p){
+  const k=findKing(b,p); if(!k)return false;
+  const [kr,kc]=k,opp=p===1?2:1;
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++)
+    if(b[r][c]&&b[r][c].p===opp&&rawMoves(b,r,c).some(([mr,mc])=>mr===kr&&mc===kc))return true;
+  return false;
+}
+
+function clone(b){return b.map(row=>row.map(c=>c?{...c}:null));}
+
+function validMoves_board(b,r,c){
+  const pc=b[r][c]; if(!pc)return[];
+  return rawMoves(b,r,c).filter(([mr,mc])=>{
+    const nb=clone(b); nb[mr][mc]=pc; nb[r][c]=null;
+    return !inCheck(nb,pc.p);
+  });
+}
+
+function inPromZone(r,p){return p===1?r<=2:r>=6;}
+function mustProm(t,r,p){
+  if(t==='FU'||t==='KYO')return p===1?r===0:r===8;
+  if(t==='KEI')return p===1?r<=1:r>=7;
+  return false;
+}
+// --- shogi.html 流用ここまで ---
+
+const NAMES = {
+  FU:'歩',KYO:'香',KEI:'桂',GIN:'銀',KIN:'金',KAKU:'角',HI:'飛',OU:'王',
+  TO:'と',NKYO:'杏',NKEI:'圭',NGIN:'全',RYUMA:'馬',RYUO:'竜'
+};
+const DEMOTE = {TO:'FU',NKYO:'KYO',NKEI:'KEI',NGIN:'GIN',RYUMA:'KAKU',RYUO:'HI'};
+const PROMOTE = {FU:'TO',KYO:'NKYO',KEI:'NKEI',GIN:'NGIN',KAKU:'RYUMA',HI:'RYUO'};
+const FULL_SET = {FU:18,KYO:4,KEI:4,GIN:4,KIN:4,KAKU:2,HI:2}; // 玉除く全駒数
+
+function pieceChar(t,p){return t==='OU'?(p===2?'玉':'王'):NAMES[t];}
+
+// shogi.html validMoves_drop (513-530行) を改修:
+// capData引数 → state.hands 参照に変更（打ち歩詰めフィルタはソルバー側で適用）
+function validDrops(state,t,p,firstOnly){
+  if(!state.hands[p].includes(t))return[];
+  const b=state.board, ms=[], last=p===1?0:8, sec=p===1?1:7;
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++){
+    if(b[r][c])continue;
+    if((t==='FU'||t==='KYO')&&r===last)continue;
+    if(t==='KEI'&&(r===last||r===sec))continue;
+    if(t==='FU'){
+      let two=false;
+      for(let rr=0;rr<9;rr++)if(b[rr][c]&&b[rr][c].t==='FU'&&b[rr][c].p===p)two=true;
+      if(two)continue;
+    }
+    const nb=clone(b); nb[r][c]={t,p};
+    if(inCheck(nb,p))continue;
+    ms.push([r,c]);
+    if(firstOnly)return ms;
+  }
+  return ms;
+}
+
+// 非破壊で着手を適用（取った駒はDEMOTEして自手駒へ / turn反転）
+function applyMove(state,move){
+  const b=clone(state.board);
+  const hands={1:state.hands[1].slice(),2:state.hands[2].slice()};
+  const p=state.turn;
+  if(move.kind==='move'){
+    const pc=b[move.fr][move.fc];
+    const tg=b[move.tr][move.tc];
+    if(tg)hands[p].push(DEMOTE[tg.t]||tg.t);
+    b[move.tr][move.tc]={t:move.prom?PROMOTE[pc.t]:pc.t,p:pc.p};
+    b[move.fr][move.fc]=null;
+  }else{
+    const i=hands[p].indexOf(move.t);
+    hands[p].splice(i,1);
+    b[move.tr][move.tc]={t:move.t,p:p};
+  }
+  return {board:b,hands:hands,turn:p===1?2:1};
+}
+
+// turn側の全合法手（盤上移動×成/不成 ＋ 持ち駒drop）
+function legalMoves(state){
+  const p=state.turn,b=state.board,res=[];
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++){
+    const pc=b[r][c]; if(!pc||pc.p!==p)continue;
+    const vs=validMoves_board(b,r,c);
+    for(let i=0;i<vs.length;i++){
+      const tr=vs[i][0],tc=vs[i][1];
+      const can=PROMOTE[pc.t]&&(inPromZone(r,p)||inPromZone(tr,p));
+      const must=mustProm(pc.t,tr,p);
+      if(must){res.push({kind:'move',fr:r,fc:c,tr:tr,tc:tc,prom:true});}
+      else{
+        res.push({kind:'move',fr:r,fc:c,tr:tr,tc:tc,prom:false});
+        if(can)res.push({kind:'move',fr:r,fc:c,tr:tr,tc:tc,prom:true});
+      }
+    }
+  }
+  const seen={};
+  for(let i=0;i<state.hands[p].length;i++){
+    const t=state.hands[p][i];
+    if(seen[t])continue; seen[t]=true;
+    const ds=validDrops(state,t,p);
+    for(let j=0;j<ds.length;j++)res.push({kind:'drop',t:t,tr:ds[j][0],tc:ds[j][1]});
+  }
+  return res;
+}
+
+// shogi.html hasAnyMove (539-545行) 改修版: state形式＋玉の脱出を先に試す早期打ち切り
+function hasAnyLegalMove(state){
+  const p=state.turn,b=state.board;
+  const k=findKing(b,p);
+  if(k&&validMoves_board(b,k[0],k[1]).length>0)return true;
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++){
+    const pc=b[r][c];
+    if(pc&&pc.p===p&&pc.t!=='OU'&&validMoves_board(b,r,c).length>0)return true;
+  }
+  const seen={};
+  for(let i=0;i<state.hands[p].length;i++){
+    const t=state.hands[p][i];
+    if(seen[t])continue; seen[t]=true;
+    if(validDrops(state,t,p,true).length>0)return true;
+  }
+  return false;
+}
+
+function isMate(state){
+  return inCheck(state.board,state.turn)&&!hasAnyLegalMove(state);
+}
+function isUchifuzume(state,move){
+  return move.kind==='drop'&&move.t==='FU'&&isMate(applyMove(state,move));
+}
+function sameMove(a,b){
+  if(a.kind!==b.kind)return false;
+  if(a.kind==='drop')return a.t===b.t&&a.tr===b.tr&&a.tc===b.tc;
+  return a.fr===b.fr&&a.fc===b.fc&&a.tr===b.tr&&a.tc===b.tc&&a.prom===b.prom;
+}
+
+// ===== 6. TSUME SOLVER =====
+const NODE_LIMIT = 200000;
+
+// 攻方の着手列挙: 王手のみ・打ち歩詰め除外。適用後局面と即詰みフラグも返す
+function attackerMovesEx(state){
+  const res=[];
+  const ms=legalMoves(state);
+  for(let i=0;i<ms.length;i++){
+    const m=ms[i];
+    const s2=applyMove(state,m);
+    if(!inCheck(s2.board,2))continue;        // 攻方は毎手王手
+    const mate=isMate(s2);
+    if(m.kind==='drop'&&m.t==='FU'&&mate)continue; // 打ち歩詰め禁止
+    res.push({m:m,s2:s2,mate:mate});
+  }
+  return res;
+}
+function attackerMoves(state){
+  return attackerMovesEx(state).map(x=>x.m);
+}
+function defenderMoves(state){
+  return legalMoves(state); // 玉移動・取り・合駒drop全種（受方手番）
+}
+
+function _tick(budget){
+  if(++budget.n>NODE_LIMIT){const e=new Error('NODE_LIMIT');e.nodeLimit=true;throw e;}
+}
+function _solveAttack(state,pliesLeft,budget){
+  const results=[];
+  const ams=attackerMovesEx(state);
+  for(let i=0;i<ams.length;i++){
+    _tick(budget);
+    const a=ams[i];
+    if(a.mate){results.push({move:a.m,line:[a.m]});continue;}
+    if(pliesLeft>=3){
+      const d=_solveDefense(a.s2,pliesLeft-1,budget);
+      if(d)results.push({move:a.m,line:[a.m].concat(d.line)});
+    }
+  }
+  if(!results.length)return null;
+  return {firstMoves:results.map(r=>r.move),line:results[0].line};
+}
+function _solveDefense(state,pliesLeft,budget){
+  const dms=defenderMoves(state);
+  if(!dms.length)return null; // 既に詰み（呼び出し側で除外済みのはず）
+  let best=null;
+  for(let i=0;i<dms.length;i++){
+    _tick(budget);
+    const s2=applyMove(state,dms[i]);
+    const a=_solveAttack(s2,pliesLeft-1,budget);
+    if(!a)return null; // 詰まない応手が1つでもあれば失敗
+    // 最長抵抗 = 攻方の解初手数が最少の応手
+    if(!best||a.firstMoves.length<best.cnt)best={cnt:a.firstMoves.length,line:[dms[i]].concat(a.line)};
+  }
+  return {line:best.line};
+}
+
+// エントリ: {firstMoves, line} or null（NODE_LIMIT超過は検証失敗=null）
+function solveTsume(state,plies){
+  const budget={n:0};
+  try{return _solveAttack(state,plies,budget);}
+  catch(e){if(e&&e.nodeLimit)return null;throw e;}
+}
+// 攻方着手後の受方全応手検証（プレイ時の正解判定用）
+function solveDefenseLine(state,pliesLeft){
+  const budget={n:0};
+  try{return _solveDefense(state,pliesLeft,budget);}
+  catch(e){if(e&&e.nodeLimit)return null;throw e;}
+}
+
+// ===== 7. TSUME GENERATOR =====
+const MAX_ATTEMPTS = 400;
+const ATTACK_POOL = ['KIN','KIN','KIN','GIN','GIN','GIN','KEI','KEI','KYO','KYO',
+                     'FU','FU','HI','KAKU','TO','RYUO','RYUMA'];
+
+function buildCandidate(rng,plies){
+  const b=Array(9).fill(null).map(()=>Array(9).fill(null));
+  const counts={FU:0,KYO:0,KEI:0,GIN:0,KIN:0,KAKU:0,HI:0};
+  const baseOf=t=>DEMOTE[t]||t;
+  // (1) 受方玉を盤上端域へ
+  const kr=Math.floor(rng()*3), kc=1+Math.floor(rng()*7);
+  b[kr][kc]={t:'OU',p:2};
+  // (2) 攻方: 盤上1〜3枚＋持ち駒1〜2枚
+  const nBoard=1+Math.floor(rng()*3);
+  const nHand=1+Math.floor(rng()*2);
+  const hand1=[];
+  let placed=0,guard=0;
+  while(placed<nBoard&&guard++<60){
+    const t=ATTACK_POOL[Math.floor(rng()*ATTACK_POOL.length)];
+    const far=(t==='HI'||t==='KAKU'||t==='RYUO'||t==='RYUMA');
+    const dist=far?4:2; // 玉周辺チェビシェフ距離≤2（大駒は≤4）
+    const r=kr-dist+Math.floor(rng()*(2*dist+1));
+    const c=kc-dist+Math.floor(rng()*(2*dist+1));
+    if(!inB(r,c)||b[r][c])continue;
+    if((t==='FU'||t==='KYO')&&r===0)continue;      // 行き所のない駒(p=1)
+    if(t==='KEI'&&r<=1)continue;
+    if(t==='FU'){
+      let two=false;
+      for(let rr=0;rr<9;rr++)if(b[rr][c]&&b[rr][c].t==='FU'&&b[rr][c].p===1)two=true;
+      if(two)continue;                              // 二歩
+    }
+    const bt=baseOf(t);
+    if(counts[bt]+1>FULL_SET[bt])continue;          // 現物枚数超過
+    counts[bt]++; b[r][c]={t:t,p:1}; placed++;
+  }
+  if(placed<nBoard)return null;
+  placed=0;guard=0;
+  while(placed<nHand&&guard++<40){
+    const t=baseOf(ATTACK_POOL[Math.floor(rng()*ATTACK_POOL.length)]);
+    if(counts[t]+1>FULL_SET[t])continue;
+    counts[t]++; hand1.push(t); placed++;
+  }
+  if(placed<nHand)return null;
+  // (3) 受方守備駒 0〜2枚（KIN/GIN/FU・玉隣接）
+  const nDef=Math.floor(rng()*3);
+  const DEFP=['KIN','GIN','FU'];
+  placed=0;guard=0;
+  while(placed<nDef&&guard++<40){
+    const t=DEFP[Math.floor(rng()*3)];
+    const dr=-1+Math.floor(rng()*3), dc=-1+Math.floor(rng()*3);
+    if(!dr&&!dc)continue;
+    const r=kr+dr,c=kc+dc;
+    if(!inB(r,c)||b[r][c])continue;
+    if(t==='FU'&&r===8)continue;                    // 行き所のない駒(p=2)
+    if(t==='FU'){
+      let two=false;
+      for(let rr=0;rr<9;rr++)if(b[rr][c]&&b[rr][c].t==='FU'&&b[rr][c].p===2)two=true;
+      if(two)continue;
+    }
+    if(counts[t]+1>FULL_SET[t])continue;
+    counts[t]++; b[r][c]={t:t,p:2}; placed++;
+  }
+  // (4) 初期局面で受方玉が王手されていないこと（攻方手番開始のため）
+  if(inCheck(b,2))return null;
+  // (5) 受方hands = 全駒 − 盤上 − 攻方hands
+  const hand2=[];
+  for(const t in FULL_SET){
+    const rest=FULL_SET[t]-counts[t];
+    for(let i=0;i<rest;i++)hand2.push(t);
+  }
+  return {board:b,hands:{1:hand1,2:hand2},turn:1};
+}
+
+const GEN_TIME_BUDGET_MS = 3000; // 非機能要件: 最悪3秒。超過時はフォールバックバンクへ
+
+function generateDailyProblem(dateStr){
+  const plies=getPlies(dateStr);
+  const t0=Date.now();
+  for(let attempt=0;attempt<MAX_ATTEMPTS;attempt++){
+    if(Date.now()-t0>GEN_TIME_BUDGET_MS)break;
+    const rng=createRng(dateStr,attempt);
+    const cand=buildCandidate(rng,plies);
+    if(!cand)continue;
+    const sol=solveTsume(cand,plies);
+    if(!sol)continue;
+    if(sol.firstMoves.length!==1)continue;             // 余詰排除（初手唯一解）
+    if(sol.line.length!==plies)continue;               // ちょうどN手
+    if(plies===3&&solveTsume(cand,1))continue;         // N-2手で詰む問題を排除
+    return {no:getPuzzleNumber(dateStr),date:dateStr,plies:plies,
+            state:cand,solution:sol.line,source:'gen'};
+  }
+  return pickFallback(dateStr,plies);
+}
+
+// ===== 8. FALLBACK BANK =====
+// 同一アルゴリズム(buildCandidate+solveTsume)のNode事前実行による自動生成物。
+// 生成手順: specs/tsume_daily/generation_log.md 参照（手作業局面なし）
+// 形式: {p:手数, b:[[r,c,駒,所有]...], h:[攻方持駒], s:[手順 move=[fr,fc,tr,tc,prom] drop=[駒,tr,tc]]}
+const FALLBACK_BANK = [
+{"p":1,"b":[[0,5,"GIN",1],[1,3,"KIN",2],[1,5,"KIN",2],[2,4,"OU",2],[2,6,"GIN",1],[4,5,"KIN",1]],"h":["KIN"],"s":[["KIN",3,4]]},
+{"p":1,"b":[[0,5,"KIN",2],[0,6,"OU",2],[1,6,"GIN",2],[2,4,"KIN",1],[2,8,"GIN",1]],"h":["KAKU","KIN"],"s":[["KIN",1,7]]},
+{"p":1,"b":[[0,4,"OU",2],[0,5,"KIN",2],[2,3,"KIN",1],[2,5,"KIN",1]],"h":["GIN"],"s":[["GIN",1,3]]},
+{"p":1,"b":[[0,2,"KIN",2],[0,3,"OU",2],[1,1,"GIN",1],[1,2,"GIN",2],[2,4,"GIN",1]],"h":["HI","KIN"],"s":[["KIN",1,4]]},
+{"p":1,"b":[[0,5,"FU",2],[0,6,"OU",2],[1,5,"KIN",2],[2,6,"GIN",1]],"h":["GIN"],"s":[["GIN",1,7]]},
+{"p":1,"b":[[0,4,"KIN",2],[0,5,"OU",2],[2,5,"KIN",1],[2,7,"KIN",1],[4,5,"KAKU",1]],"h":["FU"],"s":[[2,7,1,6,0]]},
+{"p":1,"b":[[0,6,"OU",2],[1,5,"FU",2],[1,6,"KAKU",1],[1,7,"KIN",2],[2,6,"KEI",1]],"h":["KAKU","FU"],"s":[[1,6,0,5,1]]},
+{"p":1,"b":[[0,5,"OU",2],[1,4,"FU",2],[2,5,"FU",1]],"h":["FU","KIN"],"s":[["KIN",1,5]]},
+{"p":1,"b":[[2,1,"GIN",1],[2,3,"OU",2],[2,4,"GIN",1]],"h":["KIN","HI"],"s":[["KIN",3,3]]},
+{"p":1,"b":[[0,2,"KIN",1],[0,4,"OU",2],[2,5,"GIN",1]],"h":["KYO","HI"],"s":[["HI",0,3]]},
+{"p":1,"b":[[0,1,"KIN",2],[0,2,"OU",2],[0,4,"RYUMA",1],[2,2,"GIN",1]],"h":["FU","KYO"],"s":[[0,4,1,3,0]]},
+{"p":1,"b":[[0,4,"OU",2],[0,5,"GIN",1],[4,6,"HI",1]],"h":["KIN","KEI"],"s":[["KIN",1,4]]},
+{"p":1,"b":[[0,6,"OU",2],[1,8,"FU",1],[2,7,"TO",1],[2,8,"KIN",1]],"h":["KIN"],"s":[["KIN",1,6]]},
+{"p":1,"b":[[0,6,"OU",2],[2,6,"KIN",1]],"h":["GIN"],"s":[["GIN",1,6]]},
+{"p":1,"b":[[0,2,"OU",2],[0,4,"KIN",1],[1,5,"KAKU",1],[2,3,"KAKU",1]],"h":["GIN","KIN"],"s":[["KIN",1,2]]},
+{"p":1,"b":[[0,7,"OU",2],[0,8,"KIN",2],[2,7,"GIN",1],[4,7,"RYUMA",1]],"h":["KIN","KYO"],"s":[["KIN",1,6]]},
+{"p":1,"b":[[0,2,"OU",2],[1,0,"TO",1],[1,2,"GIN",2],[1,3,"FU",2],[1,4,"TO",1],[2,2,"KYO",1]],"h":["GIN"],"s":[["GIN",1,1]]},
+{"p":1,"b":[[0,3,"OU",2],[0,5,"GIN",1],[2,3,"KEI",1],[3,4,"HI",1]],"h":["KEI","FU"],"s":[[3,4,1,4,1]]},
+{"p":1,"b":[[0,4,"OU",2],[2,0,"HI",1],[4,7,"KAKU",1]],"h":["KEI","KIN"],"s":[["KIN",1,4]]},
+{"p":1,"b":[[0,4,"OU",2],[2,2,"TO",1],[2,5,"GIN",1]],"h":["GIN","KAKU"],"s":[["GIN",1,4]]},
+{"p":1,"b":[[0,0,"GIN",1],[0,1,"OU",2],[0,3,"TO",1],[1,3,"KIN",1]],"h":["KIN","HI"],"s":[["KIN",1,1]]},
+{"p":1,"b":[[0,1,"OU",2],[0,5,"RYUMA",1],[1,3,"RYUMA",1],[2,1,"FU",1]],"h":["KIN"],"s":[["KIN",1,1]]},
+{"p":1,"b":[[0,4,"OU",2],[2,3,"KIN",1],[4,2,"RYUMA",1]],"h":["KIN","FU"],"s":[["KIN",1,4]]},
+{"p":1,"b":[[0,7,"OU",2],[1,7,"KIN",2],[1,8,"GIN",2],[2,5,"KEI",1],[4,5,"RYUO",1]],"h":["HI","KIN"],"s":[["HI",0,6]]},
+{"p":1,"b":[[0,4,"FU",2],[0,5,"OU",2],[1,4,"KYO",1],[1,6,"FU",2],[2,6,"HI",1],[2,7,"RYUMA",1]],"h":["KAKU"],"s":[[2,6,1,6,1]]},
+{"p":1,"b":[[1,8,"KIN",1],[2,6,"FU",2],[2,7,"OU",2],[3,6,"GIN",2],[4,5,"KEI",1],[4,7,"GIN",1]],"h":["HI","KAKU"],"s":[["HI",1,7]]},
+{"p":1,"b":[[0,6,"GIN",2],[0,7,"FU",2],[1,5,"KYO",1],[1,6,"OU",2],[1,7,"GIN",1]],"h":["KIN","GIN"],"s":[["KIN",2,6]]},
+{"p":1,"b":[[0,1,"OU",2],[0,3,"GIN",1],[2,1,"TO",1]],"h":["KYO","GIN"],"s":[["GIN",1,1]]},
+{"p":1,"b":[[0,5,"GIN",1],[0,6,"OU",2],[1,4,"FU",1]],"h":["KIN"],"s":[["KIN",1,6]]},
+{"p":1,"b":[[0,7,"OU",2],[2,7,"GIN",1]],"h":["KEI","KIN"],"s":[["KIN",1,7]]},
+{"p":1,"b":[[0,6,"OU",2],[1,8,"FU",1],[2,6,"GIN",1]],"h":["FU","KIN"],"s":[["KIN",1,6]]},
+{"p":1,"b":[[0,2,"OU",2],[1,4,"FU",1],[2,2,"GIN",1]],"h":["KIN","HI"],"s":[["KIN",1,2]]},
+{"p":1,"b":[[0,5,"OU",2],[2,5,"TO",1]],"h":["KIN"],"s":[["KIN",1,5]]},
+{"p":1,"b":[[0,1,"OU",2],[2,0,"TO",1]],"h":["KIN"],"s":[["KIN",1,1]]},
+{"p":1,"b":[[0,5,"OU",2],[0,6,"KIN",2],[2,1,"RYUO",1],[2,5,"GIN",1]],"h":["GIN"],"s":[["GIN",1,4]]},
+{"p":1,"b":[[0,3,"KIN",2],[0,4,"OU",2],[1,5,"KIN",2],[2,4,"GIN",1],[4,5,"HI",1]],"h":["FU"],"s":[[4,5,1,5,1]]},
+{"p":1,"b":[[1,8,"KAKU",1],[2,6,"OU",2],[3,8,"KIN",1],[4,5,"KYO",1]],"h":["FU"],"s":[[1,8,2,7,1]]},
+{"p":1,"b":[[0,3,"OU",2],[2,3,"FU",1]],"h":["KIN"],"s":[["KIN",1,3]]},
+{"p":1,"b":[[0,4,"OU",2],[0,5,"GIN",1],[1,3,"FU",2],[1,5,"FU",2]],"h":["KYO","KIN"],"s":[["KIN",1,4]]},
+{"p":1,"b":[[0,7,"OU",2],[2,5,"GIN",1],[2,7,"KIN",1]],"h":["FU","KIN"],"s":[["KIN",1,7]]},
+{"p":3,"b":[[0,5,"KIN",2],[0,6,"OU",2],[1,5,"KIN",2],[1,7,"KYO",1],[2,3,"HI",1],[3,6,"RYUMA",1]],"h":["KIN","GIN"],"s":[["KIN",0,7],[0,6,1,6,0],[2,3,2,7,1]]},
+{"p":3,"b":[[0,7,"OU",2],[2,5,"KIN",1],[2,7,"KIN",1]],"h":["KYO"],"s":[[2,5,1,6,0],[0,7,0,8,0],[1,6,1,7,0]]},
+{"p":3,"b":[[0,4,"FU",2],[0,5,"OU",2],[3,6,"RYUO",1]],"h":["KIN"],"s":[[3,6,2,5,0],[0,5,0,6,0],["KIN",1,6]]},
+{"p":3,"b":[[1,7,"OU",2],[2,5,"KIN",1],[2,7,"GIN",2],[3,8,"KYO",1]],"h":["KAKU","KIN"],"s":[["KAKU",2,8],[1,7,0,7,0],["KIN",1,7]]},
+{"p":3,"b":[[0,3,"FU",2],[0,4,"OU",2],[1,5,"FU",2],[2,8,"HI",1],[3,5,"RYUO",1]],"h":["KIN","FU"],"s":[[2,8,2,4,1],["FU",1,4],[3,5,1,5,0]]},
+{"p":3,"b":[[0,2,"OU",2],[0,3,"GIN",2],[1,0,"KIN",1],[2,4,"KIN",1]],"h":["KAKU","KEI"],"s":[["KAKU",2,0],[0,2,1,2,0],[2,0,1,1,1]]},
+{"p":3,"b":[[0,3,"GIN",1],[1,3,"OU",2],[1,4,"GIN",1],[2,5,"KEI",1]],"h":["KIN","KEI"],"s":[["KIN",2,3],[1,3,0,2,0],[0,3,1,2,1]]},
+{"p":3,"b":[[0,2,"GIN",2],[0,3,"OU",2],[1,4,"KIN",2],[1,5,"GIN",1],[2,2,"KYO",1],[2,3,"TO",1]],"h":["GIN","KYO"],"s":[["GIN",1,2],[0,2,1,2,0],[2,2,1,2,1]]},
+{"p":3,"b":[[0,4,"OU",2],[1,2,"FU",1],[1,3,"KIN",2],[1,4,"FU",2],[2,6,"KIN",1],[4,3,"RYUMA",1]],"h":["GIN","KIN"],"s":[["GIN",1,5],[0,4,0,3,0],["KIN",0,2]]},
+{"p":3,"b":[[0,2,"GIN",1],[0,4,"OU",2],[0,6,"TO",1],[1,4,"GIN",2],[4,2,"RYUMA",1]],"h":["KAKU"],"s":[["KAKU",2,2],[0,4,0,3,0],[0,2,1,3,1]]},
+{"p":3,"b":[[1,0,"GIN",2],[2,1,"OU",2],[4,0,"FU",1],[4,1,"FU",1],[4,2,"RYUO",1]],"h":["GIN","KIN"],"s":[["KIN",2,2],[2,1,2,0,0],[4,2,3,1,0]]},
+{"p":3,"b":[[0,4,"OU",2],[1,4,"KIN",2],[1,5,"KIN",2],[2,6,"HI",1],[3,3,"RYUO",1]],"h":["KIN"],"s":[[2,6,0,6,1],[1,5,0,5,0],["KIN",0,3]]},
+{"p":3,"b":[[1,6,"OU",2],[1,7,"KYO",1],[2,4,"GIN",1],[3,7,"TO",1]],"h":["KIN","KEI"],"s":[["KIN",2,6],[1,6,0,5,0],[2,4,1,5,1]]},
+{"p":3,"b":[[0,6,"OU",2],[0,7,"KIN",2],[2,4,"KYO",1],[2,7,"TO",1],[4,8,"KAKU",1]],"h":["KAKU"],"s":[["KAKU",1,5],[0,6,0,5,0],[2,4,0,4,1]]},
+{"p":3,"b":[[0,5,"KIN",2],[0,6,"OU",2],[0,7,"GIN",1],[1,5,"KYO",1],[3,5,"RYUO",1]],"h":["KIN","KIN"],"s":[[3,5,2,6,0],[0,6,0,7,0],["KIN",1,7]]},
+{"p":3,"b":[[0,5,"HI",1],[2,6,"OU",2],[3,3,"KAKU",1],[3,8,"KIN",1]],"h":["KIN"],"s":[["KIN",3,7],[2,6,1,6,0],[3,3,0,6,1]]},
+{"p":3,"b":[[1,2,"OU",2],[3,0,"KIN",1],[3,4,"KEI",1]],"h":["KIN","HI"],"s":[["HI",1,3],[1,2,0,1,0],["KIN",1,1]]},
+{"p":3,"b":[[0,4,"OU",2],[0,6,"KIN",1],[1,6,"KAKU",1],[2,2,"KIN",1]],"h":["KIN"],"s":[[1,6,0,5,1],[0,4,0,3,0],["KIN",1,2]]},
+{"p":3,"b":[[0,7,"OU",2],[1,5,"FU",1],[2,8,"KIN",1],[3,8,"RYUO",1]],"h":["FU"],"s":[[3,8,2,7,0],[0,7,0,6,0],[2,7,1,7,0]]},
+{"p":3,"b":[[0,7,"FU",2],[1,6,"OU",2],[1,8,"FU",1],[2,4,"KEI",1],[3,6,"FU",1]],"h":["KYO","KIN"],"s":[["KIN",2,6],[1,6,0,6,0],["KYO",1,6]]}
+];
+
+function deserializeBankEntry(e){
+  const b=Array(9).fill(null).map(()=>Array(9).fill(null));
+  const counts={FU:0,KYO:0,KEI:0,GIN:0,KIN:0,KAKU:0,HI:0};
+  for(let i=0;i<e.b.length;i++){
+    const x=e.b[i];
+    b[x[0]][x[1]]={t:x[2],p:x[3]};
+    if(x[2]!=='OU'){const bt=DEMOTE[x[2]]||x[2];counts[bt]++;}
+  }
+  const hand1=e.h.slice();
+  for(let i=0;i<hand1.length;i++)counts[hand1[i]]++;
+  const hand2=[];
+  for(const t in FULL_SET){
+    const rest=FULL_SET[t]-counts[t];
+    for(let i=0;i<rest;i++)hand2.push(t);
+  }
+  const sol=e.s.map(x=>typeof x[0]==='string'
+    ?{kind:'drop',t:x[0],tr:x[1],tc:x[2]}
+    :{kind:'move',fr:x[0],fc:x[1],tr:x[2],tc:x[3],prom:!!x[4]});
+  return {state:{board:b,hands:{1:hand1,2:hand2},turn:1},solution:sol};
+}
+function pickFallback(dateStr,plies){
+  const bank=FALLBACK_BANK.filter(e=>e.p===plies);
+  if(!bank.length)return null;
+  const e=bank[fnv1a(dateStr)%bank.length];
+  const d=deserializeBankEntry(e);
+  return {no:getPuzzleNumber(dateStr),date:dateStr,plies:plies,
+          state:d.state,solution:d.solution,source:'bank'};
+}
+
+// ===== 9. STATS（純粋計算部。localStorage入出力はアプリ層） =====
+function defaultStats(){
+  return {version:1,currentStreak:0,maxStreak:0,totalPlayed:0,totalCleared:0,
+          totalMistakes:0,lastResultDate:null,history:{}};
+}
+function recalcStreak(history,todayStr){
+  let streak=0,d=todayStr;
+  while(history[d]&&history[d].cleared===true){streak++;d=prevDateStr(d);}
+  return streak;
+}
+function applyResultToStats(stats,dateStr,res){
+  stats.history[dateStr]={cleared:res.cleared,mistakes:res.mistakes,
+    timeSec:res.timeSec,hintUsed:res.hintUsed,plies:res.plies};
+  stats.totalPlayed++;
+  if(res.cleared)stats.totalCleared++;
+  stats.totalMistakes+=res.mistakes;
+  stats.currentStreak=recalcStreak(stats.history,dateStr);
+  if(stats.currentStreak>stats.maxStreak)stats.maxStreak=stats.currentStreak;
+  stats.lastResultDate=dateStr;
+  const keys=Object.keys(stats.history).sort();   // 直近400日分のみ保持
+  while(keys.length>400)delete stats.history[keys.shift()];
+  return stats;
+}
+function getDisplayStats(stats){
+  const played=stats.totalPlayed;
+  return {
+    played:played,
+    cleared:stats.totalCleared,
+    clearRate:played?Math.round(stats.totalCleared/played*100):0,
+    avgMiss:played?(stats.totalMistakes/played).toFixed(1):'0.0',
+    currentStreak:stats.currentStreak,
+    maxStreak:stats.maxStreak
+  };
+}
+
+// ===== 10. SHARE（文面生成の純粋関数） =====
+const SITE_URL='https://hifukasawa77-lgtm.github.io/main/tsume_daily.html'; // リリース時に確定
+
+function buildEmojiGrid(result){
+  if(!result.cleared)return '⬛⬛⬛⬛⬛⬛';
+  let g='';
+  for(let i=0;i<result.mistakes;i++)g+='🟥';
+  g+='🟦';
+  for(let i=result.mistakes+1;i<6;i++)g+='⬜';
+  return g;
+}
+function buildShareText(lang,result,stats){
+  const grid=buildEmojiGrid(result);
+  const m=Math.floor(result.timeSec/60);
+  const ss=String(result.timeSec%60).padStart(2,'0');
+  const hint=result.hintUsed?'💡':'';
+  if(lang==='en'){
+    const head='Tsume Daily #'+result.no+' (Mate in '+result.plies+')';
+    if(!result.cleared)
+      return head+'\n'+grid+' '+result.mistakes+'/5\n#TsumeDaily\n'+SITE_URL;
+    return head+'\n'+grid+' '+result.mistakes+' miss / '+m+':'+ss+hint+
+      '\n🔥 '+stats.currentStreak+'-day streak\n#TsumeDaily\n'+SITE_URL;
+  }
+  const head='詰将棋デイリー #'+result.no+'（'+result.plies+'手詰）';
+  if(!result.cleared)
+    return head+'\n'+grid+' '+result.mistakes+'/5\n#詰将棋デイリー\n'+SITE_URL;
+  return head+'\n'+grid+' '+result.mistakes+'ミス '+m+':'+ss+hint+
+    '\n🔥'+stats.currentStreak+'日連続\n#詰将棋デイリー\n'+SITE_URL;
+}
+
+// 解手順の棋譜表記（表示用。stateを順に適用しながら駒種を解決）
+function solutionToTexts(problem){
+  const RK='一二三四五六七八九', FW='１２３４５６７８９';
+  let s=problem.state;
+  const out=[];
+  for(let i=0;i<problem.solution.length;i++){
+    const mv=problem.solution[i];
+    const pre=i%2===0?'▲':'△';
+    const sq=FW[8-mv.tc]+RK[mv.tr];
+    if(mv.kind==='drop'){
+      out.push(pre+sq+NAMES[mv.t]+'打');
+    }else{
+      const pc=s.board[mv.fr][mv.fc];
+      out.push(pre+sq+pieceChar(pc.t,pc.p)+(mv.prom?'成':''));
+    }
+    s=applyMove(s,mv);
+  }
+  return out;
+}
+</script>
+
+<script>
+"use strict";
+/* アプリ層: localStorage・DOM・進行管理 */
+
+// ===== 9b. STATS（永続化層） =====
+const K_STATS='tsumeDaily.stats.v1';
+const K_SESSION='tsumeDaily.session.v1';
+const K_PREF='tsumeDaily.pref.v1';
+const Storage={ok:true,mem:{}};
+
+function loadJSON(key,fb){
+  let raw=null;
+  try{raw=localStorage.getItem(key);}catch(e){Storage.ok=false;}
+  if(raw===null){
+    return Object.prototype.hasOwnProperty.call(Storage.mem,key)?Storage.mem[key]:fb;
+  }
+  try{
+    const o=JSON.parse(raw);
+    if(!o||typeof o!=='object'||o.version!==1)return fb; // 破損/version不一致→該当キーのみ初期化
+    return o;
+  }catch(e){return fb;}
+}
+function saveJSON(key,obj){
+  Storage.mem[key]=obj; // localStorage不可環境向けメモリフォールバック
+  try{localStorage.setItem(key,JSON.stringify(obj));}catch(e){Storage.ok=false;}
+}
+const Stats={
+  commitResult(dateStr,res){
+    const s=loadJSON(K_STATS,defaultStats());
+    applyResultToStats(s,dateStr,res);
+    saveJSON(K_STATS,s);
+    return s;
+  },
+  get(){return loadJSON(K_STATS,defaultStats());}
+};
+
+// ===== 11. GAME CONTROLLER =====
+const G={
+  lang:'ja', dateStr:'', problem:null, curState:null,
+  remainingPlies:0, mistakes:0, hintUsed:false, startedAt:0, movesDone:0,
+  phase:'ready',          // ready|playing|cleared|failed
+  sel:null, vMoves:[], busy:false, replaying:false,
+  pendMove:null, hintCell:null, hintDrop:null,
+  result:null, streakAtResult:0, countdownTimer:null
+};
+function t(key){return (I18N[G.lang]&&I18N[G.lang][key])||I18N.ja[key]||key;}
+
+function saveSession(state){
+  saveJSON(K_SESSION,{version:1,date:G.dateStr,state:state,
+    mistakes:G.mistakes,hintUsed:G.hintUsed,startedAt:G.startedAt,movesDone:G.movesDone});
+}
+
+function attemptMove(move){
+  if(G.busy||G.phase!=='playing')return;
+  clearSelection();
+  const ams=attackerMovesEx(G.curState);
+  let hit=null;
+  for(let i=0;i<ams.length;i++)if(sameMove(ams[i].m,move)){hit=ams[i];break;}
+  if(!hit){onMistake();return;}                 // 王手でない/打ち歩詰め/非合法
+  if(hit.mate){                                  // 詰み達成
+    G.curState=hit.s2; G.hintCell=null; G.hintDrop=null;
+    renderAll(); finishGame(true); return;
+  }
+  if(G.remainingPlies>=3){
+    const def=solveDefenseLine(hit.s2,G.remainingPlies-1);
+    if(def){                                     // 全応手が詰む正解手
+      G.curState=hit.s2; G.hintCell=null; G.hintDrop=null;
+      renderAll(); defenderAutoReply(def.line[0]); return;
+    }
+  }
+  onMistake();                                   // 王手だが詰みに至らない→ミス（局面は巻き戻し済み=非適用）
+}
+function defenderAutoReply(d){
+  G.busy=true; setMsg(t('thinking'));
+  setTimeout(()=>{
+    G.curState=applyMove(G.curState,d);
+    G.movesDone++; G.remainingPlies-=2; G.busy=false;
+    saveSession('playing');
+    renderAll(); setMsg(t('yourMove'));
+  },400);
+}
+function onMistake(){
+  G.mistakes++;
+  renderMiss(); shakeBoard(); toast(t('mistake'));
+  if(G.mistakes>=5){finishGame(false);}
+  else{saveSession('playing');renderAll();}
+}
+function finishGame(cleared){
+  G.phase=cleared?'cleared':'failed';
+  const timeSec=Math.max(0,Math.floor((Date.now()-G.startedAt)/1000));
+  G.result={no:G.problem.no,plies:G.problem.plies,cleared:cleared,
+    mistakes:G.mistakes,timeSec:timeSec,hintUsed:G.hintUsed};
+  saveSession(G.phase);
+  const stats=Stats.commitResult(G.dateStr,
+    {cleared:cleared,mistakes:G.mistakes,timeSec:timeSec,hintUsed:G.hintUsed,plies:G.problem.plies});
+  G.streakAtResult=stats.currentStreak;
+  renderAll(); updateHintBtn();
+  showResultModal();
+}
+function onHint(){
+  if(G.hintUsed||G.phase!=='playing'||G.busy)return;
+  G.hintUsed=true;
+  // 正解手順は決定論的（初手唯一・受方応手は最長抵抗で一意）のため保存済み解を参照
+  const nm=G.problem.solution[G.movesDone*2];
+  if(nm.kind==='move'){G.hintCell=[nm.fr,nm.fc];G.hintDrop=null;}
+  else{G.hintDrop=nm.t;G.hintCell=null;}
+  saveSession('playing'); renderAll(); updateHintBtn();
+}
+
+// ===== 12. UI =====
+const $=id=>document.getElementById(id);
+
+function show(el){el.classList.remove('hidden');}
+function hide(el){el.classList.add('hidden');}
+function setMsg(s){$('msgLine').textContent=s;}
+let toastTimer=null;
+function toast(s){
+  const el=$('toast');
+  el.textContent=s; show(el);
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>hide(el),1800);
+}
+function showBanner(s){const b=$('banner');b.textContent=s;show(b);}
+function shakeBoard(){
+  const b=$('board');
+  b.classList.remove('shake');
+  void b.offsetWidth; // reflowでアニメ再発火
+  b.classList.add('shake');
+}
+function clearSelection(){G.sel=null;G.vMoves=[];}
+
+function renderAll(){renderBoard();renderHand();renderMiss();}
+
+function renderBoard(){
+  const el=$('board');
+  el.textContent='';
+  const b=G.curState.board;
+  const king=findKing(b,2);
+  const kingChecked=king&&inCheck(b,2);
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++){
+    const div=document.createElement('div');
+    div.className='cell';
+    const isSel=G.sel&&G.sel.kind==='board'&&G.sel.r===r&&G.sel.c===c;
+    const isVM=G.vMoves.some(v=>v[0]===r&&v[1]===c);
+    if(isSel)div.classList.add('sel');
+    else if(kingChecked&&king[0]===r&&king[1]===c)div.classList.add('chk');
+    if(G.hintCell&&G.hintCell[0]===r&&G.hintCell[1]===c)div.classList.add('hint');
+    if(isVM)div.classList.add(b[r][c]?'vcap':'vmove');
+    const pc=b[r][c];
+    if(pc){
+      const pe=document.createElement('div');
+      pe.className='piece'+(pc.p===2?' p2':'');
+      pe.textContent=pieceChar(pc.t,pc.p);
+      div.appendChild(pe);
+    }else if(isVM&&G.sel&&G.sel.kind==='drop'){
+      const d=document.createElement('div');d.className='dot';div.appendChild(d);
+    }
+    div.addEventListener('click',()=>onCellTap(r,c));
+    el.appendChild(div);
+  }
+}
+function renderHand(){
+  const el=$('handPieces');
+  el.textContent='';
+  const counts={};
+  for(const t0 of G.curState.hands[1])counts[t0]=(counts[t0]||0)+1;
+  const types=Object.keys(counts);
+  if(!types.length){
+    const sp=document.createElement('span');
+    sp.className='hand-none';sp.textContent=t('none');
+    el.appendChild(sp);return;
+  }
+  for(const tp of types){
+    const btn=document.createElement('button');
+    btn.className='hand-piece';
+    btn.textContent=NAMES[tp];
+    if(G.sel&&G.sel.kind==='drop'&&G.sel.t===tp)btn.classList.add('sel-drop');
+    if(G.hintDrop===tp)btn.classList.add('hint');
+    if(counts[tp]>1){
+      const cnt=document.createElement('span');
+      cnt.className='hand-count';cnt.textContent='×'+counts[tp];
+      btn.appendChild(cnt);
+    }
+    btn.addEventListener('click',()=>onHandTap(tp));
+    el.appendChild(btn);
+  }
+}
+function renderMiss(){
+  const el=$('missIndicator');
+  el.textContent='';
+  for(let i=0;i<5;i++){
+    const sp=document.createElement('span');
+    sp.textContent=i<G.mistakes?'●':'○';
+    if(i<G.mistakes)sp.className='lit';
+    el.appendChild(sp);
+  }
+}
+function updateHintBtn(){
+  const btn=$('hintBtn');
+  btn.disabled=G.hintUsed||G.phase!=='playing';
+  btn.firstElementChild.textContent=G.hintUsed?t('hintUsed'):t('hint');
+}
+
+function onCellTap(r,c){
+  if(G.busy||G.phase!=='playing'||G.replaying)return;
+  const b=G.curState.board;
+  const pc=b[r][c];
+  if(G.sel&&G.vMoves.some(v=>v[0]===r&&v[1]===c)){
+    if(G.sel.kind==='board'){
+      const sr=G.sel.r,sc=G.sel.c,sp=b[sr][sc];
+      const can=PROMOTE[sp.t]&&(inPromZone(sr,1)||inPromZone(r,1));
+      const must=mustProm(sp.t,r,1);
+      if(must)attemptMove({kind:'move',fr:sr,fc:sc,tr:r,tc:c,prom:true});
+      else if(can){
+        G.pendMove={fr:sr,fc:sc,tr:r,tc:c};
+        show($('promModal'));return;
+      }
+      else attemptMove({kind:'move',fr:sr,fc:sc,tr:r,tc:c,prom:false});
+    }else{
+      attemptMove({kind:'drop',t:G.sel.t,tr:r,tc:c});
+    }
+    renderAll();return;
+  }
+  if(pc&&pc.p===1){
+    if(G.sel&&G.sel.kind==='board'&&G.sel.r===r&&G.sel.c===c)clearSelection();
+    else{G.sel={kind:'board',r:r,c:c};G.vMoves=validMoves_board(b,r,c);}
+  }else clearSelection();
+  renderAll();
+}
+function onHandTap(tp){
+  if(G.busy||G.phase!=='playing'||G.replaying)return;
+  if(G.sel&&G.sel.kind==='drop'&&G.sel.t===tp)clearSelection();
+  else{G.sel={kind:'drop',t:tp};G.vMoves=validDrops(G.curState,tp,1);}
+  renderAll();
+}
+
+// --- 結果・完了・統計 ---
+function resultTitleText(){return G.result.cleared?t('cleared'):t('failed');}
+function streakLineText(){
+  if(!G.result.cleared)return '';
+  return G.lang==='en'?'🔥 '+G.streakAtResult+'-day streak':'🔥'+G.streakAtResult+'日連続';
+}
+function showResultModal(){
+  $('resultTitle').textContent=resultTitleText();
+  $('resultEmoji').textContent=buildEmojiGrid(G.result);
+  $('resultStreak').textContent=streakLineText();
+  $('solutionLine').textContent=solutionToTexts(G.problem).join('　');
+  show($('resultModal'));
+}
+function fillDoneView(){
+  $('doneTitle').textContent=G.result.cleared?t('doneCleared'):t('doneFailed');
+  $('doneEmoji').textContent=buildEmojiGrid(G.result);
+  $('doneStreak').textContent=streakLineText();
+}
+function showDoneView(){
+  fillDoneView();
+  show($('doneView'));
+  startCountdown();
+}
+function startCountdown(){
+  if(G.countdownTimer)clearInterval(G.countdownTimer);
+  const el=$('countdown');
+  const tick=()=>{
+    const ms=msUntilNextJSTMidnight();
+    if(ms<=1000){
+      el.textContent='00:00:00';
+      clearInterval(G.countdownTimer);G.countdownTimer=null;
+      show($('reloadBtn'));return;
+    }
+    const s=Math.floor(ms/1000);
+    el.textContent=String(Math.floor(s/3600)).padStart(2,'0')+':'+
+      String(Math.floor(s%3600/60)).padStart(2,'0')+':'+
+      String(s%60).padStart(2,'0');
+  };
+  tick();
+  G.countdownTimer=setInterval(tick,1000);
+}
+function showStatsModal(){
+  const d=getDisplayStats(Stats.get());
+  const grid=$('statsGrid');
+  grid.textContent='';
+  const items=[
+    [String(d.played),t('played')],
+    [d.clearRate+'%',t('clearRate')],
+    [String(d.currentStreak),t('curStreak')],
+    [String(d.maxStreak),t('maxStreak')],
+    [String(d.cleared),t('clearedDays')],
+    [d.avgMiss,t('avgMiss')]
+  ];
+  for(const it of items){
+    const box=document.createElement('div');box.className='stat-box';
+    const v=document.createElement('div');v.className='stat-val';v.textContent=it[0];
+    const l=document.createElement('div');l.className='stat-label';l.textContent=it[1];
+    box.appendChild(v);box.appendChild(l);grid.appendChild(box);
+  }
+  show($('statsModal'));
+}
+
+// --- シェア ---
+function currentShareText(){
+  return buildShareText(G.lang,G.result,{currentStreak:G.streakAtResult});
+}
+function copyShare(){
+  const text=currentShareText();
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text)
+      .then(()=>toast(t('copied')))
+      .catch(()=>showCopyFallback(text));
+  }else showCopyFallback(text);
+}
+function showCopyFallback(text){
+  $('copyArea').value=text;       // textarea.value（innerHTML不使用）
+  show($('copyModal'));
+  $('copyArea').select();
+}
+function shareToX(){
+  window.open('https://twitter.com/intent/tweet?text='+
+    encodeURIComponent(currentShareText()),'_blank','noopener');
+}
+
+// --- リプレイ（Should S2） ---
+function replaySolution(){
+  if(G.replaying||!G.problem)return;
+  G.replaying=true;
+  clearSelection();G.hintCell=null;G.hintDrop=null;
+  let s=G.problem.state, i=0;
+  G.curState=s; renderAll();
+  const iv=setInterval(()=>{
+    if(i>=G.problem.solution.length){
+      clearInterval(iv);G.replaying=false;return;
+    }
+    G.curState=applyMove(G.curState,G.problem.solution[i++]);
+    renderAll();
+  },700);
+}
+
+// --- i18n適用 ---
+function applyI18n(){
+  document.documentElement.lang=G.lang;
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    el.textContent=t(el.getAttribute('data-i18n'));
+  });
+  $('langBtn').textContent=G.lang==='ja'?'EN':'JA';
+  const lg=$('legend');
+  if(G.lang==='en'){lg.textContent=I18N.en.legend;show(lg);}
+  else hide(lg);
+  if(G.problem)$('pliesLabel').textContent=t(G.problem.plies===1?'mate1':'mate3');
+  if(G.result){
+    fillDoneView();
+    if(!$('resultModal').classList.contains('hidden')){
+      $('resultTitle').textContent=resultTitleText();
+      $('resultStreak').textContent=streakLineText();
+    }
+  }
+  if(!Storage.ok)showBanner(t('noSave'));
+  updateHintBtn();
+}
+function toggleLang(){
+  G.lang=G.lang==='ja'?'en':'ja';
+  saveJSON(K_PREF,{version:1,lang:G.lang});
+  applyI18n();
+  if(G.phase==='playing')setMsg(G.busy?t('thinking'):t('yourMove'));
+  else if(G.phase==='cleared'||G.phase==='failed')setMsg('');
+}
+
+// --- 背景パーティクル（index.html系の演出を簡略流用） ---
+function startParticles(){
+  const cv=$('bg');
+  const ctx=cv.getContext('2d');
+  let W=0,H=0;
+  const resize=()=>{W=cv.width=window.innerWidth;H=cv.height=window.innerHeight;};
+  resize();
+  window.addEventListener('resize',resize);
+  const N=40,ps=[];
+  for(let i=0;i<N;i++){
+    ps.push({
+      x:Math.random()*1000,y:Math.random()*1000, // resize後に正規化
+      vx:(Math.random()-.5)*.25,vy:(Math.random()-.5)*.25,
+      r:Math.random()*1.8+.6,
+      col:Math.random()<.5?'34,211,238':'167,139,250',
+      a:Math.random()*.3+.12
+    });
+  }
+  for(const p of ps){p.x=Math.random()*W;p.y=Math.random()*H;}
+  const draw=()=>{
+    ctx.clearRect(0,0,W,H);
+    for(const p of ps){
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+      ctx.fillStyle='rgba('+p.col+','+p.a+')';
+      ctx.fill();
+    }
+  };
+  const reduced=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(reduced){draw();return;}  // 動きを止めて静的描画のみ
+  const frame=()=>{
+    for(const p of ps){
+      p.x+=p.vx;p.y+=p.vy;
+      if(p.x<-5)p.x=W+5;if(p.x>W+5)p.x=-5;
+      if(p.y<-5)p.y=H+5;if(p.y>H+5)p.y=-5;
+    }
+    draw();
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+
+// ===== 13. BOOT =====
+function bindStaticEvents(){
+  $('langBtn').addEventListener('click',toggleLang);
+  $('statsBtn').addEventListener('click',showStatsModal);
+  $('statsCloseBtn').addEventListener('click',()=>hide($('statsModal')));
+  $('hintBtn').addEventListener('click',onHint);
+  $('promYes').addEventListener('click',()=>{
+    hide($('promModal'));
+    if(G.pendMove){attemptMove({kind:'move',...G.pendMove,prom:true});G.pendMove=null;renderAll();}
+  });
+  $('promNo').addEventListener('click',()=>{
+    hide($('promModal'));
+    if(G.pendMove){attemptMove({kind:'move',...G.pendMove,prom:false});G.pendMove=null;renderAll();}
+  });
+  $('shareBtn').addEventListener('click',copyShare);
+  $('shareBtn2').addEventListener('click',copyShare);
+  $('xBtn').addEventListener('click',shareToX);
+  $('xBtn2').addEventListener('click',shareToX);
+  $('replayBtn').addEventListener('click',replaySolution);
+  $('resultCloseBtn').addEventListener('click',()=>{hide($('resultModal'));showDoneView();});
+  $('resultStatsBtn').addEventListener('click',showStatsModal);
+  $('copyCloseBtn').addEventListener('click',()=>hide($('copyModal')));
+  $('reloadBtn').addEventListener('click',()=>location.reload());
+}
+
+function restoreFinished(sessState){
+  const stats=Stats.get();
+  const h=stats.history[G.dateStr];
+  G.phase=sessState;
+  G.result={no:G.problem.no,plies:G.problem.plies,
+    cleared:sessState==='cleared',
+    mistakes:h?h.mistakes:G.mistakes,
+    timeSec:h?h.timeSec:0,
+    hintUsed:h?h.hintUsed:G.hintUsed};
+  G.streakAtResult=stats.lastResultDate===G.dateStr
+    ?stats.currentStreak:recalcStreak(stats.history,G.dateStr);
+  G.curState=G.problem.state;
+  G.remainingPlies=0;
+  show($('playView'));
+  renderAll();updateHintBtn();
+  setMsg('');
+  showDoneView();
+}
+
+function boot(){
+  const pref=loadJSON(K_PREF,{version:1,lang:'ja'});
+  G.lang=pref.lang==='en'?'en':'ja';
+  startParticles();
+  bindStaticEvents();
+
+  // localStorage可用性チェック
+  try{
+    localStorage.setItem('tsumeDaily.probe','1');
+    localStorage.removeItem('tsumeDaily.probe');
+  }catch(e){Storage.ok=false;}
+
+  // JST日付（?d=YYYY-MM-DD はDynamic-Tester/開発用の日付上書き。consoleに明示）
+  let dateStr=getJSTDateString();
+  const mm=window.location.search.match(/[?&]d=(\d{4}-\d{2}-\d{2})/);
+  if(mm){dateStr=mm[1];console.warn('[TsumeDaily] debug date override:',dateStr);}
+  G.dateStr=dateStr;
+  $('dateLabel').textContent=dateStr;
+
+  const no=getPuzzleNumber(dateStr);
+  if(no<1){ // EPOCH前アクセス
+    applyI18n();
+    show($('soonView'));
+    return;
+  }
+
+  const t0=Date.now();
+  G.problem=generateDailyProblem(dateStr);
+  console.log('[TsumeDaily] #'+G.problem.no+' plies='+G.problem.plies+
+    ' source='+G.problem.source+' gen='+(Date.now()-t0)+'ms');
+  $('puzzleNo').textContent='#'+G.problem.no;
+  applyI18n();
+
+  let sess=loadJSON(K_SESSION,null);
+  if(!sess||sess.date!==dateStr){
+    sess={version:1,date:dateStr,state:'playing',mistakes:0,hintUsed:false,
+          startedAt:Date.now(),movesDone:0};
+  }
+  G.mistakes=sess.mistakes||0;
+  G.hintUsed=!!sess.hintUsed;
+  G.startedAt=sess.startedAt||Date.now();
+  G.movesDone=sess.movesDone||0;
+
+  if(sess.state==='cleared'||sess.state==='failed'){
+    restoreFinished(sess.state);return;
+  }
+  // プレイ再開: 解手順をmovesDone手分再生して盤面復元
+  G.phase='playing';
+  G.curState=G.problem.state;
+  G.remainingPlies=G.problem.plies;
+  for(let i=0;i<G.movesDone;i++){
+    G.curState=applyMove(G.curState,G.problem.solution[i*2]);
+    G.curState=applyMove(G.curState,G.problem.solution[i*2+1]);
+    G.remainingPlies-=2;
+  }
+  saveSession('playing');
+  show($('playView'));
+  renderAll();updateHintBtn();
+  setMsg(t('yourMove'));
+}
+
+document.addEventListener('DOMContentLoaded',boot);
+</script>
+</body>
+</html>
