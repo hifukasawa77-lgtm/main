@@ -94,9 +94,10 @@ class Attention(nn.Module):
             k = torch.cat([past_kv[0], k], dim=2)
             v = torch.cat([past_kv[1], v], dim=2)
 
-        # q長 == k長 なら通常の因果マスク付き学習/プリフィル。
-        # キャッシュ使用時（q長 < k長）は過去全トークンを参照してよいのでマスク不要
-        is_causal = q.size(2) == k.size(2)
+        # キャッシュなし＝学習/プリフィルなので因果マスクあり。
+        # キャッシュ使用時は1トークンずつのデコードで過去全トークンを参照してよいのでマスク不要。
+        # ※テンソル形状の比較（SymBoolになる）ではなく静的なboolにしてONNXエクスポートに対応
+        is_causal = past_kv is None
         y = F.scaled_dot_product_attention(
             q, k, v,
             is_causal=is_causal,
