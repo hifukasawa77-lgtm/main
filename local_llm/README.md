@@ -26,6 +26,20 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
 
+## 学習済みモデル同梱 / Pretrained model included
+
+リポジトリに **学習済みのmicroチャットモデル**（3.3Mパラメータ）と対応トークナイザを同梱しています。
+日本語Wikipedia＋青空文庫 約5,400万トークンで事前学習（検証perplexity 69）→ dolly-15k-ja でSFT済み。
+セットアップ後すぐに試せます:
+
+```bash
+python chat.py                  # 対話モード（checkpoints/chat.pt を自動使用）
+python serve.py                 # ローカルAPI起動
+```
+
+※ microサイズなので応答は「日本語の体裁が整ったヨチヨチ歩き」レベルです。
+   本格的な賢さは Step 1 以降の base 学習で目指します。
+
 ## 手順 / Steps
 
 ### Step 0: まず30分で全体を動かす（micro・サンプルデータ）
