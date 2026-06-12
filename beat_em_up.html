@@ -1058,6 +1058,15 @@
       haohGaldActions: loadImage("assets/black-fang/haoh-gald-actions-alpha.png"),
       haohGaldUltimates: loadImage("assets/black-fang/haoh-gald-ultimates-alpha.png"),
       stage1Vehicles: loadImage("assets/black-fang/stage1-parked-vehicles-alpha.png"),
+      stage1CarDamage: loadImage("assets/black-fang/stage1-car-damage-alpha.png"),
+      stage1BikeDamage: loadImage("assets/black-fang/stage1-bike-damage-alpha.png"),
+      bikeRiderJack: loadImage("assets/black-fang/bike-rider-jack-alpha.png"),
+      bikeRiderKotaro: loadImage("assets/black-fang/bike-rider-kotaro-alpha.png"),
+      bikeRiderMike: loadImage("assets/black-fang/bike-rider-mike-alpha.png"),
+      bikeRiderSofia: loadImage("assets/black-fang/bike-rider-sofia-alpha.png"),
+      bikeRiderDiego: loadImage("assets/black-fang/bike-rider-diego-alpha.png"),
+      stage3FoodStall: loadImage("assets/black-fang/stage3-food-stall-alpha.png"),
+      stage4Train: loadImage("assets/black-fang/stage4-subway-train-alpha.png"),
       kingDragonPhase1Attacks: loadImage("assets/black-fang/king-dragon-phase1-attacks-alpha.png"),
       kingDragonPhase2Attacks: loadImage("assets/black-fang/king-dragon-phase2-attacks-alpha.png"),
       kingDragonFinalAttacks: loadImage("assets/black-fang/king-dragon-final-attacks-alpha.png"),
@@ -2296,6 +2305,8 @@
         specialCooldown: 0,
         jumpAttack: 0,
         heldWeapon: null,
+        mountedBike: null,
+        bikeAttackCooldown: 0,
         hurt: 0
       };
     }
@@ -2338,8 +2349,12 @@
         y: type === "barrel" ? laneBottom : y,
         baseX: x,
         baseY: y,
-        hp: type === "container" ? 42 : type === "forklift" ? 80 : type === "stall" ? 52 : ["crane", "rail", "train", "highVoltage", "elevator", "securityLaser", "lantern", "firework", "parkedCar", "parkedBike"].includes(type) ? 999 : 24,
+        hp: type === "parkedCar" ? 96 : type === "container" ? 42 : type === "forklift" ? 80 : type === "stall" ? 52 : ["crane", "rail", "train", "highVoltage", "elevator", "securityLaser", "lantern", "firework", "parkedBike"].includes(type) ? 999 : 24,
+        maxHp: type === "parkedCar" ? 96 : type === "container" ? 42 : type === "forklift" ? 80 : type === "stall" ? 52 : ["crane", "rail", "train", "highVoltage", "elevator", "securityLaser", "lantern", "firework", "parkedBike"].includes(type) ? 999 : 24,
         broken: false,
+        destroyed: false,
+        bikeHits: 0,
+        mountedBy: null,
         phase: i * 0.91,
         direction: i % 2 ? -1 : 1,
         hazardCooldown: 0,
@@ -2348,9 +2363,13 @@
       }));
       state.player.x = 120;
       state.player.y = 408;
+      state.player.mountedBike = null;
+      state.player.bikeAttackCooldown = 0;
       if (state.player2) {
         state.player2.x = 200;
         state.player2.y = 408;
+        state.player2.mountedBike = null;
+        state.player2.bikeAttackCooldown = 0;
       }
       showMessage(stage.story, 2500);
       Snd.startBGM(Snd.stageId(index));
@@ -2789,6 +2808,88 @@
       return null;
     }
 
+    function findRideableBike(player) {
+      return state.props.find(prop =>
+        prop.type === "parkedBike" &&
+        !prop.destroyed &&
+        !prop.mountedBy &&
+        Math.abs(prop.x - player.x) < 94 &&
+        Math.abs(prop.y - player.y) < 58
+      ) || null;
+    }
+
+    function mountBike(player, bike) {
+      player.mountedBike = bike;
+      player.attacking = 0;
+      player.attackType = "";
+      player.heldWeapon = null;
+      player.x = bike.x;
+      player.y = clamp(bike.y - 4, laneTop + 22, laneBottom);
+      player.invuln = Math.max(player.invuln, 420);
+      bike.mountedBy = player;
+      bike.bikeHits = bike.bikeHits || 0;
+      showMessage(`バイク乗車  耐久 ${5 - bike.bikeHits}/5`, 1100);
+      Snd.playPickup();
+    }
+
+    function dismountBike(player, broken = false) {
+      const bike = player.mountedBike;
+      if (!bike) return;
+      bike.x = player.x;
+      bike.y = player.y + 4;
+      bike.mountedBy = null;
+      player.mountedBike = null;
+      player.x += player.facing * 58;
+      player.invuln = Math.max(player.invuln, broken ? 900 : 360);
+      if (!broken) showMessage("バイク降車", 700);
+    }
+
+    function updateBikeRide(player) {
+      const bike = player.mountedBike;
+      if (!bike || bike.destroyed) {
+        if (bike) bike.mountedBy = null;
+        player.mountedBike = null;
+        return;
+      }
+      bike.x = player.x;
+      bike.y = player.y + 4;
+      bike.direction = player.facing;
+      if (!player.moving || player.bikeAttackCooldown > 0) return;
+      for (const enemy of state.enemies) {
+        if (enemy.dead || enemy.invuln > 0) continue;
+        const ahead = (enemy.x - player.x) * player.facing;
+        if (ahead > -18 && ahead < 104 && Math.abs(enemy.y - player.y) < 50) {
+          damageEnemy(enemy, 30, player.facing, "bikeRam", player.heroKey || state.heroKey);
+          enemy.x += player.facing * 34;
+          player.bikeAttackCooldown = 260;
+          showMessage("バイクアタック", 420);
+          break;
+        }
+      }
+    }
+
+    function damageMountedBike(player, dir) {
+      const bike = player.mountedBike;
+      if (!bike || bike.destroyed) return false;
+      bike.bikeHits = (bike.bikeHits || 0) + 1;
+      player.invuln = 540;
+      player.hurt = 160;
+      player.x += dir * 12;
+      addSpark(bike.x + dir * 36, bike.y - 48, "#ff8a2b", 18);
+      if (bike.bikeHits >= 5) {
+        bike.destroyed = true;
+        bike.hp = 0;
+        addSpark(bike.x, bike.y - 42, "#ff4f22", 42);
+        Snd.playMetalDrop();
+        showMessage("バイク大破!", 1200);
+        dismountBike(player, true);
+      } else {
+        Snd.playMetalDrop();
+        showMessage(`バイク被弾 ${bike.bikeHits}/5`, 720);
+      }
+      return true;
+    }
+
     function updatePlayer(player, dt, stage) {
       let mx = 0;
       let my = 0;
@@ -2800,15 +2901,18 @@
       player.dashing = player.moving && (pressed("Shift") || pressed("ShiftLeft") || pressed("ShiftRight"));
       if (player.moving && player.z === 0) player.walkClock = (player.walkClock || 0) + dt * (player.dashing ? 1.55 : 1);
       else player.walkClock = 0;
-      const speed = state.heroDef.speed * (player.attacking ? 0.42 : 1) * (player.dashing ? 1.45 : 1);
+      const speed = state.heroDef.speed * (player.attacking ? 0.42 : 1) * (player.dashing ? 1.45 : 1) * (player.mountedBike ? 1.72 : 1);
       if (mx !== 0 || my !== 0) {
         const len = Math.hypot(mx, my) || 1;
         mx /= len;
         my /= len;
         player.facing = mx < 0 ? -1 : mx > 0 ? 1 : player.facing;
       }
+      player.previousX = player.x;
+      player.previousY = player.y;
       player.x = clamp(player.x + mx * speed, 20, stage.width - 80);
       player.y = clamp(player.y + my * speed * 0.78, laneTop + 22, laneBottom);
+      if (player.mountedBike) updateBikeRide(player, dt);
       if (player.z > 0 || player.vz > 0) {
         player.z += player.vz;
         player.vz -= gravity;
@@ -2830,8 +2934,22 @@
       player.invuln = Math.max(0, player.invuln - dt);
       player.hurt = Math.max(0, player.hurt - dt);
       player.comboUntil = Math.max(0, player.comboUntil - dt);
+      player.bikeAttackCooldown = Math.max(0, (player.bikeAttackCooldown || 0) - dt);
       if (player.comboUntil === 0) player.combo = 0;
       const kTap = pressedTap("k");
+      const jTap = pressedTap("j");
+      if (player.mountedBike && kTap) {
+        dismountBike(player);
+        return;
+      }
+      if (!player.mountedBike && jTap) {
+        const bike = findRideableBike(player);
+        if (bike) {
+          mountBike(player, bike);
+          return;
+        }
+      }
+      if (player.mountedBike) return;
       const jumpTap = kTap || pressedTap(" ");
       if (jumpTap && player.z === 0 && player.attacking === 0) {
         const grappleMove = pressed("k") ? chooseGrappleMove(player) : "";
@@ -2845,7 +2963,7 @@
           player.attackHit = false;
         }
       }
-      if (pressedTap("j") && player.attacking === 0) {
+      if (jTap && player.attacking === 0) {
         if (player.heldWeapon) {
           useHeldWeapon(player, state.heroDef);
         } else {
@@ -2937,8 +3055,9 @@
         }
       }
       for (const prop of state.props) {
-        if (prop.broken || prop.hp > 900) continue;
-        if (Math.abs(prop.y - arc.y) < 72 && Math.abs(prop.x - arc.x) < arc.w * 0.62 + 32) {
+        if (prop.broken || prop.destroyed || prop.hp > 900) continue;
+        const propReach = prop.type === "parkedCar" ? 170 : 32;
+        if (Math.abs(prop.y - arc.y) < 72 && Math.abs(prop.x - arc.x) < arc.w * 0.62 + propReach) {
           prop.hp -= damage;
           addSpark(prop.x, prop.y - 40, "#f6c21a", 8);
           if (prop.hp <= 0) breakProp(prop);
@@ -3231,8 +3350,9 @@
       return 0;
     }
 
-    function damageSomePlayer(player, amount, dir) {
+    function damageSomePlayer(player, amount, dir, source = "enemy") {
       if (player.invuln > 0) return;
+      if (source === "enemy" && damageMountedBike(player, dir)) return;
       player.hp -= amount;
       player.invuln = 620;
       player.hurt = 300;
@@ -3262,7 +3382,7 @@
     }
 
     function damagePlayer(amount, dir) {
-      damageSomePlayer(state.player, amount, dir);
+      damageSomePlayer(state.player, amount, dir, "direct");
     }
 
     function updateProjectiles(dt) {
@@ -3349,16 +3469,19 @@
           if (prop.type === "crane" && prop.active) { hazardDamage = 42; hazardRange = 50; }
           if (prop.type === "lantern" && prop.active) { hazardDamage = 18; hazardRange = 42; }
           if (prop.type === "firework" && prop.active) { hazardDamage = 24; hazardRange = 72; }
-          if (prop.type === "train" && prop.active) { hazardDamage = 48; hazardRange = 150; }
+          if (prop.type === "train" && prop.active) { hazardDamage = 48; hazardRange = 390; }
           if (prop.type === "highVoltage" && prop.active) { hazardDamage = 34; hazardRange = 68; }
           if (prop.type === "securityLaser" && prop.active) { hazardDamage = 28; hazardRange = 170; }
           if (hazardDamage && prop.hazardCooldown === 0 && dx < hazardRange && dy < 58) {
-            damageSomePlayer(player, hazardDamage, Math.sign(player.x - prop.x) || 1);
+            damageSomePlayer(player, hazardDamage, Math.sign(player.x - prop.x) || 1, "hazard");
             prop.hazardCooldown = 760;
           }
-          const solid = !["crane", "lantern", "firework", "rail", "train", "highVoltage", "securityLaser"].includes(prop.type);
-          if (solid && dx < (prop.type === "parkedCar" ? 112 : prop.type === "parkedBike" ? 66 : 32) && dy < 48) {
-            player.x -= player.facing * 1.2;
+          const solid = ![
+            "crane", "lantern", "firework", "rail", "train", "highVoltage",
+            "securityLaser", "parkedCar", "parkedBike"
+          ].includes(prop.type);
+          if (solid && dx < 32 && dy < 48) {
+            player.x = player.previousX ?? player.x;
           }
           if (prop.type === "elevator" && dx < 80 && dy < 44) player.y = clamp(prop.y, laneTop + 24, laneBottom);
         }
@@ -3366,6 +3489,14 @@
     }
 
     function breakProp(prop) {
+      if (prop.type === "parkedCar") {
+        prop.hp = 0;
+        prop.destroyed = true;
+        addSpark(prop.x, prop.y - 48, "#ff8a2b", 34);
+        Snd.playMetalDrop();
+        state.score += 250;
+        return;
+      }
       prop.broken = true;
       addSpark(prop.x, prop.y - 36, "#d09145", 22);
       if (prop.type === 'container' || prop.type === 'forklift') Snd.playMetalDrop();
@@ -3585,6 +3716,10 @@
       ctx.save();
       ctx.translate(-cam, 0);
 
+      const drawableDepth = item => {
+        if (item.type === "parkedCar" || item.type === "parkedBike" || item.type === "stall") return laneTop - 4;
+        return item.y || 0;
+      };
       const drawables = [
         ...state.props.filter(p => !p.broken),
         ...state.droppedWeapons.map(w => ({ ...w, _droppedWeapon: true })),
@@ -3592,7 +3727,7 @@
         ...state.enemies,
         state.player,
         ...(state.player2 ? [state.player2] : [])
-      ].sort((a, b) => (a.y || 0) - (b.y || 0));
+      ].sort((a, b) => drawableDepth(a) - drawableDepth(b));
 
       for (const item of drawables) {
         if (item.kind === "player") drawPlayer(item);
@@ -3681,10 +3816,55 @@
 
     function drawProp(prop) {
       if (prop.type === "parkedCar" || prop.type === "parkedBike") {
-        const cell = prop.type === "parkedCar" ? [0, 0] : [1, 0];
-        const size = prop.type === "parkedCar" ? [236, 126] : [170, 122];
+        if (prop.type === "parkedCar") {
+          const ratio = prop.maxHp ? prop.hp / prop.maxHp : 1;
+          const damageFrame = prop.destroyed || prop.hp <= 0 ? 3 : ratio <= 0.33 ? 2 : ratio <= 0.66 ? 1 : 0;
+          const carHeight = damageFrame === 2 ? 190 : damageFrame === 3 ? 164 : 176;
+          drawShadow(prop.x, prop.y, damageFrame === 3 ? 260 : 290, 0);
+          drawAtlasCell(
+            assets.stage1CarDamage,
+            4,
+            1,
+            [damageFrame, 0],
+            prop.x,
+            prop.y + 6,
+            360,
+            carHeight,
+            { crop: { left: 4, top: 118, right: 4, bottom: 128 } }
+          );
+          if (damageFrame > 0 && !prop.destroyed) {
+            ctx.fillStyle = "rgba(0,0,0,0.78)";
+            ctx.fillRect(prop.x - 72, prop.y + 12, 144, 8);
+            ctx.fillStyle = ratio > 0.33 ? "#f6c21a" : "#e84122";
+            ctx.fillRect(prop.x - 70, prop.y + 14, 140 * clamp(ratio, 0, 1), 4);
+          }
+          return;
+        }
+        const broken = prop.destroyed || prop.bikeHits >= 5;
+        if (prop.mountedBy && !broken) return;
+        const size = broken ? [250, 140] : [238, 168];
+        const crop = broken
+          ? { left: 28, top: 178, right: 28, bottom: 102 }
+          : { left: 42, top: 158, right: 42, bottom: 102 };
         drawShadow(prop.x, prop.y, size[0] * 0.72, 0);
-        drawAtlasCell(assets.stage1Vehicles, 2, 1, cell, prop.x, prop.y + 4, size[0], size[1]);
+        drawAtlasCell(
+          assets.stage1BikeDamage,
+          2,
+          1,
+          [broken ? 1 : 0, 0],
+          prop.x,
+          prop.y + 4,
+          size[0],
+          size[1],
+          { crop, flip: prop.direction < 0 }
+        );
+        if (prop.mountedBy && !broken) {
+          const remaining = 5 - (prop.bikeHits || 0);
+          ctx.fillStyle = "rgba(0,0,0,0.78)";
+          ctx.fillRect(prop.x - 52, prop.y + 8, 104, 8);
+          ctx.fillStyle = remaining > 2 ? "#4ed36b" : "#e84122";
+          ctx.fillRect(prop.x - 50, prop.y + 10, 20 * remaining, 4);
+        }
         return;
       }
       if (prop.type === "lantern") {
@@ -3701,15 +3881,18 @@
         return;
       }
       if (prop.type === "stall") {
-        ctx.save();
-        ctx.translate(prop.x, prop.y);
-        ctx.fillStyle = "#6f351e"; ctx.fillRect(-72, -76, 144, 76);
-        ctx.fillStyle = "#b6262c"; ctx.fillRect(-82, -98, 164, 24);
-        ctx.fillStyle = "#f0d26d";
-        for (let x = -72; x < 72; x += 30) ctx.fillRect(x, -98, 15, 24);
-        ctx.strokeStyle = "#d3954c"; ctx.lineWidth = 5;
-        ctx.strokeRect(-72, -76, 144, 76);
-        ctx.restore();
+        drawShadow(prop.x, prop.y, 250, 0);
+        drawAtlasCell(
+          assets.stage3FoodStall,
+          1,
+          1,
+          [0, 0],
+          prop.x,
+          prop.y + 8,
+          310,
+          232,
+          { crop: { left: 164, top: 38, right: 152, bottom: 62 } }
+        );
         return;
       }
       if (prop.type === "firework") {
@@ -3734,13 +3917,9 @@
         ctx.restore(); return;
       }
       if (prop.type === "train") {
-        ctx.save(); ctx.translate(prop.x, prop.y);
-        ctx.fillStyle = "#39424d"; ctx.fillRect(-148, -92, 296, 92);
-        ctx.fillStyle = "#b6202a"; ctx.fillRect(-148, -92, 296, 18);
-        ctx.fillStyle = "#9ed4e8";
-        for (let x = -120; x <= 90; x += 70) ctx.fillRect(x, -64, 46, 28);
-        ctx.fillStyle = "#17191d"; ctx.beginPath(); ctx.arc(-96, 0, 18, 0, Math.PI * 2); ctx.arc(96, 0, 18, 0, Math.PI * 2); ctx.fill();
-        ctx.restore(); return;
+        drawShadow(prop.x, prop.y + 4, 620, 0);
+        drawAtlasCell(assets.stage4Train, 1, 1, [0, 0], prop.x, prop.y + 24, 780, 262);
+        return;
       }
       if (prop.type === "highVoltage") {
         ctx.save(); ctx.translate(prop.x, prop.y);
@@ -3806,10 +3985,37 @@
 
     function drawPlayer(p) {
       const _savedHeroKey = state.heroKey;
+      const _savedPlayerY = p.y;
       if (p.heroKey && p.heroKey !== state.heroKey) state.heroKey = p.heroKey;
       try { // restore state.heroKey in finally so P2 doesn't corrupt P1's key
       const flash = p.invuln > 0 && Math.floor(now() / 80) % 2 === 0;
-      drawShadow(p.x, p.y, p.w, p.z);
+      drawShadow(p.x, _savedPlayerY, p.w, p.z);
+      if (p.mountedBike) {
+        const mountedAssets = {
+          jack: assets.bikeRiderJack,
+          kotaro: assets.bikeRiderKotaro,
+          mike: assets.bikeRiderMike,
+          sofia: assets.bikeRiderSofia,
+          diego: assets.bikeRiderDiego
+        };
+        const mountedAsset = mountedAssets[p.heroKey || state.heroKey] || assets.bikeRiderJack;
+        drawAtlasCell(
+          mountedAsset,
+          1,
+          1,
+          [0, 0],
+          p.x,
+          p.y + 12,
+          282,
+          206,
+          {
+            crop: { left: 74, top: 30, right: 70, bottom: 42 },
+            flip: p.facing < 0,
+            alpha: 1
+          }
+        );
+        return;
+      }
       const weaponRow = heroWeaponRows[p.attackType];
       if (weaponRow !== undefined && p.attacking > 0) {
         const column = heroWeaponColumns[p.heroKey || state.heroKey] ?? 0;
@@ -3945,7 +4151,10 @@
           alpha: 0.88
         });
       }
-      } finally { state.heroKey = _savedHeroKey; }
+      } finally {
+        p.y = _savedPlayerY;
+        state.heroKey = _savedHeroKey;
+      }
     }
 
     function playerActionKey(p) {
@@ -4642,6 +4851,8 @@
         mx /= len; my /= len;
         player.facing = mx < 0 ? -1 : mx > 0 ? 1 : player.facing;
       }
+      player.previousX = player.x;
+      player.previousY = player.y;
       player.x = clamp(player.x + mx * speed, 20, stage.width - 80);
       player.y = clamp(player.y + my * speed * 0.78, laneTop + 22, laneBottom);
       if (player.z > 0 || player.vz > 0) {
@@ -4747,6 +4958,8 @@
         mx /= len; my /= len;
         player.facing = mx < 0 ? -1 : mx > 0 ? 1 : player.facing;
       }
+      player.previousX = player.x;
+      player.previousY = player.y;
       player.x = clamp(player.x + mx * speed, 20, stage.width - 80);
       player.y = clamp(player.y + my * speed * 0.78, laneTop + 22, laneBottom);
       if (player.z > 0 || player.vz > 0) {
