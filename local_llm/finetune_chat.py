@@ -86,6 +86,10 @@ def build_examples(pairs, sp, max_seq_len):
         y = ids[1:]
         # プロンプト部分（answer開始前）は -1 にして損失から除外
         boundary = len(prompt_ids) - 1  # xの中でanswer先頭トークンを予測する位置
+        if boundary >= len(y):
+            # プロンプトだけで max_seq_len を超え、応答が切り捨てられた例。
+            # 学習対象トークンがゼロになる（lossがNaN化する）のでスキップ
+            continue
         y = [-1] * boundary + y[boundary:]
         examples.append((x, y))
     return examples
