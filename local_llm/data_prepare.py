@@ -117,7 +117,8 @@ def encode(tokenizer_path: str, val_ratio: float):
     total = 0
     for path in files:
         print(f"トークン化中: {path}")
-        with open(path, encoding="utf-8") as f:
+        # errors="ignore": ダウンロード中断等で末尾が不完全なUTF-8でも処理を続行
+        with open(path, encoding="utf-8", errors="ignore") as f:
             buf = []
             for line in f:
                 buf.append(line)

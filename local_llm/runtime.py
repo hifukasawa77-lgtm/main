@@ -46,12 +46,13 @@ def build_chat_prompt(sp, messages: list[dict]) -> list[int]:
 
 
 def generate_text(model, sp, prompt_ids: list[int], max_new_tokens=200,
-                  temperature=0.8, top_p=0.95) -> str:
+                  temperature=0.8, top_p=0.95, repetition_penalty=1.2) -> str:
     """ID列から生成し、新規生成部分だけをテキストで返す。"""
     eos_id = sp.piece_to_id("<|eos|>")
     x = torch.tensor([prompt_ids], dtype=torch.long)
     out = model.generate(x, max_new_tokens=max_new_tokens,
-                         temperature=temperature, top_p=top_p, eos_id=eos_id)
+                         temperature=temperature, top_p=top_p, eos_id=eos_id,
+                         repetition_penalty=repetition_penalty)
     new_ids = out[0, len(prompt_ids):].tolist()
     if eos_id in new_ids:
         new_ids = new_ids[: new_ids.index(eos_id)]

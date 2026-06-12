@@ -1,0 +1,81 @@
+name: Deploy Cloudflare Worker (ai-proxy)
+
+# cloudflare-worker/ 配下の変更が main に push されたら自動デプロイする。
+# 必要なシークレット（リポジトリの Settings → Secrets and variables → Actions）:
+#   CLOUDFLARE_API_TOKEN  … 必須。権限: Workers Scripts:Edit / Workers KV Storage:Edit
+#   CLOUDFLARE_ACCOUNT_ID … 任意。トークンが複数アカウントに属する場合のみ必要
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare-worker/**'
+      - '.github/workflows/deploy-worker.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check secret
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN シークレットが未設定です。リポジトリの Settings → Secrets and variables → Actions で登録してください（cloudflare-worker/README.md 参照）"
+            exit 1
+          fi
+
+      - name: Ensure KV namespace (AGENT_MEMORY)
+        id: kv
+        working-directory: cloudflare-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          find_id() {
+            npx --yes wrangler@4 kv namespace list 2>/dev/null \
+              | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const a=JSON.parse(s);const n=a.find(x=>x.title&&x.title.includes('AGENT_MEMORY'));process.stdout.write(n?n.id:'')}catch(e){process.stdout.write('')}})"
+          }
+          ID=$(find_id)
+          if [ -z "$ID" ]; then
+            echo "KV namespace AGENT_MEMORY が無いため作成します"
+            npx --yes wrangler@4 kv namespace create AGENT_MEMORY || true
+            ID=$(find_id)
+          fi
+          if [ -z "$ID" ]; then
+            echo "::error::KV namespace の取得/作成に失敗しました"
+            exit 1
+          fi
+          echo "KV namespace id: $ID"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        working-directory: cloudflare-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          # KVバインディングを wrangler.toml に追記してからデプロイ
+          printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "${{ steps.kv.outputs.id }}" >> wrangler.toml
+          echo "--- wrangler.toml ---"
+          cat wrangler.toml
+          npx --yes wrangler@4 deploy
+
+      - name: Smoke test
+        run: |
+          sleep 5
+          RES=$(curl -s -m 30 -X POST 'https://ai-proxy.hi-fukasawa77.workers.dev' \
+            -H 'Content-Type: application/json' \
+            -H 'Origin: https://hifukasawa77-lgtm.github.io' \
+            -d '{"message":"こんにちは","history":[]}')
+          echo "response: $RES"
+          echo "$RES" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);if(!d.text){console.error('no text in response');process.exit(1)};console.log('OK source='+d.source)})"
