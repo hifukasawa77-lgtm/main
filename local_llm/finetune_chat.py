@@ -39,9 +39,19 @@ SAMPLE_PAIRS = [
 
 
 def load_dolly_ja(max_examples: int):
-    """日本語指示データ databricks-dolly-15k-ja（CC BY-SA 3.0）を取得する。"""
-    from datasets import load_dataset
-    ds = load_dataset("kunishou/databricks-dolly-15k-ja", split="train")
+    """日本語指示データ databricks-dolly-15k-ja（CC BY-SA 3.0）を取得する。
+
+    data/dolly_ja.json があればそれを優先（HuggingFaceに接続できない環境向け。
+    GitHubミラー raw.githubusercontent.com/kunishou/databricks-dolly-15k-ja から取得可能）。
+    """
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dolly_ja.json")
+    if os.path.exists(local_path):
+        import json
+        with open(local_path, encoding="utf-8") as f:
+            ds = json.load(f)
+    else:
+        from datasets import load_dataset
+        ds = load_dataset("kunishou/databricks-dolly-15k-ja", split="train")
     pairs = []
     for row in ds:
         instr = (row.get("instruction") or "").strip()
@@ -76,6 +86,10 @@ def build_examples(pairs, sp, max_seq_len):
         y = ids[1:]
         # プロンプト部分（answer開始前）は -1 にして損失から除外
         boundary = len(prompt_ids) - 1  # xの中でanswer先頭トークンを予測する位置
+        if boundary >= len(y):
+            # プロンプトだけで max_seq_len を超え、応答が切り捨てられた例。
+            # 学習対象トークンがゼロになる（lossがNaN化する）のでスキップ
+            continue
         y = [-1] * boundary + y[boundary:]
         examples.append((x, y))
     return examples

@@ -216,12 +216,15 @@ class MiniLLM(nn.Module):
         top_p: float = 0.95,
         top_k: int = 0,
         eos_id: int | None = None,
+        repetition_penalty: float = 1.0,
     ) -> torch.Tensor:
         """KVキャッシュを使った自己回帰生成。
 
         temperature: 低いほど堅実、高いほど多様な出力
         top_p: 累積確率がこの値に達するまでの上位トークンのみから抽選（nucleus sampling）
         top_k: 上位k件のみから抽選（0なら無効）
+        repetition_penalty: 既出トークンのlogitを割り引く（1.0で無効、小型モデルの
+            繰り返しループ対策に1.1〜1.3程度が有効）
         """
         self.eval()
         # 文脈長を超えないように入力を切り詰める
@@ -231,7 +234,17 @@ class MiniLLM(nn.Module):
         pos = idx.size(1)
 
         for _ in range(max_new_tokens):
-            logits_last = logits[:, -1, :] / max(temperature, 1e-5)
+            logits_last = logits[:, -1, :].clone()
+
+            if repetition_penalty != 1.0:
+                # 既出トークンを出にくくする（正のlogitは割る、負のlogitは掛ける）
+                prev_ids = torch.unique(idx[0])
+                scores = logits_last[0, prev_ids]
+                logits_last[0, prev_ids] = torch.where(
+                    scores > 0, scores / repetition_penalty, scores * repetition_penalty
+                )
+
+            logits_last = logits_last / max(temperature, 1e-5)
 
             if top_k > 0:
                 kth = torch.topk(logits_last, min(top_k, logits_last.size(-1)))[0][..., -1, None]
