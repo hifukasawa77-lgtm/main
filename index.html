@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://www.gstatic.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https:; frame-src https://accounts.google.com https://www.gstatic.com;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://www.gstatic.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https:; frame-src https://accounts.google.com https://www.gstatic.com https://embed.windy.com;">
   <meta http-equiv="X-Frame-Options" content="DENY">
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12129,6 +12129,15 @@
       cursor: pointer; font-size: 0.72rem; padding: 2px 4px;
     }
     .msg-action-btn:hover { color: var(--agent-text, #e8eaf2); }
+    /* 👍/👎付きの行はタッチ端末でも見えるよう常時表示 */
+    .msg-actions.has-fb { opacity: 0.85; }
+    .msg-fb-btn { font-size: 0.82rem; }
+    .msg-fb-btn:disabled { opacity: 0.45; cursor: default; }
+    .msg-fb-btn.voted { opacity: 1; color: var(--agent-accent, #22d3ee); }
+    .msg-learned-tag {
+      font-size: 0.68rem; color: var(--agent-muted, #9aa1b4);
+      padding: 2px 4px; align-self: center; white-space: nowrap;
+    }
 
     .tool-card {
       margin-top: 4px; padding: 12px;
@@ -12645,7 +12654,8 @@
       async function askGemini(userText, historyTurns) {
         if (!AGENT_PROXY_URL) throw new Error('no-key');
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        // コールドスタート＋大型モデル対策で15秒
+        const timeout = setTimeout(() => controller.abort(), 15000);
         try {
           const res = await fetch(AGENT_PROXY_URL, {
             method: 'POST',
@@ -12663,10 +12673,20 @@
           const data = await res.json();
           const text = data?.text;
           if (!text) throw new Error('proxy-empty');
-          return text.trim();
+          return { text: text.trim(), source: data.source || 'ai' };
         } finally {
           clearTimeout(timeout);
         }
+      }
+
+      // 👍/👎 フィードバックを共有学習メモリへ送信（失敗しても無視）
+      function sendAgentFeedback(question, vote) {
+        if (!AGENT_PROXY_URL) return;
+        fetch(AGENT_PROXY_URL + '/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q: question, vote: vote }),
+        }).catch(() => {});
       }
 
       // ── Utilities ────────────────────────────────────────────
@@ -12784,7 +12804,14 @@
         if (!nt) return null;
         for (const alias of STOCK_ALIASES) {
           for (const key of alias.keys) {
-            if (nt.includes(normalize(key))) return alias;
+            const nk = normalize(key);
+            if (nk.length <= 4 && /^[a-z0-9&\s-]+$/.test(nk)) {
+              // 短い英字キー（au/tel/nec等）は単語境界で判定（"claude"内の"au"等への誤爆防止）
+              const esc = nk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              if (new RegExp('(^|[^a-z0-9])' + esc + '($|[^a-z0-9])').test(nt)) return alias;
+            } else if (nt.includes(nk)) {
+              return alias;
+            }
           }
         }
         return null;
@@ -13007,7 +13034,8 @@
         });
       }
 
-      function renderMessage(role, content) {
+      function renderMessage(role, content, opts) {
+        opts = opts || {};
         const wrap = document.createElement('div');
         wrap.className = 'agent-msg ' + role;
         const bubble = document.createElement('div');
@@ -13021,6 +13049,13 @@
         if (role === 'agent') {
           const actions = document.createElement('div');
           actions.className = 'msg-actions';
+          if (opts.learned) {
+            const tag = document.createElement('span');
+            tag.className = 'msg-learned-tag';
+            tag.textContent = '🧠 ' + (State.lang === 'ja' ? '学習済み' : 'learned');
+            tag.title = State.lang === 'ja' ? 'みんなの質問から学習した回答です' : 'Answer learned from past visitors';
+            actions.appendChild(tag);
+          }
           const copy = document.createElement('button');
           copy.type = 'button';
           copy.className = 'msg-action-btn';
@@ -13030,6 +13065,27 @@
             if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
           });
           actions.appendChild(copy);
+          if (opts.feedbackFor) {
+            // 👍/👎 — 共有学習メモリへのフィードバック（押下後は両方無効化）
+            actions.classList.add('has-fb');
+            const fbBtns = [];
+            [['👍', 'up'], ['👎', 'down']].forEach(([icon, vote]) => {
+              const b = document.createElement('button');
+              b.type = 'button';
+              b.className = 'msg-action-btn msg-fb-btn';
+              b.textContent = icon;
+              b.title = State.lang === 'ja'
+                ? (vote === 'up' ? '役に立った' : '回答がよくなかった')
+                : (vote === 'up' ? 'Helpful' : 'Not helpful');
+              b.addEventListener('click', () => {
+                sendAgentFeedback(opts.feedbackFor, vote);
+                fbBtns.forEach(x => { x.disabled = true; });
+                b.classList.add('voted');
+              });
+              fbBtns.push(b);
+              actions.appendChild(b);
+            });
+          }
           wrap.appendChild(actions);
         }
         messagesEl.appendChild(wrap);
@@ -13161,62 +13217,82 @@
       let voiceEnabled = false;
       let voiceGender = 'female';
 
+      // 音声リストは非同期ロードされるため、選択結果をキャッシュし voiceschanged で再選択
+      let cachedVoice = { key: '', voice: null };
+      if (window.speechSynthesis) {
+        window.speechSynthesis.getVoices(); // ウォームアップ（初回呼び出しは空配列のことがある）
+        if (typeof window.speechSynthesis.addEventListener === 'function') {
+          window.speechSynthesis.addEventListener('voiceschanged', () => { cachedVoice = { key: '', voice: null }; });
+        }
+      }
+
+      // 自然さ優先のスコア方式で音声を選ぶ:
+      // ニューラル系（Natural/Neural/Online/Google）＞ 性別名マッチ ＞ ネットワーク音声 ＞ その他
+      function pickVoice(langPrefix, gender) {
+        const key = langPrefix + ':' + gender;
+        if (cachedVoice.key === key && cachedVoice.voice) return cachedVoice.voice;
+        const voices = window.speechSynthesis.getVoices()
+          .filter(v => v.lang && v.lang.toLowerCase().startsWith(langPrefix));
+        if (!voices.length) return null;
+        const femaleNames = /nanami|haruka|kyoko|ayumi|hikari|sayaka|samantha|karen|victoria|susan|zira|aria|jenny|female|女性/i;
+        const maleNames = /ichiro|kenji|otoya|takeru|keita|daichi|daniel|alex|david|mark|guy|male|男性/i;
+        const wantNames = gender === 'female' ? femaleNames : maleNames;
+        const avoidNames = gender === 'female' ? maleNames : femaleNames;
+        let best = null, bestScore = -Infinity;
+        for (const v of voices) {
+          let s = 0;
+          if (/natural|neural|online/i.test(v.name)) s += 8; // Edge等のニューラル音声
+          if (/google/i.test(v.name)) s += 6;                // Android Chromeの自然音声
+          if (wantNames.test(v.name)) s += 4;
+          if (avoidNames.test(v.name)) s -= 5;
+          if (!v.localService) s += 1;                       // ネットワーク音声の方が概して自然
+          if (s > bestScore) { bestScore = s; best = v; }
+        }
+        cachedVoice = { key: key, voice: best };
+        return best;
+      }
+
+      // 読み上げ用テキスト整形: 絵文字・マークダウン・URL・括弧を除去し文単位に分割
+      function cleanForSpeech(text) {
+        return String(text)
+          .replace(/\p{Extended_Pictographic}|[\uFE0F\u200D]/gu, '')
+          .replace(/https?:\/\/\S+/g, State.lang === 'ja' ? 'リンク' : 'link')
+          .replace(/[*_`#>|]+/g, '')
+          .replace(/[「」『』【】〔〕《》［］()（）]/g, '')
+          .replace(/([。！？!?])/g, '$1\n')
+          .replace(/\n+/g, '\n')
+          .trim();
+      }
+
       function speak(text) {
         if (!voiceEnabled || !window.speechSynthesis) return;
         window.speechSynthesis.cancel();
 
-        // 記号を読み上げ向けに変換し、文単位に分割
-        const cleaned = text
-          .replace(/[「」『』【】〔〕《》✨🎮💴☀️📈🎉🏙️👤🤖📡🧭🎯🔷🎲♟️♔🀄🌸📜⚫⚪🗡️]/g, '')
-          .replace(/([。！？])/g, '$1\n')
-          .replace(/\n+/g, '\n')
-          .trim();
-
-        const sentences = cleaned.split('\n').map(s => s.trim()).filter(Boolean);
+        const sentences = cleanForSpeech(text).split('\n').map(s => s.trim()).filter(Boolean);
         if (!sentences.length) return;
 
-        const voices = window.speechSynthesis.getVoices();
-        const jaVoices = voices.filter(v => v.lang.startsWith('ja'));
-        const enVoices = voices.filter(v => v.lang.startsWith('en'));
+        const isJa = State.lang === 'ja';
+        const voice = pickVoice(isJa ? 'ja' : 'en', voiceGender);
+        const basePitch = voiceGender === 'female' ? (isJa ? 1.04 : 1.06) : (isJa ? 0.9 : 0.92);
 
-        function makeUtt(sentence, idx, total) {
+        function makeUtt(sentence) {
           const utt = new SpeechSynthesisUtterance(sentence);
-          utt.lang = State.lang === 'ja' ? 'ja-JP' : 'en-US';
-
-          if (State.lang === 'ja') {
-            if (voiceGender === 'female') {
-              utt.pitch = 1.05;
-              // 文の位置で速度を微変化：最初の文はやや遅く、中間は普通、最後はやや遅く
-              utt.rate = idx === 0 ? 0.97 : idx === total - 1 ? 0.95 : 1.02;
-              utt.voice = jaVoices.find(v => /haruka|nanami|kyoko|ayumi|hikari/i.test(v.name))
-                       || jaVoices.find(v => v.localService)
-                       || jaVoices[0] || null;
-            } else {
-              utt.pitch = 0.88;
-              utt.rate = idx === 0 ? 0.95 : idx === total - 1 ? 0.92 : 0.98;
-              utt.voice = jaVoices.find(v => /ichiro|kenji|otoya|takeru/i.test(v.name))
-                       || jaVoices.find(v => v.localService && !/haruka|nanami|kyoko/i.test(v.name))
-                       || jaVoices[jaVoices.length - 1] || null;
-            }
-          } else {
-            utt.pitch = voiceGender === 'female' ? 1.08 : 0.9;
-            utt.rate = 1.0;
-            utt.voice = enVoices.find(v => voiceGender === 'female'
-              ? /samantha|karen|victoria|susan|zira/i.test(v.name)
-              : /daniel|alex|david|mark/i.test(v.name))
-              || enVoices[0] || null;
-          }
+          utt.lang = isJa ? 'ja-JP' : 'en-US';
+          if (voice) utt.voice = voice;
+          // 文ごとに微小な揺らぎを与えて単調さを減らす。疑問文はやや高めに
+          const isQuestion = /[？?]\s*$/.test(sentence);
+          utt.pitch = Math.max(0.5, basePitch + (Math.random() - 0.5) * 0.06 + (isQuestion ? 0.05 : 0));
+          utt.rate = Math.max(0.5, 1.0 + (Math.random() - 0.5) * 0.08);
           return utt;
         }
 
-        // 文を順番にキューイング（onend で次を発話）
+        // 文を順番にキューイングし、文間に自然な間（200〜350ms）を置く
         function speakQueue(arr, idx) {
           if (idx >= arr.length) return;
-          const utt = makeUtt(arr[idx], idx, arr.length);
+          const utt = makeUtt(arr[idx]);
           utt.onend = () => {
-            // 文間に自然な間（100〜180ms）
             if (idx < arr.length - 1) {
-              setTimeout(() => speakQueue(arr, idx + 1), 130);
+              setTimeout(() => speakQueue(arr, idx + 1), 200 + Math.random() * 150);
             }
           };
           window.speechSynthesis.speak(utt);
@@ -13231,7 +13307,7 @@
         const delay = opts.delay != null ? opts.delay : 220;
         await new Promise(r => setTimeout(r, delay));
         setTyping(false);
-        const { bubble } = renderMessage('agent', '');
+        const { bubble } = renderMessage('agent', '', { feedbackFor: opts.feedbackFor, learned: opts.learned });
         await typeInto(bubble, text);
         State.push({ id: uid(), role: 'agent', text: text, ts: Date.now() });
         speak(text);
@@ -13469,9 +13545,22 @@
           return;
         }
 
-        // ④ fallback — 類似サジェスト or Gemini AI
+        // ④ fallback — AI自由回答を最優先で試行（どんな質問にも答える）
         State.lastIntent = null;
         State.save();
+        if (AGENT_PROXY_URL) {
+          setTyping(true);
+          try {
+            const reply = await askGemini(text, State.history);
+            setTyping(false);
+            await botSay(reply.text, { delay: 0, feedbackFor: text, learned: reply.source === 'learned' });
+            renderChips(defaultChips());
+            return;
+          } catch (e) {
+            setTyping(false);
+            // AI失敗 → 下の類似サジェストへフォールバック
+          }
+        }
         const sug = suggestFromText(text, State.lang);
         if (sug.length > 0) {
           const msg = State.lang === 'ja'
@@ -13479,19 +13568,6 @@
             : "I didn't quite get that 🙏 Did you mean one of these?";
           await botSay(msg);
           renderChips(sug);
-        } else if (AGENT_PROXY_URL) {
-          // Gemini API で自由回答
-          setTyping(true);
-          try {
-            const reply = await askGemini(text, State.history);
-            setTyping(false);
-            await botSay(reply, { delay: 0 });
-            renderChips(defaultChips());
-          } catch (e) {
-            setTyping(false);
-            await botSay(t('agent-fallback'));
-            renderChips(defaultChips());
-          }
         } else {
           // 全インテントのスコアを計算して最も近い3候補を提示
           const isJa = State.lang === 'ja';
@@ -13541,9 +13617,31 @@
         return keys.map(k => ({ label: t(k), query: t(k) }));
       }
 
+      // インテント使用回数を端末ごとに記録し、クイックチップを使用頻度順に並べ替える
+      const AGENT_STATS_KEY = 'hide-agent-stats-v1';
+      function loadIntentStats() {
+        try { return JSON.parse(localStorage.getItem(AGENT_STATS_KEY)) || {}; } catch (e) { return {}; }
+      }
+      function recordIntentUse(name) {
+        try {
+          const stats = loadIntentStats();
+          stats[name] = (stats[name] || 0) + 1;
+          localStorage.setItem(AGENT_STATS_KEY, JSON.stringify(stats));
+        } catch (e) { /* プライベートモード等では無視 */ }
+      }
+
       function defaultChips() {
+        const quickIntent = {
+          'agent-quick-1': 'listGames',
+          'agent-quick-2': 'recommend',
+          'agent-quick-3': 'weather',
+          'agent-quick-4': 'forex',
+        };
+        const stats = loadIntentStats();
         return ['agent-quick-1','agent-quick-2','agent-quick-3','agent-quick-4']
-          .map(k => ({ label: t(k), query: t(k) }));
+          .map((k, i) => ({ k: k, i: i, n: stats[quickIntent[k]] || 0 }))
+          .sort((a, b) => b.n - a.n || a.i - b.i)
+          .map(o => ({ label: t(o.k), query: t(o.k) }));
       }
 
       // 会話文脈に応じたクイックチップを返す（インテント名 → チップ配列）
@@ -13609,6 +13707,7 @@
       }
 
       async function runIntent(name) {
+        recordIntentUse(name);
         switch (name) {
           case 'forex':     return runForex();
           case 'weather':   return runWeather();
