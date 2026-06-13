@@ -125,7 +125,8 @@
           <div>
             <label class="field">生成エンジン / Engine</label>
             <select id="engine">
-              <option value="ai" selected>AI（Workers AI）</option>
+              <option value="ai" selected>AI（Workers AI・キー不要）</option>
+              <option value="byok">高品質 BYOK（OpenAI・要キー）</option>
               <option value="proc">プロシージャル（オフライン）</option>
             </select>
           </div>
@@ -144,6 +145,32 @@
         <label class="toggle"><input type="checkbox" id="optImage" checked> AI画像でビジュアル生成 / AI images</label>
         <label class="toggle"><input type="checkbox" id="optTts" checked> AIナレーション音声（動画に収録）/ AI voice</label>
         <label class="toggle"><input type="checkbox" id="optBgm" checked> 自動BGMを入れる / Procedural BGM</label>
+
+        <div id="byokPanel" style="display:none;margin-top:12px;border:1px solid rgba(167,139,250,0.35);border-radius:12px;padding:12px;background:rgba(167,139,250,0.06)">
+          <div style="font-size:0.8rem;font-weight:700;color:var(--purple);margin-bottom:6px">🔑 高品質モード（OpenAI BYOK）</div>
+          <label class="field" style="margin-top:0">OpenAI APIキー / API key</label>
+          <input type="password" id="byokKey" placeholder="sk-..." autocomplete="off">
+          <div class="row" style="margin-top:8px">
+            <div>
+              <label class="field">ナレーション音声 / Voice</label>
+              <select id="byokVoice">
+                <option value="alloy">alloy</option>
+                <option value="ash">ash</option>
+                <option value="ballad">ballad</option>
+                <option value="coral">coral</option>
+                <option value="echo">echo</option>
+                <option value="sage" selected>sage</option>
+                <option value="shimmer">shimmer</option>
+                <option value="verse">verse</option>
+              </select>
+            </div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="byokRemember"> このブラウザにキーを保存（localStorage）</label>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button type="button" class="btn ghost" id="byokClear" style="flex:0 0 auto;padding:7px 12px;font-size:0.78rem">キーを消去</button>
+          </div>
+          <div class="note" style="margin-top:8px">キーは<strong>このブラウザ内だけ</strong>で使用し、リポジトリ・サーバーには保存しません。OpenAIへ直接通信し、台本=gpt-4o-mini / 画像=gpt-image-1 / 音声=gpt-4o-mini-tts を使用します（従量課金はご自身のOpenAIアカウントに発生）。</div>
+        </div>
 
         <details>
           <summary>詳細設定 / Advanced</summary>
@@ -246,6 +273,71 @@ function syncAspect(){ const a=PLATFORM_ASPECT[platformEl.value]; if(a) aspectEl
 platformEl.addEventListener('change',syncAspect);
 syncAspect();
 function isShortForm(){ return ['shorts','tiktok','reels'].includes(platformEl.value); }
+
+/* =========================================================================
+   BYOK（OpenAI）— キーはブラウザ内のみ。リポジトリ・サーバーには保存しない。
+   ========================================================================= */
+const byokKeyEl=$('byokKey'), byokVoiceEl=$('byokVoice'), byokRememberEl=$('byokRemember'),
+      byokPanel=$('byokPanel'), byokClearBtn=$('byokClear');
+const BYOK_LS='avs-openai-key';
+let byokKeyMem='';
+(function initByok(){
+  const saved=localStorage.getItem(BYOK_LS);
+  if(saved){ byokKeyMem=saved; byokKeyEl.value=saved; byokRememberEl.checked=true; }
+})();
+function getByokKey(){ return (byokKeyEl.value||byokKeyMem||'').trim(); }
+byokKeyEl.addEventListener('input',()=>{ byokKeyMem=byokKeyEl.value.trim(); if(byokRememberEl.checked) localStorage.setItem(BYOK_LS,byokKeyMem); });
+byokRememberEl.addEventListener('change',()=>{ if(byokRememberEl.checked) localStorage.setItem(BYOK_LS,getByokKey()); else localStorage.removeItem(BYOK_LS); });
+byokClearBtn.addEventListener('click',()=>{ byokKeyEl.value=''; byokKeyMem=''; localStorage.removeItem(BYOK_LS); byokRememberEl.checked=false; setStatus('APIキーを消去しました。'); });
+function syncEnginePanel(){ byokPanel.style.display = engineEl.value==='byok' ? 'block' : 'none'; }
+engineEl.addEventListener('change',syncEnginePanel);
+syncEnginePanel();
+
+function openaiImageSize(){ const a=aspectEl.value; if(a==='9:16') return '1024x1536'; if(a==='1:1') return '1024x1024'; return '1536x1024'; }
+async function openaiFetch(path, payload){
+  const res=await fetch('https://api.openai.com/v1'+path,{
+    method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+getByokKey()},
+    body:JSON.stringify(payload),
+  });
+  if(!res.ok){ const t=await res.text().catch(()=>''); throw new Error('OpenAI '+res.status+' '+t.slice(0,160)); }
+  return res;
+}
+async function openaiScript(prompt, platform, aspect){
+  const shortForm=['shorts','tiktok','reels'].includes(platform);
+  const sys='あなたはプロの動画ディレクター兼脚本家です。絵コンテをJSONのみで返します。'
+    +'スキーマ: {"title":string,"theme":"space|nature|tech|city|business|energy|aurora","scenes":[{"heading":string,"narration":string,"subtitle":string,"visual":string}],"youtube":{"title":string,"description":string,"tags":string[]}}。'
+    +'headingは全角12文字程度の日本語、narrationは日本語1〜2文の話し言葉、subtitleは短い日本語1行、visualは英語の画像生成プロンプト(cinematic, dramatic lighting, highly detailed を含める)。';
+  const user=`テーマ:「${prompt}」 アスペクト比:${aspect}。`
+    +(shortForm?`配信先:${platform}(縦型ショート15〜40秒)。最初のシーンは強いフック。3〜4シーンでテンポ良く、最後に行動喚起。visualはvertical 9:16 composition。`
+              :`配信先:${platform}(横型・通常尺)。4〜6シーンで分かりやすく。`);
+  const res=await openaiFetch('/chat/completions',{
+    model:'gpt-4o-mini', temperature:0.8, response_format:{type:'json_object'},
+    messages:[{role:'system',content:sys},{role:'user',content:user}],
+  });
+  const data=await res.json();
+  const txt=data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+  const json=JSON.parse(txt);
+  if(!json || !Array.isArray(json.scenes) || !json.scenes.length) throw new Error('script parse failed');
+  return json;
+}
+async function openaiImage(prompt){
+  const res=await openaiFetch('/images/generations',{
+    model:'gpt-image-1', prompt:String(prompt).slice(0,4000), size:openaiImageSize(), n:1,
+  });
+  const data=await res.json();
+  const b64=data && data.data && data.data[0] && data.data[0].b64_json;
+  if(!b64) throw new Error('no image');
+  return {image:b64, mime:'image/png'};
+}
+async function openaiTts(text){
+  const res=await fetch('https://api.openai.com/v1/audio/speech',{
+    method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+getByokKey()},
+    body:JSON.stringify({model:'gpt-4o-mini-tts', voice:byokVoiceEl.value||'sage', input:String(text).slice(0,1200), response_format:'mp3'}),
+  });
+  if(!res.ok){ const t=await res.text().catch(()=>''); throw new Error('OpenAI TTS '+res.status+' '+t.slice(0,160)); }
+  const ab=await res.arrayBuffer();
+  return await audioCtx.decodeAudioData(ab);
+}
 /* 画像生成プロンプトに映画的な品質修飾を付与（プロ寄りの画作り） */
 function enhanceVisual(p){ p=(p||'').trim(); if(!/cinematic|photoreal|highly detailed|8k/i.test(p)) p+=', cinematic composition, dramatic lighting, highly detailed, professional color grading, 8k'; return p; }
 
@@ -355,7 +447,9 @@ async function generate(){
   if(!prompt){ promptEl.focus(); setStatus('プロンプトを入力してください。'); return; }
   generating=true; setBusy(true);
   dlrow.style.display='none';
-  const useAI = engineEl.value==='ai';
+  const byok = engineEl.value==='byok';
+  const useAI = engineEl.value==='ai' || byok;
+  if(byok && !getByokKey()){ setStatus('BYOKモードです。OpenAI APIキーを入力してください。'); generating=false; setBusy(false); return; }
 
   try{
     // ---- ① 台本・シーン構成・字幕（LLM） ----
@@ -363,13 +457,15 @@ async function generate(){
     if(useAI){
       let sb=null;
       try{
-        const r=await apiPost('/video/script',{prompt,aspect:aspectEl.value,platform:platformEl.value},45000);
-        if(r && r.storyboard && Array.isArray(r.storyboard.scenes) && r.storyboard.scenes.length){
-          sb=r.storyboard;
+        if(byok){
+          sb=await openaiScript(prompt, platformEl.value, aspectEl.value);
+        } else {
+          const r=await apiPost('/video/script',{prompt,aspect:aspectEl.value,platform:platformEl.value},45000);
+          if(r && r.storyboard && Array.isArray(r.storyboard.scenes) && r.storyboard.scenes.length) sb=r.storyboard;
         }
-      }catch(e){ /* fallthrough */ }
+      }catch(e){ setStatus('AI台本に失敗('+(e&&e.message||e)+') → ルールベースで作成します。'); }
       if(sb){ applyStoryboard(sb, prompt); }
-      else { setStatus('AI台本に失敗 → ルールベースで作成しました。'); SCENES=buildStoryboardLocal(prompt); applyMetaLocal(prompt); }
+      else { SCENES=buildStoryboardLocal(prompt); applyMetaLocal(prompt); }
     } else {
       SCENES=buildStoryboardLocal(prompt); applyMetaLocal(prompt);
     }
@@ -383,7 +479,9 @@ async function generate(){
       setStatus(`② ビジュアルをAIで生成中… 0/${SCENES.length}`);
       await pool(SCENES, 2, async (sc)=>{
         try{
-          const r=await apiPost('/video/image',{prompt:enhanceVisual(sc.visualPrompt||sc.head), steps:6}, 60000);
+          const r = byok
+            ? await openaiImage(enhanceVisual(sc.visualPrompt||sc.head))
+            : await apiPost('/video/image',{prompt:enhanceVisual(sc.visualPrompt||sc.head), steps:6}, 60000);
           if(r && r.image){ sc.image=await loadImageFromB64(r.image, r.mime); }
         }catch(e){}
         done++; setProgress(0.1+0.5*(done/SCENES.length)); setStatus(`② ビジュアルをAIで生成中… ${done}/${SCENES.length}`);
@@ -398,9 +496,10 @@ async function generate(){
       setStatus(`③ ナレーション音声をAIで生成中… 0/${SCENES.length}`);
       await pool(SCENES, 2, async (sc)=>{
         try{
-          const r=await apiPost('/video/tts',{text:sc.narr, lang:'ja'}, 60000);
-          if(r && r.audio){
-            const buf=await audioCtx.decodeAudioData(b64ToArrayBuffer(r.audio));
+          let buf=null;
+          if(byok){ buf=await openaiTts(sc.narr); }
+          else { const r=await apiPost('/video/tts',{text:sc.narr, lang:'ja'}, 60000); if(r && r.audio) buf=await audioCtx.decodeAudioData(b64ToArrayBuffer(r.audio)); }
+          if(buf){
             sc.ttsBuffer=buf;
             sc.dur=Math.max(buf.duration+(isShortForm()?0.35:0.7), isShortForm()?1.4:2.2);
           }
