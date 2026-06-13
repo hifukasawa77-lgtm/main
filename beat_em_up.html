@@ -389,6 +389,106 @@
     .diff-normal { color: var(--gold) !important; }
     .diff-hard  { color: #ff6060 !important; text-shadow: 3px 3px 0 #4a0808 !important; }
 
+    /* ---- Extra options: invincible / stage select ---- */
+    .extra-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .toggle-btn {
+      appearance: none;
+      flex: 1;
+      min-width: 200px;
+      border: 1px solid #4a4535;
+      border-radius: 6px;
+      background: rgba(12, 14, 20, 0.7);
+      color: #cabf9e;
+      padding: 10px 14px;
+      font-family: "Courier New", monospace;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 100ms, color 100ms;
+    }
+
+    .toggle-btn:hover,
+    .toggle-btn:focus-visible {
+      border-color: var(--gold);
+      color: var(--gold);
+      outline: none;
+    }
+
+    .toggle-btn.active {
+      border-color: #4de6b0;
+      color: #4de6b0;
+      background: rgba(77, 230, 176, 0.08);
+    }
+
+    .toggle-btn .toggle-state,
+    .toggle-btn .stage-select-label {
+      color: #fbfbf7;
+    }
+
+    .toggle-btn.active .toggle-state {
+      color: #4de6b0;
+    }
+
+    .stage-buttons {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stage-btn {
+      appearance: none;
+      border: 2px solid #36352f;
+      border-left: 6px solid var(--accent, #36352f);
+      border-radius: 6px;
+      background: linear-gradient(180deg, #171b25, #080a0f);
+      color: #fbfbf7;
+      padding: 12px;
+      cursor: pointer;
+      text-align: left;
+      transition: transform 120ms ease, border-color 120ms ease;
+    }
+
+    .stage-btn:hover,
+    .stage-btn:focus-visible {
+      border-color: var(--gold);
+      transform: translateY(-2px);
+      outline: none;
+    }
+
+    .stage-btn.selected {
+      border-color: #4de6b0;
+    }
+
+    .stage-btn .stage-num {
+      display: block;
+      color: var(--gold);
+      font-family: Impact, "Arial Black", sans-serif;
+      font-size: 18px;
+      letter-spacing: 1px;
+      margin-bottom: 4px;
+    }
+
+    .stage-btn .stage-name {
+      display: block;
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+
+    .stage-btn small {
+      color: #8bc1ff;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
     .continue-overlay {
       display: none;
       position: absolute;
@@ -579,6 +679,12 @@
       }
 
       .fighters {
+        grid-template-columns: 1fr;
+        max-height: min(72vh, 620px);
+        overflow: auto;
+      }
+
+      .stage-buttons {
         grid-template-columns: 1fr;
         max-height: min(72vh, 620px);
         overflow: auto;
@@ -835,6 +941,22 @@
                 <small>2人でプレイ</small>
               </button>
             </div>
+            <div class="extra-options">
+              <button class="toggle-btn" id="invincibleToggle" aria-pressed="false" type="button">
+                🛡 無敵モード / GOD MODE: <span class="toggle-state">OFF</span>
+              </button>
+              <button class="toggle-btn" id="stageSelectToggle" type="button">
+                🗺 ステージセレクト / STAGE SELECT: <span class="stage-select-label">STAGE 1</span>
+              </button>
+            </div>
+          </div>
+          <!-- Step 1c: stage select -->
+          <div id="stageSelectStep" style="display:none">
+            <div class="select-step-header">
+              <button class="back-btn" id="backToModeFromStage">← BACK</button>
+              <p class="mode-step-label">STAGE SELECT</p>
+            </div>
+            <div class="stage-buttons" id="stageButtons"></div>
           </div>
           <!-- Step 1b: difficulty select -->
           <div id="difficultySelectStep" style="display:none">
@@ -1019,10 +1141,12 @@
     const H = canvas.height;
     const keys = new Map();
     const keys2 = new Map();
-    let _selectStep = "mode"; // "mode" | "difficulty" | "p1" | "p2"
+    let _selectStep = "mode"; // "mode" | "stage" | "difficulty" | "p1" | "p2"
     let _pendingMode = "1p";
     let _pendingHero1 = "";
     let _pendingDiff = "normal";
+    let _pendingStageIndex = 0;
+    let _invincibleMode = false;
     let _aiThinkTimer = 0;
     let _aiInputs = { mx: 0, my: 0, attack: false, jump: false, special: false };
     const laneTop = 355;
@@ -2256,6 +2380,7 @@
       return {
         mode: "select",
         paused: false,
+        invincible: false,
         heroKey,
         heroDef: heroDefs[heroKey],
         stageIndex: 0,
@@ -2316,6 +2441,7 @@
       state.mode = "play";
       state.gameMode = gameMode || "1p";
       state.difficulty = difficulty || "normal";
+      state.invincible = _invincibleMode;
       state.player = makePlayerObj(hero1Key, 140, 408);
       if (gameMode !== "1p" && hero2Key) {
         state.heroKey2 = hero2Key;
@@ -2324,7 +2450,7 @@
       }
       _aiThinkTimer = 0;
       _aiInputs = { mx: 0, my: 0, attack: false, jump: false, special: false };
-      loadStage(0);
+      loadStage(_pendingStageIndex);
       showMessage(state.heroDef.quote, 2100);
       select.style.display = "none";
       gameOver.classList.remove("is-visible");
@@ -3351,6 +3477,7 @@
     }
 
     function damageSomePlayer(player, amount, dir, source = "enemy") {
+      if (state.invincible) return;
       if (player.invuln > 0) return;
       if (source === "enemy" && damageMountedBike(player, dir)) return;
       player.hp -= amount;
@@ -4686,6 +4813,13 @@
       ctx.fillStyle = "#f4f0dd";
       ctx.font = "bold 18px Meiryo";
       ctx.fillText(stage.title, 28, 92);
+      if (state.invincible) {
+        ctx.fillStyle = "#4de6b0";
+        ctx.font = "bold 14px Courier New";
+        ctx.textAlign = "right";
+        ctx.fillText("🛡 INVINCIBLE", 932, 92);
+        ctx.textAlign = "left";
+      }
       if (state.heroKey === "jack") drawJackCommandPanel();
       if (state.heroKey === "kotaro") drawKotaroCommandPanel();
       if (state.heroKey === "mike") drawMikeCommandPanel();
@@ -5043,24 +5177,69 @@
     // ---- Select screen UI ----
     const modeSelectStep = document.getElementById("modeSelectStep");
     const difficultySelectStep = document.getElementById("difficultySelectStep");
+    const stageSelectStep = document.getElementById("stageSelectStep");
     const fighterSelectStep = document.getElementById("fighterSelectStep");
     const fighterStepLabel = document.getElementById("fighterStepLabel");
     const p2ControlsHint = document.getElementById("p2ControlsHint");
     const backToModeBtn = document.getElementById("backToModeBtn");
     const backToModeFromDiff = document.getElementById("backToModeFromDiff");
+    const backToModeFromStage = document.getElementById("backToModeFromStage");
+    const invincibleToggle = document.getElementById("invincibleToggle");
+    const stageSelectToggle = document.getElementById("stageSelectToggle");
+    const stageSelectLabel = stageSelectToggle.querySelector(".stage-select-label");
+    const stageButtons = document.getElementById("stageButtons");
 
     function showModeStep() {
       _selectStep = "mode";
       modeSelectStep.style.display = "";
       difficultySelectStep.style.display = "none";
+      stageSelectStep.style.display = "none";
       fighterSelectStep.style.display = "none";
     }
     function showDiffStep() {
       _selectStep = "difficulty";
       modeSelectStep.style.display = "none";
       difficultySelectStep.style.display = "";
+      stageSelectStep.style.display = "none";
       fighterSelectStep.style.display = "none";
     }
+    function showStageSelectStep() {
+      _selectStep = "stage";
+      modeSelectStep.style.display = "none";
+      stageSelectStep.style.display = "";
+    }
+
+    // ---- Invincible mode toggle ----
+    invincibleToggle.addEventListener("click", () => {
+      _invincibleMode = !_invincibleMode;
+      invincibleToggle.classList.toggle("active", _invincibleMode);
+      invincibleToggle.setAttribute("aria-pressed", String(_invincibleMode));
+      invincibleToggle.querySelector(".toggle-state").textContent = _invincibleMode ? "ON" : "OFF";
+    });
+
+    // ---- Stage select ----
+    stages.forEach((stage, i) => {
+      const btn = document.createElement("button");
+      btn.className = "stage-btn";
+      btn.dataset.stage = String(i);
+      btn.style.setProperty("--accent", stage.accent || "#36352f");
+      btn.innerHTML = `
+        <span class="stage-num">STAGE ${i + 1}</span>
+        <span class="stage-name">${stage.title.replace(/^STAGE\s*\d+\s*/, "")}</span>
+        <small>BOSS: ${stage.bossName}</small>
+      `;
+      btn.addEventListener("click", () => {
+        _pendingStageIndex = i;
+        stageButtons.querySelectorAll(".stage-btn").forEach(b => b.classList.toggle("selected", b === btn));
+        stageSelectLabel.textContent = `STAGE ${i + 1}`;
+        showModeStep();
+      });
+      stageButtons.appendChild(btn);
+    });
+    stageButtons.querySelector(`.stage-btn[data-stage="${_pendingStageIndex}"]`).classList.add("selected");
+
+    stageSelectToggle.addEventListener("click", showStageSelectStep);
+    backToModeFromStage.addEventListener("click", showModeStep);
 
     document.querySelectorAll(".mode-btn:not(.diff-btn)").forEach(btn => {
       btn.addEventListener("click", () => {
