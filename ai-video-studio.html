@@ -302,14 +302,17 @@ async function openaiFetch(path, payload){
   if(!res.ok){ const t=await res.text().catch(()=>''); throw new Error('OpenAI '+res.status+' '+t.slice(0,160)); }
   return res;
 }
-async function openaiScript(prompt, platform, aspect){
+async function openaiScript(prompt, platform, aspect, research){
   const shortForm=['shorts','tiktok','reels'].includes(platform);
   const sys='あなたはプロの動画ディレクター兼脚本家です。絵コンテをJSONのみで返します。'
     +'スキーマ: {"title":string,"theme":"space|nature|tech|city|business|energy|aurora","scenes":[{"heading":string,"narration":string,"subtitle":string,"visual":string}],"youtube":{"title":string,"description":string,"tags":string[]}}。'
-    +'headingは全角12文字程度の日本語、narrationは日本語1〜2文の話し言葉、subtitleは短い日本語1行、visualは英語の画像生成プロンプト(cinematic, dramatic lighting, highly detailed を含める)。';
+    +'headingは全角12文字程度の日本語、narrationは日本語1〜2文の話し言葉、subtitleは短い日本語1行、visualは英語の画像生成プロンプト(cinematic, dramatic lighting, highly detailed を含める)。'
+    +'参考情報が与えられた場合はその事実を要約してnarrationに正確に反映し、プロンプトのオウム返しや誤情報を避ける。';
+  const factBlock=research?`\n参考情報(Wikipedia「${research.title}」より。事実を要約して各シーンに反映):\n${research.extract}`:'';
   const user=`テーマ:「${prompt}」 アスペクト比:${aspect}。`
     +(shortForm?`配信先:${platform}(縦型ショート15〜40秒)。最初のシーンは強いフック。3〜4シーンでテンポ良く、最後に行動喚起。visualはvertical 9:16 composition。`
-              :`配信先:${platform}(横型・通常尺)。4〜6シーンで分かりやすく。`);
+              :`配信先:${platform}(横型・通常尺)。4〜6シーンで分かりやすく。`)
+    +factBlock;
   const res=await openaiFetch('/chat/completions',{
     model:'gpt-4o-mini', temperature:0.8, response_format:{type:'json_object'},
     messages:[{role:'system',content:sys},{role:'user',content:user}],
@@ -378,6 +381,26 @@ function detectTheme(prompt){
    ========================================================================= */
 let SCENES=[];      // {type,head,narr,subtitle,dur,visualPrompt,image,ttsBuffer}
 let THEME_ID='aurora';
+let lastResearch=null;  // {title,extract,url} ネット調査の出典
+
+/* インターネット(Wikipedia)から事実情報を取得（クライアント側・CORS対応・キー不要） */
+function extractTopicClient(prompt){
+  let p=String(prompt||'').split(/\n/)[0].trim();
+  const m=p.match(/(.{2,40}?)(について|を紹介|を解説|の魅力|のメリット|入門|とは|を作りたい|を作って|の作り方|の歴史)/);
+  if(m) return m[1].replace(/^(初心者向けに|わかりやすく|やさしく|ざっくり)/,'').trim();
+  return p.slice(0,40);
+}
+async function wikiResearchClient(topic){
+  try{
+    const s=await fetch('https://ja.wikipedia.org/w/api.php?action=query&list=search&srlimit=1&format=json&origin=*&srsearch='+encodeURIComponent(topic));
+    const sj=await s.json(); const hit=sj&&sj.query&&sj.query.search&&sj.query.search[0]; if(!hit) return null;
+    const title=hit.title;
+    const r=await fetch('https://ja.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(title));
+    const rj=await r.json(); const extract=rj&&rj.extract?String(rj.extract):''; if(!extract) return null;
+    const url=(rj.content_urls&&rj.content_urls.desktop&&rj.content_urls.desktop.page)||('https://ja.wikipedia.org/wiki/'+encodeURIComponent(title));
+    return {title, extract:extract.slice(0,1500), url};
+  }catch(e){ return null; }
+}
 
 /* =========================================================================
    ルールベースのフォールバック台本（オフライン / AI失敗時）
@@ -451,17 +474,22 @@ async function generate(){
   const useAI = engineEl.value==='ai' || byok;
   if(byok && !getByokKey()){ setStatus('BYOKモードです。OpenAI APIキーを入力してください。'); generating=false; setBusy(false); return; }
 
+  lastResearch=null;
   try{
-    // ---- ① 台本・シーン構成・字幕（LLM） ----
-    setProgress(0.02); setStatus('① 台本・シーン構成をAIで生成中…');
+    // ---- ① ネット調査 → 台本・シーン構成・字幕（LLM） ----
+    setProgress(0.02); setStatus('① ネットから情報を収集し、台本をAIで生成中…');
     if(useAI){
       let sb=null;
       try{
         if(byok){
-          sb=await openaiScript(prompt, platformEl.value, aspectEl.value);
+          setStatus('① ネットから情報を収集中…（Wikipedia）');
+          lastResearch=await wikiResearchClient(extractTopicClient(prompt));
+          setStatus('① 収集した情報を要約して台本をAIで生成中…');
+          sb=await openaiScript(prompt, platformEl.value, aspectEl.value, lastResearch);
         } else {
-          const r=await apiPost('/video/script',{prompt,aspect:aspectEl.value,platform:platformEl.value},45000);
-          if(r && r.storyboard && Array.isArray(r.storyboard.scenes) && r.storyboard.scenes.length) sb=r.storyboard;
+          const r=await apiPost('/video/script',{prompt,aspect:aspectEl.value,platform:platformEl.value},60000);
+          if(r && r.storyboard && Array.isArray(r.storyboard.scenes) && r.storyboard.scenes.length){ sb=r.storyboard; lastResearch=r.research||null; }
+          else if(r && r.error){ setStatus('AI台本エラー('+r.error+') → ルールベースで作成します。'); }
         }
       }catch(e){ setStatus('AI台本に失敗('+(e&&e.message||e)+') → ルールベースで作成します。'); }
       if(sb){ applyStoryboard(sb, prompt); }
@@ -513,7 +541,8 @@ async function generate(){
     THEME_ID = THEMES[THEME_ID] ? THEME_ID : detectTheme(prompt);
     drawStaticPreview();
     playBtn.disabled=false; exportBtn.disabled=false;
-    setStatus(`✅ 生成完了（${SCENES.length}シーン / 約${totalDuration().toFixed(0)}秒）。▶プレビュー または ⬇書き出しできます。`);
+    const src=lastResearch?` ／ 出典: Wikipedia「${lastResearch.title}」`:'';
+    setStatus(`✅ 生成完了（${SCENES.length}シーン / 約${totalDuration().toFixed(0)}秒）${src}。▶プレビュー または ⬇書き出しできます。`);
   } catch(e){
     setStatus('生成エラー: '+(e&&e.message||e)+' — エンジンを「プロシージャル」にするか、Worker URLをご確認ください。');
   } finally {
@@ -543,7 +572,8 @@ function applyStoryboard(sb, prompt){
   const y=sb.youtube||{};
   metaTitle.value=(y.title||title).slice(0,90);
   metaDesc.value=(y.description||SCENES.filter(s=>s.type==='point').map(s=>'・'+s.narr).join('\n'))
-    + `\n\n――――――――――\nこの動画は AI Video Studio（Cloudflare Workers AI・APIキー不要）で自動生成しました。\n#AI動画 #自動生成`;
+    + (lastResearch?`\n\n参考 / Source: ${lastResearch.title} - ${lastResearch.url}`:'')
+    + `\n\n――――――――――\nこの動画は AI Video Studio で自動生成しました。\n#AI動画 #自動生成`;
   metaTags.value=(Array.isArray(y.tags)?y.tags:[]).concat(['AI動画','自動生成',THEME_ID]).filter(Boolean).slice(0,15).join(', ');
 }
 function applyMetaLocal(prompt){
