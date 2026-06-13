@@ -133,11 +133,11 @@ async function applyFeedback(env, question, vote) {
   return { ok: true };
 }
 
-async function runAI(env, messages) {
+async function runAI(env, messages, opts) {
   let lastError = null;
   for (const model of MODELS) {
     try {
-      const result = await env.AI.run(model, { messages });
+      const result = await env.AI.run(model, { messages, ...(opts || {}) });
       const text = result?.choices?.[0]?.message?.content || result?.response || '';
       if (text) return text;
     } catch (e) {
@@ -145,6 +145,87 @@ async function runAI(env, messages) {
     }
   }
   throw lastError || new Error('all models failed');
+}
+
+// ── AI Video Studio 用エンドポイント ──────────────────────
+// 画像生成（text-to-image）。flux-1-schnell は { image: base64(jpeg) } を返す。
+const IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';
+// 音声合成（text-to-speech）。melotts は { audio: base64(mp3) } を返す。
+const TTS_MODEL = '@cf/myshell-ai/melotts';
+
+// LLM出力からJSON部分だけを安全に取り出す
+function extractJson(text) {
+  if (!text) return null;
+  let t = String(text).trim();
+  // ```json ... ``` のコードフェンスを除去
+  t = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const s = t.indexOf('{'), e = t.lastIndexOf('}');
+  if (s === -1 || e === -1 || e <= s) return null;
+  try { return JSON.parse(t.slice(s, e + 1)); } catch { return null; }
+}
+
+const VIDEO_SYSTEM = `あなたはプロの動画ディレクター兼脚本家です。
+与えられたテーマから、ナレーション付きショート動画の絵コンテをJSONのみで出力します。
+制約:
+- 出力はJSONオブジェクトのみ。前後の説明文・コードフェンスは禁止。
+- "theme" は次から最も近いものを1つ選ぶ: space, nature, tech, city, business, energy, aurora
+- "scenes" は4〜6個。各シーンは {"heading","narration","subtitle","visual"}。
+- heading: 画面に出す短い見出し(全角12文字程度まで・日本語)
+- narration: 読み上げる文(日本語・1〜2文・自然な話し言葉)
+- subtitle: 字幕(narrationを短くまとめた日本語・1行)
+- visual: 画像生成用プロンプト(英語・具体的な情景描写・cinematic, high detail を含める)
+- "youtube" は {"title","description","tags"(配列)} で日本語中心。`;
+
+async function handleVideoScript(env, body, origin) {
+  const prompt = String(body.prompt || '').slice(0, 600).trim();
+  if (!prompt) return new Response('Bad Request: empty prompt', { status: 400 });
+  const aspect = String(body.aspect || '16:9');
+  const messages = [
+    { role: 'system', content: VIDEO_SYSTEM },
+    { role: 'user', content: `テーマ:「${prompt}」\nアスペクト比: ${aspect}\n上記の絵コンテJSONを出力してください。` },
+  ];
+  try {
+    const text = await runAI(env, messages, { max_tokens: 1536 });
+    const json = extractJson(text);
+    if (!json || !Array.isArray(json.scenes) || json.scenes.length === 0) {
+      return jsonResponse({ error: 'parse_failed', raw: String(text).slice(0, 400) }, origin, 200);
+    }
+    return jsonResponse({ storyboard: json, source: 'ai' }, origin);
+  } catch (e) {
+    return jsonResponse({ error: 'ai_error', message: String(e && e.message || e) }, origin, 200);
+  }
+}
+
+async function handleVideoImage(env, body, origin) {
+  const prompt = String(body.prompt || '').slice(0, 1500).trim();
+  if (!prompt) return new Response('Bad Request: empty prompt', { status: 400 });
+  const steps = Math.min(Math.max(parseInt(body.steps) || 4, 1), 8);
+  try {
+    const r = await env.AI.run(IMAGE_MODEL, { prompt, steps });
+    const image = r && (r.image || r);
+    if (!image || typeof image !== 'string') {
+      return jsonResponse({ error: 'no_image' }, origin, 200);
+    }
+    return jsonResponse({ image, mime: 'image/jpeg' }, origin);
+  } catch (e) {
+    return jsonResponse({ error: 'image_error', message: String(e && e.message || e) }, origin, 200);
+  }
+}
+
+async function handleVideoTts(env, body, origin) {
+  const text = String(body.text || '').slice(0, 900).trim();
+  if (!text) return new Response('Bad Request: empty text', { status: 400 });
+  const lang = String(body.lang || 'ja');
+  try {
+    const r = await env.AI.run(TTS_MODEL, { prompt: text, lang });
+    const audio = r && (r.audio || r);
+    if (!audio || typeof audio !== 'string') {
+      return jsonResponse({ error: 'no_audio' }, origin, 200);
+    }
+    return jsonResponse({ audio, mime: 'audio/mpeg' }, origin);
+  } catch (e) {
+    return jsonResponse({ error: 'tts_error', message: String(e && e.message || e) }, origin, 200);
+  }
 }
 
 export default {
@@ -171,6 +252,11 @@ export default {
 
     const url = new URL(request.url);
     const hasKV = !!env.KV;
+
+    // ── AI Video Studio エンドポイント ──
+    if (url.pathname === '/video/script') return handleVideoScript(env, body, origin);
+    if (url.pathname === '/video/image')  return handleVideoImage(env, body, origin);
+    if (url.pathname === '/video/tts')    return handleVideoTts(env, body, origin);
 
     // ── フィードバック受付（👍/👎 → 共有メモリのスコア更新） ──
     if (url.pathname === '/feedback') {
@@ -226,8 +312,9 @@ export default {
   },
 };
 
-function jsonResponse(obj, origin) {
+function jsonResponse(obj, origin, status) {
   return new Response(JSON.stringify(obj), {
+    status: status || 200,
     headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
   });
 }
