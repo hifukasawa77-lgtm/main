@@ -180,9 +180,18 @@ async function handleVideoScript(env, body, origin) {
   const prompt = String(body.prompt || '').slice(0, 600).trim();
   if (!prompt) return new Response('Bad Request: empty prompt', { status: 400 });
   const aspect = String(body.aspect || '16:9');
+  const platform = String(body.platform || 'youtube');
+  const shortForm = ['shorts', 'tiktok', 'reels'].includes(platform);
+  const platformNote = shortForm
+    ? `配信先: ${platform}（縦型ショート動画 15〜40秒）。
+- 1つ目のシーンは視聴者を一瞬で掴む強いフック(問いかけ・意外な事実・結論先出し)にする。
+- シーンは3〜4個に絞り、テンポ良く・話し言葉でキャッチーに。
+- narration/subtitleは短く歯切れよく。最後は行動喚起(フォロー/いいね)。
+- visualは縦構図(vertical 9:16 composition)を意識した英語プロンプト。`
+    : `配信先: ${platform}（横型・通常尺）。落ち着いた分かりやすい構成で4〜6シーン。`;
   const messages = [
     { role: 'system', content: VIDEO_SYSTEM },
-    { role: 'user', content: `テーマ:「${prompt}」\nアスペクト比: ${aspect}\n上記の絵コンテJSONを出力してください。` },
+    { role: 'user', content: `テーマ:「${prompt}」\nアスペクト比: ${aspect}\n${platformNote}\n上記の絵コンテJSONを出力してください。` },
   ];
   try {
     const text = await runAI(env, messages, { max_tokens: 1536 });

@@ -108,7 +108,7 @@
     <div class="logo">▶</div>
     <div>
       <h1>AI Video Studio</h1>
-      <div class="sub">1行のプロンプトで、AIがビジュアル・音声・字幕・シーン構成を生成 / One prompt → AI-made video</div>
+      <div class="sub">1行のプロンプトで、AIがビジュアル・音声・字幕・構成を生成。YouTube / Shorts / TikTok / Reels 対応</div>
     </div>
     <div class="badge">Cloudflare Workers AI · APIキー不要 / no API key</div>
   </header>
@@ -130,11 +130,13 @@
             </select>
           </div>
           <div>
-            <label class="field">アスペクト比 / Aspect</label>
-            <select id="aspect">
-              <option value="16:9">16:9 (横)</option>
-              <option value="9:16">9:16 (縦・Shorts)</option>
-              <option value="1:1">1:1 (正方形)</option>
+            <label class="field">プラットフォーム / Platform</label>
+            <select id="platform">
+              <option value="youtube" selected>YouTube（16:9 横）</option>
+              <option value="shorts">YouTube Shorts（9:16 縦）</option>
+              <option value="tiktok">TikTok（9:16 縦）</option>
+              <option value="reels">Instagram Reels（9:16 縦）</option>
+              <option value="insta">Instagram Post（1:1）</option>
             </select>
           </div>
         </div>
@@ -145,6 +147,12 @@
 
         <details>
           <summary>詳細設定 / Advanced</summary>
+          <label class="field">アスペクト比（プラットフォームに連動・手動上書き可）/ Aspect</label>
+          <select id="aspect">
+            <option value="16:9">16:9 (横)</option>
+            <option value="9:16">9:16 (縦・Shorts/TikTok)</option>
+            <option value="1:1">1:1 (正方形)</option>
+          </select>
           <label class="field">Worker URL（変更時のみ）</label>
           <input type="text" id="workerUrl" placeholder="https://ai-proxy.hi-fukasawa77.workers.dev">
           <div class="note" style="margin-top:8px">AIモードは Cloudflare Workers AI（gemma / flux / melotts）を使用します。GitHub Pages 上で動作。ローカルファイルから開くとCORSで拒否されることがあります。</div>
@@ -217,7 +225,7 @@
    バックエンド: Cloudflare Workers AI プロキシ（APIキー不要）
    ========================================================================= */
 const $ = id => document.getElementById(id);
-const promptEl=$('prompt'), engineEl=$('engine'), aspectEl=$('aspect');
+const promptEl=$('prompt'), engineEl=$('engine'), aspectEl=$('aspect'), platformEl=$('platform');
 const optImage=$('optImage'), optTts=$('optTts'), optBgm=$('optBgm'), workerUrlEl=$('workerUrl');
 const board=$('board'), boardActions=$('boardActions');
 const canvas=$('stage'), ctx=canvas.getContext('2d');
@@ -231,6 +239,15 @@ const WORKER_KEY='avs-worker-url';
 workerUrlEl.value = localStorage.getItem(WORKER_KEY) || '';
 function workerBase(){ return (workerUrlEl.value.trim() || DEFAULT_WORKER).replace(/\/+$/,''); }
 workerUrlEl.addEventListener('change',()=>{ localStorage.setItem(WORKER_KEY, workerUrlEl.value.trim()); });
+
+/* プラットフォーム → アスペクト比を連動 */
+const PLATFORM_ASPECT={youtube:'16:9',shorts:'9:16',tiktok:'9:16',reels:'9:16',insta:'1:1'};
+function syncAspect(){ const a=PLATFORM_ASPECT[platformEl.value]; if(a) aspectEl.value=a; }
+platformEl.addEventListener('change',syncAspect);
+syncAspect();
+function isShortForm(){ return ['shorts','tiktok','reels'].includes(platformEl.value); }
+/* 画像生成プロンプトに映画的な品質修飾を付与（プロ寄りの画作り） */
+function enhanceVisual(p){ p=(p||'').trim(); if(!/cinematic|photoreal|highly detailed|8k/i.test(p)) p+=', cinematic composition, dramatic lighting, highly detailed, professional color grading, 8k'; return p; }
 
 /* ---------- 例 ---------- */
 const EXAMPLES = [
@@ -346,7 +363,7 @@ async function generate(){
     if(useAI){
       let sb=null;
       try{
-        const r=await apiPost('/video/script',{prompt,aspect:aspectEl.value},45000);
+        const r=await apiPost('/video/script',{prompt,aspect:aspectEl.value,platform:platformEl.value},45000);
         if(r && r.storyboard && Array.isArray(r.storyboard.scenes) && r.storyboard.scenes.length){
           sb=r.storyboard;
         }
@@ -356,6 +373,8 @@ async function generate(){
     } else {
       SCENES=buildStoryboardLocal(prompt); applyMetaLocal(prompt);
     }
+    // ショート(縦型)はテンポ重視で尺を短く（TTSがある場合は後段で上書き）
+    if(isShortForm()) SCENES.forEach(s=>{ s.dur = s.type==='point'?3.0:(s.type==='title'?2.6:2.8); });
     renderBoard();
 
     // ---- ② ビジュアル（AI画像生成） ----
@@ -364,7 +383,7 @@ async function generate(){
       setStatus(`② ビジュアルをAIで生成中… 0/${SCENES.length}`);
       await pool(SCENES, 2, async (sc)=>{
         try{
-          const r=await apiPost('/video/image',{prompt:sc.visualPrompt||sc.head, steps:4}, 60000);
+          const r=await apiPost('/video/image',{prompt:enhanceVisual(sc.visualPrompt||sc.head), steps:6}, 60000);
           if(r && r.image){ sc.image=await loadImageFromB64(r.image, r.mime); }
         }catch(e){}
         done++; setProgress(0.1+0.5*(done/SCENES.length)); setStatus(`② ビジュアルをAIで生成中… ${done}/${SCENES.length}`);
@@ -383,7 +402,7 @@ async function generate(){
           if(r && r.audio){
             const buf=await audioCtx.decodeAudioData(b64ToArrayBuffer(r.audio));
             sc.ttsBuffer=buf;
-            sc.dur=Math.max(buf.duration+0.7, 2.2);
+            sc.dur=Math.max(buf.duration+(isShortForm()?0.35:0.7), isShortForm()?1.4:2.2);
           }
         }catch(e){}
         done++; setProgress(0.6+0.35*(done/SCENES.length)); setStatus(`③ ナレーション音声をAIで生成中… ${done}/${SCENES.length}`);
@@ -522,11 +541,14 @@ function drawTitle(scene,theme,W,H,p){
   ctx.restore();
 }
 function drawPoint(scene,theme,W,H,p){
+  const vert=H>W*1.1;
   const slide=lerp(40,0,Math.min(p/0.3,1)), appear=Math.min(p/0.3,1);
   ctx.save(); ctx.globalAlpha=appear; ctx.textAlign='left'; ctx.textBaseline='top';
-  ctx.font=`800 ${Math.round(W*0.045)}px "Segoe UI","Hiragino Sans",sans-serif`; ctx.fillStyle=theme.c1;
+  const fs=Math.round(W*(vert?0.058:0.045));
+  ctx.font=`800 ${fs}px "Segoe UI","Hiragino Sans",sans-serif`; ctx.fillStyle=theme.c1;
   ctx.shadowColor='rgba(0,0,0,0.6)'; ctx.shadowBlur=12;
-  wrapText(scene.head,W*0.82).forEach((ln,i)=>ctx.fillText(ln,W*0.09+slide,H*0.28+i*W*0.055));
+  const hy=vert?H*0.10:H*0.28, lh=W*(vert?0.07:0.055);
+  wrapText(scene.head,W*0.82).forEach((ln,i)=>ctx.fillText(ln,W*0.07+slide,hy+i*lh));
   ctx.restore();
   drawCaption(scene.subtitle||scene.narr,theme,W,H,appear);
 }
@@ -541,13 +563,20 @@ function drawOutro(scene,theme,W,H,p){
 }
 function drawCaption(text,theme,W,H,alpha){
   if(!text) return;
+  const vert=H>W*1.1;                                   // 縦型(Shorts/TikTok)
   ctx.save(); ctx.globalAlpha=alpha;
-  ctx.font=`500 ${Math.round(W*0.030)}px "Segoe UI","Hiragino Sans",sans-serif`;
+  const fs=Math.round(W*(vert?0.042:0.030));
+  ctx.font=`${vert?700:500} ${fs}px "Segoe UI","Hiragino Sans",sans-serif`;
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  const lines=wrapText(text,W*0.84), lh=W*0.044, padY=W*0.02, boxH=lines.length*lh+padY*2, boxY=H-boxH-H*0.06;
-  ctx.fillStyle='rgba(5,7,13,0.55)'; roundRect(W*0.06,boxY,W*0.88,boxH,14); ctx.fill();
-  ctx.strokeStyle=hexA(theme.c1,0.3); ctx.lineWidth=1.5; roundRect(W*0.06,boxY,W*0.88,boxH,14); ctx.stroke();
-  ctx.fillStyle='#e2e8f0'; lines.forEach((ln,i)=>ctx.fillText(ln,W/2,boxY+padY+lh/2+i*lh));
+  const boxW=W*(vert?0.90:0.88), boxX=(W-boxW)/2;
+  const lines=wrapText(text,boxW-W*0.06), lh=W*(vert?0.062:0.044), padY=W*0.02;
+  const boxH=lines.length*lh+padY*2;
+  // 縦型はTikTok/ShortsのUIを避けて下から余白を多めに(セーフエリア)
+  const boxY=H-boxH-H*(vert?0.17:0.06);
+  ctx.fillStyle='rgba(5,7,13,0.58)'; roundRect(boxX,boxY,boxW,boxH,16); ctx.fill();
+  ctx.strokeStyle=hexA(theme.c1,0.35); ctx.lineWidth=1.5; roundRect(boxX,boxY,boxW,boxH,16); ctx.stroke();
+  ctx.fillStyle='#f1f5f9'; if(vert){ctx.shadowColor='rgba(0,0,0,0.7)';ctx.shadowBlur=8;}
+  lines.forEach((ln,i)=>ctx.fillText(ln,W/2,boxY+padY+lh/2+i*lh));
   ctx.restore();
 }
 function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
