@@ -313,6 +313,265 @@
   GameKit.Particles = Particles;
 
   /* ----------------------------------------------------------------------
+   * Gen — プロシージャル画像生成（ノイズ・パレット・背景・パターン・アイコン）
+   * 外部の生成AI（GPT Image等）を使わず、シード値から再現可能なアセットを
+   * Canvas API で直接生成する。`gamekit/generator.html` で動作確認・PNG書き出し可能
+   * -------------------------------------------------------------------- */
+
+  /** sides角形（star=trueなら2*sides頂点の星形）のパスを ctx に積む（内部ヘルパー） */
+  function polygonPath(ctx, cx, cy, r, sides, rotation = -Math.PI / 2, star = false) {
+    const points = star ? sides * 2 : sides;
+    const step = (Math.PI * 2) / points;
+    for (let i = 0; i <= points; i++) {
+      const angle = rotation + i * step;
+      const radius = star && i % 2 === 1 ? r * 0.5 : r;
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+  }
+
+  const Gen = {
+    /** カラーパレット集。デフォルトはポートフォリオ標準のシアン/パープル（黒背景） */
+    palettes: {
+      cyanPurple: ['#22d3ee', '#a78bfa', '#05070d'],
+      auroraTeal: ['#2dd4bf', '#818cf8', '#05070d'],
+      roseQuartz: ['#f472b6', '#a78bfa', '#05070d'],
+      emberViolet: ['#fb923c', '#a78bfa', '#05070d'],
+    },
+
+    /** シード付き疑似乱数生成器（mulberry32）。0..1 を返す関数を返す */
+    rng(seed) {
+      let a = (seed >>> 0) || 1;
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    },
+
+    /** 格子点ノイズ + 補間による2D value noise（-1..1）を返す */
+    valueNoise2D(rng) {
+      const cache = new Map();
+      const valAt = (ix, iy) => {
+        const key = ix + ',' + iy;
+        let v = cache.get(key);
+        if (v === undefined) { v = rng() * 2 - 1; cache.set(key, v); }
+        return v;
+      };
+      const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+      return function (x, y) {
+        const x0 = Math.floor(x), y0 = Math.floor(y);
+        const sx = fade(x - x0), sy = fade(y - y0);
+        const n00 = valAt(x0, y0), n10 = valAt(x0 + 1, y0);
+        const n01 = valAt(x0, y0 + 1), n11 = valAt(x0 + 1, y0 + 1);
+        return GameKit.MathX.lerp(
+          GameKit.MathX.lerp(n00, n10, sx),
+          GameKit.MathX.lerp(n01, n11, sx),
+          sy
+        );
+      };
+    },
+
+    /** value noise を複数オクターブで合成したフラクタルノイズ（-1..1）を返す */
+    fractalNoise2D(rng, opts = {}) {
+      const octaves = opts.octaves || 4;
+      const persistence = opts.persistence || 0.5;
+      const scale = opts.scale || 0.01;
+      const base = Gen.valueNoise2D(rng);
+      return function (x, y) {
+        let amp = 1, freq = 1, sum = 0, max = 0;
+        for (let i = 0; i < octaves; i++) {
+          sum += base(x * scale * freq, y * scale * freq) * amp;
+          max += amp;
+          amp *= persistence;
+          freq *= 2;
+        }
+        return sum / max;
+      };
+    },
+
+    /** ノイズで駆動した放射グラデーションの重ね描きでネビュラ風背景を生成 */
+    nebulaBackground(ctx, w, h, opts = {}) {
+      const rng = opts.rng || Gen.rng(opts.seed || 1);
+      const palette = opts.palette || Gen.palettes.cyanPurple;
+      const blobCount = opts.blobCount || 5;
+      const noise = Gen.fractalNoise2D(rng, { octaves: 3, scale: 0.002 });
+
+      ctx.save();
+      ctx.fillStyle = palette[palette.length - 1];
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < blobCount; i++) {
+        const n = Math.abs(noise(i * 137.1, i * 91.7));
+        const x = (0.1 + rng() * 0.8) * w;
+        const y = (0.1 + rng() * 0.8) * h;
+        const r = (0.25 + n * 0.35) * Math.max(w, h);
+        const color = palette[i % (palette.length - 1)];
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+        grad.addColorStop(0, color + 'cc');
+        grad.addColorStop(1, color + '00');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    },
+
+    /** 書き出し用の静止スターフィールド（動的な背景演出は GameKit.Particles を使う） */
+    starfield(ctx, w, h, opts = {}) {
+      const rng = opts.rng || Gen.rng(opts.seed || 1);
+      const palette = opts.palette || Gen.palettes.cyanPurple;
+      const count = opts.count || 150;
+
+      ctx.save();
+      ctx.fillStyle = palette[palette.length - 1];
+      ctx.fillRect(0, 0, w, h);
+      for (let i = 0; i < count; i++) {
+        ctx.globalAlpha = 0.2 + rng() * 0.7;
+        ctx.fillStyle = palette[(rng() * (palette.length - 1)) | 0];
+        ctx.beginPath();
+        ctx.arc(rng() * w, rng() * h, 0.4 + rng() * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    },
+
+    /** タイル可能なパターンを size x size の正方形に描画。
+     *  type: 'dots' | 'hexgrid' | 'waves' | 'grain' */
+    tilePattern(ctx, size, opts = {}) {
+      const rng = opts.rng || Gen.rng(opts.seed || 1);
+      const palette = opts.palette || Gen.palettes.cyanPurple;
+      const type = opts.type || 'dots';
+      const scale = opts.scale || size / 8;
+
+      ctx.save();
+      switch (type) {
+        case 'dots':
+          ctx.fillStyle = palette[0] + '33';
+          for (let y = 0; y <= size; y += scale) {
+            for (let x = 0; x <= size; x += scale) {
+              ctx.beginPath();
+              ctx.arc(x, y, scale * 0.12, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+          break;
+        case 'hexgrid': {
+          ctx.strokeStyle = palette[1] + '40';
+          ctx.lineWidth = 1;
+          const hexR = scale * 0.6;
+          const stepX = hexR * 1.5;
+          const stepY = hexR * Math.sqrt(3) * 0.5;
+          let row = 0;
+          for (let y = -hexR; y <= size + hexR; y += stepY, row++) {
+            for (let x = -hexR; x <= size + hexR; x += stepX) {
+              const cx = x + (row % 2 ? stepX / 2 : 0);
+              ctx.beginPath();
+              polygonPath(ctx, cx, y, hexR, 6, Math.PI / 6, false);
+              ctx.closePath();
+              ctx.stroke();
+            }
+          }
+          break;
+        }
+        case 'waves': {
+          ctx.strokeStyle = palette[0] + '55';
+          ctx.lineWidth = 1.5;
+          const waveCount = Math.max(2, Math.round(size / scale));
+          for (let i = 0; i < waveCount; i++) {
+            const yBase = ((i + 0.5) / waveCount) * size;
+            ctx.beginPath();
+            for (let x = 0; x <= size; x += 4) {
+              const y = yBase + Math.sin((x / size) * Math.PI * 2) * (scale * 0.25);
+              if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+          }
+          break;
+        }
+        case 'grain': {
+          const alpha = opts.alpha ?? 32;
+          const img = ctx.createImageData(size, size);
+          for (let i = 0; i < img.data.length; i += 4) {
+            const v = (rng() * 255) | 0;
+            img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+            img.data[i + 3] = alpha;
+          }
+          ctx.putImageData(img, 0, 0);
+          break;
+        }
+      }
+      ctx.restore();
+    },
+
+    /** 発光オーブ/ジェム風アイコンを描画（実績バッジ・パワーアップ等に利用可） */
+    orbIcon(ctx, cx, cy, r, opts = {}) {
+      const palette = opts.palette || Gen.palettes.cyanPurple;
+      ctx.save();
+      if (opts.glow !== false) {
+        const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.8);
+        glow.addColorStop(0, palette[0] + '55');
+        glow.addColorStop(1, palette[0] + '00');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const body = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.1, cx, cy, r);
+      body.addColorStop(0, '#ffffff');
+      body.addColorStop(0.4, palette[0]);
+      body.addColorStop(1, palette[1]);
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.beginPath();
+      ctx.ellipse(cx - r * 0.32, cy - r * 0.35, r * 0.28, r * 0.16, -Math.PI / 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    },
+
+    /** 多角形/星形のGlassmorphismバッジアイコンを描画（GameKit.UI.glassPanelと同系の配色） */
+    polygonBadge(ctx, cx, cy, r, opts = {}) {
+      const sides = opts.sides || 6;
+      const rotation = opts.rotation ?? -Math.PI / 2;
+      ctx.save();
+      ctx.beginPath();
+      polygonPath(ctx, cx, cy, r, sides, rotation, !!opts.star);
+      ctx.closePath();
+      ctx.fillStyle = opts.fill || 'rgba(255,255,255,0.06)';
+      ctx.fill();
+      ctx.lineWidth = opts.lineWidth || 2;
+      ctx.strokeStyle = opts.stroke || (opts.palette ? opts.palette[0] : 'rgba(255,255,255,0.18)');
+      ctx.stroke();
+      ctx.restore();
+    },
+
+    /** canvas を PNG の data URL に変換 */
+    toPNG(canvas) {
+      return canvas.toDataURL('image/png');
+    },
+
+    /** canvas を PNG ファイルとしてダウンロード */
+    download(canvas, filename = 'asset.png') {
+      const a = document.createElement('a');
+      a.href = Gen.toPNG(canvas);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    },
+  };
+  GameKit.Gen = Gen;
+
+  /* ----------------------------------------------------------------------
    * UI — Glassmorphism パネルとテキスト描画
    * -------------------------------------------------------------------- */
   GameKit.UI = {

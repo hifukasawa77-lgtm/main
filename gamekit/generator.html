@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GameKit Asset Generator | アセット生成ツール</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --accent-cyan: #22d3ee;
+    --accent-purple: #a78bfa;
+    --text: #e2e8f0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  h1 {
+    font-size: 22px;
+    margin-bottom: 16px;
+    color: var(--accent-cyan);
+  }
+  .layout {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: flex-start;
+  }
+  .panel {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 14px;
+    padding: 20px;
+    backdrop-filter: blur(6px);
+  }
+  .controls {
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+    color: #94a3b8;
+  }
+  select, input, button {
+    font: inherit;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  button {
+    cursor: pointer;
+    color: #05070d;
+    background: var(--accent-cyan);
+    border: none;
+    font-weight: bold;
+  }
+  button.secondary {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+  .preview {
+    flex: 1;
+    min-width: 280px;
+  }
+  canvas {
+    max-width: 100%;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--bg);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  }
+  .hint {
+    font-size: 12px;
+    color: #94a3b8;
+    margin-top: 10px;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<h1>GameKit Asset Generator | プロシージャルアセット生成ツール</h1>
+<div class="layout">
+  <aside class="panel controls">
+    <label>アセット種類 / Asset Type
+      <select id="assetType">
+        <option value="nebula">背景: ネビュラ / Nebula BG</option>
+        <option value="starfield">背景: 星空 / Starfield</option>
+        <option value="pattern-dots">パターン: ドット / Dots</option>
+        <option value="pattern-hexgrid">パターン: ヘックス / Hex Grid</option>
+        <option value="pattern-waves">パターン: 波線 / Waves</option>
+        <option value="pattern-grain">パターン: グレイン / Grain</option>
+        <option value="orb">アイコン: オーブ / Orb</option>
+        <option value="badge-hex">アイコン: 六角バッジ / Hex Badge</option>
+        <option value="badge-star">アイコン: 星バッジ / Star Badge</option>
+      </select>
+    </label>
+    <label>パレット / Palette
+      <select id="palette">
+        <option value="cyanPurple">Cyan / Purple（標準）</option>
+        <option value="auroraTeal">Aurora Teal</option>
+        <option value="roseQuartz">Rose Quartz</option>
+        <option value="emberViolet">Ember Violet</option>
+      </select>
+    </label>
+    <label>シード / Seed
+      <input type="number" id="seed" value="1" min="0" step="1">
+    </label>
+    <label>サイズ / Size
+      <select id="size">
+        <option value="256">256 x 256</option>
+        <option value="512" selected>512 x 512</option>
+        <option value="1024">1024 x 1024</option>
+        <option value="1920x1080">1920 x 1080</option>
+      </select>
+    </label>
+    <button id="regenerate">再生成 / Regenerate</button>
+    <button id="randomSeed" class="secondary">ランダムシード / Random Seed</button>
+    <button id="exportPng" class="secondary">PNGダウンロード / Export PNG</button>
+  </aside>
+  <main class="preview panel">
+    <canvas id="previewCanvas"></canvas>
+    <p class="hint">
+      GPT Image等の外部生成AIを使わず、シード値から再現可能なアセットをCanvas APIで生成します。<br>
+      No external image-generation AI required — assets are generated procedurally via Canvas API from a seed value.
+    </p>
+  </main>
+</div>
+
+<script src="gamekit.js"></script>
+<script>
+'use strict';
+
+const canvas = document.getElementById('previewCanvas');
+const ctx = canvas.getContext('2d');
+
+const typeSelect = document.getElementById('assetType');
+const paletteSelect = document.getElementById('palette');
+const seedInput = document.getElementById('seed');
+const sizeSelect = document.getElementById('size');
+
+function currentSize() {
+  const v = sizeSelect.value;
+  if (v.includes('x')) {
+    const [w, h] = v.split('x').map(Number);
+    return { w, h };
+  }
+  const n = Number(v);
+  return { w: n, h: n };
+}
+
+function render() {
+  const { w, h } = currentSize();
+  canvas.width = w;
+  canvas.height = h;
+
+  const seed = Number(seedInput.value) || 1;
+  const palette = GameKit.Gen.palettes[paletteSelect.value] || GameKit.Gen.palettes.cyanPurple;
+  const rng = GameKit.Gen.rng(seed);
+  const type = typeSelect.value;
+
+  switch (type) {
+    case 'nebula':
+      GameKit.Gen.nebulaBackground(ctx, w, h, { rng, palette });
+      break;
+    case 'starfield':
+      GameKit.Gen.starfield(ctx, w, h, { rng, palette });
+      break;
+    case 'pattern-dots':
+    case 'pattern-hexgrid':
+    case 'pattern-waves':
+    case 'pattern-grain': {
+      const size = Math.min(w, h);
+      canvas.width = size;
+      canvas.height = size;
+      GameKit.Gen.tilePattern(ctx, size, { rng, palette, type: type.replace('pattern-', '') });
+      break;
+    }
+    case 'orb':
+      ctx.fillStyle = palette[palette.length - 1];
+      ctx.fillRect(0, 0, w, h);
+      GameKit.Gen.orbIcon(ctx, w / 2, h / 2, Math.min(w, h) * 0.35, { palette });
+      break;
+    case 'badge-hex':
+      ctx.fillStyle = palette[palette.length - 1];
+      ctx.fillRect(0, 0, w, h);
+      GameKit.Gen.polygonBadge(ctx, w / 2, h / 2, Math.min(w, h) * 0.4, { sides: 6, palette, stroke: palette[0] });
+      break;
+    case 'badge-star':
+      ctx.fillStyle = palette[palette.length - 1];
+      ctx.fillRect(0, 0, w, h);
+      GameKit.Gen.polygonBadge(ctx, w / 2, h / 2, Math.min(w, h) * 0.4, { sides: 5, star: true, palette, stroke: palette[1] });
+      break;
+  }
+}
+
+document.getElementById('regenerate').addEventListener('click', render);
+document.getElementById('randomSeed').addEventListener('click', () => {
+  seedInput.value = Math.floor(Math.random() * 100000);
+  render();
+});
+document.getElementById('exportPng').addEventListener('click', () => {
+  GameKit.Gen.download(canvas, `${typeSelect.value}_${paletteSelect.value}_${seedInput.value}.png`);
+});
+[typeSelect, paletteSelect, seedInput, sizeSelect].forEach((el) =>
+  el.addEventListener('change', render)
+);
+
+render();
+</script>
+</body>
+</html>
