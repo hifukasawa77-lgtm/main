@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>学習メモリ管理</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #0a0a12;
+    color: #e6e6f0;
+    font-family: -apple-system, "Segoe UI", "Hiragino Sans", Meiryo, sans-serif;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  p.note { color: #9a9ab0; font-size: 0.85rem; margin: 0 0 20px; }
+  .setup {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .setup input {
+    flex: 1;
+    min-width: 220px;
+    background: #15151f;
+    border: 1px solid #33334a;
+    color: #e6e6f0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 0.9rem;
+  }
+  button {
+    background: linear-gradient(135deg, #0891b2, #7c3aed);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { opacity: 0.9; }
+  button.danger { background: #b91c1c; padding: 4px 10px; font-size: 0.8rem; }
+  #status { font-size: 0.85rem; color: #9a9ab0; margin-bottom: 12px; min-height: 1.2em; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid #26263a;
+    vertical-align: top;
+  }
+  th { color: #9a9ab0; font-weight: 600; position: sticky; top: 0; background: #0a0a12; }
+  td.q { max-width: 360px; word-break: break-all; }
+  td.num { text-align: right; white-space: nowrap; }
+  tr:hover td { background: #15151f; }
+</style>
+</head>
+<body>
+  <h1>学習メモリ管理</h1>
+  <p class="note">
+    Cloudflare Worker の <code>/admin/learned</code> を呼び出し、共有学習メモリを確認・削除します。
+    Worker URL と、Worker に設定した <code>ADMIN_TOKEN</code> を入力してください。
+    設定値はこの端末の localStorage に保存されます。
+  </p>
+  <div class="setup">
+    <input type="url" id="workerUrl" placeholder="Worker URL（例: https://ai-proxy.example.workers.dev）">
+    <input type="password" id="adminToken" placeholder="ADMIN_TOKEN">
+    <button id="loadBtn">読み込み</button>
+  </div>
+  <div id="status"></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>質問（正規化後）</th>
+          <th class="num">評価</th>
+          <th class="num">利用回数</th>
+          <th>最終利用</th>
+          <th>登録日時</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+<script>
+  const $workerUrl = document.getElementById("workerUrl");
+  const $adminToken = document.getElementById("adminToken");
+  const $status = document.getElementById("status");
+  const $rows = document.getElementById("rows");
+
+  $workerUrl.value = localStorage.getItem("agentAdminWorkerUrl") || "";
+  $adminToken.value = localStorage.getItem("agentAdminToken") || "";
+
+  function fmtTs(ts) {
+    if (!ts) return "-";
+    return new Date(ts).toLocaleString("ja-JP");
+  }
+
+  async function load() {
+    const base = $workerUrl.value.trim().replace(/\/+$/, "");
+    const token = $adminToken.value.trim();
+    if (!base || !token) {
+      $status.textContent = "Worker URL と ADMIN_TOKEN を入力してください。";
+      return;
+    }
+    localStorage.setItem("agentAdminWorkerUrl", base);
+    localStorage.setItem("agentAdminToken", token);
+
+    $status.textContent = "読み込み中...";
+    $rows.replaceChildren();
+    try {
+      const res = await fetch(base + "/admin/learned", {
+        headers: { "X-Admin-Token": token },
+      });
+      if (!res.ok) {
+        $status.textContent = `エラー: HTTP ${res.status}`;
+        return;
+      }
+      const data = await res.json();
+      const entries = data.entries || [];
+      $status.textContent = `${entries.length} 件の学習エントリ`;
+      for (const entry of entries) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="q">${escapeHtml(entry.q)}</td>
+          <td class="num">${entry.score}</td>
+          <td class="num">${entry.hits}</td>
+          <td>${fmtTs(entry.lastUsed)}</td>
+          <td>${fmtTs(entry.ts)}</td>
+          <td><button class="danger" data-key="${escapeHtml(entry.key)}">削除</button></td>
+        `;
+        $rows.appendChild(tr);
+      }
+      $rows.querySelectorAll("button[data-key]").forEach(button => {
+        button.addEventListener("click", () => removeEntry(button.dataset.key));
+      });
+    } catch (error) {
+      $status.textContent = "読み込みに失敗しました: " + error.message;
+    }
+  }
+
+  async function removeEntry(key) {
+    const base = $workerUrl.value.trim().replace(/\/+$/, "");
+    const token = $adminToken.value.trim();
+    if (!confirm("この学習エントリを削除しますか？")) return;
+    try {
+      const res = await fetch(base + "/admin/learned?key=" + encodeURIComponent(key), {
+        method: "DELETE",
+        headers: { "X-Admin-Token": token },
+      });
+      const data = await res.json();
+      if (data.ok) {
+        await load();
+      } else {
+        alert("削除に失敗しました。");
+      }
+    } catch (error) {
+      alert("削除に失敗しました: " + error.message);
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, character => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;",
+    })[character]);
+  }
+
+  document.getElementById("loadBtn").addEventListener("click", load);
+  if ($workerUrl.value && $adminToken.value) load();
+</script>
+</body>
+</html>
