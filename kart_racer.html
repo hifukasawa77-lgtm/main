@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>ターボカート・グランプリ / TURBO KART GRAND PRIX</title>
-<meta name="description" content="トップビューのオリジナル・カートレーシングゲーム。ドリフトでミニターボを発動し、ニトロやオイル缶などのアイテムを駆使してライバルを抜き去ろう。GameKit(Canvas API)とGameKit.Genのプロシージャル生成で実装。">
+<meta name="description" content="カート背後からの三人称（擬似3D）オリジナル・カートレーシングゲーム。ドリフトでミニターボを発動し、ニトロやオイル缶などのアイテムを駆使してライバルを抜き去ろう。GameKit(Canvas API)とGameKit.Genのプロシージャル生成で実装。">
 <meta property="og:title" content="ターボカート・グランプリ / TURBO KART GRAND PRIX">
 <meta property="og:description" content="ドリフト・アイテム・3周レース。GameKit + GameKit.Gen で描き直したオリジナル・カートレーシングゲーム。">
 <meta property="og:type" content="website">
@@ -462,6 +462,14 @@ const MAX_SPEED=3.55, ACCEL=3.6, BRAKE=6.5, FRICTION=1.7, OFFTRACK_MAXSPEED=1.5;
 const TURN_RATE=2.55, BOOST_SPEED_MULT=1.55, BOOST_DURATION=1.05, DRIFT_TURN_BONUS=1.5, DRIFT_CHARGE_RATE=1.0;
 const MOVE_SCALE=46;
 
+/* ---------------- Pseudo-3D camera (behind the kart) ---------------- */
+// ワールドの (x,y) を地面平面とみなし、カート背後・上方のカメラから
+// 水平視のピンホール投影で「マリオカート風」三人称ビューを描く
+const CAM_BACK=70, CAM_HEIGHT=88, FOCAL=340, HORIZON=Math.round(H*0.46), NEAR=12;
+const PLAYER_SCALE=1.7;        // 画面下中央に固定描画するプレイヤーカートの大きさ
+const CAM_TURN_SMOOTH=7;       // カメラ追従の補間係数（大きいほど機敏）
+const CAM_TURN_MAX=3.6;        // カメラ角速度上限(rad/s) — スピン時の急回転を抑制
+
 function angleLerp(a,b,t){ let d=((b-a+Math.PI*3)%(Math.PI*2))-Math.PI; return a+d*t; }
 function angleDiff(a,b){ return ((b-a+Math.PI*3)%(Math.PI*2))-Math.PI; }
 
@@ -478,6 +486,10 @@ class RaceScene extends Scene {
     for (const b of ITEM_BOXES){ b.alive=true; b.respawnAt=0; }
     this.state='COUNTDOWN';
     this.countdownT=3.999;
+    // pseudo-3D camera state
+    this.camAngle = this.player.angle;
+    this._ca=Math.cos(this.camAngle); this._sa=Math.sin(this.camAngle);
+    this._camX=this.player.x; this._camY=this.player.y;
   }
   makeKart(i){
     const startP=PATH[START_IDX], tangent=pathTangentAt(START_IDX), nrm=pathNormal(START_IDX);
@@ -490,7 +502,7 @@ class RaceScene extends Scene {
       boostTime:0, shieldTime:0, spinTime:0, item:null,
       pathHint:START_IDX, progress:-back*0.001, lap:1, finished:false, finishTime:0, rank:i+1,
       aiSwerve:(Math.random()*2-1)*18, aiThrottle:0, aiSteer:0, aiDrift:false, aiUseItem:false,
-      wobble:Math.random()*Math.PI*2, trail:[], _lapDist:null
+      wobble:Math.random()*Math.PI*2, trail:[], _lapDist:null, lastSteer:0
     };
   }
 
@@ -502,6 +514,7 @@ class RaceScene extends Scene {
       if (curN!==prevN && curN>=0) RaceAudio.sfxCountdown(curN===0);
       if (this.countdownT<=0) this.state='RACING';
       for (const k of this.karts) k.speed*=0.9;
+      this.updateCamera(dt);
       this.updateEngineSound();
       touch.itemJust=false;
       return;
@@ -515,6 +528,7 @@ class RaceScene extends Scene {
     this.checkItemBoxes();
     this.resolveKartCollisions();
     this.updateRanks();
+    this.updateCamera(dt);
     this.updateEngineSound();
     touch.itemJust=false;
 
@@ -567,6 +581,8 @@ class RaceScene extends Scene {
       k.drift=false; k.driftCharge=0;
     }
     k.angle += steerInput*TURN_RATE*turnMul*speedFactor*dt*Math.sign(k.speed||1);
+    // 視覚用ステア量（カートのリーン/スキューに使用）を平滑化
+    k.lastSteer += (steerInput - k.lastSteer)*Math.min(1, 10*dt);
 
     this.moveKart(k,dt);
     if (offtrack && k.speed>OFFTRACK_MAXSPEED) k.speed=Math.max(OFFTRACK_MAXSPEED, k.speed-4*dt);
@@ -719,23 +735,34 @@ class RaceScene extends Scene {
     game.changeScene(new ResultScene(order, playerRank));
   }
 
+  /* ================= Pseudo-3D camera & projection ================= */
+  updateCamera(dt){
+    const p=this.player;
+    // カメラ角はプレイヤー進行角へ平滑追従＋角速度クランプ（スピン時の酔い対策）
+    let diff = angleDiff(this.camAngle, p.angle) * Math.min(1, CAM_TURN_SMOOTH*dt);
+    diff = clamp(diff, -CAM_TURN_MAX*dt, CAM_TURN_MAX*dt);
+    this.camAngle += diff;
+    this._ca=Math.cos(this.camAngle); this._sa=Math.sin(this.camAngle);
+    this._camX = p.x - this._ca*CAM_BACK;
+    this._camY = p.y - this._sa*CAM_BACK;
+  }
+  // ワールド地面点(wx,wy,高さh)→画面座標。depth<=NEAR は不可視
+  project(wx, wy, h){
+    const dx=wx-this._camX, dy=wy-this._camY;
+    const depth = dx*this._ca + dy*this._sa;
+    if (depth<=NEAR) return {visible:false, depth};
+    const lateral = -dx*this._sa + dy*this._ca;
+    const scale = FOCAL/depth;
+    return { visible:true, depth, scale, x:W/2 + lateral*scale, y:HORIZON + (CAM_HEIGHT-(h||0))*scale };
+  }
+
   /* ---------------- draw ---------------- */
   draw(c){
-    const cam=this.camera();
-    this.drawTrack(c, cam);
-
-    c.save(); c.translate(-cam.x,-cam.y);
-    const drawables=this.karts.slice().sort((a,b)=>a.y-b.y);
-    for (const k of drawables) this.drawKart(c,k);
-    for (const p of this.projectiles){
-      c.save(); c.translate(p.x,p.y);
-      const pulse=1+Math.sin(performance.now()/80)*0.12;
-      c.drawImage(starSprite, -17*pulse, -17*pulse, 34*pulse, 34*pulse);
-      c.restore();
-    }
-    c.restore();
-
-    this.drawBoostFx(c,cam);
+    this.drawSky(c);
+    this.drawGround(c);
+    this.drawRoad(c);
+    this.drawSprites(c);     // 他カート/木/標識/アイテム/オイル/弾/ブースト粒子（深度ソート）
+    this.drawPlayerKart(c);  // プレイヤーは画面下中央に固定
     this.drawMinimap(c);
     this.drawSpeedGauge(c);
     this.drawDriftMeter(c);
@@ -743,128 +770,208 @@ class RaceScene extends Scene {
     this.drawCountdown(c);
     this.drawFxMessages(c);
   }
-  camera(){
-    let cx=this.player?this.player.x:WORLD_W/2, cy=this.player?this.player.y:WORLD_H/2;
-    cx=clamp(cx, W/2-40, WORLD_W-W/2+40); cy=clamp(cy, H/2-40, WORLD_H-H/2+40);
-    return {x:cx-W/2, y:cy-H/2};
-  }
-  drawTrack(c, cam){
-    c.fillStyle='#0c2a12'; c.fillRect(0,0,W,H);
-    c.save(); c.translate(-cam.x,-cam.y);
-    // grass texture (GameKit.Gen tile pattern)
-    c.fillStyle=grassPattern; c.fillRect(0,0,WORLD_W,WORLD_H);
 
-    c.lineCap='round'; c.lineJoin='round';
-    this.drawPathStroke(c, ROAD_WIDTH+16, null, true);
-    this.drawPathStroke(c, ROAD_WIDTH, '#3a3f4d');
-    // dashed centre line
-    c.save();
-    c.strokeStyle='rgba(255,255,255,0.35)'; c.lineWidth=3; c.setLineDash([14,14]);
-    c.beginPath();
-    for (let i=0;i<=PATH_LEN;i++){ const p=PATH[i%PATH_LEN]; i===0?c.moveTo(p.x,p.y):c.lineTo(p.x,p.y); }
-    c.stroke(); c.restore();
+  drawSky(c){
+    const g=c.createLinearGradient(0,0,0,HORIZON);
+    g.addColorStop(0,'#070b1c'); g.addColorStop(0.7,'#101a3a'); g.addColorStop(1,'#1b2750');
+    c.fillStyle=g; c.fillRect(0,0,W,HORIZON);
+    // 遠景の丘シルエット（カメラ角に応じて横パララックス）
+    const off=(this.camAngle/(Math.PI*2))*W*3;
+    c.fillStyle='#14223f';
+    c.beginPath(); c.moveTo(0,HORIZON);
+    for (let x=0;x<=W;x+=24){
+      const y=HORIZON - 26 - Math.sin((x+off)*0.011)*16 - Math.sin((x+off)*0.027)*9;
+      c.lineTo(x,y);
+    }
+    c.lineTo(W,HORIZON); c.closePath(); c.fill();
+    // 地平の光のにじみ
+    const hg=c.createLinearGradient(0,HORIZON-30,0,HORIZON);
+    hg.addColorStop(0,'rgba(34,211,238,0)'); hg.addColorStop(1,'rgba(34,211,238,0.18)');
+    c.fillStyle=hg; c.fillRect(0,HORIZON-30,W,30);
+  }
+  drawGround(c){
+    const g=c.createLinearGradient(0,HORIZON,0,H);
+    g.addColorStop(0,'#163f1f'); g.addColorStop(1,'#0a2410');
+    c.fillStyle=g; c.fillRect(0,HORIZON,W,H-HORIZON);
+  }
 
-    this.drawCheckerLine(c, START_IDX);
-    for (const pr of PROPS) this.drawProp(c, pr);
-    for (const b of ITEM_BOXES) this.drawItemBox(c, b);
-    for (const h of this.hazards) this.drawHazard(c, h);
-    c.restore();
-  }
-  drawPathStroke(c, width, color, curbStyle){
-    c.beginPath();
-    for (let i=0;i<=PATH_LEN;i++){ const p=PATH[i%PATH_LEN]; i===0?c.moveTo(p.x,p.y):c.lineTo(p.x,p.y); }
-    c.lineWidth=width;
-    if (curbStyle){
-      c.strokeStyle='#e2e8f0'; c.setLineDash([26,26]); c.lineDashOffset=0; c.stroke();
-      c.strokeStyle='#ef4444'; c.lineDashOffset=26; c.stroke(); c.setLineDash([]);
-    } else {
-      c.strokeStyle=color; c.stroke();
-      c.lineWidth=width*0.92; c.strokeStyle='rgba(255,255,255,0.04)'; c.stroke();
+  /* ---------------- road ribbon (far -> near painter's order) ---------------- */
+  drawRoad(c){
+    const hint=this.player.pathHint;
+    const FAR=80, BACK=16;
+    for (let o=FAR; o>=-BACK; o--){
+      const i=((hint+o)%PATH_LEN+PATH_LEN)%PATH_LEN;
+      const j=((hint+o+1)%PATH_LEN+PATH_LEN)%PATH_LEN;
+      this.drawRoadSeg(c, i, j);
     }
   }
-  drawCheckerLine(c, idx){
-    const p=PATH[idx], tang=pathTangentAt(idx), len=ROAD_WIDTH, cells=8;
-    c.save(); c.translate(p.x,p.y); c.rotate(tang+Math.PI/2);
-    for (let i=0;i<cells;i++) for (let j=0;j<2;j++){
-      c.fillStyle=(i+j)%2===0?'#fff':'#111';
-      c.fillRect(-len/2+i*(len/cells), -10+j*10, len/cells, 10);
+  drawRoadSeg(c, i, j){
+    const pi=PATH[i], pj=PATH[j], ni=pathNormal(i), nj=pathNormal(j);
+    const hw=ROAD_WIDTH/2;
+    const Lf=this.project(pj.x+nj.x*hw, pj.y+nj.y*hw, 0);
+    const Rf=this.project(pj.x-nj.x*hw, pj.y-nj.y*hw, 0);
+    const Ln=this.project(pi.x+ni.x*hw, pi.y+ni.y*hw, 0);
+    const Rn=this.project(pi.x-ni.x*hw, pi.y-ni.y*hw, 0);
+    if (!(Lf.visible&&Rf.visible&&Ln.visible&&Rn.visible)) return;
+    const quad=(a,b,cc,d)=>{ c.beginPath(); c.moveTo(a.x,a.y); c.lineTo(b.x,b.y); c.lineTo(cc.x,cc.y); c.lineTo(d.x,d.y); c.closePath(); c.fill(); };
+    // road surface
+    c.fillStyle = (i%2===0)?'#3a3f4d':'#363b48';
+    quad(Lf,Rf,Rn,Ln);
+    // curbs (alternating red/white) just outside both edges
+    const co=10, curb=(i%2===0)?'#ef4444':'#e2e8f0';
+    const Lfo=this.project(pj.x+nj.x*(hw+co), pj.y+nj.y*(hw+co),0), Lno=this.project(pi.x+ni.x*(hw+co), pi.y+ni.y*(hw+co),0);
+    if (Lfo.visible&&Lno.visible){ c.fillStyle=curb; quad(Lfo,Lf,Ln,Lno); }
+    const Rfo=this.project(pj.x-nj.x*(hw+co), pj.y-nj.y*(hw+co),0), Rno=this.project(pi.x-ni.x*(hw+co), pi.y-ni.y*(hw+co),0);
+    if (Rfo.visible&&Rno.visible){ c.fillStyle=curb; quad(Rf,Rfo,Rno,Rn); }
+    // start/finish checker band
+    if (i===START_IDX){
+      const cells=8;
+      for (let ci=0;ci<cells;ci++){
+        const x0=hw-(ci/cells)*ROAD_WIDTH, x1=hw-((ci+1)/cells)*ROAD_WIDTH;
+        const a=this.project(pi.x+ni.x*x0, pi.y+ni.y*x0,0), b=this.project(pi.x+ni.x*x1, pi.y+ni.y*x1,0);
+        const d=this.project(pj.x+nj.x*x0, pj.y+nj.y*x0,0), e=this.project(pj.x+nj.x*x1, pj.y+nj.y*x1,0);
+        if (a.visible&&b.visible&&d.visible&&e.visible){ c.fillStyle=ci%2?'#111':'#fff'; quad(a,b,e,d); }
+      }
+    } else if (i%2===0){
+      // dashed centre line
+      const cw=4;
+      const a=this.project(pj.x+nj.x*cw, pj.y+nj.y*cw,0), b=this.project(pj.x-nj.x*cw, pj.y-nj.y*cw,0);
+      const d=this.project(pi.x+ni.x*cw, pi.y+ni.y*cw,0), e=this.project(pi.x-ni.x*cw, pi.y-ni.y*cw,0);
+      if (a.visible&&b.visible&&d.visible&&e.visible){ c.fillStyle='rgba(255,255,255,0.55)'; quad(a,b,e,d); }
     }
-    c.restore();
   }
-  drawProp(c, pr){
-    c.save(); c.translate(pr.x,pr.y); c.scale(pr.scale,pr.scale);
-    if (pr.type==='tree'){
-      c.fillStyle='#5a3a22'; c.fillRect(-3,-2,6,14);
-      c.fillStyle=`hsl(${pr.hue},45%,38%)`; c.beginPath(); c.arc(0,-12,13,0,Math.PI*2); c.fill();
-      c.fillStyle=`hsl(${pr.hue},45%,46%)`; c.beginPath(); c.arc(-4,-16,9,0,Math.PI*2); c.fill();
-    } else {
-      c.fillStyle='#9ca3af'; c.fillRect(-2,-2,4,18);
-      c.fillStyle='#facc15'; c.beginPath(); c.moveTo(-10,-22); c.lineTo(10,-22); c.lineTo(10,-8); c.lineTo(-10,-8); c.closePath(); c.fill();
-      c.fillStyle='#1f2937'; c.font='bold 11px sans-serif'; c.textAlign='center'; c.fillText('!',0,-12);
-    }
-    c.restore();
-  }
-  drawItemBox(c, b){
-    if (!b.alive) return;
-    const t=performance.now()/300, s=20+Math.sin(t*2)*3;
-    c.save(); c.translate(b.x,b.y); c.rotate(t%(Math.PI*2));
-    c.drawImage(itemBoxSprite, -s/2, -s/2, s, s);
-    c.restore();
-  }
-  drawHazard(c, h){
-    c.save(); c.translate(h.x,h.y);
-    c.fillStyle='rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(0,4,15,7,0,0,Math.PI*2); c.fill();
-    c.fillStyle='#6b4a2a'; c.fillRect(-7,-9,14,16);
-    c.fillStyle='#3f2c18'; c.fillRect(-7,-9,14,4);
-    c.fillStyle='#fbbf24'; c.font='bold 8px sans-serif'; c.textAlign='center'; c.fillText('OIL',0,2);
-    c.restore();
-  }
-  drawKart(c, k){
-    c.save(); c.translate(k.x,k.y); c.rotate(k.angle);
-    c.translate(0, Math.sin(k.wobble)*0.6);
-    // shadow
-    c.save(); c.translate(2,3); c.fillStyle='rgba(0,0,0,0.32)'; c.beginPath(); c.ellipse(0,0,15,10,0,0,Math.PI*2); c.fill(); c.restore();
-    // shield bubble
-    if (k.shieldTime>0){
-      c.save(); c.globalAlpha=0.35+Math.sin(performance.now()/100)*0.1;
-      c.strokeStyle='#a78bfa'; c.lineWidth=2.5; c.beginPath(); c.arc(0,0,19,0,Math.PI*2); c.stroke();
-      c.fillStyle='rgba(167,139,250,0.12)'; c.fill(); c.restore();
-    }
-    // baked sprite (Gen)
-    c.drawImage(k.sprite, -32, -24);
-    // boost flame
-    if (k.boostTime>0){
-      c.save(); c.translate(-16,0);
-      const fl=8+Math.random()*6, g=c.createLinearGradient(0,0,-fl,0);
-      g.addColorStop(0,'rgba(34,211,238,0.95)'); g.addColorStop(1,'rgba(34,211,238,0)');
-      c.fillStyle=g; c.beginPath(); c.moveTo(0,-5); c.lineTo(-fl,0); c.lineTo(0,5); c.closePath(); c.fill(); c.restore();
-    }
-    // spin stars
-    if (k.spinTime>0){
-      c.save(); c.rotate(-k.angle); c.fillStyle='#facc15';
-      for (let i=0;i<3;i++){ const a=performance.now()/120+i*2.1; drawStarShape(c, Math.cos(a)*16, -16+Math.sin(a)*4, 5, 4, 2); }
-      c.restore();
-    }
-    c.restore();
-    // drift trail
-    for (const t of k.trail){
-      c.save(); c.globalAlpha=Math.max(0,t.life/0.5)*0.35; c.fillStyle='#9ca3af';
-      c.beginPath(); c.arc(t.x,t.y,3,0,Math.PI*2); c.fill(); c.restore();
-    }
-    // name tag
-    c.save(); c.font=k.isPlayer?'bold 9px sans-serif':'9px sans-serif';
-    c.fillStyle=k.isPlayer?'#22d3ee':'rgba(255,255,255,0.55)'; c.textAlign='center';
-    c.fillText(k.isPlayer?'YOU':k.color.name, k.x, k.y-22); c.restore();
-  }
-  drawBoostFx(c, cam){
-    c.save(); c.translate(-cam.x,-cam.y);
+
+  /* ---------------- billboarded sprites (depth sorted) ---------------- */
+  drawSprites(c){
+    const list=[];
+    // advance + collect boost particles
     for (let i=this.boostFx.length-1;i>=0;i--){
       const f=this.boostFx[i]; f.x+=f.vx; f.y+=f.vy; f.life-=1/60;
       if (f.life<=0){ this.boostFx.splice(i,1); continue; }
-      c.globalAlpha=clamp(f.life/0.6,0,1); c.fillStyle=`hsl(${f.hue},90%,65%)`;
-      c.beginPath(); c.arc(f.x,f.y,2.4,0,Math.PI*2); c.fill();
+      const pr=this.project(f.x,f.y,6); if (!pr.visible) continue;
+      list.push({depth:pr.depth, fn:()=>{ c.save(); c.globalAlpha=clamp(f.life/0.6,0,1); c.fillStyle=`hsl(${f.hue},90%,65%)`;
+        c.beginPath(); c.arc(pr.x,pr.y,Math.max(1,3*pr.scale),0,Math.PI*2); c.fill(); c.restore(); }});
     }
-    c.globalAlpha=1; c.restore();
+    // hazards (oil decals on the ground)
+    for (const h of this.hazards){
+      const pr=this.project(h.x,h.y,0); if (!pr.visible) continue;
+      list.push({depth:pr.depth, fn:()=>this.drawOil3D(c,pr)});
+    }
+    // item boxes
+    for (const b of ITEM_BOXES){
+      if (!b.alive) continue;
+      const pr=this.project(b.x,b.y,0); if (!pr.visible) continue;
+      list.push({depth:pr.depth, fn:()=>{ const s=26*pr.scale; const hover=Math.sin(performance.now()/300+b.x)*3*pr.scale;
+        c.drawImage(itemBoxSprite, pr.x-s/2, pr.y-s*0.85+hover, s, s); }});
+    }
+    // props (trees / signs)
+    for (const pp of PROPS){
+      const pr=this.project(pp.x,pp.y,0); if (!pr.visible) continue;
+      list.push({depth:pr.depth, fn:()=>this.drawProp3D(c,pp,pr)});
+    }
+    // projectiles (star shots)
+    for (const p of this.projectiles){
+      const pr=this.project(p.x,p.y,8); if (!pr.visible) continue;
+      list.push({depth:pr.depth, fn:()=>{ const s=30*pr.scale*(1+Math.sin(performance.now()/80)*0.12);
+        c.drawImage(starSprite, pr.x-s/2, pr.y-s/2, s, s); }});
+    }
+    // rival karts (player drawn separately, fixed)
+    for (const k of this.karts){
+      if (k.isPlayer) continue;
+      const pr=this.project(k.x,k.y,0); if (!pr.visible) continue;
+      const turn=clamp(Math.sin(angleDiff(this.camAngle,k.angle))*0.9 + k.lastSteer*0.2, -1.3, 1.3);
+      list.push({depth:pr.depth, fn:()=>this.drawKart3D(c, pr.x, pr.y, pr.scale, k.color, turn,
+        {boostTime:k.boostTime, shieldTime:k.shieldTime, spinTime:k.spinTime, drift:k.drift, name:k.color.name, nameColor:'rgba(255,255,255,0.6)'})});
+    }
+    list.sort((a,b)=>b.depth-a.depth);
+    for (const e of list) e.fn();
+  }
+
+  drawProp3D(c, pp, pr){
+    const s=pr.scale, cx=pr.x, baseY=pr.y;
+    if (pp.type==='tree'){
+      const th=30*s*pp.scale;
+      c.fillStyle='#5a3a22'; c.fillRect(cx-2.5*s, baseY-th*0.45, 5*s, th*0.45);
+      c.fillStyle=`hsl(${pp.hue},45%,36%)`; c.beginPath(); c.arc(cx, baseY-th*0.6, 13*s*pp.scale, 0, Math.PI*2); c.fill();
+      c.fillStyle=`hsl(${pp.hue},45%,46%)`; c.beginPath(); c.arc(cx-4*s, baseY-th*0.72, 9*s*pp.scale, 0, Math.PI*2); c.fill();
+    } else {
+      const ph=34*s*pp.scale;
+      c.fillStyle='#9ca3af'; c.fillRect(cx-2*s, baseY-ph*0.5, 4*s, ph*0.5);
+      c.fillStyle='#facc15'; c.fillRect(cx-11*s, baseY-ph, 22*s, ph*0.42);
+      c.fillStyle='#1f2937'; c.font=`bold ${Math.max(6,13*s)}px sans-serif`; c.textAlign='center'; c.textBaseline='middle';
+      c.fillText('!', cx, baseY-ph*0.78);
+    }
+  }
+  drawOil3D(c, pr){
+    const s=pr.scale;
+    c.save(); c.fillStyle='rgba(20,12,4,0.6)'; c.beginPath(); c.ellipse(pr.x, pr.y, 16*s, 6*s, 0,0,Math.PI*2); c.fill();
+    c.fillStyle='rgba(60,40,20,0.55)'; c.beginPath(); c.ellipse(pr.x, pr.y, 10*s, 3.6*s, 0,0,Math.PI*2); c.fill();
+    c.fillStyle='#fbbf24'; c.font=`bold ${Math.max(6,9*s)}px sans-serif`; c.textAlign='center'; c.textBaseline='middle'; c.fillText('OIL', pr.x, pr.y);
+    c.restore();
+  }
+
+  // 三人称（背後）視点のカートを (cx, baseY) に scale s で描く。turn でリーン/スキュー
+  drawKart3D(c, cx, baseY, s, color, turn, opts){
+    opts=opts||{};
+    const bw=28*s, bh=15*s;
+    // shadow (skew しない)
+    c.save(); c.fillStyle='rgba(0,0,0,0.32)'; c.beginPath(); c.ellipse(cx, baseY, bw*0.62, bw*0.2, 0,0,Math.PI*2); c.fill(); c.restore();
+    // shield
+    if (opts.shieldTime>0){
+      c.save(); c.globalAlpha=0.32+Math.sin(performance.now()/100)*0.1; c.strokeStyle='#a78bfa'; c.lineWidth=2.4*s;
+      c.beginPath(); c.ellipse(cx, baseY-bh*0.9, bw*0.78, bh*1.5, 0,0,Math.PI*2); c.stroke();
+      c.fillStyle='rgba(167,139,250,0.12)'; c.fill(); c.restore();
+    }
+    c.save();
+    c.translate(cx, baseY);
+    c.transform(1,0, clamp(turn,-1.3,1.3)*0.2, 1, 0, 0); // turn lean (skew)
+    // boost flames (behind/below)
+    if (opts.boostTime>0){
+      const fl=(10+Math.random()*8)*s, g=c.createLinearGradient(0,0,0,fl);
+      g.addColorStop(0,'rgba(34,211,238,0.95)'); g.addColorStop(1,'rgba(34,211,238,0)');
+      c.fillStyle=g; c.beginPath(); c.moveTo(-bw*0.3,0); c.lineTo(0,fl); c.lineTo(bw*0.3,0); c.closePath(); c.fill();
+    }
+    // rear wheels
+    c.fillStyle='#1f2937';
+    c.fillRect(-bw*0.58, -bh*0.55, bw*0.26, bh*0.8);
+    c.fillRect(bw*0.32, -bh*0.55, bw*0.26, bh*0.8);
+    // body (viewed from behind)
+    const grad=c.createLinearGradient(0,-bh*1.7,0,0);
+    grad.addColorStop(0, color.light); grad.addColorStop(0.5, color.body); grad.addColorStop(1, color.dark);
+    c.fillStyle=grad; roundRectPath(c, -bw*0.5, -bh*1.7, bw, bh*1.7, 5*s); c.fill();
+    // rear window / cockpit
+    c.fillStyle='#0f172a'; roundRectPath(c, -bw*0.3, -bh*1.55, bw*0.6, bh*0.62, 3*s); c.fill();
+    // driver helmet
+    c.fillStyle=color.light; c.beginPath(); c.arc(0, -bh*1.42, bw*0.15, 0, Math.PI*2); c.fill();
+    // spoiler
+    c.fillStyle=color.dark; c.fillRect(-bw*0.52, -bh*1.92, bw*1.04, bh*0.2);
+    c.restore();
+    // spin stars
+    if (opts.spinTime>0){
+      c.save(); c.fillStyle='#facc15';
+      for (let i=0;i<3;i++){ const a=performance.now()/120+i*2.1; drawStarShape(c, cx+Math.cos(a)*16*s, baseY-bh*2.2+Math.sin(a)*4*s, 5, 4*s, 2*s); }
+      c.restore();
+    }
+    // name tag
+    if (opts.name && s>0.5){
+      c.save(); c.font=`${Math.max(8,9*s)}px sans-serif`; c.fillStyle=opts.nameColor||'rgba(255,255,255,0.6)';
+      c.textAlign='center'; c.textBaseline='alphabetic'; c.fillText(opts.name, cx, baseY-bh*2.6); c.restore();
+    }
+  }
+
+  drawPlayerKart(c){
+    const p=this.player, s=PLAYER_SCALE;
+    const cx=W/2, baseY=H*0.84 + Math.sin(p.wobble)*1.4;
+    const turn=clamp(p.lastSteer*0.9 + (p.drift?p.driftDir*0.35:0), -1.3, 1.3);
+    // drift dust
+    if (p.drift && Math.abs(p.speed)>0.5){
+      c.save(); c.fillStyle='rgba(200,210,225,0.4)';
+      for (let i=0;i<3;i++){ const r=(6+Math.random()*8)*s; c.globalAlpha=0.18+Math.random()*0.2;
+        c.beginPath(); c.arc(cx+(Math.random()-0.5)*40*s, baseY+(Math.random()*6)*s, r, 0, Math.PI*2); c.fill(); }
+      c.restore();
+    }
+    this.drawKart3D(c, cx, baseY, s, p.color, turn,
+      {boostTime:p.boostTime, shieldTime:p.shieldTime, spinTime:p.spinTime, drift:p.drift, name:'YOU', nameColor:'#22d3ee'});
   }
   drawMinimap(c){
     const mw=150,mh=96, ox=W-mw-16, oy=H-mh-16;
@@ -972,7 +1079,7 @@ class TitleScene extends Scene {
     UI.glassPanel(c, W/2-330, H/2-150, 660, 300, {radius:18, fill:'rgba(10,14,26,0.55)'});
     UI.text(c, 'TURBO KART GRAND PRIX', W/2, H/2-128, {font:'bold 38px "Segoe UI", sans-serif', color:'#22d3ee'});
     UI.text(c, 'ターボカート・グランプリ', W/2, H/2-78, {color:'#a78bfa', font:'18px sans-serif'});
-    UI.text(c, 'トップビューのオリジナル・カートレース！', W/2, H/2-38, {color:'#c7cdec', font:'14px sans-serif'});
+    UI.text(c, 'カート背後からの三人称ビュー（擬似3D）カートレース！', W/2, H/2-38, {color:'#c7cdec', font:'14px sans-serif'});
     UI.text(c, '矢印 / WASD で操作 ・ Shift でドリフト（曲がりながら離すとミニターボ）', W/2, H/2-12, {color:'#c7cdec', font:'13px sans-serif'});
     UI.text(c, 'Space でアイテム使用 ・ ライバル5台を抜いて3周を制せ！', W/2, H/2+12, {color:'#c7cdec', font:'13px sans-serif'});
     UI.text(c, 'スマホは画面下のボタンで操作', W/2, H/2+36, {color:'#8a93b8', font:'12px sans-serif'});
