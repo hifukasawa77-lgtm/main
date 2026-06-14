@@ -8,6 +8,9 @@
  *   AI — Workers AI（必須）
  *   KV — KV namespace（任意。未設定なら学習機能をスキップして動作）
  *
+ * シークレット（任意）:
+ *   ADMIN_TOKEN — /admin/* エンドポイントの認証トークン。未設定ならadminは404
+ *
  * 設定方法: README.md を参照
  */
 
@@ -32,15 +35,41 @@ const SYSTEM_PROMPT = `あなたは「ヒデのポートフォリオサイト」
 
 // ── 共有学習メモリ（KV） ─────────────────────────────────
 const LEARN_INDEX_KEY = 'learn:index';
-const LEARN_MAX_ENTRIES = 300;
-const SIMILARITY_THRESHOLD = 0.85;
+const LEARN_MAX_ENTRIES = 400;
+const SIMILARITY_THRESHOLD = 0.75;
 const REMOVE_SCORE = -2; // 👎が積み重なってこの値以下になったら削除
+const MIN_QUERY_LEN = 2; // 短すぎる質問は誤マッチを防ぐため学習メモリ対象外
 
 function normalizeQ(s) {
   return (s || '').toLowerCase()
     .replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/[\s、。！？!?.,]+/g, '')
     .trim();
+}
+
+// 表記ゆれ吸収: 文末の決まり文句（教えて/ください/ですか等）や末尾助詞を除去してから比較する。
+// 「ドル円教えて」と「今日のドル円のレートを教えてください」のような言い換えでもヒットしやすくする。
+const TRAILING_PHRASES = [
+  '教えてください', '教えてくれる', '教えてもらえる', '教えて',
+  'お願いします', 'おねがいします', 'ください', 'でしょうか',
+  'ですか', 'かな', 'かしら', 'です', 'ます',
+];
+
+function canonicalizeQ(qNorm) {
+  let s = qNorm;
+  let changed = true;
+  let guard = 0;
+  while (changed && guard++ < 5) {
+    changed = false;
+    for (const p of TRAILING_PHRASES) {
+      if (s.length > p.length && s.endsWith(p)) {
+        s = s.slice(0, -p.length).replace(/[をのはがにでもと]+$/g, '');
+        changed = true;
+        break;
+      }
+    }
+  }
+  return s.length >= 1 ? s : qNorm;
 }
 
 function bigrams(s) {
@@ -54,6 +83,7 @@ function similarity(a, b) {
   if (!a || !b) return 0;
   if (a === b) return 1;
   const sa = bigrams(a), sb = bigrams(b);
+  if (sa.size === 0 || sb.size === 0) return 0;
   let inter = 0;
   for (const g of sa) if (sb.has(g)) inter++;
   const union = sa.size + sb.size - inter;
@@ -76,60 +106,109 @@ async function loadIndex(env) {
   }
 }
 
-async function findLearned(env, qNorm) {
-  const index = await loadIndex(env);
+async function saveIndex(env, index) {
+  await env.KV.put(LEARN_INDEX_KEY, JSON.stringify(index));
+}
+
+// インデックス内から最も似ている質問を探す（正規化＋表記ゆれ吸収後の文字列で比較）
+function findBestMatch(index, qCanon) {
+  if (qCanon.length < MIN_QUERY_LEN) return null;
   let best = null, bestSim = 0;
   for (const entry of index) {
-    const sim = similarity(qNorm, entry.q);
+    const sim = similarity(qCanon, entry.q);
     if (sim > bestSim) { bestSim = sim; best = entry; }
   }
   if (!best || bestSim < SIMILARITY_THRESHOLD) return null;
-  try {
-    const raw = await env.KV.get('learn:' + best.k);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  return best;
 }
 
-async function saveLearned(env, question, answer) {
-  const qNorm = normalizeQ(question);
-  if (qNorm.length < 2 || !answer) return;
-  const key = await qHash(qNorm);
+async function findLearned(env, ctx, qCanon) {
   const index = await loadIndex(env);
-  const filtered = index.filter(e => e.k !== key);
-  filtered.push({ q: qNorm, k: key, ts: Date.now() });
-  // LRU: 古い順に上限を超えた分を削除
-  filtered.sort((a, b) => a.ts - b.ts);
-  const removed = filtered.splice(0, Math.max(0, filtered.length - LEARN_MAX_ENTRIES));
+  const best = findBestMatch(index, qCanon);
+  if (!best) return null;
+  const raw = await env.KV.get('learn:' + best.k);
+  if (!raw) return null;
+  const item = JSON.parse(raw);
+  if (!item.a) return null;
+  // 利用統計（ヒット数・最終利用時刻）の更新はレスポンスをブロックしない
+  ctx.waitUntil(touchLearned(env, index, best.k, item));
+  return { key: best.k, text: item.a };
+}
+
+async function touchLearned(env, index, key, item) {
+  const now = Date.now();
+  item.hits = (item.hits || 0) + 1;
+  item.lastUsed = now;
+  const entry = index.find(e => e.k === key);
+  if (entry) { entry.hits = item.hits; entry.lastUsed = now; }
   await Promise.all([
-    env.KV.put('learn:' + key, JSON.stringify({ q: question.slice(0, 200), a: answer.slice(0, 1000), score: 0, ts: Date.now() })),
-    env.KV.put(LEARN_INDEX_KEY, JSON.stringify(filtered)),
-    ...removed.map(e => env.KV.delete('learn:' + e.k)),
+    env.KV.put('learn:' + key, JSON.stringify(item)),
+    saveIndex(env, index),
   ]);
 }
 
-async function applyFeedback(env, question, vote) {
-  const qNorm = normalizeQ(question);
+// AIが生成した回答を学習メモリへ保存。容量超過時は「価値（評価×10＋利用回数）が低く
+// 最近使われていない」エントリから削除する（鮮度・有用性ベースの入れ替え）。
+async function saveLearned(env, key, qCanon, question, answer) {
   const index = await loadIndex(env);
-  let best = null, bestSim = 0;
-  for (const entry of index) {
-    const sim = similarity(qNorm, entry.q);
-    if (sim > bestSim) { bestSim = sim; best = entry; }
+  const now = Date.now();
+  const filtered = index.filter(e => e.k !== key);
+  filtered.push({ q: qCanon, k: key, ts: now, score: 0, hits: 0, lastUsed: now });
+
+  let removedKeys = [];
+  if (filtered.length > LEARN_MAX_ENTRIES) {
+    const overflow = filtered.length - LEARN_MAX_ENTRIES;
+    const sorted = [...filtered].sort((a, b) => {
+      const va = (a.score || 0) * 10 + (a.hits || 0);
+      const vb = (b.score || 0) * 10 + (b.hits || 0);
+      if (va !== vb) return va - vb;
+      return (a.lastUsed || a.ts || 0) - (b.lastUsed || b.ts || 0);
+    });
+    removedKeys = sorted.filter(e => e.k !== key).slice(0, overflow).map(e => e.k);
+    const removeSet = new Set(removedKeys);
+    for (let i = filtered.length - 1; i >= 0; i--) {
+      if (removeSet.has(filtered[i].k)) filtered.splice(i, 1);
+    }
   }
-  if (!best || bestSim < SIMILARITY_THRESHOLD) return { ok: false };
-  const raw = await env.KV.get('learn:' + best.k);
+
+  await Promise.all([
+    env.KV.put('learn:' + key, JSON.stringify({
+      q: question.slice(0, 200), a: answer.slice(0, 1000),
+      score: 0, hits: 0, ts: now, lastUsed: now,
+    })),
+    saveIndex(env, filtered),
+    ...removedKeys.map(k => env.KV.delete('learn:' + k)),
+  ]);
+}
+
+// 👍/👎 フィードバック。response の key を使って直接エントリを更新する（精度優先）。
+// key 不明（旧クライアント）の場合のみ質問文の類似検索でフォールバックする。
+async function applyFeedback(env, key, qFallback, vote) {
+  const index = await loadIndex(env);
+  let entry = key ? index.find(e => e.k === key) : null;
+  if (!entry && qFallback) {
+    entry = findBestMatch(index, canonicalizeQ(normalizeQ(qFallback)));
+  }
+  if (!entry) return { ok: false };
+
+  const raw = await env.KV.get('learn:' + entry.k);
   if (!raw) return { ok: false };
   const item = JSON.parse(raw);
   item.score = (item.score || 0) + (vote === 'up' ? 1 : -1);
+  entry.score = item.score;
+
   if (item.score <= REMOVE_SCORE) {
+    const filtered = index.filter(e => e.k !== entry.k);
     await Promise.all([
-      env.KV.delete('learn:' + best.k),
-      env.KV.put(LEARN_INDEX_KEY, JSON.stringify(index.filter(e => e.k !== best.k))),
+      env.KV.delete('learn:' + entry.k),
+      saveIndex(env, filtered),
     ]);
     return { ok: true, removed: true };
   }
-  await env.KV.put('learn:' + best.k, JSON.stringify(item));
+  await Promise.all([
+    env.KV.put('learn:' + entry.k, JSON.stringify(item)),
+    saveIndex(env, index),
+  ]);
   return { ok: true };
 }
 
@@ -274,12 +353,21 @@ export default {
   async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
     const isAllowed = ALLOWED_ORIGINS.some(o => origin.startsWith(o));
+    const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
+      if (url.pathname.startsWith('/admin/')) {
+        return new Response(null, { status: 204, headers: adminCorsHeaders() });
+      }
       return new Response(null, {
         status: 204,
         headers: corsHeaders(isAllowed ? origin : ''),
       });
+    }
+
+    // ── 管理エンドポイント（ADMIN_TOKENトークンで認可、Origin制限なし） ──
+    if (url.pathname.startsWith('/admin/')) {
+      return handleAdmin(request, env, url);
     }
 
     if (!isAllowed) return new Response('Forbidden', { status: 403 });
@@ -292,7 +380,6 @@ export default {
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    const url = new URL(request.url);
     const hasKV = !!env.KV;
 
     // ── AI Video Studio エンドポイント ──
@@ -302,11 +389,16 @@ export default {
 
     // ── フィードバック受付（👍/👎 → 共有メモリのスコア更新） ──
     if (url.pathname === '/feedback') {
-      const { q, vote } = body;
-      if (!hasKV || !q || (vote !== 'up' && vote !== 'down')) {
+      const { q, vote, key } = body;
+      if (!hasKV || (vote !== 'up' && vote !== 'down') || (!key && !q)) {
         return jsonResponse({ ok: false }, origin);
       }
-      const result = await applyFeedback(env, String(q).slice(0, 500), vote);
+      const result = await applyFeedback(
+        env,
+        typeof key === 'string' ? key : null,
+        q ? String(q).slice(0, 500) : null,
+        vote,
+      );
       return jsonResponse(result, origin);
     }
 
@@ -320,12 +412,13 @@ export default {
     }
 
     const userText = message.trim();
+    const qCanon = canonicalizeQ(normalizeQ(userText));
 
     // ① 共有学習メモリから類似質問の回答を検索（AI消費ゼロで即答）
     if (hasKV) {
-      const learned = await findLearned(env, normalizeQ(userText));
-      if (learned && learned.a) {
-        return jsonResponse({ text: learned.a, source: 'learned' }, origin);
+      const learned = await findLearned(env, ctx, qCanon);
+      if (learned) {
+        return jsonResponse({ text: learned.text, source: 'learned', key: learned.key }, origin);
       }
     }
 
@@ -343,21 +436,68 @@ export default {
 
     try {
       const text = await runAI(env, messages);
-      // ③ 回答を共有メモリへ保存（AI生成回答のみ保存＝汚染対策）
-      if (hasKV && text) {
-        ctx.waitUntil(saveLearned(env, userText, text.trim()).catch(() => {}));
+      // ③ 回答を共有メモリへ保存（AI生成回答のみ保存＝汚染対策）。レスポンスはブロックしない
+      let key = null;
+      if (hasKV && text && qCanon.length >= MIN_QUERY_LEN) {
+        key = await qHash(qCanon);
+        ctx.waitUntil(saveLearned(env, key, qCanon, userText, text.trim()).catch(() => {}));
       }
-      return jsonResponse({ text, source: 'ai' }, origin);
+      return jsonResponse({ text, source: 'ai', key }, origin);
     } catch (e) {
       return new Response('AI error: ' + e.message, { status: 502 });
     }
   },
 };
 
+// ── 管理API: 学習エントリの閲覧・削除（ADMIN_TOKEN必須） ──
+async function handleAdmin(request, env, url) {
+  if (!env.ADMIN_TOKEN) return new Response('Not Found', { status: 404 });
+  const token = request.headers.get('X-Admin-Token') || url.searchParams.get('token') || '';
+  if (token !== env.ADMIN_TOKEN) {
+    return new Response('Unauthorized', { status: 401, headers: adminCorsHeaders() });
+  }
+
+  const hasKV = !!env.KV;
+
+  if (url.pathname === '/admin/learned') {
+    if (request.method === 'GET') {
+      const index = hasKV ? await loadIndex(env) : [];
+      const entries = index
+        .map(e => ({
+          key: e.k, q: e.q,
+          score: e.score || 0, hits: e.hits || 0,
+          ts: e.ts, lastUsed: e.lastUsed || e.ts,
+        }))
+        .sort((a, b) => (b.score * 10 + b.hits) - (a.score * 10 + a.hits));
+      return jsonResponseWithHeaders({ entries }, adminCorsHeaders());
+    }
+    if (request.method === 'DELETE') {
+      const key = url.searchParams.get('key') || '';
+      if (!hasKV || !key) return jsonResponseWithHeaders({ ok: false }, adminCorsHeaders());
+      const index = await loadIndex(env);
+      const filtered = index.filter(e => e.k !== key);
+      if (filtered.length === index.length) {
+        return jsonResponseWithHeaders({ ok: false, error: 'not-found' }, adminCorsHeaders());
+      }
+      await Promise.all([
+        env.KV.delete('learn:' + key),
+        saveIndex(env, filtered),
+      ]);
+      return jsonResponseWithHeaders({ ok: true }, adminCorsHeaders());
+    }
+  }
+
+  return new Response('Not Found', { status: 404, headers: adminCorsHeaders() });
+}
+
 function jsonResponse(obj, origin, status) {
+  return jsonResponseWithHeaders(obj, corsHeaders(origin), status);
+}
+
+function jsonResponseWithHeaders(obj, headers, status) {
   return new Response(JSON.stringify(obj), {
     status: status || 200,
-    headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+    headers: { 'Content-Type': 'application/json', ...headers },
   });
 }
 
@@ -366,5 +506,13 @@ function corsHeaders(origin) {
     'Access-Control-Allow-Origin': origin || '',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
+function adminCorsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Token',
   };
 }
