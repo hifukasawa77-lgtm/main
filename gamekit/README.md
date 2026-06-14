@@ -45,6 +45,7 @@ A micro-engine + agent workflow for producing Canvas games inside Claude Code. N
 - `GameKit.Collision` — AABB / 円 / 矩形×円（`.claude/skills/game-dev` のガイドライン準拠）
 - `GameKit.Sfx` — Web Audio プロシージャルSE（`beep` / `noise` / `jingle`）。音声ファイル不要
 - `GameKit.Particles` — ポートフォリオ共通のアンビエントパーティクル背景
+- `GameKit.Gen` — プロシージャル画像生成（シード付き乱数・ノイズ・パレット・ネビュラ背景・スターフィールド・タイルパターン・オーブ/バッジアイコン + PNG書き出し）。`generator.html` で動作確認・アセット書き出し可能
 - `GameKit.UI` — Glassmorphism パネル + テキスト描画
 - `GameKit.Save` — localStorage ラッパー（ゲームごとに名前空間分離）
 - `GameKit.MathX` — `clamp` / `lerp` / `rand`
@@ -63,7 +64,7 @@ CLAUDE.md のルールに従う:
 画像生成・取得は Graphic-Designer エージェントが担当。優先順位:
 
 1. **MCPコネクタ**（OAuth認証・APIキー不要）: Adobe（Stock無料素材検索 / 背景削除 / 生成拡張 / ベクター化）、Canva（AIデザイン生成）、Figma
-2. **プロシージャル生成**: Canvas / SVG をコードで描く（このリポジトリの主流）
+2. **プロシージャル生成**: Canvas / SVG をコードで描く（このリポジトリの主流）。`gamekit/generator.html` を開くと `GameKit.Gen` の各関数（ネビュラ背景・スターフィールド・タイルパターン・オーブ/バッジアイコン）をシード/パレット/サイズ指定でプレビューしPNG書き出しできる。text-to-image系MCP（GPT-Image相当）が使えない場合の主要な代替手段
 3. **フリー素材**: Kenney / OpenGameArt / itch.io（要ライセンス確認）
 4. **ローカル生成**: 自分のPCの Stable Diffusion（ComfyUI 等）を MCP サーバー経由で接続
 

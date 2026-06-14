@@ -42,6 +42,7 @@ OAuth接続のMCPコネクタはCLAUDE.mdの「有料APIキー禁止」に抵触
 - Canvas API / SVG をコードで直接描画してアセット化する（背景・UI・アイコン・エフェクトに最適）
 - 動的演出は `gamekit/gamekit.js` の `Particles` / `UI` モジュールを再利用する
 - 静的画像が必要なら Canvas で描画 → `canvas.toDataURL()` / Playwright スクリーンショットでPNG化する
+- **`GameKit.Gen`（GPT Image 2.0相当の代替ツール）**: `gamekit/gamekit.js` に、シード付き乱数・2Dノイズ・カラーパレット（`cyanPurple`/`auroraTeal`/`roseQuartz`/`emberViolet`）・ネビュラ背景・スターフィールド・タイルパターン（dots/hexgrid/waves/grain）・オーブ/ポリゴンバッジアイコンの生成関数を用意している。`gamekit/generator.html` をブラウザ（またはPlaywright）で開き、アセット種類・パレット・シード・サイズをUIで指定 → 「PNGダウンロード」でエクスポート → `assets/art/` 配下へ配置、の流れで量産する
 
 ### A-2. 外部ツールで生成（ローカル生成/編集）
 用途に応じて最適ツールを選ぶ（環境に無い場合は導入手順を提示し、導入後に作業を継続）。
