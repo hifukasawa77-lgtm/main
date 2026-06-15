@@ -87,7 +87,9 @@
   }
   .btn:hover{transform:translateY(-2px)}
   .btn.stop{background:linear-gradient(135deg,var(--red),#fb7185);color:#2a0a0f;box-shadow:0 6px 18px rgba(248,113,113,0.25)}
-  .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .btn.ghost{background:transparent;color:var(--cyan);border:1px solid var(--cyan);box-shadow:none}
+  .btn.ghost:hover{background:var(--cyan-soft)}
+  .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
 
   /* 統計カード */
   .stats{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:22px}
@@ -192,6 +194,7 @@
       </select>
     </div>
     <button class="btn" id="toggleBtn">▶ 計測開始 / Start</button>
+    <button class="btn ghost" id="exportBtn" disabled>⬇ CSV書き出し / Export</button>
   </div>
 
   <!-- 統計カード -->
@@ -278,7 +281,7 @@
   // ---------- DOM ----------
   const $ = id => document.getElementById(id);
   const targetSel=$('target'), customWrap=$('customWrap'), customUrl=$('customUrl'),
-        intervalSel=$('interval'), sensSel=$('sens'), toggleBtn=$('toggleBtn');
+        intervalSel=$('interval'), sensSel=$('sens'), toggleBtn=$('toggleBtn'), exportBtn=$('exportBtn');
   const sRtt=$('s-rtt'), sAvg=$('s-avg'), sJitter=$('s-jitter'), sJams=$('s-jams'),
         sLoss=$('s-loss'), sScore=$('s-score');
   const flowBadge=$('flowBadge'), flowText=$('flowText'), connBadge=$('connBadge'),
@@ -291,7 +294,8 @@
   // ---------- 計測状態 ----------
   let running=false, timer=null;
   const MAX=120;                 // 保持サンプル数
-  let samples=[];                // {rtt:number|null, t:number, jam:bool, loss:bool}
+  let samples=[];                // 描画用の直近サンプル {rtt, t, jam, loss}
+  let history=[];                // 書き出し用の全履歴（セッション通算）
   let jamCount=0, lossCount=0, totalCount=0;
   const TIMEOUT=5000;
 
@@ -358,10 +362,13 @@
       addLog('jam', `パケづまり検知 / Jam — ${Math.round(rtt)}ms（基準 ${Math.round(base)}ms）`);
     }
 
-    samples.push({rtt, t:Date.now(), jam, loss});
+    const t=Date.now();
+    samples.push({rtt, t, jam, loss});
     if(samples.length>MAX) samples.shift();
+    history.push({idx:totalCount, t, target:url, rtt, jam, loss, base});
     spawnPacket(rtt, jam, loss);
     updateStats();
+    exportBtn.disabled = history.length===0;
   }
 
   function updateStats(){
@@ -627,6 +634,44 @@
     addLog('', '計測停止 / Stopped');
   }
   toggleBtn.addEventListener('click', ()=> running?stop():start());
+
+  // ---------- CSV書き出し ----------
+  function exportCsv(){
+    if(!history.length) return;
+    const csvField = v => {
+      const s = (v==null) ? '' : String(v);
+      return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+    };
+    const lines = [];
+    // メタ情報（# 始まりのコメント行）
+    lines.push('# Packet Visibility export / パケットの見える化 書き出し');
+    lines.push('# generated,'+new Date().toISOString());
+    lines.push('# samples,'+history.length+',jams,'+jamCount+',loss,'+lossCount);
+    // ヘッダ
+    lines.push(['no','timestamp_iso','time_local','target','rtt_ms','status','baseline_ms'].join(','));
+    for(const h of history){
+      const status = h.loss ? 'loss' : (h.jam ? 'jam' : 'ok');
+      lines.push([
+        h.idx,
+        new Date(h.t).toISOString(),
+        new Date(h.t).toLocaleString('ja-JP',{hour12:false}),
+        csvField(h.target),
+        h.rtt==null ? '' : Math.round(h.rtt),
+        status,
+        h.base==null ? '' : Math.round(h.base)
+      ].join(','));
+    }
+    // BOM付きでExcelの日本語文字化けを防ぐ
+    const blob = new Blob(['﻿'+lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+    a.href = url; a.download = 'packet-visibility_'+ts+'.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    addLog('', `CSV書き出し / Exported ${history.length} 件`);
+  }
+  exportBtn.addEventListener('click', exportCsv);
 })();
 </script>
 </body>
