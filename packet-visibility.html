@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>パケットの見える化 | Packet Visibility — hide_0001</title>
+<meta name="description" content="5Gドコモ回線の『パケづまり』をブラウザだけで実測・可視化する。RTT・ジッタ・パケットロスをリアルタイムでグラフ化し、詰まりの瞬間を見える化します。">
+<style>
+  :root{
+    --bg:#0a0e1a;
+    --bg2:#0d1426;
+    --panel:rgba(255,255,255,0.04);
+    --panel-border:rgba(255,255,255,0.09);
+    --text:#e6edf6;
+    --muted:#90a0b8;
+    --cyan:#22d3ee;
+    --cyan-soft:rgba(34,211,238,0.12);
+    --purple:#a855f7;
+    --purple-soft:rgba(168,85,247,0.12);
+    --green:#34d399;
+    --amber:#fbbf24;
+    --red:#f87171;
+    --radius:16px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:radial-gradient(1200px 700px at 80% -10%, #11203b 0%, transparent 60%),
+               radial-gradient(900px 600px at 0% 110%, #1a1030 0%, transparent 55%),
+               var(--bg);
+    color:var(--text);
+    font-family:'Segoe UI','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;
+    min-height:100vh;
+    overflow-x:hidden;
+  }
+  /* 背景パーティクル */
+  #bg-particles{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.5}
+  header{
+    position:relative;z-index:2;
+    display:flex;align-items:center;gap:16px;
+    padding:14px 24px;
+    border-bottom:1px solid var(--panel-border);
+    background:rgba(10,14,26,0.6);
+    backdrop-filter:blur(14px);
+  }
+  header a.back{
+    text-decoration:none;color:var(--muted);font-size:.9rem;
+    display:flex;align-items:center;gap:6px;transition:color .2s;
+  }
+  header a.back:hover{color:var(--text)}
+  header h1{font-size:1.1rem;font-weight:700;letter-spacing:.02em}
+  header .en{color:var(--muted);font-weight:500;font-size:.8rem;margin-left:4px}
+  main{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:40px 20px 90px}
+  .hero{margin-bottom:28px}
+  .hero h2{font-size:2rem;font-weight:800;line-height:1.25;letter-spacing:.01em}
+  .hero h2 .grad{
+    background:linear-gradient(90deg,var(--cyan),var(--purple));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .hero p{color:var(--muted);margin-top:10px;font-size:.95rem;line-height:1.7;max-width:760px}
+  .hero p .en{display:block;font-size:.82rem;opacity:.8;margin-top:4px}
+
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:var(--radius);
+    backdrop-filter:blur(16px);
+    box-shadow:0 8px 30px rgba(0,0,0,0.25);
+  }
+  .controls{padding:18px 20px;margin-bottom:22px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
+  .ctrl{display:flex;flex-direction:column;gap:6px}
+  .ctrl label{font-size:.72rem;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+  .ctrl select,.ctrl input{
+    background:rgba(255,255,255,0.05);
+    border:1px solid var(--panel-border);
+    color:var(--text);
+    padding:9px 12px;border-radius:10px;font-size:.9rem;outline:none;min-width:160px;
+    transition:border-color .2s;
+  }
+  .ctrl select:focus,.ctrl input:focus{border-color:var(--cyan)}
+  #customUrl{min-width:240px}
+  .btn{
+    border:none;cursor:pointer;font-weight:700;font-size:.92rem;letter-spacing:.02em;
+    padding:11px 22px;border-radius:11px;transition:transform .15s,box-shadow .2s,opacity .2s;
+    color:#06121f;background:linear-gradient(135deg,var(--cyan),#38bdf8);
+    box-shadow:0 6px 18px rgba(34,211,238,0.25);
+  }
+  .btn:hover{transform:translateY(-2px)}
+  .btn.stop{background:linear-gradient(135deg,var(--red),#fb7185);color:#2a0a0f;box-shadow:0 6px 18px rgba(248,113,113,0.25)}
+  .btn.ghost{background:transparent;color:var(--cyan);border:1px solid var(--cyan);box-shadow:none}
+  .btn.ghost:hover{background:var(--cyan-soft)}
+  .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+
+  /* 統計カード */
+  .stats{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:22px}
+  @media(max-width:860px){.stats{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:480px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{padding:16px;text-align:center}
+  .stat .k{font-size:.68rem;color:var(--muted);letter-spacing:.05em;text-transform:uppercase}
+  .stat .v{font-size:1.55rem;font-weight:800;margin-top:6px;font-variant-numeric:tabular-nums}
+  .stat .u{font-size:.7rem;color:var(--muted);margin-left:2px;font-weight:600}
+  .stat.accent-cyan .v{color:var(--cyan)}
+  .stat.accent-purple .v{color:var(--purple)}
+  .stat.accent-amber .v{color:var(--amber)}
+  .stat.accent-red .v{color:var(--red)}
+  .stat.accent-green .v{color:var(--green)}
+
+  .viz-grid{display:grid;grid-template-columns:1fr;gap:22px}
+
+  .viz{padding:18px 20px}
+  .viz h3{font-size:.95rem;font-weight:700;display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .viz h3 .en{color:var(--muted);font-weight:500;font-size:.76rem}
+  .viz .hint{font-size:.76rem;color:var(--muted);margin-bottom:14px;line-height:1.6}
+  canvas.draw{width:100%;display:block;border-radius:12px;background:rgba(0,0,0,0.22)}
+
+  /* 状態バッジ */
+  .status-row{display:flex;align-items:center;gap:10px;margin:2px 0 14px;flex-wrap:wrap}
+  .badge{display:inline-flex;align-items:center;gap:7px;font-size:.8rem;font-weight:700;padding:6px 14px;border-radius:20px}
+  .badge .dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+  .badge.good{background:rgba(52,211,153,0.12);color:var(--green)} .badge.good .dot{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .badge.warn{background:rgba(251,191,36,0.12);color:var(--amber)} .badge.warn .dot{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+  .badge.bad{background:rgba(248,113,113,0.14);color:var(--red)} .badge.bad .dot{background:var(--red);box-shadow:0 0 8px var(--red)}
+  .badge.idle{background:rgba(144,160,184,0.12);color:var(--muted)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.74rem;color:var(--muted);margin-top:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+  /* ログ */
+  .log{padding:18px 20px;margin-top:22px;max-height:260px;overflow-y:auto}
+  .log h3{font-size:.95rem;font-weight:700;margin-bottom:12px}
+  .log-list{display:flex;flex-direction:column;gap:6px;font-size:.82rem;font-family:'SFMono-Regular',Consolas,monospace}
+  .log-item{display:flex;gap:10px;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,0.03)}
+  .log-item .t{color:var(--muted);flex-shrink:0}
+  .log-item.jam{background:rgba(248,113,113,0.10)}
+  .log-item.jam .msg{color:var(--red)}
+  .log-item.loss{background:rgba(168,85,247,0.10)}
+  .log-item.loss .msg{color:var(--purple)}
+  .log-empty{color:var(--muted);font-size:.82rem}
+
+  .note{margin-top:26px;padding:16px 20px;font-size:.8rem;color:var(--muted);line-height:1.75}
+  .note strong{color:var(--text)}
+  footer{position:relative;z-index:1;text-align:center;color:var(--muted);font-size:.76rem;padding:20px}
+</style>
+</head>
+<body>
+<canvas id="bg-particles"></canvas>
+
+<header>
+  <a href="index.html" class="back">← ポートフォリオに戻る</a>
+  <h1>📡 パケットの見える化<span class="en">Packet Visibility</span></h1>
+</header>
+
+<main>
+  <section class="hero">
+    <h2>5Gなのに<span class="grad">パケづまり</span>？<br>その瞬間を見える化する。</h2>
+    <p>
+      ブラウザだけで回線の往復時間（RTT）・ジッタ・パケットロスをリアルタイム計測し、
+      ドコモ5G回線が「詰まる」瞬間を検知・可視化します。外部サーバーへの送信は一切なし、すべて端末内で完結します。
+      <span class="en">Measure RTT, jitter and packet loss in real time — right in your browser. 100% client-side, nothing leaves your device.</span>
+    </p>
+  </section>
+
+  <!-- 操作パネル -->
+  <div class="panel controls">
+    <div class="ctrl">
+      <label for="target">計測先 / Target</label>
+      <select id="target">
+        <option value="self">このサイト（同一オリジン）</option>
+        <option value="https://www.google.com/favicon.ico">Google</option>
+        <option value="https://www.cloudflare.com/favicon.ico">Cloudflare</option>
+        <option value="https://www.nttdocomo.co.jp/favicon.ico">NTTドコモ</option>
+        <option value="custom">カスタムURL…</option>
+      </select>
+    </div>
+    <div class="ctrl" id="customWrap" style="display:none">
+      <label for="customUrl">カスタムURL / Custom</label>
+      <input id="customUrl" type="text" placeholder="https://example.com/favicon.ico">
+    </div>
+    <div class="ctrl">
+      <label for="interval">計測間隔 / Interval</label>
+      <select id="interval">
+        <option value="500">0.5 秒</option>
+        <option value="1000" selected>1 秒</option>
+        <option value="2000">2 秒</option>
+        <option value="3000">3 秒</option>
+      </select>
+    </div>
+    <div class="ctrl">
+      <label for="sens">詰まり感度 / Sensitivity</label>
+      <select id="sens">
+        <option value="2">低（×2）</option>
+        <option value="3" selected>標準（×3）</option>
+        <option value="4">高（×4）</option>
+      </select>
+    </div>
+    <button class="btn" id="toggleBtn">▶ 計測開始 / Start</button>
+    <button class="btn ghost" id="exportBtn" disabled>⬇ CSV書き出し / Export</button>
+  </div>
+
+  <!-- 統計カード -->
+  <div class="stats">
+    <div class="stat panel accent-cyan"><div class="k">現在RTT / Now</div><div class="v" id="s-rtt">—<span class="u">ms</span></div></div>
+    <div class="stat panel"><div class="k">平均RTT / Avg</div><div class="v" id="s-avg">—<span class="u">ms</span></div></div>
+    <div class="stat panel accent-purple"><div class="k">ジッタ / Jitter</div><div class="v" id="s-jitter">—<span class="u">ms</span></div></div>
+    <div class="stat panel accent-amber"><div class="k">パケづまり / Jams</div><div class="v" id="s-jams">0<span class="u">回</span></div></div>
+    <div class="stat panel accent-red"><div class="k">ロス率 / Loss</div><div class="v" id="s-loss">0<span class="u">%</span></div></div>
+    <div class="stat panel accent-green"><div class="k">回線品質 / Score</div><div class="v" id="s-score">—</div></div>
+  </div>
+
+  <div class="viz-grid">
+    <!-- パケット流の可視化 -->
+    <div class="viz panel">
+      <h3>🚦 パケットの流れ <span class="en">/ Packet Flow</span></h3>
+      <div class="status-row">
+        <span class="badge idle" id="flowBadge"><span class="dot"></span><span id="flowText">待機中 / Idle</span></span>
+        <span class="badge idle" id="connBadge"><span class="dot"></span><span id="connText">回線情報を取得中…</span></span>
+      </div>
+      <div class="hint">端末 → 基地局 → サーバへ流れるパケットを1計測=1パケットで描画。基地局で滞留＝<b style="color:var(--red)">パケづまり</b>、消失＝<b style="color:var(--purple)">ロス</b>です。</div>
+      <canvas id="flow" class="draw" width="1040" height="240"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--cyan)"></i>快適 (低RTT)</span>
+        <span><i style="background:var(--amber)"></i>遅延あり</span>
+        <span><i style="background:var(--red)"></i>パケづまり</span>
+        <span><i style="background:var(--purple)"></i>ロス（消失）</span>
+      </div>
+    </div>
+
+    <!-- RTTタイムライン -->
+    <div class="viz panel">
+      <h3>📈 RTT タイムライン <span class="en">/ Latency Timeline</span></h3>
+      <div class="hint">直近の往復時間の推移。点線＝詰まり判定ライン（ベースライン中央値×感度）。これを超えた瞬間が「パケづまり」です。</div>
+      <canvas id="graph" class="draw" width="1040" height="220"></canvas>
+    </div>
+  </div>
+
+  <!-- イベントログ -->
+  <div class="panel log">
+    <h3>📋 イベントログ / Event Log</h3>
+    <div class="log-list" id="logList"><div class="log-empty">計測を開始するとここに記録されます。 / Start measuring to see events.</div></div>
+  </div>
+
+  <div class="panel note">
+    <strong>仕組み / How it works:</strong> 同一オリジンまたは指定URLへ <code>fetch(no-store, no-cors)</code> でキャッシュを避けたリクエストを連続送信し、<code>performance.now()</code> で往復時間を計測します。タイムアウト（5秒）や失敗はパケットロスとして扱います。回線種別・推定下り速度はブラウザの <code>navigator.connection</code> から取得（対応ブラウザのみ）。<br>
+    <strong>注意 / Note:</strong> ブラウザのセキュリティ上、生のパケットダンプ（Wireshark相当）は取得できません。本ツールはアプリ層からの往復遅延の揺らぎで「詰まり」を推定する簡易計測です。カスタムURLはCORSやmixed-contentで計測できない場合があります。データ通信が発生するため、ギガ節約中はご注意ください。
+  </div>
+</main>
+
+<footer>hide_0001 — Packet Visibility / すべて端末内で計測・外部送信なし</footer>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- 背景パーティクル ----------
+  const bgc = document.getElementById('bg-particles');
+  const bx = bgc.getContext('2d');
+  let bw, bh, dots = [];
+  function resizeBg(){
+    bw = bgc.width = innerWidth; bh = bgc.height = innerHeight;
+    dots = Array.from({length: Math.min(70, Math.floor(bw*bh/26000))}, () => ({
+      x: Math.random()*bw, y: Math.random()*bh,
+      vx:(Math.random()-.5)*.25, vy:(Math.random()-.5)*.25, r: Math.random()*1.6+.4
+    }));
+  }
+  function drawBg(){
+    bx.clearRect(0,0,bw,bh);
+    for(const d of dots){
+      d.x+=d.vx; d.y+=d.vy;
+      if(d.x<0||d.x>bw) d.vx*=-1;
+      if(d.y<0||d.y>bh) d.vy*=-1;
+      bx.beginPath(); bx.arc(d.x,d.y,d.r,0,7); bx.fillStyle='rgba(34,211,238,0.5)'; bx.fill();
+    }
+    // 近接ライン
+    for(let i=0;i<dots.length;i++)for(let j=i+1;j<dots.length;j++){
+      const a=dots[i],b=dots[j],dx=a.x-b.x,dy=a.y-b.y,dist=dx*dx+dy*dy;
+      if(dist<11000){ bx.strokeStyle='rgba(120,140,200,'+(0.10*(1-dist/11000))+')'; bx.beginPath(); bx.moveTo(a.x,a.y); bx.lineTo(b.x,b.y); bx.stroke(); }
+    }
+  }
+  addEventListener('resize', resizeBg); resizeBg();
+
+  // ---------- DOM ----------
+  const $ = id => document.getElementById(id);
+  const targetSel=$('target'), customWrap=$('customWrap'), customUrl=$('customUrl'),
+        intervalSel=$('interval'), sensSel=$('sens'), toggleBtn=$('toggleBtn'), exportBtn=$('exportBtn');
+  const sRtt=$('s-rtt'), sAvg=$('s-avg'), sJitter=$('s-jitter'), sJams=$('s-jams'),
+        sLoss=$('s-loss'), sScore=$('s-score');
+  const flowBadge=$('flowBadge'), flowText=$('flowText'), connBadge=$('connBadge'),
+        connText=$('connText'), logList=$('logList');
+
+  targetSel.addEventListener('change', () => {
+    customWrap.style.display = targetSel.value === 'custom' ? 'flex' : 'none';
+  });
+
+  // ---------- 計測状態 ----------
+  let running=false, timer=null;
+  const MAX=120;                 // 保持サンプル数
+  let samples=[];                // 描画用の直近サンプル {rtt, t, jam, loss}
+  let history=[];                // 書き出し用の全履歴（セッション通算）
+  let jamCount=0, lossCount=0, totalCount=0;
+  const TIMEOUT=5000;
+
+  function targetUrl(){
+    if(targetSel.value==='self') return location.pathname.split('/').slice(0,-1).join('/')+'/manifest.json';
+    if(targetSel.value==='custom') return customUrl.value.trim();
+    return targetSel.value;
+  }
+
+  // 中央値（詰まり判定ベースライン）
+  function median(arr){
+    const a=arr.filter(v=>v!=null).slice().sort((x,y)=>x-y);
+    if(!a.length) return null;
+    const m=Math.floor(a.length/2);
+    return a.length%2 ? a[m] : (a[m-1]+a[m])/2;
+  }
+  function stdev(arr){
+    const a=arr.filter(v=>v!=null);
+    if(a.length<2) return 0;
+    const mean=a.reduce((s,v)=>s+v,0)/a.length;
+    return Math.sqrt(a.reduce((s,v)=>s+(v-mean)**2,0)/a.length);
+  }
+
+  // 1回の計測（no-cors / Imageフォールバック）
+  function pingOnce(url){
+    return new Promise(resolve=>{
+      const bust = url + (url.includes('?')?'&':'?') + '_=' + Date.now() + Math.random().toString(36).slice(2);
+      const t0=performance.now();
+      let done=false;
+      const finish=v=>{ if(!done){done=true; resolve(v);} };
+      const to=setTimeout(()=>finish(null), TIMEOUT);
+      fetch(bust,{mode:'no-cors',cache:'no-store'})
+        .then(()=>{ clearTimeout(to); finish(performance.now()-t0); })
+        .catch(()=>{
+          // fetchが弾かれた場合は画像読込で計測を試みる
+          clearTimeout(to);
+          const img=new Image();
+          const t1=performance.now();
+          const to2=setTimeout(()=>{img.src=''; finish(null);}, TIMEOUT);
+          img.onload=img.onerror=()=>{ clearTimeout(to2); finish(performance.now()-t1); };
+          img.src=bust;
+        });
+    });
+  }
+
+  async function tick(){
+    if(!running) return;
+    const url=targetUrl();
+    if(!url){ stop(); return; }
+    const rtt=await pingOnce(url);
+    if(!running) return;
+
+    totalCount++;
+    const recent = samples.map(s=>s.rtt);
+    const base = median(recent);
+    const sens = parseFloat(sensSel.value);
+    let jam=false, loss=false;
+
+    if(rtt==null){
+      loss=true; lossCount++;
+      addLog('loss', 'パケットロス / Packet lost（タイムアウト）');
+    } else if(base!=null && rtt > Math.max(base*sens, base+120)){
+      jam=true; jamCount++;
+      addLog('jam', `パケづまり検知 / Jam — ${Math.round(rtt)}ms（基準 ${Math.round(base)}ms）`);
+    }
+
+    const t=Date.now();
+    samples.push({rtt, t, jam, loss});
+    if(samples.length>MAX) samples.shift();
+    history.push({idx:totalCount, t, target:url, rtt, jam, loss, base});
+    spawnPacket(rtt, jam, loss);
+    updateStats();
+    exportBtn.disabled = history.length===0;
+  }
+
+  function updateStats(){
+    const rtts = samples.map(s=>s.rtt);
+    const last = samples[samples.length-1];
+    const valid = rtts.filter(v=>v!=null);
+    const avg = valid.length ? valid.reduce((a,b)=>a+b,0)/valid.length : null;
+    const jit = stdev(rtts);
+
+    sRtt.innerHTML = (last&&last.rtt!=null? Math.round(last.rtt) : '×') + '<span class="u">ms</span>';
+    sAvg.innerHTML = (avg!=null? Math.round(avg):'—') + '<span class="u">ms</span>';
+    sJitter.innerHTML = Math.round(jit) + '<span class="u">ms</span>';
+    sJams.innerHTML = jamCount + '<span class="u">回</span>';
+    const lossPct = totalCount? Math.round(lossCount/totalCount*100):0;
+    sLoss.innerHTML = lossPct + '<span class="u">%</span>';
+
+    // 品質スコア（0-100）: RTT・ジッタ・ロスをペナルティ化
+    let score=null, label='good', txt='良好 / Good';
+    if(avg!=null){
+      score = 100;
+      score -= Math.min(45, Math.max(0,(avg-30))*0.12);   // 遅延ペナルティ
+      score -= Math.min(30, jit*0.4);                      // 揺らぎペナルティ
+      score -= lossPct*1.5;                                // ロスペナルティ
+      score = Math.max(0, Math.round(score));
+      sScore.textContent = score;
+      if(score>=75){label='good'; txt='快適 / Smooth';}
+      else if(score>=45){label='warn'; txt='詰まり気味 / Sluggish';}
+      else {label='bad'; txt='パケづまり多発 / Congested';}
+    } else { sScore.textContent='—'; }
+
+    if(running){
+      flowBadge.className='badge '+label;
+      flowText.textContent = txt;
+    }
+  }
+
+  // ---------- 回線情報（navigator.connection） ----------
+  function updateConn(){
+    const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if(!c){ connBadge.className='badge idle'; connText.textContent='回線種別: 非対応ブラウザ'; return; }
+    const map = {'slow-2g':'低速2G','2g':'2G','3g':'3G','4g':'4G / 5G'};
+    const type = map[c.effectiveType] || c.effectiveType || '不明';
+    const dl = c.downlink!=null ? `下り≈${c.downlink}Mbps` : '';
+    const rt = c.rtt!=null ? `RTT≈${c.rtt}ms` : '';
+    const sd = c.saveData ? '・省データON' : '';
+    connBadge.className='badge '+(c.effectiveType==='4g'?'good':c.effectiveType==='3g'?'warn':'bad');
+    connText.textContent = `推定回線: ${type} ${dl} ${rt}${sd}`.replace(/\s+/g,' ').trim();
+  }
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if(conn && conn.addEventListener) conn.addEventListener('change', updateConn);
+  updateConn();
+
+  // ---------- ログ ----------
+  function addLog(type, msg){
+    const empty = logList.querySelector('.log-empty');
+    if(empty) empty.remove();
+    const now = new Date();
+    const ts = now.toLocaleTimeString('ja-JP',{hour12:false});
+    const el = document.createElement('div');
+    el.className = 'log-item' + (type? ' '+type : '');
+    el.innerHTML = `<span class="t">${ts}</span><span class="msg">${msg}</span>`;
+    logList.prepend(el);
+    while(logList.children.length>60) logList.lastChild.remove();
+  }
+
+  // ---------- パケット流アニメーション ----------
+  const flow = $('flow'), fx = flow.getContext('2d');
+  const graph = $('graph'), gx = graph.getContext('2d');
+  let packets=[];      // {p:0..1, rtt, jam, loss, born, dur, queued}
+  let queue=0;         // 基地局での滞留数
+
+  function colorFor(rtt, jam, loss){
+    if(loss) return '#a855f7';
+    if(jam)  return '#f87171';
+    if(rtt==null) return '#a855f7';
+    if(rtt<80)  return '#22d3ee';
+    if(rtt<200) return '#7dd3fc';
+    if(rtt<400) return '#fbbf24';
+    return '#f87171';
+  }
+  function spawnPacket(rtt, jam, loss){
+    // RTTを可視時間にマップ（20ms→0.7s, 2000ms→4s）
+    const clamped = Math.min(2000, Math.max(20, rtt==null?2000:rtt));
+    const dur = 700 + (clamped-20)/1980*3300;
+    packets.push({p:0, rtt, jam, loss, born:performance.now(), dur, drop:loss});
+  }
+
+  // ノード座標を計算
+  function nodes(W,H){
+    const y=H*0.5;
+    return {
+      y,
+      dev:{x:W*0.10, y, label:'📱 端末', en:'Device'},
+      bts:{x:W*0.50, y, label:'📡 基地局', en:'5G Base'},
+      srv:{x:W*0.90, y, label:'🖥️ サーバ', en:'Server'}
+    };
+  }
+
+  function drawFlow(ts){
+    const W=flow.width, H=flow.height;
+    fx.clearRect(0,0,W,H);
+    const n=nodes(W,H);
+
+    // 経路ライン
+    fx.lineWidth=2;
+    const grad=fx.createLinearGradient(n.dev.x,0,n.srv.x,0);
+    grad.addColorStop(0,'rgba(34,211,238,0.25)');
+    grad.addColorStop(.5,'rgba(168,85,247,0.25)');
+    grad.addColorStop(1,'rgba(34,211,238,0.25)');
+    fx.strokeStyle=grad;
+    fx.beginPath(); fx.moveTo(n.dev.x,n.y); fx.lineTo(n.srv.x,n.y); fx.stroke();
+
+    // パケット描画＆更新
+    queue=0;
+    packets = packets.filter(pk=>{
+      const elapsed = ts - pk.born;
+      pk.p = elapsed / pk.dur;
+      const x0=n.dev.x, x1=n.srv.x;
+      // ロスは基地局(0.5)で消滅
+      if(pk.drop && pk.p>=0.5){
+        // 消失エフェクト
+        const fade=Math.min(1,(pk.p-0.5)/0.25);
+        if(fade>=1) return false;
+        fx.globalAlpha=1-fade;
+        fx.fillStyle='#a855f7';
+        fx.beginPath(); fx.arc(n.bts.x,n.y-6-fade*18,4,0,7); fx.fill();
+        fx.globalAlpha=1; return true;
+      }
+      if(pk.p>=1) return false;
+      // 詰まりパケットは基地局付近で停滞して見えるようイージング
+      let prog=pk.p;
+      if(pk.jam){ prog = pk.p<0.5 ? pk.p : 0.5 + (pk.p-0.5)*(pk.p-0.5)*2; queue++; }
+      const x = x0 + (x1-x0)*Math.min(1,prog);
+      const col=colorFor(pk.rtt,pk.jam,pk.loss);
+      // グロー
+      fx.shadowColor=col; fx.shadowBlur=12;
+      fx.fillStyle=col;
+      fx.beginPath(); fx.arc(x, n.y, pk.jam?6:5, 0, 7); fx.fill();
+      fx.shadowBlur=0;
+      return true;
+    });
+
+    // ノード描画
+    for(const key of ['dev','bts','srv']){
+      const nd=n[key];
+      const jammed = key==='bts' && queue>0;
+      fx.beginPath(); fx.arc(nd.x,nd.y,22,0,7);
+      fx.fillStyle = jammed ? 'rgba(248,113,113,0.18)' : 'rgba(255,255,255,0.06)';
+      fx.fill();
+      fx.lineWidth=2;
+      fx.strokeStyle = jammed ? '#f87171' : (key==='bts'?'#a855f7':'#22d3ee');
+      fx.stroke();
+      fx.font='16px sans-serif'; fx.textAlign='center';
+      fx.fillText(nd.label.slice(0,2), nd.x, nd.y+6);
+      fx.font='600 12px sans-serif'; fx.fillStyle='#cdd9ec';
+      fx.fillText(nd.label.slice(2), nd.x, nd.y+44);
+      fx.font='10px sans-serif'; fx.fillStyle='#7d8ba6';
+      fx.fillText(nd.en, nd.x, nd.y+58);
+    }
+
+    // 基地局の滞留メーター
+    if(queue>0){
+      fx.font='700 13px sans-serif'; fx.fillStyle='#f87171'; fx.textAlign='center';
+      fx.fillText('⚠ 滞留 '+queue, n.bts.x, n.y-40);
+    }
+  }
+
+  // ---------- RTTタイムライングラフ ----------
+  function drawGraph(){
+    const W=graph.width, H=graph.height, pad=28;
+    gx.clearRect(0,0,W,H);
+    // 枠
+    gx.strokeStyle='rgba(255,255,255,0.08)'; gx.lineWidth=1;
+    gx.strokeRect(pad, 10, W-pad-10, H-pad-10);
+
+    const rtts=samples.map(s=>s.rtt);
+    const valid=rtts.filter(v=>v!=null);
+    const maxV=Math.max(120, ...valid)*1.15;
+    const base=median(rtts);
+    const sens=parseFloat(sensSel.value);
+    const x0=pad, x1=W-10, y0=10, y1=H-pad;
+    const xStep=(x1-x0)/Math.max(1,MAX-1);
+    const yFor=v=>y1-(v/maxV)*(y1-y0);
+
+    // 目盛り
+    gx.fillStyle='#6b7a96'; gx.font='10px sans-serif'; gx.textAlign='right';
+    for(let i=0;i<=3;i++){
+      const v=maxV*i/3, y=yFor(v);
+      gx.strokeStyle='rgba(255,255,255,0.05)'; gx.beginPath(); gx.moveTo(x0,y); gx.lineTo(x1,y); gx.stroke();
+      gx.fillText(Math.round(v)+'ms', x0-4, y+3);
+    }
+
+    // 詰まり判定ライン
+    if(base!=null){
+      const th=Math.max(base*sens, base+120);
+      if(th<maxV){
+        const y=yFor(th);
+        gx.strokeStyle='rgba(248,113,113,0.6)'; gx.setLineDash([6,5]); gx.lineWidth=1.5;
+        gx.beginPath(); gx.moveTo(x0,y); gx.lineTo(x1,y); gx.stroke(); gx.setLineDash([]);
+        gx.fillStyle='#f87171'; gx.textAlign='left'; gx.font='700 10px sans-serif';
+        gx.fillText('詰まり判定 '+Math.round(th)+'ms', x0+6, y-5);
+      }
+    }
+
+    // ライン
+    const start=Math.max(0, samples.length-MAX);
+    gx.lineWidth=2; gx.strokeStyle='#22d3ee';
+    gx.beginPath();
+    let started=false;
+    samples.forEach((s,i)=>{
+      const x=x0+i*xStep;
+      if(s.rtt==null){ started=false; return; }
+      const y=yFor(s.rtt);
+      if(!started){ gx.moveTo(x,y); started=true; } else gx.lineTo(x,y);
+    });
+    gx.stroke();
+
+    // 点（詰まり=赤, ロス=紫マーカー）
+    samples.forEach((s,i)=>{
+      const x=x0+i*xStep;
+      if(s.loss){
+        gx.fillStyle='#a855f7';
+        gx.beginPath(); gx.moveTo(x-3,y1-4); gx.lineTo(x+3,y1-4); gx.lineTo(x,y1-9); gx.fill();
+        return;
+      }
+      if(s.rtt==null) return;
+      const y=yFor(s.rtt);
+      gx.beginPath(); gx.arc(x,y, s.jam?3.5:2, 0, 7);
+      gx.fillStyle = s.jam?'#f87171':'#7dd3fc'; gx.fill();
+    });
+  }
+
+  // ---------- メインループ ----------
+  function loop(ts){
+    drawBg();
+    drawFlow(ts);
+    drawGraph();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // ---------- 開始/停止 ----------
+  function start(){
+    if(targetSel.value==='custom' && !customUrl.value.trim()){
+      customUrl.focus(); return;
+    }
+    running=true;
+    toggleBtn.textContent='■ 停止 / Stop';
+    toggleBtn.classList.add('stop');
+    [targetSel,intervalSel,customUrl].forEach(e=>e.disabled=true);
+    flowBadge.className='badge good'; flowText.textContent='計測中 / Live';
+    addLog('', `計測開始 → ${targetUrl()}（間隔 ${intervalSel.value}ms）`);
+    const run=async()=>{ if(!running) return; await tick(); if(running) timer=setTimeout(run, parseInt(intervalSel.value)); };
+    run();
+  }
+  function stop(){
+    running=false;
+    clearTimeout(timer);
+    toggleBtn.textContent='▶ 計測開始 / Start';
+    toggleBtn.classList.remove('stop');
+    [targetSel,intervalSel,customUrl].forEach(e=>e.disabled=false);
+    flowBadge.className='badge idle'; flowText.textContent='待機中 / Idle';
+    addLog('', '計測停止 / Stopped');
+  }
+  toggleBtn.addEventListener('click', ()=> running?stop():start());
+
+  // ---------- CSV書き出し ----------
+  function exportCsv(){
+    if(!history.length) return;
+    const csvField = v => {
+      const s = (v==null) ? '' : String(v);
+      return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+    };
+    const lines = [];
+    // メタ情報（# 始まりのコメント行）
+    lines.push('# Packet Visibility export / パケットの見える化 書き出し');
+    lines.push('# generated,'+new Date().toISOString());
+    lines.push('# samples,'+history.length+',jams,'+jamCount+',loss,'+lossCount);
+    // ヘッダ
+    lines.push(['no','timestamp_iso','time_local','target','rtt_ms','status','baseline_ms'].join(','));
+    for(const h of history){
+      const status = h.loss ? 'loss' : (h.jam ? 'jam' : 'ok');
+      lines.push([
+        h.idx,
+        new Date(h.t).toISOString(),
+        new Date(h.t).toLocaleString('ja-JP',{hour12:false}),
+        csvField(h.target),
+        h.rtt==null ? '' : Math.round(h.rtt),
+        status,
+        h.base==null ? '' : Math.round(h.base)
+      ].join(','));
+    }
+    // BOM付きでExcelの日本語文字化けを防ぐ
+    const blob = new Blob(['﻿'+lines.join('\r\n')], {type:'text/csv;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+    a.href = url; a.download = 'packet-visibility_'+ts+'.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    addLog('', `CSV書き出し / Exported ${history.length} 件`);
+  }
+  exportBtn.addEventListener('click', exportCsv);
+})();
+</script>
+</body>
+</html>
