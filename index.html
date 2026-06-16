@@ -9,6 +9,10 @@
   <meta name="description" content="「hideの部屋」は埼玉県三郷市在住のhideが運営する個人サイトです。Claude AIと共同開発したブラウザゲーム35本以上を無料公開。将棋・バックギャモン・麻雀・シューティングなどインストール不要で今すぐ遊べます。">
   <title>hide の部屋 | ブラウザゲーム・AI開発ツール・三郷市情報</title>
   <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/">
+  <!-- Favicon / アイコン -->
+  <link rel="icon" type="image/svg+xml" href="assets/logo/favicon.svg">
+  <link rel="apple-touch-icon" href="assets/logo/favicon.svg">
+  <link rel="manifest" href="manifest.json">
   <link rel="alternate" hreflang="ja" href="https://hifukasawa77-lgtm.github.io/main/">
   <link rel="alternate" hreflang="en" href="https://hifukasawa77-lgtm.github.io/main/?lang=en">
   <link rel="alternate" hreflang="x-default" href="https://hifukasawa77-lgtm.github.io/main/">
@@ -62,7 +66,7 @@
         "itemListElement": [
           {
             "@type": "ListItem", "position": 1,
-            "item": { "@type": "SoftwareApplication", "name": "将棋RPG Enhanced", "applicationCategory": "GameApplication", "operatingSystem": "Web Browser", "url": "https://hifukasawa77-lgtm.github.io/main/shogi_rpg.html", "offers": { "@type": "Offer", "price": "0", "priceCurrency": "JPY" } }
+            "item": { "@type": "SoftwareApplication", "name": "将棋RPG Enhanced", "applicationCategory": "GameApplication", "operatingSystem": "Web Browser", "url": "https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html", "offers": { "@type": "Offer", "price": "0", "priceCurrency": "JPY" } }
           },
           {
             "@type": "ListItem", "position": 2,
@@ -198,7 +202,7 @@
       --surface: #ffffff;
       --surface-warm: #fff3e6;
       --text: #1c1917;
-      --muted: #78716c;
+      --muted: #736c66; /* WCAG AA(4.5:1)を全背景(bg/surface/warm)で満たすよう微調整 */
       --line: rgba(28, 25, 23, 0.08);
       --orange: #f97316;
       --orange-soft: rgba(249, 115, 22, 0.12);
@@ -1431,7 +1435,15 @@
     .dash-todo-btn:focus-visible,
     .dash-voice-btn:focus-visible,
     .nav-link:focus-visible,
-    a:focus-visible {
+    a:focus-visible,
+    button:focus-visible,
+    [role="button"]:focus-visible,
+    [role="tab"]:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    summary:focus-visible,
+    [tabindex]:not([tabindex="-1"]):focus-visible {
       outline: 2px solid var(--orange);
       outline-offset: 3px;
       border-radius: 4px;
@@ -4886,8 +4898,10 @@
       const canvas = document.getElementById('bg-canvas');
       const ctx = canvas.getContext('2d');
 
-      const ORB_COUNT   = 8;
-      const SPARK_COUNT = 45;
+      // モバイルでは粒子数を抑え、O(n²)の接続線描画の負荷を下げる
+      const isMobile = window.matchMedia('(max-width: 768px)').matches;
+      const ORB_COUNT   = isMobile ? 4 : 8;
+      const SPARK_COUNT = isMobile ? 18 : 45;
       const CONNECT_DIST = 120;
 
       const ORB_COLORS = [
@@ -9764,7 +9778,7 @@
         const congEl = document.getElementById('home-traffic-congestion');
         const nowStr = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 
-        fetch(url)
+        fetchWithTimeout(url, null, 8000)
           .then(r => r.ok ? r.json() : Promise.reject(r.status))
           .then(data => {
             const features = data.features || [];
@@ -13383,42 +13397,67 @@
         State.push({ id: uid(), role: 'user', text: text, ts: Date.now() });
       }
 
+      // ── ネットワーク堅牢化ヘルパー（タイムアウト＋前回値キャッシュ）──
+      // 外部APIが落ちた/遅い場合でもUIが固まらないよう、各fetchに上限時間を設ける。
+      // 全ソース失敗時は localStorage の前回値を stale フラグ付きで返し、空表示を防ぐ。
+      function fetchWithTimeout(url, opts, timeoutMs) {
+        const ctrl = new AbortController();
+        const id = setTimeout(() => ctrl.abort(), timeoutMs || 6000);
+        return fetch(url, Object.assign({}, opts || {}, { signal: ctrl.signal }))
+          .finally(() => clearTimeout(id));
+      }
+      function cacheSet(key, data) {
+        try { localStorage.setItem('hide-cache-' + key, JSON.stringify({ data: data, ts: Date.now() })); } catch (e) {}
+      }
+      function cacheGet(key) {
+        try {
+          const raw = localStorage.getItem('hide-cache-' + key);
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+      }
+
       // ── Tool implementations ────────────────────────────────
       async function fetchForex() {
         const today = new Date().toISOString().slice(0, 10);
-        // ① frankfurter.app
-        try {
-          const res = await fetch('https://api.frankfurter.app/latest?from=USD&to=JPY');
-          if (res.ok) {
-            const d = await res.json();
-            if (d.rates && d.rates.JPY) return { rate: d.rates.JPY, date: d.date || today };
-          }
-        } catch (e) { /* fallthrough */ }
-        // ② open.er-api.com (free, no key)
-        try {
-          const res = await fetch('https://open.er-api.com/v6/latest/USD');
-          if (res.ok) {
-            const d = await res.json();
-            if (d.rates && d.rates.JPY) return { rate: d.rates.JPY, date: today };
-          }
-        } catch (e) { /* fallthrough */ }
-        // ③ jsdelivr CDN currency API
-        try {
-          const res = await fetch('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json');
-          if (res.ok) {
-            const d = await res.json();
-            if (d.usd && d.usd.jpy) return { rate: d.usd.jpy, date: d.date || today };
-          }
-        } catch (e) { /* fallthrough */ }
+        const sources = [
+          // ① frankfurter.app
+          async () => {
+            const r = await fetchWithTimeout('https://api.frankfurter.app/latest?from=USD&to=JPY');
+            if (r.ok) { const d = await r.json(); if (d.rates && d.rates.JPY) return { rate: d.rates.JPY, date: d.date || today }; }
+          },
+          // ② open.er-api.com (free, no key)
+          async () => {
+            const r = await fetchWithTimeout('https://open.er-api.com/v6/latest/USD');
+            if (r.ok) { const d = await r.json(); if (d.rates && d.rates.JPY) return { rate: d.rates.JPY, date: today }; }
+          },
+          // ③ jsdelivr CDN currency API
+          async () => {
+            const r = await fetchWithTimeout('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json');
+            if (r.ok) { const d = await r.json(); if (d.usd && d.usd.jpy) return { rate: d.usd.jpy, date: d.date || today }; }
+          },
+        ];
+        for (const src of sources) {
+          try { const v = await src(); if (v) { cacheSet('forex', v); return v; } } catch (e) { /* 次のソースへ */ }
+        }
+        // 全滅: 前回値があれば前回値表示にフォールバック
+        const cached = cacheGet('forex');
+        if (cached && cached.data) return Object.assign({}, cached.data, { stale: true });
         throw new Error('forex-all-sources-failed');
       }
 
       async function fetchWeatherMisato() {
         const url = 'https://api.open-meteo.com/v1/forecast?latitude=35.83&longitude=139.87&current=temperature_2m,weather_code,wind_speed_10m&timezone=Asia%2FTokyo';
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('weather http ' + res.status);
-        const data = await res.json();
-        return data.current;
+        try {
+          const res = await fetchWithTimeout(url);
+          if (!res.ok) throw new Error('weather http ' + res.status);
+          const data = await res.json();
+          if (data && data.current) { cacheSet('weather', data.current); return data.current; }
+          throw new Error('weather-empty');
+        } catch (e) {
+          const cached = cacheGet('weather');
+          if (cached && cached.data) return Object.assign({}, cached.data, { stale: true });
+          throw e;
+        }
       }
 
       const WEATHER_CODE = {
@@ -13453,14 +13492,15 @@
         body.appendChild(sub);
         const meta = document.createElement('div');
         meta.className = 'tool-card-meta';
-        meta.textContent = (State.lang === 'ja' ? '出典: open-meteo.com' : 'source: open-meteo.com');
+        meta.textContent = (State.lang === 'ja' ? '出典: open-meteo.com' : 'source: open-meteo.com')
+          + (data.stale ? (State.lang === 'ja' ? '（前回取得値）' : ' (last known value)') : '');
         card.appendChild(title);
         card.appendChild(body);
         card.appendChild(meta);
         return card;
       }
 
-      function buildForexCard(rate, date) {
+      function buildForexCard(rate, date, stale) {
         const card = document.createElement('div');
         card.className = 'tool-card';
         const title = document.createElement('div');
@@ -13474,7 +13514,8 @@
         body.appendChild(big);
         const meta = document.createElement('div');
         meta.className = 'tool-card-meta';
-        meta.textContent = (State.lang === 'ja' ? '出典: frankfurter.app / 基準日: ' : 'source: frankfurter.app / as of ') + date;
+        meta.textContent = (State.lang === 'ja' ? '出典: frankfurter.app / 基準日: ' : 'source: frankfurter.app / as of ') + date
+          + (stale ? (State.lang === 'ja' ? '（前回取得値）' : ' (last known value)') : '');
         card.appendChild(title);
         card.appendChild(body);
         card.appendChild(meta);
@@ -13809,13 +13850,13 @@
       async function runForex() {
         setTyping(true);
         try {
-          const { rate, date } = await fetchForex();
+          const { rate, date, stale } = await fetchForex();
           setTyping(false);
           const { bubble } = renderMessage('agent', '');
           const intro = State.lang === 'ja' ? '現在のドル円レートはこちらです 💴' : "Here's the current USD/JPY rate 💴";
           await typeInto(bubble, intro);
           State.push({ id: uid(), role: 'agent', text: intro, ts: Date.now() });
-          messagesEl.appendChild(buildForexCard(rate, date));
+          messagesEl.appendChild(buildForexCard(rate, date, stale));
           scrollToBottom();
           renderChips(contextChips('forex'));
         } catch (e) {
