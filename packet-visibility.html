@@ -239,6 +239,10 @@
       <input id="customUrl" type="text" placeholder="https://example.com/favicon.ico">
     </div>
     <div class="ctrl">
+      <label for="siteLabel">基地局名・設置場所 / Site</label>
+      <input id="siteLabel" type="text" placeholder="例: 自宅2F / ○○基地局" maxlength="40">
+    </div>
+    <div class="ctrl">
       <label for="interval">計測間隔 / Interval</label>
       <select id="interval">
         <option value="500">0.5 秒</option>
@@ -295,6 +299,7 @@
       <div class="status-row">
         <span class="badge idle" id="flowBadge"><span class="dot"></span><span id="flowText">待機中 / Idle</span></span>
         <span class="badge idle" id="connBadge"><span class="dot"></span><span id="connText">回線情報を取得中…</span></span>
+        <span class="badge idle" id="siteBadge"><span>📍</span><span id="siteText">基地局・場所 未設定 / No site</span></span>
       </div>
       <div class="hint">端末 → 基地局 → サーバへ流れるパケットを1計測=1パケットで描画。基地局で滞留＝<b style="color:var(--red)">パケづまり</b>、消失＝<b style="color:var(--purple)">ロス</b>です。</div>
       <canvas id="flow" class="draw" width="1040" height="240"></canvas>
@@ -335,7 +340,7 @@
 
   <div class="panel note">
     <strong>仕組み / How it works:</strong> 同一オリジンまたは指定URLへ <code>fetch(no-store, no-cors)</code> でキャッシュを避けたリクエストを連続送信し、<code>performance.now()</code> で往復時間を計測します。タイムアウト（5秒）や失敗はパケットロスとして扱います。回線種別・推定下り速度はブラウザの <code>navigator.connection</code> から取得（対応ブラウザのみ）。<br>
-    <strong>注意 / Note:</strong> ブラウザのセキュリティ上、生のパケットダンプ（Wireshark相当）は取得できません。本ツールはアプリ層からの往復遅延の揺らぎで「詰まり」を推定する簡易計測です。カスタムURLはCORSやmixed-contentで計測できない場合があります。データ通信が発生するため、ギガ節約中はご注意ください。
+    <strong>注意 / Note:</strong> ブラウザのセキュリティ上、生のパケットダンプ（Wireshark相当）や<strong>接続中の基地局情報（セルID・基地局名）は取得できません</strong>。「基地局名・設置場所」欄は計測記録に付ける<strong>手動ラベル</strong>で、端末内に保存されCSV・画像にも記録されます（外部送信なし）。本ツールはアプリ層からの往復遅延の揺らぎで「詰まり」を推定する簡易計測です。カスタムURLはCORSやmixed-contentで計測できない場合があります。データ通信が発生するため、ギガ節約中はご注意ください。
   </div>
 </main>
 
@@ -390,14 +395,15 @@
   const $ = id => document.getElementById(id);
   const targetSel=$('target'), customWrap=$('customWrap'), customUrl=$('customUrl'),
         intervalSel=$('interval'), sensSel=$('sens'), alertChk=$('alertChk'),
-        toggleBtn=$('toggleBtn'), exportBtn=$('exportBtn'), snapBtn=$('snapBtn'),
-        resetBtn=$('resetBtn'), clearLogBtn=$('clearLogBtn');
+        siteLabel=$('siteLabel'), toggleBtn=$('toggleBtn'), exportBtn=$('exportBtn'),
+        snapBtn=$('snapBtn'), resetBtn=$('resetBtn'), clearLogBtn=$('clearLogBtn');
   const sRtt=$('s-rtt'), sAvg=$('s-avg'), sJitter=$('s-jitter'), sJams=$('s-jams'),
         sLoss=$('s-loss'), sScore=$('s-score');
   const dP50=$('d-p50'), dP95=$('d-p95'), dP99=$('d-p99'), dMax=$('d-max');
   const cardLoss=$('card-loss'), scoreRing=$('scoreRing');
   const flowBadge=$('flowBadge'), flowText=$('flowText'), connBadge=$('connBadge'),
-        connText=$('connText'), logList=$('logList'), lastSummary=$('lastSummary');
+        connText=$('connText'), logList=$('logList'), lastSummary=$('lastSummary'),
+        siteBadge=$('siteBadge'), siteText=$('siteText');
 
   targetSel.addEventListener('change', () => {
     customWrap.style.display = targetSel.value === 'custom' ? 'flex' : 'none';
@@ -496,7 +502,7 @@
     const t=Date.now();
     samples.push({rtt, t, jam, loss});
     if(samples.length>MAX) samples.shift();
-    history.push({idx:totalCount, t, target:url, rtt, jam, loss, base});
+    history.push({idx:totalCount, t, target:url, site:siteLabel.value.trim(), rtt, jam, loss, base});
     spawnPacket(rtt, jam, loss);
     updateStats(calibrating);
     exportBtn.disabled = snapBtn.disabled = history.length===0;
@@ -599,6 +605,14 @@
   const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
   if(conn && conn.addEventListener) conn.addEventListener('change', updateConn);
   updateConn();
+
+  // ---------- 基地局名・設置場所ラベル（手動入力・端末内のみ） ----------
+  function updateSiteBadge(){
+    const v = siteLabel.value.trim();
+    siteText.textContent = v ? v : '基地局・場所 未設定 / No site';
+    siteBadge.className = 'badge ' + (v ? 'good' : 'idle');
+  }
+  siteLabel.addEventListener('input', updateSiteBadge);
 
   // ---------- ログ ----------
   function addLog(type, msg){
@@ -960,7 +974,7 @@
     lines.push('# generated,'+new Date().toISOString());
     lines.push('# samples,'+history.length+',jams,'+jamCount+',loss,'+lossCount);
     // ヘッダ
-    lines.push(['no','timestamp_iso','time_local','target','rtt_ms','status','baseline_ms'].join(','));
+    lines.push(['no','timestamp_iso','time_local','target','site','rtt_ms','status','baseline_ms'].join(','));
     for(const h of history){
       const status = h.loss ? 'loss' : (h.jam ? 'jam' : 'ok');
       lines.push([
@@ -968,6 +982,7 @@
         new Date(h.t).toISOString(),
         new Date(h.t).toLocaleString('ja-JP',{hour12:false}),
         csvField(h.target),
+        csvField(h.site),
         h.rtt==null ? '' : Math.round(h.rtt),
         status,
         h.base==null ? '' : Math.round(h.base)
@@ -1003,6 +1018,8 @@
     c.fillText('📡 パケットの見える化', 26, 46);
     c.fillStyle='#90a0b8'; c.font='12px sans-serif';
     c.fillText('Packet Visibility — hide_0001', 26, 66);
+    const site=siteLabel.value.trim();
+    if(site){ c.fillStyle='#22d3ee'; c.font='700 13px sans-serif'; c.fillText('📍 '+site, 26, 90); }
     // スコアリング
     const sc=curStats.score, lab=curStats.label||'good';
     const cx=470, cy=86, r=44;
@@ -1059,7 +1076,7 @@
   function saveSettings(){
     try{
       localStorage.setItem(LS_SET, JSON.stringify({
-        target:targetSel.value, custom:customUrl.value,
+        target:targetSel.value, custom:customUrl.value, site:siteLabel.value,
         interval:intervalSel.value, sens:sensSel.value, alert:alertChk.checked
       }));
     }catch(e){}
@@ -1070,6 +1087,7 @@
       if(!s) return;
       if(s.target){ targetSel.value=s.target; customWrap.style.display = s.target==='custom'?'flex':'none'; }
       if(s.custom) customUrl.value=s.custom;
+      if(s.site) siteLabel.value=s.site;
       if(s.interval) intervalSel.value=s.interval;
       if(s.sens) sensSel.value=s.sens;
       alertChk.checked=!!s.alert;
@@ -1100,13 +1118,14 @@
   }
 
   // 設定変更の保存
-  [targetSel,customUrl,intervalSel,sensSel,alertChk].forEach(e=>{
+  [targetSel,customUrl,siteLabel,intervalSel,sensSel,alertChk].forEach(e=>{
     e.addEventListener('change', saveSettings);
   });
   alertChk.addEventListener('change', ()=>{ if(alertChk.checked) ensureAudio(); });
 
   // 初期化
   loadSettings();
+  updateSiteBadge();
   drawRing(null,'good');
   showLastSummary();
 })();
