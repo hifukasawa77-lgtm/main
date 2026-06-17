@@ -727,120 +727,162 @@ class GoBoard {
   }
 }
 
-// ===== GoAI クラス =====
+// ===== 思考エンジン（モンテカルロ法 + ヒューリスティック・プレイアウト / Web Worker） =====
+// DOM非依存の純粋エンジン。Blob URL でWorker化し、思考中もUIを固めない。
+// プレイアウトは「自分の眼を埋めない」「アタリの取り/逃げ」を優先する軽量方策。
+const GO_ENGINE_SRC = `
+'use strict';
+var BLACK=1,WHITE=2,KOMI=7.5,SZ=9;
+function oppC(c){return c===BLACK?WHITE:BLACK;}
+function nbrs(i){var r=(i/SZ)|0,c=i%SZ,a=[];if(r>0)a.push(i-SZ);if(r<SZ-1)a.push(i+SZ);if(c>0)a.push(i-1);if(c<SZ-1)a.push(i+1);return a;}
+function floodGroup(grid,i){var color=grid[i],stones=[],seen={},stack=[i],libs=0,libSeen={};
+  while(stack.length){var x=stack.pop();if(seen[x])continue;seen[x]=1;stones.push(x);var nb=nbrs(x);
+    for(var k=0;k<nb.length;k++){var y=nb[k];if(grid[y]===0){if(!libSeen[y]){libSeen[y]=1;libs++;}}else if(grid[y]===color&&!seen[y])stack.push(y);}}
+  return {stones:stones,libs:libs};}
+// 着手を試し、捕獲を反映。非合法（自殺/コウ）なら null を返し grid を元に戻す。
+function tryPlay(grid,ko,i,color){
+  if(grid[i]!==0)return null;if(i===ko)return null;
+  grid[i]=color;var opp=oppC(color),captured=0,lastCap=-1;
+  var nb=nbrs(i);
+  for(var k=0;k<nb.length;k++){var y=nb[k];if(grid[y]===opp){var g=floodGroup(grid,y);if(g.libs===0){for(var s=0;s<g.stones.length;s++){grid[g.stones[s]]=0;lastCap=g.stones[s];}captured+=g.stones.length;}}}
+  if(captured===0){var mg=floodGroup(grid,i);if(mg.libs===0){grid[i]=0;return null;}}
+  var newko=-1;if(captured===1){var mg2=floodGroup(grid,i);if(mg2.stones.length===1&&mg2.libs===1)newko=lastCap;}
+  return {ko:newko,captured:captured};}
+function isEye(grid,i,color){
+  if(grid[i]!==0)return false;
+  var r=(i/SZ)|0,c=i%SZ;
+  var orth=nbrs(i);for(var k=0;k<orth.length;k++)if(grid[orth[k]]!==color)return false;
+  // 斜め（盤外は味方扱い）
+  var dc=[[-1,-1],[-1,1],[1,-1],[1,1]],friendly=0,offb=0;
+  for(var d=0;d<4;d++){var rr=r+dc[d][0],cc=c+dc[d][1];if(rr<0||rr>=SZ||cc<0||cc>=SZ){offb++;friendly++;}else if(grid[rr*SZ+cc]===color)friendly++;}
+  if(offb>0)return friendly===4;return friendly>=3;}
+function territory(grid){
+  var visited=new Uint8Array(SZ*SZ),b=0,w=0,bt=0,wt=0;
+  for(var i=0;i<SZ*SZ;i++){if(grid[i]===BLACK)b++;else if(grid[i]===WHITE)w++;}
+  for(var s=0;s<SZ*SZ;s++){if(grid[s]!==0||visited[s])continue;var region=[],stack=[s],border=0;// border bitmask 1=black 2=white
+    while(stack.length){var x=stack.pop();if(visited[x])continue;visited[x]=1;region.push(x);var nb=nbrs(x);
+      for(var k=0;k<nb.length;k++){var y=nb[k];if(grid[y]===0){if(!visited[y])stack.push(y);}else border|=grid[y];}}
+    if(border===BLACK)bt+=region.length;else if(border===WHITE)wt+=region.length;}
+  return {black:b+bt,white:w+wt+KOMI};}
+function legalNonEye(grid,ko,color){
+  var out=[];for(var i=0;i<SZ*SZ;i++){if(grid[i]!==0||i===ko)continue;if(isEye(grid,i,color))continue;
+    var copy=grid.slice();var r=tryPlay(copy,ko,i,color);if(r)out.push(i);}
+  return out;}
+function heuristic(grid,ko,i,color){
+  var copy=grid.slice();var opp=oppC(color);var score=Math.random()*2;
+  var res=tryPlay(copy,ko,i,color);if(!res)return -1;
+  score+=res.captured*45;
+  var nb=nbrs(i);
+  for(var k=0;k<nb.length;k++){var y=nb[k];if(copy[y]===opp){var g=floodGroup(copy,y);if(g.libs===1)score+=22;}}
+  var mg=floodGroup(copy,i);score+=Math.min(mg.libs,6)*8;
+  if(mg.libs===1)score-=25; // 自己アタリは避ける
+  // 中央寄り・星
+  var r=(i/SZ)|0,c=i%SZ;var edge=Math.min(r,c,SZ-1-r,SZ-1-c);if(edge>=2)score+=4;else if(edge===0)score-=3;
+  return score;}
+// プレイアウト：軽量ヒューリスティック方策
+function choosePlayoutMove(grid,ko,color,lastIdx){
+  // 局所戦術：直前手の周辺でアタリの取り/逃げ
+  if(lastIdx>=0&&Math.random()<0.85){
+    var cands=[],nb=nbrs(lastIdx);
+    for(var k=0;k<nb.length;k++){var y=nb[k];
+      if(grid[y]===oppC(color)){var g=floodGroup(grid,y);if(g.libs===1){var lib=findLib(grid,g.stones);if(lib>=0)cands.push(lib);}}
+      else if(grid[y]===color){var g2=floodGroup(grid,y);if(g2.libs===1){var lib2=findLib(grid,g2.stones);if(lib2>=0)cands.push(lib2);}}}
+    // 直前手自身がアタリにした自グループの救援も上で拾える
+    while(cands.length){var pick=cands.splice((Math.random()*cands.length)|0,1)[0];
+      if(grid[pick]!==0||pick===ko||isEye(grid,pick,color))continue;
+      var copy=grid.slice();if(tryPlay(copy,ko,pick,color))return pick;}
+  }
+  // ランダム（自分の眼は埋めない）
+  var n=SZ*SZ,start=(Math.random()*n)|0;
+  for(var t=0;t<n;t++){var i=(start+t)%n;if(grid[i]!==0||i===ko)continue;if(isEye(grid,i,color))continue;
+    var c2=grid.slice();if(tryPlay(c2,ko,i,color))return i;}
+  return -1;}
+function findLib(grid,stones){for(var s=0;s<stones.length;s++){var nb=nbrs(stones[s]);for(var k=0;k<nb.length;k++)if(grid[nb[k]]===0)return nb[k];}return -1;}
+// 戦術的利得（点）：石の捕獲＋アタリの自グループ救援。自己アタリは大幅減点。
+function tacticalGain(grid,ko,i,color){
+  var nb=nbrs(i),opp=oppC(color),savePts=0,seen={};
+  for(var k=0;k<nb.length;k++){var y=nb[k];if(grid[y]===color){var g=floodGroup(grid,y);if(g.libs===1){var key=g.stones[0];if(!seen[key]){seen[key]=1;savePts+=g.stones.length;}}}}
+  var copy=grid.slice();var res=tryPlay(copy,ko,i,color);if(!res)return -999;
+  var gain=res.captured*2;
+  var mg=floodGroup(copy,i);
+  if(savePts>0&&(mg.libs>=2||res.captured>0))gain+=savePts*2;
+  if(mg.libs===1&&res.captured===0)gain-=10; // 自己アタリ回避
+  return gain;}
+function playout(grid,ko,turn,lastIdx){
+  var passes=0,maxMoves=SZ*SZ*2;
+  for(var step=0;step<maxMoves;step++){
+    var mv=choosePlayoutMove(grid,ko,turn,lastIdx);
+    if(mv<0){passes++;if(passes>=2)break;ko=-1;turn=oppC(turn);lastIdx=-1;continue;}
+    passes=0;var res=tryPlay(grid,ko,mv,turn);if(!res){break;}
+    ko=res.ko;lastIdx=mv;turn=oppC(turn);}
+  var sc=territory(grid);return sc.black-sc.white;} // 黒からの点差（コミ込み）
+function goSearch(req){
+  SZ=req.size;var grid0=Int8Array.from(req.grid),ko0=(req.ko==null?-1:req.ko),color=req.color;
+  var diff=req.difficulty||'hard',deadline=Date.now()+(req.deadlineMs||1500);
+  var roots=legalNonEye(grid0,ko0,color);
+  if(!roots.length)return {r:-1,c:-1}; // パス
+  if(diff==='easy'){var i=roots[(Math.random()*roots.length)|0];return {r:(i/SZ)|0,c:i%SZ};}
+  if(diff==='normal'){var best=-Infinity,bi=roots[0];for(var k=0;k<roots.length;k++){var sc=heuristic(grid0,ko0,roots[k],color);if(sc>best){best=sc;bi=roots[k];}}return {r:(bi/SZ)|0,c:bi%SZ};}
+  // hard: モンテカルロ（PUCT：ヒューリスティック事前確率＋プレイアウト）
+  var n=roots.length,wins=new Float32Array(n),visits=new Float32Array(n);
+  var Cpuct=3.0,FPU=0.45,opp=oppC(color);
+  // 事前確率：ヒューリスティックを正規化（合計1）
+  var pri=new Float32Array(n),psum=1e-6;
+  for(var j=0;j<n;j++){var h=heuristic(grid0,ko0,roots[j],color);pri[j]=h>0?h:0.01;psum+=pri[j];}
+  for(var j2=0;j2<n;j2++)pri[j2]/=psum;
+  var iter=0,total=0;
+  while(Date.now()<deadline&&iter<300000){
+    var idx=0,bestU=-Infinity,st=Math.sqrt(total+1);
+    for(var j3=0;j3<n;j3++){var q=visits[j3]>0?wins[j3]/visits[j3]:FPU;var u=q+Cpuct*pri[j3]*st/(1+visits[j3]);if(u>bestU){bestU=u;idx=j3;}}
+    var g=Int8Array.from(grid0);var res=tryPlay(g,ko0,roots[idx],color);
+    var margin=playout(g,res?res.ko:-1,opp,roots[idx]);
+    var m=(color===BLACK?margin:-margin);var reward=0.5+0.5*Math.tanh(m/8); // 点差を滑らかな報酬に
+    visits[idx]++;total++;wins[idx]+=reward;iter++;}
+  // 最終手：訪問数最大（同数は勝率で）
+  var bi2=0;for(var j4=1;j4<n;j4++){if(visits[j4]>visits[bi2]||(visits[j4]===visits[bi2]&&wins[j4]>wins[bi2]))bi2=j4;}
+  var mi=roots[bi2];
+  // 戦術セーフティネット：明確な捕獲/救援は確実に拾う（プレイアウトのノイズで見落とすため）
+  var tbest=-1,tg=1.5,mig=tacticalGain(grid0,ko0,mi,color);
+  for(var k=0;k<n;k++){var gn=tacticalGain(grid0,ko0,roots[k],color);if(gn>tg){tg=gn;tbest=roots[k];}}
+  if(tbest>=0&&tg>mig+0.5)mi=tbest;
+  return {r:(mi/SZ)|0,c:mi%SZ};}
+if(typeof window==='undefined'&&typeof self!=='undefined'&&self.postMessage){
+  self.onmessage=function(e){try{self.postMessage(goSearch(e.data));}catch(err){self.postMessage({r:-1,c:-1});}};
+}
+`;
+let goWorker=null, goSearchSync=null;
+try{
+  const blob=new Blob([GO_ENGINE_SRC],{type:'application/javascript'});
+  goWorker=new Worker(URL.createObjectURL(blob));
+}catch(e){ goWorker=null; }
+try{ goSearchSync=new Function(GO_ENGINE_SRC+'\nreturn goSearch;')(); }catch(e){ goSearchSync=null; }
+
+function runGoSearch(req){
+  return new Promise((resolve)=>{
+    if(goWorker){
+      let done=false;
+      goWorker.onmessage=(e)=>{ if(done)return; done=true; resolve(e.data); };
+      goWorker.onerror=()=>{ if(done)return; done=true; resolve(goSearchSync?goSearchSync(req):{r:-1,c:-1}); };
+      goWorker.postMessage(req);
+    } else if(goSearchSync){
+      setTimeout(()=>resolve(goSearchSync(req)),10);
+    } else resolve({r:-1,c:-1});
+  });
+}
+
+// ===== GoAI クラス（思考エンジンへの委譲ラッパー） =====
 class GoAI {
   constructor(difficulty) { this.difficulty = difficulty; }
 
   getMove(board, color) {
-    return new Promise(resolve => {
-      const delay = this.difficulty === 'hard' ? 50 : 20;
-      setTimeout(() => {
-        let move;
-        if (this.difficulty === 'easy') move = this._randomMove(board, color);
-        else if (this.difficulty === 'normal') move = this._heuristicMove(board, color);
-        else move = this._uctMove(board, color);
-        resolve(move || {r: -1, c: -1});
-      }, delay);
-    });
-  }
-
-  _randomMove(board, color) {
-    const moves = board.getLegalMoves(color);
-    if (!moves.length) return null;
-    return moves[Math.floor(Math.random() * moves.length)];
-  }
-
-  _evalMove(board, r, c, color) {
-    const opp = color === BLACK ? WHITE : BLACK;
-    let score = Math.random() * 3;
-    const b = board.clone();
-    b.grid[r][c] = color;
-    // 敵石を取る
-    for (const [nr, nc] of b.neighbors(r, c)) {
-      if (b.grid[nr][nc] === opp) {
-        const g = b.getGroup(nr, nc);
-        if (b.getLiberties(g) === 0) { score += 50 * g.size; b.removeGroup(g); }
-      }
-    }
-    // 敵連をアタリに
-    for (const [nr, nc] of b.neighbors(r, c)) {
-      if (b.grid[nr][nc] === opp) {
-        const g = b.getGroup(nr, nc);
-        if (b.getLiberties(g) === 1) score += 30;
-      }
-    }
-    // 自連の呼吸点増加
-    const myGroup = b.getGroup(r, c);
-    if (myGroup.size) score += b.getLiberties(myGroup) * 10;
-    // 星・天元
-    const center = Math.floor(board.size / 2);
-    const stars9 = [[2,2],[2,6],[6,2],[6,6],[4,4]];
-    const stars13 = [[3,3],[3,9],[9,3],[9,9],[3,6],[9,6],[6,3],[6,9],[6,6]];
-    const stars = board.size === 9 ? stars9 : stars13;
-    if (stars.some(([sr,sc]) => sr===r && sc===c)) score += 5;
-    return score;
-  }
-
-  _heuristicMove(board, color) {
-    const moves = board.getLegalMoves(color);
-    if (!moves.length) return null;
-    let best = null, bestScore = -Infinity;
-    for (const m of moves) {
-      const s = this._evalMove(board, m.r, m.c, color);
-      if (s > bestScore) { bestScore = s; best = m; }
-    }
-    return best;
-  }
-
-  _simulate(board, color) {
-    const b = board.clone();
-    let cur = color;
-    let passes = 0;
-    const maxMoves = b.size * b.size;
-    for (let i = 0; i < maxMoves; i++) {
-      const moves = b.getLegalMoves(cur);
-      if (!moves.length) {
-        passes++;
-        if (passes >= 2) break;
-      } else {
-        passes = 0;
-        const m = moves[Math.floor(Math.random() * moves.length)];
-        b.playMove(m.r, m.c, cur);
-      }
-      cur = cur === BLACK ? WHITE : BLACK;
-    }
-    const sc = b.scoreByChineseRules();
-    return sc.black > sc.white ? BLACK : WHITE;
-  }
-
-  _uctMove(board, color) {
-    const ITERATIONS = 200;
-    const C = 1.414;
-    const moves = board.getLegalMoves(color);
-    if (!moves.length) return null;
-    const wins = new Float32Array(moves.length);
-    const visits = new Float32Array(moves.length);
-    for (let i = 0; i < ITERATIONS; i++) {
-      // UCB1 selection
-      let idx = 0;
-      let best = -Infinity;
-      const totalVisits = visits.reduce((a,b)=>a+b, 0) || 1;
-      for (let j = 0; j < moves.length; j++) {
-        const ucb = visits[j] === 0
-          ? Infinity
-          : wins[j]/visits[j] + C * Math.sqrt(Math.log(totalVisits)/visits[j]);
-        if (ucb > best) { best = ucb; idx = j; }
-      }
-      const m = moves[idx];
-      const b = board.clone();
-      b.playMove(m.r, m.c, color);
-      const winner = this._simulate(b, color === BLACK ? WHITE : BLACK);
-      visits[idx]++;
-      if (winner === color) wins[idx]++;
-    }
-    let bestIdx = 0;
-    for (let j = 1; j < moves.length; j++) if (visits[j] > visits[bestIdx]) bestIdx = j;
-    return moves[bestIdx];
+    const grid = new Int8Array(board.size * board.size);
+    for (let r = 0; r < board.size; r++)
+      for (let c = 0; c < board.size; c++)
+        grid[r * board.size + c] = board.grid[r][c];
+    const ko = board.koPoint ? (board.koPoint.r * board.size + board.koPoint.c) : -1;
+    const deadlineMs = this.difficulty === 'hard' ? 1500 : (this.difficulty === 'normal' ? 300 : 20);
+    const req = { grid: Array.from(grid), size: board.size, ko, color, difficulty: this.difficulty, deadlineMs };
+    return runGoSearch(req).then((mv) => mv || {r: -1, c: -1});
   }
 }
 

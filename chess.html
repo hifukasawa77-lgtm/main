@@ -646,7 +646,6 @@
   let lastMove = null;
   let pendingPromotion = null;
   let aiThinking = false;
-  let tt = new Map();
 
   function preloadChessAssets(){
     const entries = Object.entries(PIECE_IMAGE_PATHS);
@@ -1168,102 +1167,165 @@
     return res;
   }
 
-  function evalBase(s){
-    let score = 0;
-    for (let i=0;i<64;i++){
-      const p = s.board[i];
-      if (!p) continue;
-      const col = colorOf(p);
-      const pt = pieceType(p);
-      const val = PIECE_VALUE[pt] + pstVal(pt, i, col);
-      score += (col === "w") ? val : -val;
-    }
-    // small (cheap) mobility term: pseudo moves only (keeps search snappy)
-    const tmp = s.side;
-    const m1 = genPseudoMoves(s).length;
-    const s2 = cloneState(s); s2.side = opp(tmp);
-    const m2 = genPseudoMoves(s2).length;
-    score += (m1 - m2);
-    return score;
+  // ===== 思考エンジン（negamax + αβ + 反復深化 + 静止探索 / Web Worker） =====
+  // DOM非依存の純粋エンジン。Blob URL でWorker化し、思考中もUIを固めない。
+  // Worker生成に失敗した環境（file:// 等）では同期フォールバックで実行する。
+  const CHESS_ENGINE_SRC = `
+'use strict';
+var PIECE_VALUE={P:100,N:320,B:330,R:500,Q:900,K:0};
+var MATE=100000;
+var PST=${JSON.stringify(PST)};
+var K_END=[
+ -50,-30,-30,-30,-30,-30,-30,-50,
+ -30,-10,  0,  0,  0,  0,-10,-30,
+ -30,  0, 20, 30, 30, 20,  0,-30,
+ -30,  0, 30, 40, 40, 30,  0,-30,
+ -30,  0, 30, 40, 40, 30,  0,-30,
+ -30,  0, 20, 30, 30, 20,  0,-30,
+ -30,-20,  0,  0,  0,  0,-20,-30,
+ -50,-40,-30,-20,-20,-30,-40,-50];
+function opp(side){return side==='w'?'b':'w';}
+function isUpper(ch){return ch&&ch===ch.toUpperCase();}
+function colorOf(p){return !p?null:(isUpper(p)?'w':'b');}
+function pieceType(p){return p?p.toUpperCase():null;}
+function rc(i){return [Math.floor(i/8),i%8];}
+function idx(r,c){return r*8+c;}
+function inBounds(r,c){return r>=0&&r<8&&c>=0&&c<8;}
+function cloneState(s){return {board:s.board.slice(),side:s.side,castling:{K:s.castling.K,Q:s.castling.Q,k:s.castling.k,q:s.castling.q},ep:s.ep,halfmove:s.halfmove,fullmove:s.fullmove};}
+function fenKey(s){var b='';for(var r=0;r<8;r++){var e=0;for(var c=0;c<8;c++){var p=s.board[idx(r,c)];if(!p)e++;else{if(e){b+=e;e=0;}b+=p;}}if(e)b+=e;if(r!==7)b+='/';}var cst=(s.castling.K?'K':'')+(s.castling.Q?'Q':'')+(s.castling.k?'k':'')+(s.castling.q?'q':'')||'-';return b+' '+s.side+' '+cst+' '+s.ep;}
+function parseFEN(fen){var parts=fen.trim().split(/\\s+/);var placement=parts[0],side=parts[1],castling=parts[2],ep=parts[3],hm=parts[4],fm=parts[5];var board=new Array(64).fill(null);var rows=placement.split('/');for(var r=0;r<8;r++){var c=0;var row=rows[r];for(var k=0;k<row.length;k++){var ch=row[k];if(/\\d/.test(ch))c+=Number(ch);else{board[idx(r,c)]=ch;c++;}}}return {board:board,side:side,castling:{K:castling.indexOf('K')>=0,Q:castling.indexOf('Q')>=0,k:castling.indexOf('k')>=0,q:castling.indexOf('q')>=0},ep:ep&&ep!=='-'?idx(8-Number(ep[1]),ep.charCodeAt(0)-97):-1,halfmove:Number(hm||0),fullmove:Number(fm||1)};}
+function pstVal(pt,i,col){var p=rc(i);var pstIdx=col==='w'?(7-p[0])*8+p[1]:p[0]*8+p[1];return PST[pt][pstIdx]||0;}
+function isSquareAttacked(s,squareIndex,bySide){var b=s.board;var p=rc(squareIndex),r=p[0],c=p[1];
+  if(bySide==='w'){var rr=r+1;if(rr<8){if(c-1>=0&&b[idx(rr,c-1)]==='P')return true;if(c+1<8&&b[idx(rr,c+1)]==='P')return true;}}
+  else{var rr2=r-1;if(rr2>=0){if(c-1>=0&&b[idx(rr2,c-1)]==='p')return true;if(c+1<8&&b[idx(rr2,c+1)]==='p')return true;}}
+  var kn=bySide==='w'?'N':'n';var kd=[[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+  for(var i=0;i<8;i++){var ar=r+kd[i][0],ac=c+kd[i][1];if(inBounds(ar,ac)&&b[idx(ar,ac)]===kn)return true;}
+  var bishop=bySide==='w'?'B':'b',queen=bySide==='w'?'Q':'q',rook=bySide==='w'?'R':'r',king=bySide==='w'?'K':'k';
+  var diag=[[-1,-1],[-1,1],[1,-1],[1,1]];for(var d=0;d<4;d++){var dr=diag[d][0],dc=diag[d][1],x=r+dr,y=c+dc;while(inBounds(x,y)){var q=b[idx(x,y)];if(q){if(q===bishop||q===queen)return true;break;}x+=dr;y+=dc;}}
+  var line=[[-1,0],[1,0],[0,-1],[0,1]];for(var l=0;l<4;l++){var lr=line[l][0],lc=line[l][1],x2=r+lr,y2=c+lc;while(inBounds(x2,y2)){var q2=b[idx(x2,y2)];if(q2){if(q2===rook||q2===queen)return true;break;}x2+=lr;y2+=lc;}}
+  for(var er=-1;er<=1;er++)for(var ec=-1;ec<=1;ec++){if(!er&&!ec)continue;var kr=r+er,kc=c+ec;if(inBounds(kr,kc)&&b[idx(kr,kc)]===king)return true;}
+  return false;}
+function kingSquare(s,side){var t=side==='w'?'K':'k';for(var i=0;i<64;i++)if(s.board[i]===t)return i;return -1;}
+function inCheck(s,side){var k=kingSquare(s,side);if(k<0)return false;return isSquareAttacked(s,k,opp(side));}
+function genPseudoMoves(s){var moves=[],b=s.board,side=s.side;
+  for(var from=0;from<64;from++){var piece=b[from];if(!piece)continue;if(colorOf(piece)!==side)continue;var pt=pieceType(piece);var pp=rc(from),r=pp[0],c=pp[1];
+    if(pt==='P'){var dir=side==='w'?-1:1,startRank=side==='w'?6:1,promoRank=side==='w'?0:7,oneR=r+dir;
+      if(inBounds(oneR,c)&&!b[idx(oneR,c)]){var to=idx(oneR,c);if(oneR===promoRank){var prs=['Q','R','B','N'];for(var pi=0;pi<4;pi++)moves.push({from:from,to:to,piece:piece,capture:null,promotion:prs[pi],flags:{}});}else{moves.push({from:from,to:to,piece:piece,capture:null,promotion:null,flags:{}});if(r===startRank){var twoR=r+dir*2;if(inBounds(twoR,c)&&!b[idx(twoR,c)])moves.push({from:from,to:idx(twoR,c),piece:piece,capture:null,promotion:null,flags:{p2:true}});}}}
+      var dcs=[-1,1];for(var di=0;di<2;di++){var cc=c+dcs[di],rr=r+dir;if(!inBounds(rr,cc))continue;var to2=idx(rr,cc),target=b[to2];if(target&&colorOf(target)===opp(side)){if(rr===promoRank){var prs2=['Q','R','B','N'];for(var pj=0;pj<4;pj++)moves.push({from:from,to:to2,piece:piece,capture:target,promotion:prs2[pj],flags:{cap:true}});}else moves.push({from:from,to:to2,piece:piece,capture:target,promotion:null,flags:{cap:true}});}else if(to2===s.ep)moves.push({from:from,to:to2,piece:piece,capture:side==='w'?'p':'P',promotion:null,flags:{ep:true,cap:true}});}
+      continue;}
+    if(pt==='N'){var ND=[[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];for(var ni=0;ni<8;ni++){var nr=r+ND[ni][0],nc=c+ND[ni][1];if(!inBounds(nr,nc))continue;var nto=idx(nr,nc),nt=b[nto];if(!nt||colorOf(nt)===opp(side))moves.push({from:from,to:nto,piece:piece,capture:nt||null,promotion:null,flags:nt?{cap:true}:{}});}continue;}
+    if(pt==='B'||pt==='R'||pt==='Q'){var dirs=[];if(pt==='B'||pt==='Q'){dirs.push([-1,-1],[-1,1],[1,-1],[1,1]);}if(pt==='R'||pt==='Q'){dirs.push([-1,0],[1,0],[0,-1],[0,1]);}for(var si=0;si<dirs.length;si++){var sr=dirs[si][0],sc=dirs[si][1],x=r+sr,y=c+sc;while(inBounds(x,y)){var sto=idx(x,y),st=b[sto];if(!st){moves.push({from:from,to:sto,piece:piece,capture:null,promotion:null,flags:{}});}else{if(colorOf(st)===opp(side))moves.push({from:from,to:sto,piece:piece,capture:st,promotion:null,flags:{cap:true}});break;}x+=sr;y+=sc;}}continue;}
+    if(pt==='K'){for(var kr=-1;kr<=1;kr++)for(var kc=-1;kc<=1;kc++){if(!kr&&!kc)continue;var er=r+kr,ec=c+kc;if(!inBounds(er,ec))continue;var kto=idx(er,ec),kt=b[kto];if(!kt||colorOf(kt)===opp(side))moves.push({from:from,to:kto,piece:piece,capture:kt||null,promotion:null,flags:kt?{cap:true}:{}});}
+      if(side==='w'&&from===idx(7,4)){if(s.castling.K&&b[idx(7,5)]==null&&b[idx(7,6)]==null&&b[idx(7,7)]==='R')moves.push({from:from,to:idx(7,6),piece:piece,capture:null,promotion:null,flags:{castle:'K'}});if(s.castling.Q&&b[idx(7,3)]==null&&b[idx(7,2)]==null&&b[idx(7,1)]==null&&b[idx(7,0)]==='R')moves.push({from:from,to:idx(7,2),piece:piece,capture:null,promotion:null,flags:{castle:'Q'}});}
+      if(side==='b'&&from===idx(0,4)){if(s.castling.k&&b[idx(0,5)]==null&&b[idx(0,6)]==null&&b[idx(0,7)]==='r')moves.push({from:from,to:idx(0,6),piece:piece,capture:null,promotion:null,flags:{castle:'k'}});if(s.castling.q&&b[idx(0,3)]==null&&b[idx(0,2)]==null&&b[idx(0,1)]==null&&b[idx(0,0)]==='r')moves.push({from:from,to:idx(0,2),piece:piece,capture:null,promotion:null,flags:{castle:'q'}});}
+      continue;}
   }
-  function evalForAI(s){
-    const base = evalBase(s);
-    return aiSide === "w" ? base : -base;
+  return moves;}
+function applyMove(s,m){var ns=cloneState(s),b=ns.board,side=s.side,moving=m.piece,pt=pieceType(moving),from=m.from,to=m.to;var captured=m.flags.ep?(side==='w'?b[to+8]:b[to-8]):b[to];b[from]=null;b[to]=moving;if(m.flags.ep){var capSq=side==='w'?to+8:to-8;b[capSq]=null;}if(m.flags.castle){if(m.flags.castle==='K'){b[idx(7,7)]=null;b[idx(7,5)]='R';}if(m.flags.castle==='Q'){b[idx(7,0)]=null;b[idx(7,3)]='R';}if(m.flags.castle==='k'){b[idx(0,7)]=null;b[idx(0,5)]='r';}if(m.flags.castle==='q'){b[idx(0,0)]=null;b[idx(0,3)]='r';}}if(m.promotion){b[to]=side==='w'?m.promotion:m.promotion.toLowerCase();}
+  if(pt==='K'){if(side==='w'){ns.castling.K=false;ns.castling.Q=false;}else{ns.castling.k=false;ns.castling.q=false;}}
+  if(pt==='R'){if(from===idx(7,7))ns.castling.K=false;if(from===idx(7,0))ns.castling.Q=false;if(from===idx(0,7))ns.castling.k=false;if(from===idx(0,0))ns.castling.q=false;}
+  if(captured){if(to===idx(7,7)&&captured==='R')ns.castling.K=false;if(to===idx(7,0)&&captured==='R')ns.castling.Q=false;if(to===idx(0,7)&&captured==='r')ns.castling.k=false;if(to===idx(0,0)&&captured==='r')ns.castling.q=false;}
+  ns.ep=-1;if(pt==='P'&&m.flags.p2){var fp=rc(from);ns.ep=side==='w'?idx(fp[0]-1,fp[1]):idx(fp[0]+1,fp[1]);}
+  var isCapture=!!captured||!!m.flags.ep;if(pt==='P'||isCapture)ns.halfmove=0;else ns.halfmove=(s.halfmove||0)+1;ns.fullmove=s.fullmove+(side==='b'?1:0);ns.side=opp(side);return ns;}
+function isLegalMove(s,m){if(m.flags.castle){if(inCheck(s,s.side))return false;var pass=[];if(m.to===idx(7,6))pass.push(idx(7,5),idx(7,6));if(m.to===idx(7,2))pass.push(idx(7,3),idx(7,2));if(m.to===idx(0,6))pass.push(idx(0,5),idx(0,6));if(m.to===idx(0,2))pass.push(idx(0,3),idx(0,2));for(var i=0;i<pass.length;i++)if(isSquareAttacked(s,pass[i],opp(s.side)))return false;}var ns=applyMove(s,m);return !inCheck(ns,opp(ns.side));}
+function legalMoves(s){var pseudo=genPseudoMoves(s),res=[];for(var i=0;i<pseudo.length;i++)if(isLegalMove(s,pseudo[i]))res.push(pseudo[i]);return res;}
+function evalBase(s){var b=s.board,score=0,phase=0,wK=-1,bK=-1,wB=0,bB=0;var wp=[0,0,0,0,0,0,0,0],bp=[0,0,0,0,0,0,0,0];
+  for(var i=0;i<64;i++){var p=b[i];if(!p)continue;var col=colorOf(p),pt=pieceType(p),pos=rc(i),r=pos[0],c=pos[1];
+    if(pt!=='K'){var v=PIECE_VALUE[pt]+pstVal(pt,i,col);score+=col==='w'?v:-v;}
+    if(pt==='P'){if(col==='w')wp[c]++;else bp[c]++;}
+    if(pt==='N'||pt==='B')phase+=1;else if(pt==='R')phase+=2;else if(pt==='Q')phase+=4;
+    if(pt==='B'){if(col==='w')wB++;else bB++;}
+    if(pt==='K'){if(col==='w')wK=i;else bK=i;}}
+  var mgW=Math.min(phase,24)/24;
+  function kEval(ksq,col){if(ksq<0)return 0;var p=rc(ksq);var pstIdx=col==='w'?(7-p[0])*8+p[1]:p[0]*8+p[1];return (PST.K[pstIdx]||0)*mgW+(K_END[pstIdx]||0)*(1-mgW);}
+  score+=kEval(wK,'w');score-=kEval(bK,'b');
+  if(wB>=2)score+=30;if(bB>=2)score-=30;
+  for(var f=0;f<8;f++){if(wp[f]>1)score-=12*(wp[f]-1);if(bp[f]>1)score+=12*(bp[f]-1);
+    if(wp[f]&&(f===0||wp[f-1]===0)&&(f===7||wp[f+1]===0))score-=14;
+    if(bp[f]&&(f===0||bp[f-1]===0)&&(f===7||bp[f+1]===0))score+=14;}
+  // 通過ポーン
+  for(var i2=0;i2<64;i2++){var p2=b[i2];if(!p2)continue;var pt2=pieceType(p2);if(pt2!=='P')continue;var ps=rc(i2),pr=ps[0],pc=ps[1],col2=colorOf(p2);var passed=true;
+    if(col2==='w'){for(var rr=pr-1;rr>=0;rr--){for(var cc=pc-1;cc<=pc+1;cc++){if(cc<0||cc>7)continue;if(b[idx(rr,cc)]==='p'){passed=false;}}}if(passed)score+=(7-pr)*(7-pr)*1.2;}
+    else{for(var rr2=pr+1;rr2<8;rr2++){for(var cc2=pc-1;cc2<=pc+1;cc2++){if(cc2<0||cc2>7)continue;if(b[idx(rr2,cc2)]==='P'){passed=false;}}}if(passed)score-=pr*pr*1.2;}}
+  // ルークのオープン/セミオープン
+  for(var i3=0;i3<64;i3++){var p3=b[i3];if(!p3)continue;if(pieceType(p3)!=='R')continue;var col3=colorOf(p3),fc=rc(i3)[1];var own=col3==='w'?wp[fc]:bp[fc],ot=col3==='w'?bp[fc]:wp[fc];var bo=own===0?(ot===0?20:10):0;score+=col3==='w'?bo:-bo;}
+  // 玉の安全度（中盤のみ）
+  if(mgW>0.3){score+=kingShield(b,wK,'w')*mgW;score-=kingShield(b,bK,'b')*mgW;}
+  return score;}
+function kingShield(b,ksq,col){if(ksq<0)return 0;var p=rc(ksq),r=p[0],c=p[1];var pawn=col==='w'?'P':'p';var dir=col==='w'?-1:1;var sh=0;for(var dc=-1;dc<=1;dc++){var cc=c+dc;if(cc<0||cc>7)continue;var r1=r+dir;if(r1>=0&&r1<8&&b[idx(r1,cc)]===pawn)sh+=12;else{var r2=r+dir*2;if(r2>=0&&r2<8&&b[idx(r2,cc)]===pawn)sh+=6;else sh-=14;}}return sh;}
+function sameMove(a,m){return a&&m&&a.from===m.from&&a.to===m.to&&a.promotion===m.promotion;}
+var deadline=0,tt=null,killers=null,history=null;
+function orderScore(s,m,ttMove,ply){
+  if(sameMove(ttMove,m))return 2000000;
+  var sc=0;
+  if(m.promotion)sc+=900000+(PIECE_VALUE[m.promotion]||0);
+  if(m.flags.cap){var cap=m.flags.ep?(s.side==='w'?'p':'P'):(s.board[m.to]||m.capture);sc+=100000+(PIECE_VALUE[pieceType(cap)]||0)*16-(PIECE_VALUE[pieceType(m.piece)]||0);}
+  else{var k=killers[ply];if(k){if(sameMove(k[0],m))sc+=90000;else if(sameMove(k[1],m))sc+=80000;}sc+=(history[m.from*64+m.to]||0);if(m.flags.castle)sc+=50000;}
+  return sc;}
+function quiesce(s,alpha,beta,qd){
+  var stand=s.side==='w'?evalBase(s):-evalBase(s);
+  if(stand>=beta)return beta;if(stand>alpha)alpha=stand;
+  if(qd<=0)return alpha;
+  var ms=genPseudoMoves(s),caps=[];for(var i=0;i<ms.length;i++){if(ms[i].flags.cap||ms[i].promotion)caps.push(ms[i]);}
+  caps.sort(function(a,b){return orderScore(s,b,null,0)-orderScore(s,a,null,0);});
+  for(var j=0;j<caps.length;j++){var m=caps[j];if(!isLegalMove(s,m))continue;var ns=applyMove(s,m);var v=-quiesce(ns,-beta,-alpha,qd-1);if(v>=beta)return beta;if(v>alpha)alpha=v;}
+  return alpha;}
+function negamax(s,depth,alpha,beta,ply){
+  if(Date.now()>deadline)return null;
+  var alphaOrig=alpha,key=fenKey(s),hit=tt.get(key),ttMove=null;
+  if(hit){ttMove=hit.move;if(hit.depth>=depth){if(hit.flag===0)return hit.score;else if(hit.flag===-1){if(hit.score>alpha)alpha=hit.score;}else{if(hit.score<beta)beta=hit.score;}if(alpha>=beta)return hit.score;}}
+  var moves=legalMoves(s);
+  if(!moves.length)return inCheck(s,s.side)?-MATE+ply:0;
+  if(depth<=0)return quiesce(s,alpha,beta,8);
+  moves.sort(function(a,b){return orderScore(s,b,ttMove,ply)-orderScore(s,a,ttMove,ply);});
+  var best=-Infinity,bestMove=null;
+  for(var i=0;i<moves.length;i++){var m=moves[i];var ns=applyMove(s,m);var v=negamax(ns,depth-1,-beta,-alpha,ply+1);if(v===null)return null;v=-v;
+    if(v>best){best=v;bestMove=m;}if(v>alpha)alpha=v;
+    if(alpha>=beta){if(!m.flags.cap&&!m.promotion){var k=killers[ply]||(killers[ply]=[null,null]);if(!sameMove(k[0],m)){k[1]=k[0];k[0]=m;}history[m.from*64+m.to]=(history[m.from*64+m.to]||0)+depth*depth;}break;}}
+  var flag=best<=alphaOrig?1:(best>=beta?-1:0);
+  tt.set(key,{depth:depth,score:best,flag:flag,move:bestMove});
+  return best;}
+function chessSearch(req){
+  var s=parseFEN(req.fen);
+  deadline=Date.now()+(req.deadlineMs||1500);
+  tt=new Map();killers=[];history={};
+  var diff=req.difficulty||'normal';
+  var maxDepth=diff==='easy'?2:64;
+  var roots=legalMoves(s);
+  if(!roots.length)return null;
+  if(diff==='easy'&&Math.random()<0.4)return roots[Math.floor(Math.random()*roots.length)];
+  var best=roots[0];
+  for(var depth=1;depth<=maxDepth;depth++){
+    var alpha=-Infinity,beta=Infinity,localBest=-Infinity,localMove=null,aborted=false;
+    var ordered=roots.slice().sort(function(a,b){return orderScore(s,b,best,0)-orderScore(s,a,best,0);});
+    for(var i=0;i<ordered.length;i++){var m=ordered[i];var ns=applyMove(s,m);var v=negamax(ns,depth-1,-beta,-alpha,1);if(v===null){aborted=true;break;}v=-v;if(v>localBest){localBest=v;localMove=m;}if(v>alpha)alpha=v;}
+    if(localMove&&!aborted)best=localMove;
+    if(aborted||Date.now()>deadline)break;
+    if(localBest>MATE-1000)break;
   }
+  return best;}
+if(typeof window==='undefined'&&typeof self!=='undefined'&&self.postMessage){
+  self.onmessage=function(e){try{self.postMessage(chessSearch(e.data));}catch(err){self.postMessage(null);}};
+}
+`;
+  let chessWorker=null, chessSearchSync=null;
+  try{
+    const blob=new Blob([CHESS_ENGINE_SRC],{type:'application/javascript'});
+    chessWorker=new Worker(URL.createObjectURL(blob));
+  }catch(e){ chessWorker=null; }
+  try{ chessSearchSync=new Function(CHESS_ENGINE_SRC+'\nreturn chessSearch;')(); }catch(e){ chessSearchSync=null; }
 
-  function terminalScoreFromMoves(s, moves, depthLeft){
-    if (moves.length) return null;
-    if (inCheck(s, s.side)){
-      // side to move is checkmated
-      const aiMated = s.side === aiSide;
-      const v = aiMated ? -MATE : MATE;
-      return v + (aiMated ? -depthLeft : depthLeft);
-    }
-    return 0; // stalemate
-  }
-
-  function moveOrderScore(s, m){
-    let score = 0;
-    if (m.promotion) score += 9000;
-    if (m.flags.castle) score += 200;
-    if (m.flags.cap){
-      const cap = m.flags.ep ? (s.side === "w" ? "p" : "P") : (s.board[m.to] || m.capture);
-      if (cap){
-        score += 1000 + (PIECE_VALUE[pieceType(cap)] || 0) - (PIECE_VALUE[pieceType(m.piece)] || 0);
-      } else score += 1000;
-    }
-    return score;
-  }
-
-  function minimax(s, depth, alpha, beta){
-    const key = fenKey(s);
-    const hit = tt.get(key);
-    if (hit && hit.depth >= depth) return hit.score;
-
-    const moves = legalMoves(s);
-    const t = terminalScoreFromMoves(s, moves, depth);
-    if (t !== null) return t;
-    if (depth === 0) return evalForAI(s);
-    moves.sort((a,b)=>moveOrderScore(s,b)-moveOrderScore(s,a));
-    const maximizing = s.side === aiSide;
-
-    let best = maximizing ? -Infinity : Infinity;
-    for (const m of moves){
-      const ns = applyMove(s, m);
-      const val = minimax(ns, depth-1, alpha, beta);
-      if (maximizing){
-        if (val > best) best = val;
-        if (best > alpha) alpha = best;
-      } else {
-        if (val < best) best = val;
-        if (best < beta) beta = best;
-      }
-      if (beta <= alpha) break;
-    }
-    tt.set(key, {depth, score: best});
-    return best;
-  }
-
-  function chooseAiMove(s){
-    const moves = legalMoves(s);
-    if (!moves.length) return null;
-    if (difficulty === "easy"){
-      return moves[Math.floor(Math.random() * moves.length)];
-    }
-    const depth = difficulty === "hard" ? 4 : 3;
-    tt.clear();
-    let bestMove = moves[0];
-    let bestScore = -Infinity;
-    moves.sort((a,b)=>moveOrderScore(s,b)-moveOrderScore(s,a));
-    for (const m of moves){
-      const ns = applyMove(s, m);
-      const score = minimax(ns, depth-1, -Infinity, Infinity);
-      if (score > bestScore){
-        bestScore = score;
-        bestMove = m;
-      }
-    }
-    return bestMove;
+  function runChessSearch(req){
+    return new Promise((resolve)=>{
+      if(chessWorker){
+        let done=false;
+        chessWorker.onmessage=(e)=>{ if(done)return; done=true; resolve(e.data); };
+        chessWorker.onerror=()=>{ if(done)return; done=true; resolve(chessSearchSync?chessSearchSync(req):null); };
+        chessWorker.postMessage(req);
+      } else if(chessSearchSync){
+        setTimeout(()=>resolve(chessSearchSync(req)),10);
+      } else resolve(null);
+    });
   }
 
   function moveToText(s, m){
@@ -1506,26 +1568,31 @@
     aiThinking = true;
     msgPill.textContent = "AI思考中…";
     render();
-    setTimeout(() => {
-      try{
-        const m = chooseAiMove(state);
-        aiThinking = false;
-        if (!m){
-          msgPill.textContent = "パス？（合法手なし）";
-          setStatus("対局中", "AI側に合法手がありません。");
-          gameActive = false;
-          render();
-          return;
-        }
-        // force queen promotion for AI if needed
-        if (m.promotion) m = {...m, promotion:"Q"};
-        doMove(m);
-      } finally {
+    const deadlineMs = difficulty === "hard" ? 1500 : (difficulty === "normal" ? 600 : 250);
+    const req = { fen: toFEN(state), difficulty, deadlineMs };
+    const snapshot = toFEN(state);
+    runChessSearch(req).then((m) => {
+      // 思考完了までに局面が変わっていたら破棄
+      if (!gameActive || !aiSide || !state || state.side !== aiSide || toFEN(state) !== snapshot){
         aiThinking = false;
         msgPill.textContent = gameActive ? "プレイ中" : "終局";
         render();
+        return;
       }
-    }, 40);
+      aiThinking = false;
+      if (!m){
+        msgPill.textContent = "パス？（合法手なし）";
+        setStatus("対局中", "AI側に合法手がありません。");
+        gameActive = false;
+        render();
+        return;
+      }
+      // force queen promotion for AI if needed
+      if (m.promotion) m = {...m, promotion:"Q"};
+      doMove(m);
+      msgPill.textContent = gameActive ? "プレイ中" : "終局";
+      render();
+    });
   }
 
   function newGame(){
