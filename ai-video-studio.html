@@ -101,6 +101,7 @@
   .dlrow{display:none;margin-top:14px;gap:10px;align-items:center;flex-wrap:wrap}
   footer{color:var(--muted);font-size:0.74rem;text-align:center;margin-top:40px}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -191,7 +192,39 @@
       </div>
 
       <div class="card" style="margin-top:18px">
-        <h2>② 台本・絵コンテ（編集可） <small>Storyboard</small></h2>
+        <h2>② プロダクト情報（任意） <small>Product</small></h2>
+        <div class="note" style="margin-top:0">商品名を入れると、その商品を訴求する商品紹介動画になります（商品画像はタイトル・エンディングに実写そのまま表示、AI生成画像と差し替え）。空欄ならこれまで通りの汎用動画を生成します。</div>
+        <label class="field" style="margin-top:10px">商品名 / Product name</label>
+        <input type="text" id="prodName" placeholder="例：ワイヤレスイヤホン Aurora Pro">
+        <label class="field">特徴・訴求ポイント / Key features</label>
+        <textarea id="prodDesc" placeholder="例：ノイズキャンセリング搭載、連続再生30時間、軽量設計" style="min-height:60px"></textarea>
+        <div class="row" style="margin-top:0">
+          <div>
+            <label class="field">価格・CTA / Price &amp; CTA</label>
+            <input type="text" id="prodCta" placeholder="今すぐ購入 — ¥2,980">
+          </div>
+          <div>
+            <label class="field">商品URL / Product URL</label>
+            <input type="text" id="prodUrl" placeholder="https://example.com/item/123">
+          </div>
+        </div>
+        <label class="field">業種テンプレート / Industry template</label>
+        <select id="industry">
+          <option value="general" selected>汎用 / General</option>
+          <option value="ec">EC商品・物販 / E-commerce</option>
+          <option value="app">アプリ・SaaS / App</option>
+          <option value="restaurant">飲食店 / Restaurant</option>
+          <option value="service">サービス・士業 / Service</option>
+        </select>
+        <label class="field">商品画像 / Product image</label>
+        <input type="file" id="prodImage" accept="image/*">
+        <div id="prodImagePreviewWrap" style="display:none;margin-top:10px">
+          <img id="prodImagePreview" alt="product preview" style="width:96px;height:96px;object-fit:cover;border-radius:12px;border:1px solid var(--line)">
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <h2>③ 台本・絵コンテ（編集可） <small>Storyboard</small></h2>
         <div id="board"><div class="empty">プロンプトを入れて「AIで動画を生成」を押してください。</div></div>
         <div class="btnrow" id="boardActions" style="display:none">
           <button class="btn ghost" id="addScene">＋ シーン追加</button>
@@ -203,7 +236,7 @@
     <!-- RIGHT -->
     <section>
       <div class="card">
-        <h2>③ プレビュー & 書き出し <small>Preview & Export</small></h2>
+        <h2>④ プレビュー & 書き出し <small>Preview & Export</small></h2>
         <div class="stage">
           <div class="rec-dot" id="recDot"><b></b> REC</div>
           <canvas id="stage" width="1280" height="720"></canvas>
@@ -228,7 +261,7 @@
       </div>
 
       <div class="card meta-out" style="margin-top:18px">
-        <h2>④ YouTube 用メタデータ <small>AI auto-generated</small></h2>
+        <h2>⑤ YouTube 用メタデータ <small>AI auto-generated</small></h2>
         <div class="copybar"><span class="k">タイトル / Title</span><button data-copy="metaTitle">コピー</button></div>
         <input type="text" id="metaTitle" placeholder="生成後に自動入力されます">
         <div class="copybar" style="margin-top:12px"><span class="k">説明 / Description</span><button data-copy="metaDesc">コピー</button></div>
@@ -260,6 +293,8 @@ const bar=$('bar'), statusEl=$('status'), recDot=$('recDot');
 const playBtn=$('playBtn'), exportBtn=$('exportBtn'), stopBtn=$('stopBtn'), genBtn=$('genBtn');
 const dlrow=$('dlrow'), dlLink=$('dlLink'), dlInfo=$('dlInfo');
 const metaTitle=$('metaTitle'), metaDesc=$('metaDesc'), metaTags=$('metaTags');
+const prodNameEl=$('prodName'), prodDescEl=$('prodDesc'), prodCtaEl=$('prodCta'), prodUrlEl=$('prodUrl'),
+      industryEl=$('industry'), prodImageEl=$('prodImage'), prodImagePreviewWrap=$('prodImagePreviewWrap'), prodImagePreview=$('prodImagePreview');
 
 const DEFAULT_WORKER='https://ai-proxy.hi-fukasawa77.workers.dev';
 const WORKER_KEY='avs-worker-url';
@@ -302,17 +337,32 @@ async function openaiFetch(path, payload){
   if(!res.ok){ const t=await res.text().catch(()=>''); throw new Error('OpenAI '+res.status+' '+t.slice(0,160)); }
   return res;
 }
-async function openaiScript(prompt, platform, aspect, research){
+/* 業種テンプレート（Worker側 gemini-proxy.js の INDUSTRY_NOTES と文言を一致させる） */
+const INDUSTRY_NOTES={
+  general:'',
+  ec:'EC商品・物販紹介のトーン。購買意欲を高める言葉で、使用シーン・素材・ベネフィットを具体的に伝える。',
+  app:'アプリ・SaaS紹介のトーン。課題→解決→主要機能の順に簡潔でテンポ良く伝える。',
+  restaurant:'飲食店紹介のトーン。雰囲気・看板メニュー・味の魅力を食欲が出る言葉で伝える。',
+  service:'サービス・士業紹介のトーン。信頼感を重視し、悩み→解決→相談導線の順に伝える。',
+};
+const PRODUCT_SYS_NOTE='product（商品情報）が与えられた場合、narrationは商品の魅力を伝える説得力のある宣伝トーンにし、商品名・特徴を自然に織り込む。価格・購入導線はoutro系シーンのみで触れる。記載のない仕様・効果を創作しない。';
+function buildProductBlock(product){
+  if(!product||!product.name) return '';
+  return `\n\n# 商品情報（narrationに自然に織り込み、価格/購入導線は最後のシーンのみで触れる。記載外の仕様は創作しない）:\n商品名: ${product.name}\n特徴: ${product.description||'(なし)'}\n価格/CTA: ${product.price||'(なし)'}\nURL: ${product.url||'(なし)'}`;
+}
+async function openaiScript(prompt, platform, aspect, research, product){
   const shortForm=['shorts','tiktok','reels'].includes(platform);
   const sys='あなたはプロの動画ディレクター兼脚本家です。絵コンテをJSONのみで返します。'
     +'スキーマ: {"title":string,"theme":"space|nature|tech|city|business|energy|aurora","scenes":[{"heading":string,"narration":string,"subtitle":string,"visual":string}],"youtube":{"title":string,"description":string,"tags":string[]}}。'
     +'headingは全角12文字程度の日本語、narrationは日本語1〜2文の話し言葉、subtitleは短い日本語1行、visualは英語の画像生成プロンプト(cinematic, dramatic lighting, highly detailed を含める)。'
-    +'参考情報が与えられた場合はその事実を要約してnarrationに正確に反映し、プロンプトのオウム返しや誤情報を避ける。';
+    +'参考情報が与えられた場合はその事実を要約してnarrationに正確に反映し、プロンプトのオウム返しや誤情報を避ける。'
+    +PRODUCT_SYS_NOTE;
   const factBlock=research?`\n参考情報(Wikipedia「${research.title}」より。事実を要約して各シーンに反映):\n${research.extract}`:'';
+  const industryNote=(product&&INDUSTRY_NOTES[product.industry])?`\n業種テンプレート: ${INDUSTRY_NOTES[product.industry]}`:'';
   const user=`テーマ:「${prompt}」 アスペクト比:${aspect}。`
     +(shortForm?`配信先:${platform}(縦型ショート15〜40秒)。最初のシーンは強いフック。3〜4シーンでテンポ良く、最後に行動喚起。visualはvertical 9:16 composition。`
               :`配信先:${platform}(横型・通常尺)。4〜6シーンで分かりやすく。`)
-    +factBlock;
+    +factBlock+industryNote+buildProductBlock(product);
   const res=await openaiFetch('/chat/completions',{
     model:'gpt-4o-mini', temperature:0.8, response_format:{type:'json_object'},
     messages:[{role:'system',content:sys},{role:'user',content:user}],
@@ -382,6 +432,70 @@ function detectTheme(prompt){
 let SCENES=[];      // {type,head,narr,subtitle,dur,visualPrompt,image,ttsBuffer}
 let THEME_ID='aurora';
 let lastResearch=null;  // {title,extract,url} ネット調査の出典
+let productImage=null;  // アップロードされた商品実写（Image要素）
+let brandColor=null;    // 商品画像から抽出したブランドカラー（hex）
+
+/* =========================================================================
+   プロダクト情報（任意）— 入力があれば商品紹介動画モードになる
+   ========================================================================= */
+function hasProduct(){ return prodNameEl.value.trim().length>0; }
+function currentProduct(){
+  if(!hasProduct()) return null;
+  return {
+    name: prodNameEl.value.trim(),
+    description: prodDescEl.value.trim().slice(0,500),
+    price: prodCtaEl.value.trim(),
+    url: prodUrlEl.value.trim(),
+    industry: industryEl.value,
+  };
+}
+function loadImageFromFile(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>{ const img=new Image(); img.onload=()=>resolve(img); img.onerror=reject; img.src=reader.result; };
+    reader.onerror=reject;
+    reader.readAsDataURL(file);
+  });
+}
+prodImageEl.addEventListener('change', async ()=>{
+  const file=prodImageEl.files && prodImageEl.files[0];
+  if(!file){ productImage=null; prodImagePreviewWrap.style.display='none'; return; }
+  try{
+    productImage=await loadImageFromFile(file);
+    prodImagePreview.src=productImage.src;
+    prodImagePreviewWrap.style.display='block';
+  }catch(e){ productImage=null; prodImagePreviewWrap.style.display='none'; }
+});
+/* 商品画像から平均色を抽出してブランドカラーにする（近白・近黒は除外、暗すぎる色は見出し文字の可読性のため明るく補正） */
+function extractDominantColor(img){
+  const size=16;
+  const c=document.createElement('canvas'); c.width=size; c.height=size;
+  const cctx=c.getContext('2d'); cctx.drawImage(img,0,0,size,size);
+  const data=cctx.getImageData(0,0,size,size).data;
+  let r=0,g=0,b=0,n=0;
+  for(let i=0;i<data.length;i+=4){
+    const rr=data[i],gg=data[i+1],bb=data[i+2];
+    const lum=0.299*rr+0.587*gg+0.114*bb;
+    if(lum>245||lum<12) continue; // 背景の白飛び・黒つぶれを除外
+    r+=rr; g+=gg; b+=bb; n++;
+  }
+  if(!n){ r=g=b=128; n=1; }
+  r=Math.round(r/n); g=Math.round(g/n); b=Math.round(b/n);
+  const lum=0.299*r+0.587*g+0.114*b;
+  if(lum<140){ const amt=Math.min(1,(140-lum)/(255-lum)); r=Math.round(r+(255-r)*amt); g=Math.round(g+(255-g)*amt); b=Math.round(b+(255-b)*amt); }
+  return '#'+[r,g,b].map(v=>Math.max(0,Math.min(255,v)).toString(16).padStart(2,'0')).join('');
+}
+function lighten(hex,amt){
+  const n=parseInt(hex.slice(1),16), r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+  const mix=v=>Math.round(v+(255-v)*amt);
+  return '#'+[mix(r),mix(g),mix(b)].map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+/* 描画/BGM用に、ブランドカラーがあればアクセント色だけ差し替えたテーマを返す */
+function activeTheme(){
+  const t=THEMES[THEME_ID];
+  if(!brandColor) return t;
+  return Object.assign({},t,{c1:brandColor,c2:lighten(brandColor,0.35)});
+}
 
 /* インターネット(Wikipedia)から事実情報を取得（クライアント側・CORS対応・キー不要） */
 function extractTopicClient(prompt){
@@ -412,15 +526,51 @@ function mainKeyword(prompt){
   if(m) return m[1].replace(/^(初心者向けに|わかりやすく|やさしく)/,'').trim();
   const s=splitSentences(p)[0]||p; return s.length>22?s.slice(0,22):s;
 }
-function buildStoryboardLocal(prompt){
+/* =========================================================================
+   プロダクト動画ヘルパー（商品名が入力された場合のみ使用）
+   ========================================================================= */
+function buildCtaText(product){
+  if(!product) return '';
+  return [product.price, product.url].filter(Boolean).join('   ');
+}
+function buildProductOutro(product){
+  const ctaPhrase = product.price || '';
+  return {
+    head: product.name,
+    narr: `「${product.name}」、${ctaPhrase?ctaPhrase+'で':''}ぜひチェックしてみてください！`,
+    subtitle: ctaPhrase || product.name,
+  };
+}
+function loadQrImage(text){
+  try{
+    const qr=qrcode(0,'L'); qr.addData(String(text).slice(0,300)); qr.make();
+    const dataUrl=qr.createDataURL(6,2);
+    return new Promise((resolve,reject)=>{ const img=new Image(); img.onload=()=>resolve(img); img.onerror=reject; img.src=dataUrl; });
+  }catch(e){ return Promise.resolve(null); }
+}
+/* タイトル/エンディングシーンに商品実写・CTA・QRを適用する（商品情報がある場合のみ） */
+function applyProductToScenes(scenes, product){
+  if(!product||!scenes.length) return;
+  const title=scenes[0], outro=scenes[scenes.length-1];
+  if(productImage){ title.image=productImage; title.skipAiImage=true; outro.image=productImage; outro.skipAiImage=true; }
+  Object.assign(outro, buildProductOutro(product));
+  const cta=buildCtaText(product);
+  if(cta) outro.ctaText=cta;
+  if(product.url) loadQrImage(product.url).then(img=>{ if(img) outro.qrImage=img; });
+}
+function buildStoryboardLocal(prompt, product){
   THEME_ID=detectTheme(prompt);
   const theme=THEMES[THEME_ID]; const kw=mainKeyword(prompt);
   let points=splitSentences(prompt).filter(s=>s.length>=4&&s.length<=80).slice(0,6);
   if(points.length<3) points=points.concat([`${kw}とは？`,`${kw}の魅力`,`知っておきたいポイント`,`今日からできること`]).slice(0,4);
   const scenes=[];
-  scenes.push({type:'title',head:theme.emoji+' '+(splitSentences(prompt)[0]||kw),narr:`今日のテーマは「${kw}」。最後までぜひご覧ください。`,subtitle:kw,dur:3.6,visualPrompt:`cinematic establishing shot about ${prompt}, high detail`});
+  const titleNarr = product
+    ? `今日は「${product.name}」をご紹介します。${product.description?product.description.slice(0,40):kw}`
+    : `今日のテーマは「${kw}」。最後までぜひご覧ください。`;
+  scenes.push({type:'title',head:theme.emoji+' '+(product?product.name:(splitSentences(prompt)[0]||kw)),narr:titleNarr,subtitle:product?product.name:kw,dur:3.6,visualPrompt:`cinematic establishing shot about ${prompt}, high detail`});
   points.forEach((p,i)=>scenes.push({type:'point',head:`${i+1}. ${p.length<=22?p:mainKeyword(p)}`,narr:p,subtitle:p.length<=24?p:p.slice(0,24),dur:4.5,visualPrompt:`cinematic scene illustrating: ${p}, high detail`}));
   scenes.push({type:'outro',head:'ご視聴ありがとうございました',narr:'チャンネル登録と高評価をお願いします！',subtitle:'Thanks for watching',dur:4.0,visualPrompt:`elegant closing background, ${THEME_ID} mood, high detail`});
+  applyProductToScenes(scenes, product);
   return scenes;
 }
 
@@ -474,6 +624,9 @@ async function generate(){
   const useAI = engineEl.value==='ai' || byok;
   if(byok && !getByokKey()){ setStatus('BYOKモードです。OpenAI APIキーを入力してください。'); generating=false; setBusy(false); return; }
 
+  const product = currentProduct();
+  brandColor = (product && productImage) ? extractDominantColor(productImage) : null;
+
   lastResearch=null;
   try{
     // ---- ① ネット調査 → 台本・シーン構成・字幕（LLM） ----
@@ -485,17 +638,17 @@ async function generate(){
           setStatus('① ネットから情報を収集中…（Wikipedia）');
           lastResearch=await wikiResearchClient(extractTopicClient(prompt));
           setStatus('① 収集した情報を要約して台本をAIで生成中…');
-          sb=await openaiScript(prompt, platformEl.value, aspectEl.value, lastResearch);
+          sb=await openaiScript(prompt, platformEl.value, aspectEl.value, lastResearch, product);
         } else {
-          const r=await apiPost('/video/script',{prompt,aspect:aspectEl.value,platform:platformEl.value},60000);
+          const r=await apiPost('/video/script',{prompt,aspect:aspectEl.value,platform:platformEl.value,product},60000);
           if(r && r.storyboard && Array.isArray(r.storyboard.scenes) && r.storyboard.scenes.length){ sb=r.storyboard; lastResearch=r.research||null; }
           else if(r && r.error){ setStatus('AI台本エラー('+r.error+') → ルールベースで作成します。'); }
         }
       }catch(e){ setStatus('AI台本に失敗('+(e&&e.message||e)+') → ルールベースで作成します。'); }
-      if(sb){ applyStoryboard(sb, prompt); }
-      else { SCENES=buildStoryboardLocal(prompt); applyMetaLocal(prompt); }
+      if(sb){ applyStoryboard(sb, prompt, product); }
+      else { SCENES=buildStoryboardLocal(prompt, product); applyMetaLocal(prompt); }
     } else {
-      SCENES=buildStoryboardLocal(prompt); applyMetaLocal(prompt);
+      SCENES=buildStoryboardLocal(prompt, product); applyMetaLocal(prompt);
     }
     // ショート(縦型)はテンポ重視で尺を短く（TTSがある場合は後段で上書き）
     if(isShortForm()) SCENES.forEach(s=>{ s.dur = s.type==='point'?3.0:(s.type==='title'?2.6:2.8); });
@@ -503,16 +656,17 @@ async function generate(){
 
     // ---- ② ビジュアル（AI画像生成） ----
     if(useAI && optImage.checked){
+      const targets=SCENES.filter(s=>!s.skipAiImage);
       let done=0;
-      setStatus(`② ビジュアルをAIで生成中… 0/${SCENES.length}`);
-      await pool(SCENES, 2, async (sc)=>{
+      setStatus(`② ビジュアルをAIで生成中… 0/${targets.length}`);
+      await pool(targets, 2, async (sc)=>{
         try{
           const r = byok
             ? await openaiImage(enhanceVisual(sc.visualPrompt||sc.head))
             : await apiPost('/video/image',{prompt:enhanceVisual(sc.visualPrompt||sc.head), steps:6}, 60000);
           if(r && r.image){ sc.image=await loadImageFromB64(r.image, r.mime); }
         }catch(e){}
-        done++; setProgress(0.1+0.5*(done/SCENES.length)); setStatus(`② ビジュアルをAIで生成中… ${done}/${SCENES.length}`);
+        done++; setProgress(0.1+0.5*(done/Math.max(targets.length,1))); setStatus(`② ビジュアルをAIで生成中… ${done}/${targets.length}`);
       });
       renderBoard();
     }
@@ -550,10 +704,10 @@ async function generate(){
   }
 }
 
-function applyStoryboard(sb, prompt){
+function applyStoryboard(sb, prompt, product){
   THEME_ID = THEMES[sb.theme] ? sb.theme : detectTheme(prompt);
   const theme=THEMES[THEME_ID];
-  const title=(sb.title||mainKeyword(prompt)).trim();
+  const title=(product?product.name:(sb.title||mainKeyword(prompt))).trim();
   const scenes=[];
   scenes.push({type:'title',head:theme.emoji+' '+title, narr:`今日のテーマは「${mainKeyword(prompt)}」。`, subtitle:title, dur:3.6,
     visualPrompt:(sb.scenes[0] && sb.scenes[0].visual) || `cinematic title background about ${prompt}, high detail`});
@@ -567,6 +721,7 @@ function applyStoryboard(sb, prompt){
   });
   scenes.push({type:'outro',head:'ご視聴ありがとうございました', narr:'チャンネル登録と高評価をお願いします！', subtitle:'Thanks for watching!', dur:4.0,
     visualPrompt:`elegant closing background, ${THEME_ID} mood, cinematic, high detail`});
+  applyProductToScenes(scenes, product);
   SCENES=scenes;
   // メタデータ
   const y=sb.youtube||{};
@@ -688,7 +843,31 @@ function drawOutro(scene,theme,W,H,p){
   ctx.shadowColor=hexA(theme.c2,0.6); ctx.shadowBlur=20;
   wrapText(scene.head,W*0.8).forEach((ln,i,a)=>ctx.fillText(ln,W/2,H*0.42+(i-(a.length-1)/2)*W*0.06));
   ctx.shadowBlur=0; ctx.restore();
+  drawCtaBadge(scene,theme,W,H,appear);
   drawCaption(scene.subtitle||scene.narr,theme,W,H,appear);
+}
+/* 商品の価格/CTAバッジと購入リンクQRコード（商品情報がある場合のみ・outroシーン専用） */
+function drawCtaBadge(scene,theme,W,H,alpha){
+  if(scene.qrImage){
+    const qs=W*0.14, qx=W-W*0.04-qs, qy=H*0.05, pad=W*0.012;
+    ctx.save(); ctx.globalAlpha=alpha*0.95;
+    ctx.fillStyle='rgba(255,255,255,0.92)'; roundRect(qx-pad,qy-pad,qs+pad*2,qs+pad*2,10); ctx.fill();
+    ctx.drawImage(scene.qrImage,qx,qy,qs,qs);
+    ctx.restore();
+  }
+  if(scene.ctaText){
+    ctx.save(); ctx.globalAlpha=alpha; ctx.textAlign='center'; ctx.textBaseline='middle';
+    let fs=Math.round(W*0.034);
+    ctx.font=`800 ${fs}px "Segoe UI","Hiragino Sans",sans-serif`;
+    let textW=ctx.measureText(scene.ctaText).width;
+    const maxW=W*0.78;
+    if(textW>maxW){ fs=Math.round(fs*maxW/textW); ctx.font=`800 ${fs}px "Segoe UI","Hiragino Sans",sans-serif`; textW=ctx.measureText(scene.ctaText).width; }
+    const padX=W*0.035, boxW=textW+padX*2, boxH=fs*1.9, boxX=(W-boxW)/2, boxY=H*0.58;
+    ctx.fillStyle=hexA(theme.c1,0.16); roundRect(boxX,boxY,boxW,boxH,boxH/2); ctx.fill();
+    ctx.strokeStyle=hexA(theme.c1,0.7); ctx.lineWidth=2; roundRect(boxX,boxY,boxW,boxH,boxH/2); ctx.stroke();
+    ctx.fillStyle='#fff'; ctx.fillText(scene.ctaText, W/2, boxY+boxH/2);
+    ctx.restore();
+  }
 }
 function drawCaption(text,theme,W,H,alpha){
   if(!text) return;
@@ -794,7 +973,7 @@ function frame(now){
   let dt=(now-lastFrame)/1000; if(dt>0.1)dt=0.1; lastFrame=now;
   const t=(now-startTime)/1000, total=totalDuration();
   if(t>=total){ finishPlayback(); return; }
-  const theme=THEMES[THEME_ID]; const {scene,idx,p}=sceneAt(t);
+  const theme=activeTheme(); const {scene,idx,p}=sceneAt(t);
   const hasVoiceBuffers=SCENES.some(s=>s.ttsBuffer);
   if(playing && !recording && !hasVoiceBuffers && idx!==spokenIdx){ spokenIdx=idx; speakPreview(scene.narr); }
   renderSceneFrame(scene,theme,W,H,t,dt,p);
@@ -808,7 +987,7 @@ function startPlayback(isRecording){
   playing=true; recording=isRecording; spokenIdx=-1; dlrow.style.display='none';
   ensureAudioCtx();
   if(isRecording) setupRecordDest();
-  startBGM(THEMES[THEME_ID]);
+  startBGM(activeTheme());
   scheduleVoice();
   playBtn.disabled=true; exportBtn.disabled=true; stopBtn.disabled=false; genBtn.disabled=true;
   if(isRecording){
@@ -859,7 +1038,7 @@ function setProgress(v){ bar.style.width=Math.round(v*100)+'%'; }
 function setBusy(b){ genBtn.disabled=b; if(b){ playBtn.disabled=true; exportBtn.disabled=true; } }
 function drawStaticPreview(){
   const [W,H]=aspectDims(); canvas.width=W; canvas.height=H; initVisualState(W,H);
-  const theme=THEMES[THEME_ID]; const s=SCENES[0];
+  const theme=activeTheme(); const s=SCENES[0];
   if(s&&s.image){ drawImageCover(s.image,W,H,1.06,0,0); drawScrim(theme,W,H); }
   else { drawBackground(theme,W,H,0); drawVisual(theme,W,H,0,0.016); }
   if(s) drawTitle(s,theme,W,H,1);
