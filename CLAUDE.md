@@ -8,6 +8,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `game.html` — ZELDA QUEST（Canvas APIのみで作ったトップビューRPG）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
+- `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。詳細: `claudechord-vault/README.md`）
 
 ## デザイン・スタイルのルール
 - カラースキーム: 黒背景 + アクセントカラー（シアン / パープル系）※サイバーパンク的演出は使用禁止
@@ -33,6 +34,19 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - コミット前に `.edge-test-profile/` が含まれていないか確認すること（.gitignore 推奨）
 - コミットメッセージは日本語でもOK
 
+## Obsidian メモリ層（Claudechord Vault）
+
+`claudechord-vault/` を Claudechord（本エージェントハーネス）の**単一ナレッジ／メモリ層**とする。
+要件定義・設計・評価・リスク・マーケ等の成果物をここに集約し、エージェントは `[[ウィキリンク]]` で相互参照する。
+
+- **正本**: `claudechord-vault/`（git 管理）。Google Drive `pmo/` は配布用ミラー
+- **frontmatter 規約必須**: `type / project / status / agent` ＋（評価）`eval_score / spec_score / revision_count / verdict`、（法務）`risk_level`。語彙は規約から外さない（Dataview 集計が壊れる）
+- **保存先**: 成果物→`deliverables/`、プロジェクトハブ→`projects/`、ダッシュボード→`dashboards/`、雛形→`_templates/`、日次→`daily/`
+- **テンプレート**: 新規成果物は `_templates/`（Templater）から起こす
+- **KPI**: PMO は `dashboards/KPI_品質メトリクス.md`（Dataview）で合格率・平均修正回数・ベロシティを参照
+- **連携**: Local REST API プラグイン or git 経由でClaude Codeが読み書き（詳細: `claudechord-vault/README.md`）
+- **APIキー禁止規約**: Local REST API のキーは `.gitignore` 管理。コミット禁止
+
 ## エージェントハーネス設計
 
 成果物作成は以下のエージェントパイプラインで行う（`.claude/agents/` に定義）。
@@ -41,7 +55,9 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 ### PMOエージェント (`pmo`)
 - PM・深澤を支援するプロジェクトマネジメントオフィス特化型エージェント
 - 開発パイプライン全体の進捗・リスク・課題・品質・ドキュメントを一元管理する
-- Google Drive（pmo/）・Google Calendar・Gmail・Slackと連携して運用する
+- ドキュメントの正本は Obsidian メモリ層（`claudechord-vault/`）。Google Drive（pmo/）は配布用ミラーとして扱う
+- KPI（合格率・平均修正回数・ベロシティ）は vault の Dataview ダッシュボードで自動集計する
+- Google Calendar・Gmail・Slackと連携して運用する
 - 先読み型（Proactive）でパイプラインのボトルネック・リスクを検知して深澤に報告する
 - 週次ステータスレポート・デイリーブリーフィングを担当する
 - KPI管理（evaluator合格率・平均修正回数・ベロシティ）を行う
