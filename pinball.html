@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEON PINBALL | ピンボール</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --accent-cyan: #22d3ee;
+    --accent-purple: #a78bfa;
+    --text: #e2e8f0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: radial-gradient(circle at 50% 0%, #0b1020, #05070d 70%);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 12px;
+    padding: 12px;
+  }
+  canvas {
+    max-width: 96vw;
+    max-height: 92vh;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--bg);
+    box-shadow: 0 10px 50px rgba(0, 0, 0, 0.7);
+    touch-action: none;
+  }
+  .hint { font-size: 13px; color: #94a3b8; text-align: center; max-width: 540px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<p class="hint">左右フリッパー: ← / → ・ A / D ・ 画面左右タップ &nbsp;|&nbsp; 発射: Space 長押しで離す<br>Flippers: Left / Right ・ A / D ・ tap halves &nbsp;|&nbsp; Launch: hold &amp; release Space</p>
+
+<script src="gamekit/gamekit.js"></script>
+<script>
+'use strict';
+
+const W = 540, H = 760;
+const game = new GameKit.Engine(document.getElementById('game'), { width: W, height: H });
+const save = new GameKit.Save('neon-pinball');
+
+const CYAN = '#22d3ee', PURPLE = '#a78bfa', WHITE = '#e2e8f0';
+
+/* ---------- 物理ユーティリティ / Physics helpers ---------- */
+// 円(ball)と線分(x1,y1-x2,y2)の衝突を解決し、ヒット時は接触法線/接触点を返す
+function collideSegment(ball, x1, y1, x2, y2, e) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const L2 = dx * dx + dy * dy || 1e-6;
+  let t = ((ball.x - x1) * dx + (ball.y - y1) * dy) / L2;
+  t = GameKit.MathX.clamp(t, 0, 1);
+  const cx = x1 + dx * t, cy = y1 + dy * t;
+  let nx = ball.x - cx, ny = ball.y - cy;
+  let dist = Math.hypot(nx, ny);
+  if (dist >= ball.r) return null;
+  if (dist < 1e-6) { // 中心が線上 → 線分の法線を使う
+    nx = -dy; ny = dx; dist = Math.hypot(nx, ny) || 1;
+  }
+  nx /= dist; ny /= dist;
+  const overlap = ball.r - dist;
+  ball.x += nx * overlap;
+  ball.y += ny * overlap;
+  const vn = ball.vx * nx + ball.vy * ny;
+  if (vn < 0) {
+    ball.vx -= (1 + e) * vn * nx;
+    ball.vy -= (1 + e) * vn * ny;
+  }
+  return { nx, ny, cx, cy };
+}
+
+// 円(ball)と固定円(c)の衝突（バンパー）。反発 + 一定インパルスでエネルギー付与
+function collideBumper(ball, c, e, impulse) {
+  let nx = ball.x - c.x, ny = ball.y - c.y;
+  let dist = Math.hypot(nx, ny);
+  const minD = ball.r + c.r;
+  if (dist >= minD) return false;
+  if (dist < 1e-6) { nx = 0; ny = -1; dist = 1; }
+  nx /= dist; ny /= dist;
+  ball.x = c.x + nx * minD;
+  ball.y = c.y + ny * minD;
+  const vn = ball.vx * nx + ball.vy * ny;
+  if (vn < 0) { ball.vx -= (1 + e) * vn * nx; ball.vy -= (1 + e) * vn * ny; }
+  ball.vx += nx * impulse;
+  ball.vy += ny * impulse;
+  return true;
+}
+
+/* ---------- テーブル定義 / Table layout ---------- */
+function buildTable() {
+  // 静的な壁（線分）。e = 反発係数
+  const walls = [
+    // 上アーチ / top arch (left→right)
+    [30, 150, 70, 90, 0.5], [70, 90, 160, 50, 0.5], [160, 50, 270, 42, 0.5],
+    [270, 42, 380, 50, 0.5], [380, 50, 450, 72, 0.5], [450, 72, 500, 118, 0.5],
+    [500, 118, 516, 150, 0.5],
+    // 左壁 + 左下ファネル / left wall + funnel
+    [30, 150, 30, 600, 0.55], [30, 600, 165, 694, 0.55],
+    // 右シューターレーン仕切り + 右外壁 / shooter lane divider + outer wall
+    [474, 150, 474, 710, 0.55], [516, 150, 516, 710, 0.55],
+    [474, 710, 516, 710, 0.4], // レーン床 / lane floor
+    // 右下ファネル（フィールド側）/ right funnel (field side)
+    [474, 600, 375, 694, 0.55],
+  ];
+  // ポップバンパー / pop bumpers
+  const bumpers = [
+    { x: 180, y: 300, r: 24, flash: 0 },
+    { x: 340, y: 300, r: 24, flash: 0 },
+    { x: 260, y: 220, r: 24, flash: 0 },
+  ];
+  // スリングショット（フリッパー上の角面）/ slingshots
+  const slings = [
+    { x1: 95, y1: 558, x2: 158, y2: 628, flash: 0 }, // 左 / left (kicks up-right)
+    { x1: 445, y1: 558, x2: 382, y2: 628, flash: 0 }, // 右 / right (kicks up-left)
+  ];
+  // ドロップターゲット バンク（左の縦短線分）/ drop targets
+  const targets = [
+    { x: 88, y: 360, h: 30, down: false, flash: 0 },
+    { x: 88, y: 398, h: 30, down: false, flash: 0 },
+    { x: 88, y: 436, h: 30, down: false, flash: 0 },
+  ];
+  return { walls, bumpers, slings, targets };
+}
+
+/* ---------- フリッパー / Flipper ---------- */
+class Flipper {
+  constructor(px, py, len, rest, active) {
+    this.px = px; this.py = py; this.len = len;
+    this.rest = rest; this.active = active;
+    this.angle = rest; this.omega = 0; this.pressed = false;
+  }
+  tip() {
+    return { x: this.px + Math.cos(this.angle) * this.len, y: this.py + Math.sin(this.angle) * this.len };
+  }
+  update(dt) {
+    const target = this.pressed ? this.active : this.rest;
+    const speed = 26; // rad/s
+    const prev = this.angle;
+    const diff = target - this.angle;
+    const step = GameKit.MathX.clamp(diff, -speed * dt, speed * dt);
+    this.angle += step;
+    this.omega = dt > 0 ? (this.angle - prev) / dt : 0;
+  }
+  // ボールとの衝突。接触点の角速度をボールへ伝える
+  collide(ball) {
+    const tp = this.tip();
+    const hit = collideSegment(ball, this.px, this.py, tp.x, tp.y, 0.4);
+    if (!hit) return false;
+    // 接触点の周速度 v = omega × r（r: ピボット→接触点）
+    const rx = hit.cx - this.px, ry = hit.cy - this.py;
+    const vpx = -ry * this.omega, vpy = rx * this.omega;
+    const vpn = vpx * hit.nx + vpy * hit.ny;
+    if (vpn > 0) { // フリッパーが押し出す向きのときだけ加速
+      ball.vx += hit.nx * vpn * 1.1;
+      ball.vy += hit.ny * vpn * 1.1;
+    }
+    return true;
+  }
+  draw(ctx) {
+    const tp = this.tip();
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(34,211,238,0.25)';
+    ctx.lineWidth = 22;
+    ctx.beginPath(); ctx.moveTo(this.px, this.py); ctx.lineTo(tp.x, tp.y); ctx.stroke();
+    const grad = ctx.createLinearGradient(this.px, this.py, tp.x, tp.y);
+    grad.addColorStop(0, '#67e8f9'); grad.addColorStop(1, '#a78bfa');
+    ctx.strokeStyle = grad; ctx.lineWidth = 14;
+    ctx.beginPath(); ctx.moveTo(this.px, this.py); ctx.lineTo(tp.x, tp.y); ctx.stroke();
+    ctx.fillStyle = '#0b1020';
+    ctx.beginPath(); ctx.arc(this.px, this.py, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = CYAN; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ---------- タイトル / Title ---------- */
+class TitleScene extends GameKit.Scene {
+  enter() {
+    this.particles = new GameKit.Particles(W, H, { count: 80 });
+    this.t = 0;
+  }
+  update(dt, game) {
+    this.t += dt;
+    this.particles.update(dt);
+    if (game.input.justPressed('Space') || game.input.pointer.justPressed) {
+      game.audio.jingle([{ f: 523, d: 0.1 }, { f: 659, d: 0.1 }, { f: 784, d: 0.18 }]);
+      game.changeScene(new PlayScene());
+    }
+  }
+  draw(ctx) {
+    ctx.fillStyle = '#05070d'; ctx.fillRect(0, 0, W, H);
+    this.particles.draw(ctx);
+    GameKit.UI.glassPanel(ctx, W / 2 - 220, H / 2 - 170, 440, 300);
+    GameKit.UI.text(ctx, 'NEON PINBALL', W / 2, H / 2 - 130, { font: 'bold 44px "Segoe UI", sans-serif', color: CYAN });
+    GameKit.UI.text(ctx, 'ネオン・ピンボール', W / 2, H / 2 - 80, { color: PURPLE, font: '20px sans-serif' });
+    GameKit.UI.text(ctx, '← / →  フリッパー / Flippers', W / 2, H / 2 - 24, { font: '15px sans-serif', color: '#94a3b8' });
+    GameKit.UI.text(ctx, 'Space 長押しで発射 / hold & release to launch', W / 2, H / 2 + 4, { font: '15px sans-serif', color: '#94a3b8' });
+    const blink = Math.sin(this.t * 4) > -0.3;
+    if (blink) GameKit.UI.text(ctx, 'クリック / Space でスタート — Click / Space to Start', W / 2, H / 2 + 56, { font: '16px sans-serif' });
+    GameKit.UI.text(ctx, 'HIGH SCORE: ' + (save.get('hiscore', 0)), W / 2, H / 2 + 96, { color: '#94a3b8', font: '14px sans-serif' });
+  }
+}
+
+/* ---------- プレイ / Play ---------- */
+class PlayScene extends GameKit.Scene {
+  enter() {
+    const t = buildTable();
+    this.walls = t.walls; this.bumpers = t.bumpers; this.slings = t.slings; this.targets = t.targets;
+    this.left = new Flipper(165, 648, 86, 0.40, -0.50);
+    this.right = new Flipper(375, 648, 86, Math.PI - 0.40, Math.PI + 0.50);
+    this.particles = new GameKit.Particles(W, H, { count: 40 });
+    this.score = 0;
+    this.balls = 3;
+    this.message = '発射！ / LAUNCH!';
+    this.msgTimer = 2.5;
+    this.popups = []; // スコアポップアップ
+    this.newBall();
+  }
+  newBall() {
+    this.ball = { x: 495, y: 700, vx: 0, vy: 0, r: 9, state: 'lane', trail: [] };
+    this.charge = 0; this.wasHolding = false;
+  }
+  addScore(n, x, y) {
+    this.score += n;
+    this.popups.push({ x, y, n, life: 0.9 });
+  }
+  update(dt, game) {
+    this.particles.update(dt);
+    if (this.msgTimer > 0) this.msgTimer -= dt;
+    for (let i = this.popups.length - 1; i >= 0; i--) {
+      this.popups[i].life -= dt; this.popups[i].y -= 26 * dt;
+      if (this.popups[i].life <= 0) this.popups.splice(i, 1);
+    }
+    for (const b of this.bumpers) if (b.flash > 0) b.flash -= dt * 4;
+    for (const s of this.slings) if (s.flash > 0) s.flash -= dt * 4;
+    for (const tg of this.targets) if (tg.flash > 0) tg.flash -= dt * 4;
+
+    // 入力: フリッパー / flipper input
+    const inp = game.input, p = inp.pointer;
+    const leftHeld = inp.isDown('ArrowLeft') || inp.isDown('KeyA') || inp.isDown('KeyZ') || (p.isDown && p.x < W / 2);
+    const rightHeld = inp.isDown('ArrowRight') || inp.isDown('KeyD') || inp.isDown('KeyM') || (p.isDown && p.x >= W / 2);
+    if (leftHeld && !this.left.pressed) game.audio.beep(220, 0.04, 'square', 0.12);
+    if (rightHeld && !this.right.pressed) game.audio.beep(220, 0.04, 'square', 0.12);
+    this.left.pressed = leftHeld; this.right.pressed = rightHeld;
+
+    const ball = this.ball;
+
+    // 発射チャージ / plunger charge
+    if (ball.state === 'lane') {
+      const holding = inp.isDown('Space') || inp.isDown('ArrowDown') || p.isDown;
+      if (holding) {
+        this.charge = Math.min(1, this.charge + dt / 1.1);
+        this.wasHolding = true;
+      } else if (this.wasHolding) {
+        const power = Math.max(0.35, this.charge);
+        ball.vy = -(700 + power * 880);
+        ball.vx = -40;
+        ball.state = 'play';
+        this.charge = 0; this.wasHolding = false;
+        game.audio.beep(180 + power * 240, 0.18, 'sawtooth', 0.22);
+      }
+    }
+
+    // フリッパーの角度更新（dt全体で）/ flipper angle update
+    this.left.update(dt);
+    this.right.update(dt);
+
+    if (ball.state === 'play') {
+      // サブステップ積分でトンネリング防止 / substep integration
+      const steps = Math.max(1, Math.ceil(dt / (1 / 240)));
+      const sub = dt / steps;
+      for (let s = 0; s < steps; s++) this.physicsStep(sub, game);
+
+      // トレイル / trail
+      ball.trail.push({ x: ball.x, y: ball.y });
+      if (ball.trail.length > 12) ball.trail.shift();
+
+      // ドレイン判定 / drain
+      if (ball.y > H + 20) this.loseBall(game);
+    }
+  }
+  physicsStep(dt, game) {
+    const ball = this.ball;
+    // 重力 + 積分 / gravity + integrate
+    ball.vy += 1100 * dt;
+    // 速度クランプ / clamp speed
+    const sp = Math.hypot(ball.vx, ball.vy);
+    if (sp > 1700) { ball.vx *= 1700 / sp; ball.vy *= 1700 / sp; }
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    // 壁 / walls
+    for (const w of this.walls) collideSegment(ball, w[0], w[1], w[2], w[3], w[4]);
+
+    // バンパー / bumpers
+    for (const b of this.bumpers) {
+      if (collideBumper(ball, b, 0.6, 360)) {
+        b.flash = 1; this.addScore(100, b.x, b.y - b.r - 4);
+        game.audio.beep(660, 0.08, 'triangle', 0.2);
+      }
+    }
+    // スリングショット / slingshots
+    for (const s of this.slings) {
+      const hit = collideSegment(ball, s.x1, s.y1, s.x2, s.y2, 0.7);
+      if (hit) {
+        ball.vx += hit.nx * 340; ball.vy += hit.ny * 340;
+        s.flash = 1; this.addScore(60, (s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2 - 12);
+        game.audio.beep(520, 0.06, 'square', 0.18);
+      }
+    }
+    // ドロップターゲット / drop targets
+    let allDown = true;
+    for (const tg of this.targets) {
+      if (!tg.down) {
+        const hit = collideSegment(ball, tg.x, tg.y, tg.x, tg.y + tg.h, 0.5);
+        if (hit && hit.nx > 0) { // 右面から命中 / hit from field side
+          tg.down = true; tg.flash = 1; this.addScore(250, tg.x + 20, tg.y + tg.h / 2);
+          game.audio.beep(880, 0.1, 'triangle', 0.2);
+        }
+      }
+      if (!tg.down) allDown = false;
+    }
+    if (allDown && this.targets.length) {
+      this.addScore(1500, 130, 400);
+      this.message = 'TARGET CLEAR! +1500'; this.msgTimer = 2;
+      game.audio.jingle([{ f: 523, d: 0.08 }, { f: 659, d: 0.08 }, { f: 784, d: 0.08 }, { f: 1046, d: 0.16 }]);
+      for (const tg of this.targets) tg.down = false; // リセット / reset
+    }
+
+    // フリッパー / flippers
+    this.left.collide(ball);
+    this.right.collide(ball);
+  }
+  loseBall(game) {
+    this.balls--;
+    game.audio.noise(0.35, 0.25);
+    if (this.balls <= 0) {
+      const hi = save.get('hiscore', 0);
+      if (this.score > hi) save.set('hiscore', this.score);
+      game.changeScene(new GameOverScene(this.score));
+      return;
+    }
+    this.message = 'BALL LOST — のこり ' + this.balls;
+    this.msgTimer = 2;
+    this.newBall();
+  }
+
+  /* ---------- 描画 / Draw ---------- */
+  draw(ctx) {
+    ctx.fillStyle = '#05070d'; ctx.fillRect(0, 0, W, H);
+    this.particles.draw(ctx);
+
+    // テーブル面のうっすらした縁取り / faint playfield glow
+    ctx.save();
+    ctx.strokeStyle = 'rgba(167,139,250,0.10)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(20, 30, W - 40, H - 50, 20); ctx.stroke();
+    ctx.restore();
+
+    // 壁 / walls
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(34,211,238,0.18)';
+    for (const w of this.walls) { ctx.beginPath(); ctx.moveTo(w[0], w[1]); ctx.lineTo(w[2], w[3]); ctx.stroke(); }
+    ctx.lineWidth = 2.5; ctx.strokeStyle = CYAN;
+    for (const w of this.walls) { ctx.beginPath(); ctx.moveTo(w[0], w[1]); ctx.lineTo(w[2], w[3]); ctx.stroke(); }
+    ctx.restore();
+
+    // ドロップターゲット / drop targets
+    for (const tg of this.targets) {
+      ctx.save();
+      if (tg.down) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(tg.x, tg.y); ctx.lineTo(tg.x, tg.y + tg.h); ctx.stroke();
+      } else {
+        ctx.lineCap = 'round'; ctx.lineWidth = 9;
+        ctx.strokeStyle = tg.flash > 0 ? '#ffffff' : PURPLE;
+        ctx.beginPath(); ctx.moveTo(tg.x, tg.y); ctx.lineTo(tg.x, tg.y + tg.h); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // スリングショット / slingshots
+    for (const s of this.slings) {
+      ctx.save();
+      ctx.fillStyle = s.flash > 0 ? 'rgba(255,255,255,0.85)' : 'rgba(167,139,250,0.5)';
+      ctx.strokeStyle = s.flash > 0 ? '#ffffff' : PURPLE; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x2, s.y2);
+      ctx.lineTo(s.x1, s.y2);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.restore();
+    }
+
+    // バンパー / bumpers
+    for (const b of this.bumpers) {
+      const r = b.r + (b.flash > 0 ? b.flash * 5 : 0);
+      GameKit.Gen.orbIcon(ctx, b.x, b.y, r, { palette: b.flash > 0 ? ['#ffffff', CYAN] : ['#22d3ee', '#a78bfa'] });
+      ctx.save();
+      ctx.strokeStyle = b.flash > 0 ? '#ffffff' : 'rgba(34,211,238,0.6)';
+      ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(b.x, b.y, b.r + 4, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
+
+    // フリッパー / flippers
+    this.left.draw(ctx);
+    this.right.draw(ctx);
+
+    // ボール トレイル + 本体 / ball trail + body
+    const ball = this.ball;
+    ctx.save();
+    for (let i = 0; i < ball.trail.length; i++) {
+      const tr = ball.trail[i]; const a = (i / ball.trail.length) * 0.4;
+      ctx.globalAlpha = a; ctx.fillStyle = CYAN;
+      ctx.beginPath(); ctx.arc(tr.x, tr.y, ball.r * (i / ball.trail.length), 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    const grad = ctx.createRadialGradient(ball.x - 3, ball.y - 3, 1, ball.x, ball.y, ball.r);
+    grad.addColorStop(0, '#ffffff'); grad.addColorStop(0.6, '#cbd5e1'); grad.addColorStop(1, '#64748b');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // プランジャー チャージメーター / plunger charge meter
+    if (ball.state === 'lane') {
+      const mx = 524, my0 = 700, my1 = 520;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(mx, my0); ctx.lineTo(mx, my1); ctx.stroke();
+      ctx.strokeStyle = this.charge > 0.8 ? '#f472b6' : CYAN;
+      ctx.beginPath(); ctx.moveTo(mx, my0); ctx.lineTo(mx, my0 - (my0 - my1) * this.charge); ctx.stroke();
+      ctx.restore();
+      if (Math.sin(performance.now() / 250) > 0) {
+        GameKit.UI.text(ctx, 'Space 長押し / hold', 380, 726, { font: '13px sans-serif', color: '#94a3b8', align: 'left' });
+      }
+    }
+
+    // スコアポップアップ / score popups
+    for (const p of this.popups) {
+      ctx.save(); ctx.globalAlpha = Math.max(0, p.life);
+      GameKit.UI.text(ctx, '+' + p.n, p.x, p.y, { font: 'bold 16px sans-serif', color: '#fde68a' });
+      ctx.restore();
+    }
+
+    // HUD
+    GameKit.UI.glassPanel(ctx, 16, 14, 250, 70);
+    GameKit.UI.text(ctx, 'SCORE / スコア', 24, 22, { font: '12px sans-serif', color: '#94a3b8', align: 'left' });
+    GameKit.UI.text(ctx, String(this.score), 24, 40, { font: 'bold 26px sans-serif', color: CYAN, align: 'left' });
+    GameKit.UI.glassPanel(ctx, W - 150, 14, 134, 70);
+    GameKit.UI.text(ctx, 'BALLS / 残', W - 142, 22, { font: '12px sans-serif', color: '#94a3b8', align: 'left' });
+    let dots = '';
+    for (let i = 0; i < this.balls; i++) dots += '●';
+    GameKit.UI.text(ctx, dots || '—', W - 142, 40, { font: 'bold 24px sans-serif', color: PURPLE, align: 'left' });
+    GameKit.UI.text(ctx, 'HI ' + save.get('hiscore', 0), W - 142, 66, { font: '12px sans-serif', color: '#94a3b8', align: 'left' });
+
+    // メッセージ / message banner
+    if (this.msgTimer > 0) {
+      ctx.save(); ctx.globalAlpha = Math.min(1, this.msgTimer);
+      GameKit.UI.glassPanel(ctx, W / 2 - 150, 100, 300, 44);
+      GameKit.UI.text(ctx, this.message, W / 2, 114, { font: 'bold 17px sans-serif', color: '#fde68a' });
+      ctx.restore();
+    }
+  }
+}
+
+/* ---------- ゲームオーバー / Game Over ---------- */
+class GameOverScene extends GameKit.Scene {
+  constructor(score) { super(); this.score = score; }
+  enter() {
+    this.particles = new GameKit.Particles(W, H, { count: 70 });
+    this.t = 0;
+    this.hi = save.get('hiscore', 0);
+    this.isNew = this.score >= this.hi && this.score > 0;
+  }
+  update(dt, game) {
+    this.t += dt;
+    this.particles.update(dt);
+    if (this.t > 0.6 && (game.input.justPressed('Space') || game.input.pointer.justPressed)) {
+      game.changeScene(new TitleScene());
+    }
+  }
+  draw(ctx) {
+    ctx.fillStyle = '#05070d'; ctx.fillRect(0, 0, W, H);
+    this.particles.draw(ctx);
+    GameKit.UI.glassPanel(ctx, W / 2 - 200, H / 2 - 150, 400, 280);
+    GameKit.UI.text(ctx, 'GAME OVER', W / 2, H / 2 - 110, { font: 'bold 40px sans-serif', color: PURPLE });
+    GameKit.UI.text(ctx, 'ゲームオーバー', W / 2, H / 2 - 64, { font: '18px sans-serif', color: '#94a3b8' });
+    GameKit.UI.text(ctx, 'SCORE: ' + this.score, W / 2, H / 2 - 16, { font: 'bold 30px sans-serif', color: CYAN });
+    if (this.isNew) {
+      const blink = Math.sin(this.t * 6) > 0;
+      if (blink) GameKit.UI.text(ctx, '★ NEW HIGH SCORE! ★', W / 2, H / 2 + 30, { font: 'bold 18px sans-serif', color: '#fde68a' });
+    } else {
+      GameKit.UI.text(ctx, 'HIGH SCORE: ' + this.hi, W / 2, H / 2 + 30, { font: '16px sans-serif', color: '#94a3b8' });
+    }
+    if (this.t > 0.6) GameKit.UI.text(ctx, 'クリック / Space でタイトルへ — Click / Space to Title', W / 2, H / 2 + 80, { font: '15px sans-serif' });
+  }
+}
+
+game.changeScene(new TitleScene());
+game.start();
+</script>
+</body>
+</html>
