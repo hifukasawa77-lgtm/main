@@ -1,0 +1,1446 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self';">
+<meta name="description" content="戦国の野望 — 信長の野望風の戦国歴史シミュレーション。全国64洲をヘックス戦で攻め取る。1560/1568/1574の3シナリオ。Canvas + GameKit製。">
+<title>戦国の野望 | Sengoku no Yabou — 戦国シミュレーション</title>
+<style>
+  :root { --bg:#05070d; --cyan:#22d3ee; --purple:#a78bfa; --text:#e2e8f0; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: radial-gradient(circle at 50% -10%, #0b1426 0%, #05070d 60%);
+    color: var(--text);
+    font-family: "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    min-height:100vh; gap:10px; padding:10px;
+  }
+  canvas {
+    max-width:97vw; border-radius:14px;
+    border:1px solid rgba(255,255,255,0.12);
+    background:var(--bg); box-shadow:0 12px 48px rgba(0,0,0,0.65);
+    touch-action:none;
+  }
+  .hint { font-size:12px; color:#8aa0b8; text-align:center; line-height:1.6; }
+  .hint b { color:var(--cyan); }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<p class="hint"><b>戦国の野望</b> / Sengoku no Yabou &nbsp;|&nbsp; クリックで操作 — Click to play &nbsp;|&nbsp; 全国64洲をヘックス戦で制覇せよ</p>
+
+<script src="gamekit/gamekit.js"></script>
+<script>
+'use strict';
+
+/* =====================================================================
+ * 戦国の野望 (Sengoku no Yabou) — GameKit製 戦国歴史シミュレーション
+ * 64洲 / ヘックス戦 / 3シナリオ(1560,1568,1574) / 全国武将
+ * ===================================================================== */
+
+const W = 960, H = 600;
+const canvas = document.getElementById('game');
+const game = new GameKit.Engine(canvas, { width: W, height: H });
+const save = new GameKit.Save('sengoku');
+const SAVE_VERSION = 1;
+
+/* ---- 静的データ登録（JSONロード後に格納） ---- */
+const DATA = { provinces:null, provById:{}, generals:null, genById:{}, scenarios:null };
+
+/* ---- マップ描画パラメータ（論理座標→画面座標） ---- */
+const MAP = { s:0.655, ox:14, oy:64, clip:{x:6,y:58,w:676,h:492}, R:80 };
+function toScreenX(lx){ return MAP.ox + lx * MAP.s; }
+function toScreenY(ly){ return MAP.oy + ly * MAP.s; }
+
+/* ---- 季節 ---- */
+const SEASONS = [
+  {jp:'春', en:'Spring', mod:1.0},
+  {jp:'夏', en:'Summer', mod:1.15},
+  {jp:'秋', en:'Autumn', mod:1.5},
+  {jp:'冬', en:'Winter', mod:0.5},
+];
+
+/* ---- 兵科 ---- */
+const UNITS = {
+  spear:    {jp:'足軽', en:'Ashigaru', move:3, range:1, atk:1.0, def:1.15, color:'#cbd5e1'},
+  cavalry:  {jp:'騎馬', en:'Cavalry',  move:5, range:1, atk:1.35, def:0.9, color:'#fbbf24'},
+  bow:      {jp:'弓',   en:'Bow',      move:3, range:2, atk:0.95, def:0.95, color:'#34d399'},
+  gun:      {jp:'鉄砲', en:'Gun',      move:2, range:2, atk:1.6, def:0.8, color:'#f87171'},
+};
+const UNIT_ORDER = ['spear','cavalry','bow','gun'];
+/* 兵科相性: 足軽>騎馬>鉄砲>足軽 */
+function advantage(a, d){
+  if (a==='spear'   && d==='cavalry') return 1.3;
+  if (a==='cavalry' && d==='spear')   return 0.77;
+  if (a==='cavalry' && d==='gun')     return 1.3;
+  if (a==='gun'     && d==='cavalry') return 0.77;
+  if (a==='gun'     && d==='spear')   return 1.3;
+  if (a==='spear'   && d==='gun')     return 0.77;
+  return 1.0;
+}
+/* 年代別の兵科構成（鉄砲普及の進展） */
+const COMP = {
+  1560: {spear:0.55, cavalry:0.27, bow:0.16, gun:0.02},
+  1568: {spear:0.50, cavalry:0.25, bow:0.13, gun:0.12},
+  1574: {spear:0.44, cavalry:0.20, bow:0.14, gun:0.22},
+};
+function compFor(year, family){
+  const base = Object.assign({}, COMP[year] || COMP[1568]);
+  if (family==='takeda') { base.cavalry += 0.10; base.spear -= 0.10; }
+  if (family==='oda')    { base.gun += 0.08; base.spear -= 0.08; }
+  if (family==='shimazu'){ base.gun += 0.05; base.bow -= 0.05; }
+  if (family==='otomo')  { base.gun += 0.05; base.spear -= 0.05; }
+  let sum = 0; for (const k in base){ if(base[k]<0) base[k]=0; sum+=base[k]; }
+  for (const k in base) base[k] /= sum;
+  return base;
+}
+
+/* ---- 小ユーティリティ ---- */
+const clamp = GameKit.MathX.clamp;
+function T(ctx, str, x, y, opts={}){
+  ctx.save();
+  ctx.font = (opts.weight?opts.weight+' ':'') + (opts.size||14) + 'px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
+  ctx.fillStyle = opts.color || '#e2e8f0';
+  ctx.textAlign = opts.align || 'left';
+  ctx.textBaseline = opts.baseline || 'top';
+  if (opts.shadow){ ctx.shadowColor='rgba(0,0,0,0.6)'; ctx.shadowBlur=4; }
+  ctx.fillText(str, x, y);
+  ctx.restore();
+}
+function pointInRect(p, r){ return p.x>=r.x && p.x<=r.x+r.w && p.y>=r.y && p.y<=r.y+r.h; }
+function pointInPoly(px, py, poly){
+  let inside=false;
+  for (let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];
+    if (((yi>py)!==(yj>py)) && (px < (xj-xi)*(py-yi)/(yj-yi)+xi)) inside=!inside;
+  }
+  return inside;
+}
+/* 半平面でポリゴンをクリップ（A側=サイト側を残す）Sutherland-Hodgman */
+function clipHalfPlane(poly, ax, ay, bx, by){
+  const mx=(ax+bx)/2, my=(ay+by)/2, nx=bx-ax, ny=by-ay;
+  const inside = (px,py)=> ((px-mx)*nx + (py-my)*ny) <= 0;
+  const out=[];
+  for (let i=0;i<poly.length;i++){
+    const cur=poly[i], nxt=poly[(i+1)%poly.length];
+    const ci=inside(cur[0],cur[1]), ni=inside(nxt[0],nxt[1]);
+    if (ci) out.push(cur);
+    if (ci!==ni){
+      const d1=(cur[0]-mx)*nx+(cur[1]-my)*ny;
+      const d2=(nxt[0]-mx)*nx+(nxt[1]-my)*ny;
+      const t=d1/(d1-d2);
+      out.push([cur[0]+t*(nxt[0]-cur[0]), cur[1]+t*(nxt[1]-cur[1])]);
+    }
+  }
+  return out;
+}
+/* 各洲のVoronoiセル（画面座標）を計算してキャッシュ */
+function computeProvinceCells(){
+  const sites = DATA.provinces.map(p=>({id:p.id, x:toScreenX(p.x), y:toScreenY(p.y)}));
+  const Rpx = MAP.R * MAP.s;
+  const cells = {};
+  for (const s of sites){
+    let poly = [
+      [s.x-Rpx, s.y-Rpx],[s.x+Rpx, s.y-Rpx],
+      [s.x+Rpx, s.y+Rpx],[s.x-Rpx, s.y+Rpx]
+    ];
+    for (const o of sites){
+      if (o.id===s.id) continue;
+      const d = Math.hypot(o.x-s.x, o.y-s.y);
+      if (d > Rpx*2.4) continue;
+      poly = clipHalfPlane(poly, s.x, s.y, o.x, o.y);
+      if (poly.length<3) break;
+    }
+    cells[s.id] = poly;
+  }
+  return cells;
+}
+
+/* ===================================================================
+ * GameState 構築
+ * =================================================================== */
+function deriveProvinceStats(kok, isCapital){
+  const development = Math.round(clamp(28 + kok/16, 20, 95));
+  const castleLevel = isCapital ? 3 : (kok>=350 ? 2 : 1);
+  const soldiers = Math.round(clamp(kok * 2.0 * (isCapital?1.35:1.0), 200, 6500));
+  return { development, castleLevel, soldiers };
+}
+function buildGameState(scenarioId, playerDaimyo){
+  const scn = DATA.scenarios.find(s=>s.id===scenarioId);
+  const dById = {}; scn.daimyo.forEach(d=>dById[d.id]=d);
+  const state = {
+    version: SAVE_VERSION,
+    scenarioId, year: scn.year, scenarioNameJP: scn.nameJP,
+    turn:1, season:0, playerDaimyo,
+    daimyo:{}, provinces:{}, generals:{},
+    rng: (Date.now() & 0xffffff) ^ scenarioId,
+    log:[], pendingBattle:null, pendingResult:null,
+  };
+  // count provinces per daimyo for starting gold
+  const owncnt = {};
+  for (const pid in scn.own){ const d=scn.own[pid]; owncnt[d]=(owncnt[d]||0)+1; }
+  scn.daimyo.forEach(d=>{
+    state.daimyo[d.id] = { id:d.id, gold: 1000 + (owncnt[d.id]||1)*280, alive:true };
+  });
+  // generals runtime (all inactive initially)
+  DATA.generals.forEach(g=>{ state.generals[g.id]={loyalty:0, alive:true, location:null, daimyo:null}; });
+  // provinces
+  DATA.provinces.forEach(p=>{
+    const owner = scn.own[p.id] || null;
+    const prov = { owner, soldiers:0, development:0, castleLevel:1, generals:[], hasActed:false };
+    if (owner){
+      const dd = dById[owner];
+      const isCap = dd && dd.capital===p.id;
+      const st = deriveProvinceStats(p.kokudaka, isCap);
+      prov.soldiers = st.soldiers; prov.development = st.development; prov.castleLevel = st.castleLevel;
+    }
+    state.provinces[p.id] = prov;
+  });
+  // place lords at capitals
+  scn.daimyo.forEach(d=>{
+    const g = state.generals[d.lord];
+    if (g){ g.loyalty=100; g.location=d.capital; g.daimyo=d.id;
+      if (state.provinces[d.capital]) state.provinces[d.capital].generals.push(d.lord); }
+  });
+  // place retainers
+  for (const pid in scn.place){
+    const owner = scn.own[pid];
+    scn.place[pid].forEach(gid=>{
+      const g = state.generals[gid];
+      if (g && g.location==null){
+        g.loyalty=82; g.location=pid; g.daimyo=owner;
+        if (state.provinces[pid]) state.provinces[pid].generals.push(gid);
+      }
+    });
+  }
+  return state;
+}
+
+/* ---- state アクセス補助 ---- */
+function provOwner(state, pid){ return state.provinces[pid].owner; }
+function daimyoOf(state){ return DATA.scenarios.find(s=>s.id===state.scenarioId).daimyo; }
+function daimyoDef(state, did){ return daimyoOf(state).find(d=>d.id===did); }
+function bestGeneralIn(state, pid){
+  const prov = state.provinces[pid];
+  let best=null, bestScore=-1;
+  prov.generals.forEach(gid=>{
+    if (!state.generals[gid].alive) return;
+    const g = DATA.genById[gid];
+    const sc = g.stats.tou + g.stats.bu*0.4;
+    if (sc>bestScore){ bestScore=sc; best=gid; }
+  });
+  return best;
+}
+function provinceStrength(state, pid){
+  const prov = state.provinces[pid];
+  const bg = bestGeneralIn(state, pid);
+  const tou = bg ? DATA.genById[bg].stats.tou : 45;
+  return prov.soldiers * (1 + tou/200) * (1 + prov.castleLevel*0.08);
+}
+function ownedProvinces(state, did){
+  return DATA.provinces.filter(p=>state.provinces[p.id].owner===did).map(p=>p.id);
+}
+function neighborsOf(pid){ return (DATA.provById[pid].neighbors)||[]; }
+
+/* ===================================================================
+ * 戦闘モデル（手動・自動共通の評価関数）
+ * =================================================================== */
+function armyQuality(generals, year, family, defender, castleLevel, terrain){
+  let bu=50, tou=50;
+  if (generals && generals.length){
+    let mb=0, mt=0;
+    generals.forEach(gid=>{ const g=DATA.genById[gid]; if(!g) return; mb=Math.max(mb,g.stats.bu); mt=Math.max(mt,g.stats.tou); });
+    bu=mb||50; tou=mt||50;
+  }
+  const comp = compFor(year, family);
+  // 1.0を基準に、武将能力・鉄砲比率で加減（差が出すぎないスケール）
+  let q = 1 + (bu-50)/180 + (tou-50)/300 + comp.gun*0.20;
+  if (defender){
+    // 城は基準Lv1で補正0、Lv5で+20%
+    q *= (1 + Math.max(0,(castleLevel||1)-1)*0.05);
+    if (terrain==='mountain') q *= 1.12;
+    else if (terrain==='river') q *= 1.08;
+    else if (terrain==='coast') q *= 1.03;
+  }
+  return q;
+}
+/* 自動解決（ヘッドレス・集約攻防） */
+function autoResolveBattle(opts){
+  // opts: {atkSoldiers, atkGenerals, atkFamily, defSoldiers, defGenerals, defFamily, year, castleLevel, terrain, rngFn}
+  const rnd = opts.rngFn || Math.random;
+  let an = opts.atkSoldiers, dn = opts.defSoldiers;
+  const a0=an, d0=dn;
+  // 戦ごとの士気・運（±10%）で番狂わせの余地を残す
+  const aq = armyQuality(opts.atkGenerals, opts.year, opts.atkFamily, false, 0, null) * (0.9+rnd()*0.2);
+  const dq = armyQuality(opts.defGenerals, opts.year, opts.defFamily, true, opts.castleLevel, opts.terrain) * (0.9+rnd()*0.2);
+  let round=0;
+  while (round<24 && an>a0*0.16 && dn>d0*0.16){
+    const aDmg = an*aq*0.105*(0.85+rnd()*0.3);
+    const dDmg = dn*dq*0.105*(0.85+rnd()*0.3);
+    dn -= aDmg; an -= dDmg;
+    round++;
+  }
+  an=Math.max(0,Math.round(an)); dn=Math.max(0,Math.round(dn));
+  const aFrac = an/Math.max(1,a0), dFrac = dn/Math.max(1,d0);
+  const attackerWins = aFrac >= dFrac;
+  return { attackerWins, atkSurvivors:an, defSurvivors:dn };
+}
+/* 武将の戦死判定 */
+function rollGeneralDeaths(state, generals, lossFrac, isLord){
+  const dead=[];
+  generals.forEach(gid=>{
+    const g = state.generals[gid];
+    if (!g || !g.alive) return;
+    let chance = 0.10 + lossFrac*0.4;
+    if (isLord && isLord(gid)) chance *= 0.5;
+    if (Math.random() < chance){ g.alive=false; dead.push(gid); }
+  });
+  return dead;
+}
+
+/* ===================================================================
+ * BootScene — JSONロード
+ * =================================================================== */
+class BootScene extends GameKit.Scene {
+  enter(game){
+    this.t=0; this.progress=0; this.error=null; this.done=false;
+    Promise.all([
+      GameKit.Assets.loadJSON('assets/sengoku/provinces.json'),
+      GameKit.Assets.loadJSON('assets/sengoku/generals.json'),
+      GameKit.Assets.loadJSON('assets/sengoku/scenarios.json'),
+    ]).then(([prov, gen, scn])=>{
+      DATA.provinces = prov.provinces;
+      DATA.provinces.forEach(p=>DATA.provById[p.id]=p);
+      // 隣接を双方向に正規化
+      DATA.provinces.forEach(p=>{
+        (p.neighbors||[]).forEach(nb=>{
+          const np = DATA.provById[nb];
+          if (np && !(np.neighbors||[]).includes(p.id)){ (np.neighbors=np.neighbors||[]).push(p.id); }
+        });
+      });
+      DATA.generals = gen.generals;
+      DATA.generals.forEach(g=>DATA.genById[g.id]=g);
+      DATA.scenarios = scn.scenarios;
+      this.done=true;
+      game.changeScene(new TitleScene());
+    }).catch(e=>{ this.error = e.message || String(e); console.error(e); });
+  }
+  update(dt){ this.t+=dt; if(!this.done && !this.error) this.progress = Math.min(0.95, this.progress + dt*0.6); }
+  draw(ctx){
+    ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
+    T(ctx,'戦国の野望', W/2, H/2-60, {size:34, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx,'データ読込中… / Loading…', W/2, H/2-6, {size:14, color:'#94a3b8', align:'center'});
+    GameKit.UI.glassPanel(ctx, W/2-160, H/2+24, 320, 16, {radius:8});
+    ctx.fillStyle='#22d3ee'; ctx.fillRect(W/2-158, H/2+26, 316*this.progress, 12);
+    if (this.error){
+      T(ctx,'読込エラー: '+this.error, W/2, H/2+60, {size:13, color:'#f87171', align:'center'});
+      T(ctx,'※ローカルではHTTPサーバ経由で開いてください', W/2, H/2+82, {size:12, color:'#94a3b8', align:'center'});
+    }
+  }
+}
+
+/* ===================================================================
+ * TitleScene
+ * =================================================================== */
+class TitleScene extends GameKit.Scene {
+  enter(game){
+    this.particles = new GameKit.Particles(W, H, {count:60, colors:['#e8c07a','#a78bfa','#22d3ee']});
+    this.t=0;
+    this.hasSave = !!save.get('autosave', null);
+    this.buttons = this._layout();
+  }
+  _layout(){
+    const bs=[]; const cx=W/2;
+    bs.push({x:cx-130, y:330, w:260, h:50, jp:'新規ゲーム', en:'New Game', action:()=>game.changeScene(new ScenarioSelectScene())});
+    bs.push({x:cx-130, y:392, w:260, h:50, jp:'続きから', en:'Continue', on:this.hasSave, action:()=>{
+      const st = save.get('autosave', null);
+      if (st && st.version===SAVE_VERSION){ game.changeScene(new MapScene(st)); }
+    }});
+    return bs;
+  }
+  update(dt, game){
+    this.t+=dt; this.particles.update(dt);
+    if (game.input.pointer.justPressed){
+      const p=game.input.pointer;
+      for (const b of this.buttons){ if ((b.on!==false) && pointInRect(p,b)){ game.audio.beep(660,0.08,'triangle'); b.action(); return; } }
+    }
+  }
+  draw(ctx){
+    ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
+    this.particles.draw(ctx);
+    // タイトル枠
+    GameKit.UI.glassPanel(ctx, W/2-300, 90, 600, 200, {radius:18, stroke:'rgba(232,192,122,0.4)'});
+    T(ctx,'戦国の野望', W/2, 120, {size:64, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    T(ctx,'SENGOKU NO YABOU', W/2, 200, {size:18, color:'#a78bfa', align:'center'});
+    T(ctx,'全国64洲をヘックス戦で制覇する戦国シミュレーション', W/2, 234, {size:14, color:'#cbd5e1', align:'center'});
+    T(ctx,'A Sengoku grand-strategy of 64 provinces & hex battles', W/2, 256, {size:12, color:'#7d93ab', align:'center'});
+    for (const b of this.buttons) drawButton(ctx, b, this.t);
+    T(ctx,'© Canvas + GameKit / 史実着想のオリジナル作品', W/2, H-26, {size:11, color:'#64748b', align:'center'});
+  }
+}
+
+/* 共通ボタン描画 */
+function drawButton(ctx, b, t){
+  const enabled = b.on!==false;
+  const hot = b._hot;
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 10);
+  ctx.fillStyle = enabled ? (hot?'rgba(232,192,122,0.22)':'rgba(255,255,255,0.07)') : 'rgba(255,255,255,0.03)';
+  ctx.fill();
+  ctx.lineWidth=1.2; ctx.strokeStyle = enabled ? (b.accent||'rgba(232,192,122,0.55)') : 'rgba(255,255,255,0.10)';
+  ctx.stroke(); ctx.restore();
+  const col = enabled? '#f1e6cf':'#5b6877';
+  if (b.jp!==undefined){
+    T(ctx, b.jp, b.x+b.w/2, b.y+ (b.en? b.h/2-13 : b.h/2-9), {size: b.sz||17, weight:'bold', color:col, align:'center'});
+    if (b.en) T(ctx, b.en, b.x+b.w/2, b.y+b.h/2+4, {size:11, color: enabled?'#9fb2c6':'#566372', align:'center'});
+  } else if (b.label!==undefined){
+    T(ctx, b.label, b.x+b.w/2, b.y+b.h/2-7, {size:b.sz||14, weight:'bold', color:col, align:'center'});
+  }
+}
+function updateButtonHot(buttons, p){ for (const b of buttons){ b._hot = pointInRect(p,b); } }
+
+/* ===================================================================
+ * ScenarioSelectScene
+ * =================================================================== */
+class ScenarioSelectScene extends GameKit.Scene {
+  enter(game){
+    this.particles = new GameKit.Particles(W, H, {count:40, colors:['#e8c07a','#a78bfa']});
+    this.t=0; this.step='scenario'; this.scn=null; this.scrollDaimyo=0;
+    this.buttons=[]; this._rebuild();
+  }
+  _rebuild(){
+    this.buttons=[];
+    if (this.step==='scenario'){
+      DATA.scenarios.forEach((s,i)=>{
+        this.buttons.push({x:140, y:150+i*110, w:680, h:92, scn:s, action:()=>{ this.scn=s; this.step='daimyo'; this._rebuild(); }});
+      });
+      this.buttons.push({x:W/2-90, y:H-50, w:180, h:36, label:'← 戻る Back', sz:13, action:()=>game.changeScene(new TitleScene())});
+    } else {
+      // daimyo grid (playable = has capital province owned)
+      const list = this.scn.daimyo.filter(d=>this.scn.own[d.capital]===d.id);
+      this._daimyoList = list;
+      const cols=4, cw=190, ch=70, gx=40, gy=130;
+      list.forEach((d,i)=>{
+        const c=i%cols, r=Math.floor(i/cols);
+        this.buttons.push({x:gx+c*(cw+12), y:gy+r*(ch+12), w:cw, h:ch, daimyo:d, accent:'rgba(255,255,255,0.3)', action:()=>{
+          game.audio.jingle([{f:392,d:0.1},{f:523,d:0.1},{f:659,d:0.18}]);
+          game.changeScene(new MapScene(buildGameState(this.scn.id, d.id)));
+        }});
+      });
+      this.buttons.push({x:40, y:H-48, w:160, h:34, label:'← シナリオ選択', sz:12, action:()=>{ this.step='scenario'; this._rebuild(); }});
+    }
+  }
+  update(dt, game){
+    this.t+=dt; this.particles.update(dt);
+    const p=game.input.pointer; updateButtonHot(this.buttons, p);
+    if (p.justPressed){
+      for (const b of this.buttons){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(620,0.07,'triangle'); b.action(); return; } }
+    }
+  }
+  draw(ctx){
+    ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H); this.particles.draw(ctx);
+    if (this.step==='scenario'){
+      T(ctx,'シナリオを選択 / Choose a Scenario', W/2, 70, {size:26, weight:'bold', color:'#e8c07a', align:'center'});
+      for (const b of this.buttons){
+        if (b.scn){
+          ctx.save();
+          ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,12);
+          ctx.fillStyle = b._hot?'rgba(232,192,122,0.18)':'rgba(255,255,255,0.06)'; ctx.fill();
+          ctx.strokeStyle='rgba(232,192,122,0.4)'; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
+          T(ctx, b.scn.year+'年  '+b.scn.nameJP, b.x+24, b.y+16, {size:22, weight:'bold', color:'#f1e6cf'});
+          T(ctx, b.scn.nameEN, b.x+24, b.y+46, {size:12, color:'#a78bfa'});
+          T(ctx, b.scn.descJP, b.x+24, b.y+66, {size:12, color:'#9fb2c6'});
+        } else { drawButton(ctx, b, this.t); }
+      }
+    } else {
+      T(ctx, this.scn.year+'年 '+this.scn.nameJP+' — 大名を選択 / Choose your clan', W/2, 64, {size:20, weight:'bold', color:'#e8c07a', align:'center'});
+      T(ctx, this.scn.descEN, W/2, 92, {size:11, color:'#7d93ab', align:'center'});
+      for (const b of this.buttons){
+        if (b.daimyo){
+          const d=b.daimyo;
+          ctx.save();
+          ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,10);
+          ctx.fillStyle = b._hot? 'rgba(255,255,255,0.14)':'rgba(255,255,255,0.05)'; ctx.fill();
+          ctx.strokeStyle=d.color; ctx.lineWidth=2; ctx.stroke(); ctx.restore();
+          // 家紋風マーク
+          ctx.fillStyle=d.color; ctx.beginPath(); ctx.arc(b.x+22, b.y+b.h/2, 12, 0, Math.PI*2); ctx.fill();
+          const lord = DATA.genById[d.lord];
+          T(ctx, d.nameJP+'家', b.x+42, b.y+12, {size:16, weight:'bold', color:'#f1e6cf'});
+          T(ctx, lord?lord.nameJP:'', b.x+42, b.y+34, {size:12, color:'#9fb2c6'});
+          T(ctx, '統'+(lord?lord.stats.tou:'-')+' 武'+(lord?lord.stats.bu:'-'), b.x+42, b.y+50, {size:11, color:'#7d93ab'});
+        } else { drawButton(ctx, b, this.t); }
+      }
+    }
+  }
+}
+
+/* ===================================================================
+ * MapScene — 戦略マップ（ハブ）
+ * =================================================================== */
+class MapScene extends GameKit.Scene {
+  constructor(state){ super(); this.state=state; }
+  enter(game){
+    this.cells = computeProvinceCells();
+    this.t=0; this.mode='select'; this.selected=null; this.hover=null;
+    this.overlay=null; this.march=null; this.message=null; this.messageT=0;
+    this.particles = new GameKit.Particles(W, H, {count:24, colors:['#1e3a5f','#2a2150']});
+    // 戦闘から戻った結果の適用
+    if (this.state.pendingResult){ this.overlay = {type:'battleResult', data:this.state.pendingResult}; this.state.pendingResult=null; }
+    this._checkEnd(game);
+    this._save();
+  }
+  _save(){ this.state.version=SAVE_VERSION; save.set('autosave', this.state); }
+  _flash(jp){ this.message=jp; this.messageT=2.2; }
+
+  /* ---- 入力 ---- */
+  update(dt, game){
+    this.t+=dt; this.particles.update(dt);
+    if (this.messageT>0) this.messageT-=dt;
+    const p=game.input.pointer; this.hover=null;
+
+    if (this.overlay){ this._updateOverlay(game, p); return; }
+
+    // ボタン群
+    const btns = this._buttons();
+    updateButtonHot(btns, p);
+    // ホバー洲
+    if (pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
+
+    if (p.justPressed){
+      for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.06,'triangle'); b.action(game); return; } }
+      const pid = this._pickProvince(p.x, p.y);
+      if (pid) this._clickProvince(game, pid);
+    }
+  }
+  _pickProvince(x,y){
+    if (!pointInRect({x,y}, MAP.clip)) return null;
+    for (const id in this.cells){ if (this.cells[id].length>=3 && pointInPoly(x,y,this.cells[id])) return id; }
+    return null;
+  }
+  _clickProvince(game, pid){
+    const st=this.state; const prov=st.provinces[pid];
+    if (this.mode==='select'){
+      if (prov.owner===st.playerDaimyo){ this.selected=pid; this.mode='province'; game.audio.beep(720,0.05,'sine'); }
+      else { this.overlay={type:'provinceInfo', pid}; }
+    } else if (this.mode==='province'){
+      if (pid===this.selected){ this.selected=null; this.mode='select'; return; }
+      const src=st.provinces[this.selected];
+      if (neighborsOf(this.selected).includes(pid)){
+        if (src.hasActed){ this._flash('この洲は今ターン既に出陣済'); return; }
+        if (src.soldiers<=100){ this._flash('兵が足りません'); return; }
+        this._openMarch(this.selected, pid);
+      } else if (prov.owner===st.playerDaimyo){
+        this.selected=pid; // 別の自国洲へ選択切替
+      } else {
+        this.overlay={type:'provinceInfo', pid};
+      }
+    }
+  }
+
+  /* ---- 出陣（March）オーバーレイ ---- */
+  _openMarch(srcId, dstId){
+    const st=this.state; const src=st.provinces[srcId];
+    const maxSend = src.soldiers-100;
+    this.march = {
+      srcId, dstId,
+      troops: Math.max(100, Math.round(maxSend*0.6/100)*100),
+      maxSend,
+      generals: src.generals.filter(g=>st.generals[g].alive).slice(),
+      pick: {},
+    };
+    // デフォルトで最強武将を選択
+    const bg = bestGeneralIn(st, srcId);
+    if (bg) this.march.pick[bg]=true;
+    this.overlay={type:'march'};
+  }
+  _confirmMarch(game, auto){
+    const st=this.state, m=this.march;
+    const src=st.provinces[m.srcId], dst=st.provinces[m.dstId];
+    const troops=clamp(m.troops, 100, m.maxSend);
+    const gens=Object.keys(m.pick).filter(g=>m.pick[g]);
+    const enemy = dst.owner!==st.playerDaimyo;
+    src.soldiers -= troops;
+    // 武将を出陣元から外す
+    gens.forEach(g=>{ const i=src.generals.indexOf(g); if(i>=0) src.generals.splice(i,1); });
+    src.hasActed=true;
+    if (!enemy){
+      // 増援（自国洲へ移動）
+      dst.soldiers += troops;
+      gens.forEach(g=>{ st.generals[g].location=m.dstId; dst.generals.push(g); });
+      this.overlay=null; this.march=null; this.selected=null; this.mode='select';
+      game.audio.beep(520,0.1,'sine'); this._flash('増援を送りました'); this._save();
+      return;
+    }
+    // 攻撃
+    const ctx = this._buildBattleContext(m.srcId, m.dstId, troops, gens);
+    this.overlay=null; this.march=null;
+    if (auto){
+      this._resolveAutoPlayerBattle(game, ctx);
+    } else {
+      st.pendingBattle = ctx;
+      game.changeScene(new BattleScene(st));
+    }
+  }
+  _buildBattleContext(srcId, dstId, troops, gens){
+    const st=this.state; const dst=st.provinces[dstId];
+    const dstOwner = dst.owner;
+    const dDef = dstOwner? daimyoDef(st, dstOwner) : null;
+    return {
+      srcId, dstId,
+      year: st.year,
+      attacker: { daimyo: st.playerDaimyo, family: daimyoDef(st,st.playerDaimyo).id, soldiers: troops, generals: gens },
+      defender: { daimyo: dstOwner, family: dstOwner||'', soldiers: dst.soldiers, generals: dst.generals.filter(g=>st.generals[g].alive).slice(), castleLevel: dst.castleLevel },
+      terrain: DATA.provById[dstId].terrain,
+    };
+  }
+  _resolveAutoPlayerBattle(game, ctx){
+    const st=this.state;
+    const res = autoResolveBattle({
+      atkSoldiers:ctx.attacker.soldiers, atkGenerals:ctx.attacker.generals, atkFamily:ctx.attacker.family,
+      defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
+      year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain,
+    });
+    applyBattleResult(st, ctx, res);
+    game.audio.jingle(res.attackerWins?[{f:523,d:0.1},{f:784,d:0.16}]:[{f:392,d:0.12},{f:262,d:0.2}]);
+    this.overlay={type:'battleResult', data: st.pendingResult}; st.pendingResult=null;
+    this.selected=null; this.mode='select'; this._save();
+  }
+
+  /* ---- コマンド: 内政/徴兵 ---- */
+  _develop(game){
+    const st=this.state, pid=this.selected, prov=st.provinces[pid];
+    const cost=220;
+    if (st.daimyo[st.playerDaimyo].gold<cost){ this._flash('金が足りません'); return; }
+    if (prov.development>=95){ this._flash('開発度は最大です'); return; }
+    st.daimyo[st.playerDaimyo].gold-=cost;
+    prov.development=clamp(prov.development+6,0,95);
+    game.audio.beep(680,0.08,'sine'); this._flash('開発度+6'); this._save();
+  }
+  _castle(game){
+    const st=this.state, pid=this.selected, prov=st.provinces[pid];
+    if (prov.castleLevel>=5){ this._flash('城は最大規模です'); return; }
+    const cost=(prov.castleLevel+1)*700;
+    if (st.daimyo[st.playerDaimyo].gold<cost){ this._flash('金が足りません'); return; }
+    st.daimyo[st.playerDaimyo].gold-=cost;
+    prov.castleLevel++;
+    game.audio.beep(560,0.12,'triangle'); this._flash('城を強化（Lv'+prov.castleLevel+'）'); this._save();
+  }
+  _recruit(game){
+    const st=this.state, pid=this.selected, prov=st.provinces[pid];
+    const add=500;
+    const cap=DATA.provById[pid].kokudaka*4 + prov.castleLevel*600;
+    if (prov.soldiers>=cap){ this._flash('これ以上徴兵できません'); return; }
+    const bg=bestGeneralIn(st,pid); const sei=bg?DATA.genById[bg].stats.sei:45;
+    const cost=Math.round(add*(0.6 - sei/400));
+    if (st.daimyo[st.playerDaimyo].gold<cost){ this._flash('金が足りません'); return; }
+    st.daimyo[st.playerDaimyo].gold-=cost;
+    prov.soldiers=Math.min(cap, prov.soldiers+add);
+    game.audio.beep(440,0.1,'square'); this._flash('兵+'+add+'（費用 '+cost+'貫）'); this._save();
+  }
+
+  /* ---- ターン終了 → AI処理 ---- */
+  _endTurn(game){
+    const st=this.state;
+    // 収入
+    daimyoOf(st).forEach(d=>{
+      if (!st.daimyo[d.id].alive) return;
+      let inc=0;
+      ownedProvinces(st,d.id).forEach(pid=>{
+        const prov=st.provinces[pid];
+        inc += Math.round(DATA.provById[pid].kokudaka*(prov.development/100)*SEASONS[st.season].mod*0.9);
+      });
+      st.daimyo[d.id].gold += inc;
+    });
+    // AI 各大名
+    const aiLog=[];
+    daimyoOf(st).forEach(d=>{
+      if (d.id===st.playerDaimyo || !st.daimyo[d.id].alive) return;
+      runStrategicAI(st, d, aiLog);
+    });
+    // 行動フラグ・季節・ターン更新
+    for (const pid in st.provinces) st.provinces[pid].hasActed=false;
+    st.season=(st.season+1)%4;
+    if (st.season===0) st.year++;
+    st.turn++;
+    this.selected=null; this.mode='select';
+    this._updateDaimyoAlive();
+    this.overlay={type:'turnSummary', data:aiLog};
+    game.audio.beep(500,0.12,'triangle');
+    this._save();
+    this._checkEnd(game);
+  }
+  _updateDaimyoAlive(){
+    const st=this.state;
+    daimyoOf(st).forEach(d=>{ if (ownedProvinces(st,d.id).length===0) st.daimyo[d.id].alive=false; });
+  }
+  _checkEnd(game){
+    const st=this.state;
+    const mine=ownedProvinces(st, st.playerDaimyo).length;
+    if (mine===0){ this.overlay={type:'gameover', win:false}; }
+    else if (mine===DATA.provinces.length){ this.overlay={type:'gameover', win:true}; }
+  }
+
+  /* ---- ボタン定義 ---- */
+  _buttons(){
+    const st=this.state; const bs=[];
+    // 下部コマンドバー
+    if (this.mode==='province' && this.selected){
+      const y=556; let x=14;
+      bs.push({x, y, w:120, h:36, jp:'内政 開発', en:'Develop', accent:'rgba(52,211,153,0.6)', action:g=>this._develop(g)}); x+=128;
+      bs.push({x, y, w:120, h:36, jp:'城強化', en:'Castle', accent:'rgba(96,165,250,0.6)', action:g=>this._castle(g)}); x+=128;
+      bs.push({x, y, w:120, h:36, jp:'徴兵', en:'Recruit', accent:'rgba(251,191,36,0.6)', action:g=>this._recruit(g)}); x+=128;
+      bs.push({x, y, w:120, h:36, jp:'武将一覧', en:'Generals', action:()=>{ this.overlay={type:'provinceInfo', pid:this.selected}; }}); x+=128;
+    }
+    bs.push({x:W-150, y:556, w:136, h:36, jp:'ターン終了', en:'End Turn', accent:'rgba(232,192,122,0.7)', action:g=>this._endTurn(g)});
+    bs.push({x:W-150, y:512, w:136, h:34, label:'タイトルへ', sz:12, action:()=>game.changeScene(new TitleScene())});
+    return bs;
+  }
+
+  /* ---- オーバーレイ入力 ---- */
+  _updateOverlay(game, p){
+    const ov=this.overlay; const btns=this._overlayButtons();
+    updateButtonHot(btns, p);
+    // marchのスライダー等
+    if (p.justPressed){
+      for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.05,'sine'); b.action(game); return; } }
+    }
+  }
+  _overlayButtons(){
+    const ov=this.overlay; const bs=[]; const st=this.state;
+    if (!ov) return bs;
+    if (ov.type==='march'){
+      const m=this.march; const px=W/2-230, py=H/2-150, pw=460;
+      // troops -/+
+      bs.push({x:px+30, y:py+96, w:44, h:34, label:'-100', sz:12, action:()=>{ m.troops=clamp(m.troops-100,100,m.maxSend); }});
+      bs.push({x:px+30, y:py+136, w:44, h:30, label:'-500', sz:11, action:()=>{ m.troops=clamp(m.troops-500,100,m.maxSend); }});
+      bs.push({x:px+pw-74, y:py+96, w:44, h:34, label:'+100', sz:12, action:()=>{ m.troops=clamp(m.troops+100,100,m.maxSend); }});
+      bs.push({x:px+pw-74, y:py+136, w:44, h:30, label:'+500', sz:11, action:()=>{ m.troops=clamp(m.troops+500,100,m.maxSend); }});
+      bs.push({x:px+pw/2-70, y:py+128, w:60, h:24, label:'半数', sz:11, action:()=>{ m.troops=clamp(Math.round(m.maxSend*0.5/100)*100,100,m.maxSend); }});
+      bs.push({x:px+pw/2+10, y:py+128, w:60, h:24, label:'全軍', sz:11, action:()=>{ m.troops=m.maxSend; }});
+      // generals toggles
+      m.generals.forEach((g,i)=>{
+        const gx=px+24+(i%2)*(pw/2-20), gy=py+196+Math.floor(i/2)*30;
+        bs.push({x:gx, y:gy, w:pw/2-40, h:26, _gen:g, action:()=>{ m.pick[g]=!m.pick[g]; }});
+      });
+      const dst=st.provinces[m.dstId];
+      const enemy = dst.owner!==st.playerDaimyo;
+      const by=py+300;
+      if (enemy){
+        bs.push({x:px+24, y:by, w:130, h:40, jp:'出陣（戦）', en:'Hex Battle', accent:'rgba(248,113,113,0.7)', action:g=>this._confirmMarch(g,false)});
+        bs.push({x:px+164, y:by, w:130, h:40, jp:'自動解決', en:'Auto', accent:'rgba(251,191,36,0.7)', action:g=>this._confirmMarch(g,true)});
+        bs.push({x:px+pw-110, y:by, w:90, h:40, jp:'取消', en:'Cancel', action:()=>{ this.overlay=null; this.march=null; }});
+      } else {
+        bs.push({x:px+24, y:by, w:150, h:40, jp:'増援を送る', en:'Reinforce', accent:'rgba(52,211,153,0.7)', action:g=>this._confirmMarch(g,false)});
+        bs.push({x:px+pw-110, y:by, w:90, h:40, jp:'取消', en:'Cancel', action:()=>{ this.overlay=null; this.march=null; }});
+      }
+    } else if (ov.type==='provinceInfo'){
+      bs.push({x:W/2+150, y:H/2+150, w:120, h:36, jp:'閉じる', en:'Close', action:()=>{ this.overlay=null; }});
+    } else if (ov.type==='battleResult' || ov.type==='turnSummary'){
+      bs.push({x:W/2-60, y:H/2+150, w:120, h:40, jp:'了解', en:'OK', accent:'rgba(232,192,122,0.7)', action:()=>{ this.overlay=null; }});
+    } else if (ov.type==='gameover'){
+      bs.push({x:W/2-130, y:H/2+120, w:120, h:42, jp:'タイトルへ', en:'Title', action:()=>{ save.set('autosave',null); game.changeScene(new TitleScene()); }});
+      bs.push({x:W/2+10, y:H/2+120, w:120, h:42, jp:'続ける', en:'Keep', action:()=>{ this.overlay=null; }});
+    }
+    return bs;
+  }
+
+  /* ---- 描画 ---- */
+  draw(ctx, game){
+    ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
+    // 海背景
+    ctx.fillStyle='#081120'; ctx.fillRect(MAP.clip.x,MAP.clip.y,MAP.clip.w,MAP.clip.h);
+    this.particles.draw(ctx);
+    this._drawMap(ctx);
+    this._drawTopBar(ctx);
+    this._drawSidePanel(ctx);
+    // ボタン
+    if (!this.overlay){ const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t); }
+    // メッセージトースト
+    if (this.messageT>0){
+      const a=Math.min(1,this.messageT);
+      ctx.globalAlpha=a;
+      GameKit.UI.glassPanel(ctx, W/2-160, 510, 320, 34, {radius:10, fill:'rgba(20,30,50,0.9)'});
+      T(ctx, this.message, W/2, 519, {size:14, color:'#e8c07a', align:'center'});
+      ctx.globalAlpha=1;
+    }
+    if (this.overlay) this._drawOverlay(ctx);
+  }
+  _drawMap(ctx){
+    const st=this.state;
+    for (const p of DATA.provinces){
+      const cell=this.cells[p.id]; if (!cell||cell.length<3) continue;
+      const prov=st.provinces[p.id];
+      const dd = prov.owner? daimyoDef(st, prov.owner):null;
+      let fill = dd? dd.color : '#3a4452';
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(cell[0][0],cell[0][1]);
+      for (let i=1;i<cell.length;i++) ctx.lineTo(cell[i][0],cell[i][1]);
+      ctx.closePath();
+      // プレイヤー領は明るく
+      ctx.globalAlpha = prov.owner===st.playerDaimyo ? 0.92 : 0.78;
+      ctx.fillStyle=fill; ctx.fill();
+      ctx.globalAlpha=1;
+      // 枠
+      let stroke='rgba(5,7,13,0.85)', lw=1.4;
+      if (p.id===this.selected){ stroke='#22d3ee'; lw=3; }
+      else if (this.mode==='province' && this.selected && neighborsOf(this.selected).includes(p.id)){
+        stroke = (prov.owner===st.playerDaimyo)? '#34d399' : '#a78bfa'; lw=2.4;
+      } else if (p.id===this.hover){ stroke='#e8c07a'; lw=2; }
+      ctx.lineWidth=lw; ctx.strokeStyle=stroke; ctx.stroke();
+      ctx.restore();
+      // ラベル
+      const cx=toScreenX(p.x), cy=toScreenY(p.y);
+      T(ctx, p.nameJP, cx, cy-12, {size:11, weight:'bold', color:'#0c0c10', align:'center', baseline:'middle'});
+      T(ctx, p.nameJP, cx, cy-13, {size:11, weight:'bold', color:'#f8fafc', align:'center', baseline:'middle'});
+      if (prov.owner){
+        T(ctx, (prov.soldiers/1000).toFixed(1)+'千', cx, cy+4, {size:10, color:'#0c0c10', align:'center', baseline:'middle'});
+        T(ctx, (prov.soldiers/1000).toFixed(1)+'千', cx, cy+3, {size:10, color:'#dbe4ee', align:'center', baseline:'middle'});
+      }
+    }
+  }
+  _drawTopBar(ctx){
+    const st=this.state; const pd=daimyoDef(st, st.playerDaimyo);
+    GameKit.UI.glassPanel(ctx, 6, 6, 676, 46, {radius:10, fill:'rgba(12,20,36,0.8)'});
+    // 家マーク
+    ctx.fillStyle=pd.color; ctx.beginPath(); ctx.arc(28,29,12,0,Math.PI*2); ctx.fill();
+    T(ctx, pd.nameJP+'家', 48, 12, {size:16, weight:'bold', color:'#f1e6cf'});
+    T(ctx, st.year+'年 '+SEASONS[st.season].jp+' （第'+st.turn+'ターン）', 48, 32, {size:11, color:'#9fb2c6'});
+    const mine=ownedProvinces(st,st.playerDaimyo).length;
+    T(ctx, '金 '+st.daimyo[st.playerDaimyo].gold+'貫', 330, 12, {size:14, color:'#e8c07a'});
+    T(ctx, '領国 '+mine+' / '+DATA.provinces.length+' 洲', 330, 32, {size:12, color:'#9fb2c6'});
+    let totalS=0; ownedProvinces(st,st.playerDaimyo).forEach(pid=>totalS+=st.provinces[pid].soldiers);
+    T(ctx, '総兵力 '+(totalS/1000).toFixed(1)+'千', 460, 12, {size:13, color:'#cbd5e1'});
+    T(ctx, '目標: 全64洲制覇', 460, 32, {size:11, color:'#7d93ab'});
+    T(ctx, this.scenarioHint||'', 600, 20, {size:10, color:'#64748b'});
+  }
+  _drawSidePanel(ctx){
+    const st=this.state; const x=690, w=264;
+    GameKit.UI.glassPanel(ctx, x, 6, w, 540, {radius:12, fill:'rgba(10,16,28,0.82)'});
+    const pid = this.selected || this.hover;
+    if (!pid){
+      T(ctx,'洲を選択してください', x+w/2, 20, {size:13, color:'#9fb2c6', align:'center'});
+      T(ctx,'自国の洲をクリック → 内政・徴兵', x+16, 60, {size:11, color:'#7d93ab'});
+      T(ctx,'隣接洲をクリック → 出陣（戦／増援）', x+16, 82, {size:11, color:'#7d93ab'});
+      // 凡例（大名色 上位）
+      T(ctx,'― 勢力 / Clans ―', x+w/2, 120, {size:12, color:'#e8c07a', align:'center'});
+      const clans = daimyoOf(st).filter(d=>st.daimyo[d.id].alive)
+        .map(d=>({d, n:ownedProvinces(st,d.id).length})).sort((a,b)=>b.n-a.n).slice(0,12);
+      clans.forEach((c,i)=>{
+        const yy=148+i*30;
+        ctx.fillStyle=c.d.color; ctx.fillRect(x+18, yy, 14, 14);
+        T(ctx, c.d.nameJP+'家', x+40, yy, {size:12, color: c.d.id===st.playerDaimyo?'#e8c07a':'#cbd5e1'});
+        T(ctx, c.n+'洲', x+w-24, yy, {size:12, color:'#9fb2c6', align:'right'});
+      });
+      return;
+    }
+    const p=DATA.provById[pid], prov=st.provinces[pid];
+    const dd=prov.owner?daimyoDef(st,prov.owner):null;
+    T(ctx, p.nameJP+' ('+p.nameEN+')', x+16, 18, {size:18, weight:'bold', color:'#f1e6cf'});
+    T(ctx, p.region+'地方 ・ 地形:'+terrainJP(p.terrain), x+16, 44, {size:11, color:'#9fb2c6'});
+    T(ctx, dd? '領主: '+dd.nameJP+'家' : '空白地（無所属）', x+16, 64, {size:13, color: dd?dd.color:'#94a3b8'});
+    const rows=[
+      ['石高', p.kokudaka+'千石'],
+      ['兵力', prov.soldiers+' 人'],
+      ['開発度', prov.development+' / 95'],
+      ['城', 'Lv '+prov.castleLevel+' / 5'],
+    ];
+    rows.forEach((r,i)=>{ const yy=92+i*24;
+      T(ctx, r[0], x+18, yy, {size:12, color:'#9fb2c6'});
+      T(ctx, r[1], x+w-22, yy, {size:13, color:'#e2e8f0', align:'right'});
+    });
+    T(ctx,'― 配属武将 ―', x+w/2, 196, {size:12, color:'#e8c07a', align:'center'});
+    const gens=prov.generals.filter(g=>st.generals[g].alive);
+    if (gens.length===0){ T(ctx,'（在城武将なし）', x+w/2, 220, {size:11, color:'#7d93ab', align:'center'}); }
+    gens.slice(0,9).forEach((gid,i)=>{
+      const g=DATA.genById[gid]; const yy=218+i*32;
+      T(ctx, g.nameJP, x+18, yy, {size:13, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, x+18, yy+15, {size:10, color:'#7d93ab'});
+      T(ctx, '忠'+st.generals[gid].loyalty, x+w-22, yy+4, {size:11, color:'#9fb2c6', align:'right'});
+    });
+  }
+
+  _drawOverlay(ctx){
+    const ov=this.overlay, st=this.state;
+    ctx.save(); ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,W,H); ctx.restore();
+    if (ov.type==='march') this._drawMarch(ctx);
+    else if (ov.type==='provinceInfo') this._drawProvinceInfo(ctx, ov.pid);
+    else if (ov.type==='battleResult') this._drawBattleResult(ctx, ov.data);
+    else if (ov.type==='turnSummary') this._drawTurnSummary(ctx, ov.data);
+    else if (ov.type==='gameover') this._drawGameOver(ctx, ov.win);
+    const btns=this._overlayButtons(); for (const b of btns){
+      if (b._gen){ drawGenToggle(ctx, b, this.march, st); } else drawButton(ctx,b,this.t);
+    }
+  }
+  _drawMarch(ctx){
+    const st=this.state, m=this.march;
+    const px=W/2-230, py=H/2-150, pw=460, ph=380;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.96)', stroke:'rgba(232,192,122,0.4)'});
+    const src=DATA.provById[m.srcId], dst=DATA.provById[m.dstId];
+    const dstProv=st.provinces[m.dstId];
+    const enemy=dstProv.owner!==st.playerDaimyo;
+    T(ctx, (enemy?'出陣 / March to Battle':'増援 / Reinforce'), px+pw/2, py+16, {size:20, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx, src.nameJP+'  →  '+dst.nameJP+(dstProv.owner?'（'+daimyoDef(st,dstProv.owner).nameJP+'家）':'（空白地）'), px+pw/2, py+48, {size:13, color:'#cbd5e1', align:'center'});
+    T(ctx, '敵兵力 約'+dstProv.soldiers+'人 ・ 城Lv'+dstProv.castleLevel+' ・ 地形'+terrainJP(dst.terrain), px+pw/2, py+68, {size:11, color:'#9fb2c6', align:'center'});
+    // troops
+    T(ctx, '出陣兵数', px+pw/2, py+96, {size:12, color:'#9fb2c6', align:'center'});
+    T(ctx, m.troops+' 人', px+pw/2, py+112, {size:22, weight:'bold', color:'#f1e6cf', align:'center'});
+    T(ctx, '（最大 '+m.maxSend+'）', px+pw/2, py+158, {size:10, color:'#7d93ab', align:'center'});
+    T(ctx, '― 従軍武将 ―', px+pw/2, py+176, {size:12, color:'#e8c07a', align:'center'});
+    if (m.generals.length===0) T(ctx,'（武将なし）', px+pw/2, py+198, {size:11, color:'#7d93ab', align:'center'});
+  }
+  _drawProvinceInfo(ctx, pid){
+    const st=this.state, p=DATA.provById[pid], prov=st.provinces[pid];
+    const dd=prov.owner?daimyoDef(st,prov.owner):null;
+    const px=W/2-230, py=H/2-170, pw=460, ph=350;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.96)'});
+    T(ctx, p.nameJP+' / '+p.nameEN, px+pw/2, py+18, {size:22, weight:'bold', color:'#f1e6cf', align:'center'});
+    T(ctx, (dd?dd.nameJP+'家':'無所属')+' ・ '+p.region+' ・ '+terrainJP(p.terrain), px+pw/2, py+50, {size:12, color: dd?dd.color:'#94a3b8', align:'center'});
+    T(ctx, '石高 '+p.kokudaka+'千石  兵 '+prov.soldiers+'  開発 '+prov.development+'  城Lv'+prov.castleLevel, px+pw/2, py+74, {size:12, color:'#cbd5e1', align:'center'});
+    T(ctx, '― 配属武将 ―', px+pw/2, py+102, {size:12, color:'#e8c07a', align:'center'});
+    const gens=prov.generals.filter(g=>st.generals[g].alive);
+    if (!gens.length) T(ctx,'（在城武将なし）', px+pw/2, py+126, {size:11, color:'#7d93ab', align:'center'});
+    gens.slice(0,8).forEach((gid,i)=>{
+      const g=DATA.genById[gid]; const c=i%2, r=Math.floor(i/2);
+      const gx=px+30+c*(pw/2-20), gy=py+126+r*46;
+      T(ctx, g.nameJP, gx, gy, {size:14, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, gx, gy+18, {size:10, color:'#7d93ab'});
+    });
+  }
+  _drawBattleResult(ctx, d){
+    const px=W/2-220, py=H/2-150, pw=440, ph=320;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.96)', stroke: d.win?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
+    T(ctx, d.win?'勝利 / Victory':'敗北 / Defeat', px+pw/2, py+24, {size:26, weight:'bold', color: d.win?'#34d399':'#f87171', align:'center'});
+    T(ctx, DATA.provById[d.dstId].nameJP+' の戦い', px+pw/2, py+62, {size:14, color:'#cbd5e1', align:'center'});
+    T(ctx, (d.win?'を攻略した！':'攻略に失敗…'), px+pw/2, py+84, {size:13, color:'#9fb2c6', align:'center'});
+    T(ctx, '自軍生存 '+d.atkSurvivors+' 人 / 敵残存 '+d.defSurvivors+' 人', px+pw/2, py+120, {size:13, color:'#e2e8f0', align:'center'});
+    if (d.generalsLost && d.generalsLost.length){
+      T(ctx, '討死: '+d.generalsLost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), px+pw/2, py+150, {size:12, color:'#f87171', align:'center'});
+    } else {
+      T(ctx, '武将の損失なし', px+pw/2, py+150, {size:12, color:'#7d93ab', align:'center'});
+    }
+  }
+  _drawTurnSummary(ctx, log){
+    const px=W/2-240, py=H/2-180, pw=480, ph=360;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.96)'});
+    const st=this.state;
+    T(ctx, st.year+'年 '+SEASONS[st.season].jp+' — 評定 / Council', px+pw/2, py+18, {size:18, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx, '諸国の動向 / News of the realm', px+pw/2, py+46, {size:11, color:'#9fb2c6', align:'center'});
+    if (!log || !log.length){ T(ctx,'目立った動きはなかった。', px+pw/2, py+90, {size:13, color:'#9fb2c6', align:'center'}); }
+    else {
+      log.slice(0,9).forEach((line,i)=>{ T(ctx, '・'+line, px+30, py+78+i*26, {size:12, color:'#cbd5e1'}); });
+      if (log.length>9) T(ctx, '…他 '+(log.length-9)+' 件', px+30, py+78+9*26, {size:11, color:'#7d93ab'});
+    }
+  }
+  _drawGameOver(ctx, win){
+    const px=W/2-240, py=H/2-150, pw=480, ph=300;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:18, fill:'rgba(14,22,38,0.97)', stroke: win?'rgba(232,192,122,0.6)':'rgba(248,113,113,0.5)'});
+    T(ctx, win?'天下統一！':'落 城', px+pw/2, py+40, {size:40, weight:'bold', color: win?'#e8c07a':'#f87171', align:'center'});
+    T(ctx, win?'全64洲を制覇した！ All 64 provinces conquered!':'貴家は滅亡した… Your clan has fallen.', px+pw/2, py+110, {size:14, color:'#cbd5e1', align:'center'});
+    const st=this.state;
+    T(ctx, st.scenarioNameJP+' / '+st.year+'年 / '+st.turn+'ターン', px+pw/2, py+140, {size:12, color:'#9fb2c6', align:'center'});
+  }
+}
+function terrainJP(t){ return {plain:'平地',mountain:'山地',coast:'沿岸',river:'河川'}[t]||t; }
+function drawGenToggle(ctx, b, march, st){
+  const on=!!march.pick[b._gen]; const g=DATA.genById[b._gen];
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,7);
+  ctx.fillStyle= on?'rgba(52,211,153,0.22)':'rgba(255,255,255,0.05)'; ctx.fill();
+  ctx.strokeStyle= on?'#34d399':'rgba(255,255,255,0.15)'; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
+  T(ctx, (on?'☑ ':'☐ ')+g.nameJP, b.x+8, b.y+5, {size:12, color: on?'#d7f5e8':'#9fb2c6'});
+  T(ctx, '武'+g.stats.bu, b.x+b.w-30, b.y+6, {size:10, color:'#7d93ab'});
+}
+
+/* ===================================================================
+ * 戦略AI
+ * =================================================================== */
+function runStrategicAI(st, d, log){
+  const aggro = {aggressive:1.15, opportunist:1.0, defensive:0.82}[d.ai] || 1.0;
+  const treasury = st.daimyo[d.id];
+  let myProvs = ownedProvinces(st, d.id);
+  // 内政・徴兵（国力に余裕があれば）
+  myProvs.forEach(pid=>{
+    const prov=st.provinces[pid];
+    if (treasury.gold>900 && prov.development<80 && Math.random()<0.5){ treasury.gold-=220; prov.development=clamp(prov.development+6,0,95); }
+    if (treasury.gold>600){
+      const cap=DATA.provById[pid].kokudaka*4+prov.castleLevel*600;
+      if (prov.soldiers<cap*0.7 && Math.random()<0.6){ const cost=300; if(treasury.gold>=cost){ treasury.gold-=cost; prov.soldiers=Math.min(cap, prov.soldiers+500);} }
+    }
+  });
+  // 攻撃判断（最大2回/ターン）
+  let attacks=0;
+  const order = myProvs.slice().sort(()=> Math.random()-0.5);
+  for (const pid of order){
+    if (attacks>=2) break;
+    const prov=st.provinces[pid];
+    if (prov.hasActed || prov.soldiers<800) continue;
+    // 敵隣接洲
+    const targets = neighborsOf(pid).filter(nb=>{ const o=st.provinces[nb].owner; return o!==d.id; });
+    if (!targets.length) continue;
+    // 最も弱い/価値ある標的
+    let best=null, bestScore=-1;
+    targets.forEach(nb=>{
+      const tp=st.provinces[nb];
+      const val = DATA.provById[nb].kokudaka/Math.max(1,provinceStrength(st,nb));
+      if (val>bestScore){ bestScore=val; best=nb; }
+    });
+    if (!best) continue;
+    const myStr = provinceStrength(st,pid);
+    const enStr = Math.max(1, provinceStrength(st,best));
+    if (myStr*aggro > enStr*1.05){
+      // 出陣（自動解決）
+      const send = Math.round((prov.soldiers-200)*0.8);
+      if (send<300) continue;
+      const gens = prov.generals.filter(g=>st.generals[g].alive).slice();
+      const tp=st.provinces[best];
+      const ctx={
+        srcId:pid, dstId:best, year:st.year,
+        attacker:{daimyo:d.id, family:d.id, soldiers:send, generals:gens},
+        defender:{daimyo:tp.owner, family:tp.owner||'', soldiers:tp.soldiers, generals:tp.generals.filter(g=>st.generals[g].alive).slice(), castleLevel:tp.castleLevel},
+        terrain:DATA.provById[best].terrain,
+      };
+      prov.soldiers-=send; prov.hasActed=true;
+      gens.forEach(g=>{ const i=prov.generals.indexOf(g); if(i>=0) prov.generals.splice(i,1); });
+      const res=autoResolveBattle({
+        atkSoldiers:send, atkGenerals:gens, atkFamily:d.id,
+        defSoldiers:tp.soldiers, defGenerals:ctx.defender.generals, defFamily:tp.owner||'',
+        year:st.year, castleLevel:tp.castleLevel, terrain:ctx.terrain,
+      });
+      const defenderName = tp.owner?daimyoDef(st,tp.owner).nameJP:'空白';
+      applyBattleResult(st, ctx, res, gens);
+      attacks++;
+      if (res.attackerWins){
+        log.push(d.nameJP+'家が'+defenderName+'家の'+DATA.provById[best].nameJP+'を攻略');
+      }
+    }
+  }
+}
+
+/* ---- 戦闘結果を state に適用（手動・自動共通） ---- */
+function applyBattleResult(st, ctx, res, attackerGenerals){
+  const src=st.provinces[ctx.srcId], dst=st.provinces[ctx.dstId];
+  const atkGens = attackerGenerals || ctx.attacker.generals;
+  const playerInvolved = ctx.attacker.daimyo===st.playerDaimyo;
+  const generalsLost=[];
+  const lord = daimyoDef(st, ctx.attacker.daimyo);
+  const isLord = (gid)=> lord && lord.lord===gid;
+  if (res.attackerWins){
+    // 攻撃側生存兵が占領
+    const defLossFrac = 1 - res.defSurvivors/Math.max(1,ctx.defender.soldiers);
+    // 守備側武将の討死/捕縛
+    const deadDef = rollGeneralDeaths(st, ctx.defender.generals, defLossFrac, (gid)=>{ const dl=ctx.defender.daimyo&&daimyoDef(st,ctx.defender.daimyo); return dl&&dl.lord===gid; });
+    // 守備側の生存武将は領地を失い退去（locationクリア）
+    dst.generals.filter(g=>st.generals[g].alive).forEach(g=>{ st.generals[g].location=null; st.generals[g].daimyo=null; });
+    dst.generals = [];
+    // 占領
+    dst.owner = ctx.attacker.daimyo;
+    dst.soldiers = res.atkSurvivors;
+    // 攻撃側武将を移動
+    atkGens.forEach(g=>{ if (st.generals[g].alive){ st.generals[g].location=ctx.dstId; st.generals[g].daimyo=ctx.attacker.daimyo; dst.generals.push(g); } });
+    // 攻撃側のわずかな討死
+    const atkLossFrac = 1 - res.atkSurvivors/Math.max(1,ctx.attacker.soldiers);
+    rollGeneralDeaths(st, atkGens, atkLossFrac*0.5, isLord).forEach(g=>generalsLost.push(g));
+    deadDef.forEach(g=>generalsLost.push(g));
+  } else {
+    // 攻撃側敗北：生存兵は出陣元へ帰還、武将も戻る
+    src.soldiers += res.atkSurvivors;
+    const atkLossFrac = 1 - res.atkSurvivors/Math.max(1,ctx.attacker.soldiers);
+    const deadAtk = rollGeneralDeaths(st, atkGens, atkLossFrac, isLord);
+    atkGens.forEach(g=>{ if (st.generals[g].alive){ st.generals[g].location=ctx.srcId; src.generals.push(g); } });
+    deadAtk.forEach(g=>generalsLost.push(g));
+    // 守備側兵を更新
+    dst.soldiers = res.defSurvivors;
+  }
+  if (playerInvolved){
+    st.pendingResult = { win:res.attackerWins, dstId:ctx.dstId, atkSurvivors:res.atkSurvivors, defSurvivors:res.defSurvivors, generalsLost };
+  }
+}
+
+/* ===================================================================
+ * BattleScene — ヘックス戦術戦闘
+ * =================================================================== */
+const HEX = { size:25, cols:11, rows:9, ox:300, oy:120 };
+function hexNeighbors(col,row){
+  const even = (row%2)===0;
+  const d = even
+    ? [[1,0],[-1,0],[0,-1],[-1,-1],[0,1],[-1,1]]
+    : [[1,0],[-1,0],[1,-1],[0,-1],[1,1],[0,1]];
+  return d.map(([dc,dr])=>[col+dc,row+dr]).filter(([c,r])=>c>=0&&c<HEX.cols&&r>=0&&r<HEX.rows);
+}
+function offsetToCube(col,row){
+  const x = col - (row - (row&1))/2;
+  const z = row; const y = -x-z;
+  return [x,y,z];
+}
+function hexDist(c1,r1,c2,r2){
+  const a=offsetToCube(c1,r1), b=offsetToCube(c2,r2);
+  return (Math.abs(a[0]-b[0])+Math.abs(a[1]-b[1])+Math.abs(a[2]-b[2]))/2;
+}
+function hexCenter(col,row){
+  const x = HEX.ox + HEX.size*Math.sqrt(3)*(col + 0.5*(row&1));
+  const y = HEX.oy + HEX.size*1.5*row;
+  return [x,y];
+}
+
+class BattleScene extends GameKit.Scene {
+  constructor(state){ super(); this.state=state; this.ctx=state.pendingBattle; }
+  enter(game){
+    const c=this.ctx; this.state.pendingBattle=null;
+    this.t=0; this.round=1; this.maxRounds=12; this.phase='player'; this.selected=null;
+    this.reach={}; this.targets={}; this.message=null; this.messageT=0;
+    this.terrainMap = this._genTerrain(c.terrain);
+    this.stacks = [];
+    this._buildStacks('atk', c.attacker, c.year, c.attacker.family, false);
+    this._buildStacks('def', c.defender, c.year, c.defender.family, true);
+    this.particles = new GameKit.Particles(W, H, {count:18, colors:['#2a1c10','#1a2233']});
+    this._enemyHQ = this.stacks.filter(s=>s.side==='def').sort((a,b)=>b.count-a.count)[0];
+    this.over=false; this.result=null;
+  }
+  _genTerrain(baseTerrain){
+    const rng = GameKit.Gen.rng((this.state.rng||1) ^ (this.ctx.dstId?this.ctx.dstId.length*97:7));
+    const map={};
+    for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
+      let t='plain'; const v=rng();
+      if (baseTerrain==='mountain'){ if(v<0.32) t='mountain'; else if(v<0.5) t='forest'; }
+      else if (baseTerrain==='river'){ if (r===Math.floor(HEX.rows/2) && v<0.7) t='river'; else if(v<0.18) t='forest'; }
+      else if (baseTerrain==='coast'){ if(v<0.16) t='forest'; if (c===0||c===HEX.cols-1) { if(v<0.4) t='water'; } }
+      else { if(v<0.2) t='forest'; }
+      map[c+','+r]=t;
+    }
+    return map;
+  }
+  _buildStacks(side, force, year, family, isDef){
+    const comp=compFor(year, family);
+    const total=force.soldiers;
+    const types=UNIT_ORDER.filter(t=>Math.round(total*comp[t])>=50);
+    if (!types.length) types.push('spear');
+    // 武将を兵力順スタックへ割当
+    const gens=(force.generals||[]).slice().sort((a,b)=>{
+      const ga=DATA.genById[a], gb=DATA.genById[b];
+      return (gb?gb.stats.tou+gb.stats.bu:0)-(ga?ga.stats.tou+ga.stats.bu:0);
+    });
+    const sized = types.map(t=>({t, n:Math.max(1,Math.round(total*comp[t]))})).sort((a,b)=>b.n-a.n);
+    let gi=0;
+    const baseRow = isDef? 0 : HEX.rows-1;
+    const row2 = isDef? 1 : HEX.rows-2;
+    sized.forEach((s,idx)=>{
+      const gid = gi<gens.length? gens[gi++] : null;
+      const gstat = gid? DATA.genById[gid].stats : {tou:48,bu:48,chi:48,sei:48};
+      const col = 2 + idx*2;
+      const row = idx%2===0? baseRow : row2;
+      this.stacks.push({
+        id: side+idx, side, type:s.t, count:s.n, count0:s.n,
+        col: clamp(col,0,HEX.cols-1), row,
+        gen:gid, name: gid? DATA.genById[gid].nameJP : (isDef?'守備隊':'足軽隊'),
+        stat:gstat, hasMoved:false, hasAttacked:false, castle: isDef? (force.castleLevel||1):0,
+      });
+    });
+  }
+  stackAt(col,row){ return this.stacks.find(s=>s.col===col&&s.row===row); }
+
+  /* ---- 入力 ---- */
+  update(dt, game){
+    this.t+=dt; this.particles.update(dt);
+    if (this.messageT>0) this.messageT-=dt;
+    const p=game.input.pointer;
+    const btns=this._buttons();
+    updateButtonHot(btns, p);
+    if (this.over){
+      if (p.justPressed){ for (const b of btns){ if(pointInRect(p,b)){ b.action(game); return; } } }
+      return;
+    }
+    if (p.justPressed){
+      for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.05,'sine'); b.action(game); return; } }
+      if (this.phase==='player') this._handleGridClick(game, p);
+    }
+  }
+  _pickHex(px,py){
+    let best=null, bd=1e9;
+    for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
+      const [hx,hy]=hexCenter(c,r); const d=Math.hypot(px-hx,py-hy);
+      if (d<bd){ bd=d; best=[c,r]; }
+    }
+    return bd<=HEX.size*1.05? best : null;
+  }
+  _handleGridClick(game, p){
+    const hx=this._pickHex(p.x,p.y); if (!hx) return;
+    const [c,r]=hx; const s=this.stackAt(c,r);
+    if (this.selected){
+      const sel=this.selected;
+      // 攻撃対象か
+      if (s && s.side==='def' && this.targets[c+','+r]){ this._attack(game, sel, s); return; }
+      // 移動先か
+      if (!s && this.reach[c+','+r]!==undefined && !sel.hasMoved){
+        sel.col=c; sel.row=r; sel.hasMoved=true;
+        game.audio.beep(420,0.05,'sine');
+        this._computeRange(sel);
+        return;
+      }
+      // 別の自軍選択
+      if (s && s.side==='atk'){ this._select(s); return; }
+      this.selected=null; this.reach={}; this.targets={};
+    } else if (s && s.side==='atk'){
+      this._select(s);
+    }
+  }
+  _select(s){ this.selected=s; this._computeRange(s); }
+  _computeRange(s){
+    this.reach={}; this.targets={};
+    // 攻撃対象（射程内の敵）
+    if (!s.hasAttacked){
+      const range=UNITS[s.type].range;
+      this.stacks.filter(e=>e.side==='def').forEach(e=>{
+        if (hexDist(s.col,s.row,e.col,e.row)<=range) this.targets[e.col+','+e.row]=true;
+      });
+    }
+    if (s.hasMoved) return;
+    // 移動可能（Dijkstra + ZOC）
+    const mp=UNITS[s.type].move;
+    const dist={}; dist[s.col+','+s.row]=0;
+    const pq=[[0,s.col,s.row]];
+    const enemyAdj=(c,r)=> hexNeighbors(c,r).some(([nc,nr])=>{ const o=this.stackAt(nc,nr); return o&&o.side==='def'; });
+    while (pq.length){
+      pq.sort((a,b)=>a[0]-b[0]);
+      const [cd,cc,cr]=pq.shift();
+      if (cd>dist[cc+','+cr]) continue;
+      // ZOC: 敵隣接hexからは更に進めない（このhexには入れる）
+      if ((cc!==s.col||cr!==s.row) && enemyAdj(cc,cr)) continue;
+      hexNeighbors(cc,cr).forEach(([nc,nr])=>{
+        const occ=this.stackAt(nc,nr); if (occ) return;
+        const terr=this.terrainMap[nc+','+nr];
+        if (terr==='water') return;
+        let cost=1; if (terr==='forest'||terr==='mountain') cost=2; if (terr==='river') cost=2;
+        const nd=cd+cost;
+        if (nd<=mp && (dist[nc+','+nr]===undefined || nd<dist[nc+','+nr])){ dist[nc+','+nr]=nd; pq.push([nd,nc,nr]); }
+      });
+    }
+    for (const k in dist){ if (k!==s.col+','+s.row) this.reach[k]=dist[k]; }
+  }
+  _attack(game, atk, def){
+    const res=this._resolveMelee(atk, def);
+    atk.hasAttacked=true; atk.hasMoved=true;
+    game.audio.noise(0.18,0.2);
+    if (UNITS[atk.type].range>=2 && hexDist(atk.col,atk.row,def.col,def.row)>=2) game.audio.beep(900,0.05,'square');
+    this._flash(atk.name+'隊 → '+def.name+'隊  敵-'+res.defLoss+(res.atkLoss?' 自-'+res.atkLoss:''));
+    this._cleanupStacks();
+    this.selected=null; this.reach={}; this.targets={};
+    this._checkBattleEnd(game);
+  }
+  _resolveMelee(atk, def){
+    const dist=hexDist(atk.col,atk.row,def.col,def.row);
+    const ranged = UNITS[atk.type].range>=2 && dist>=2;
+    const ua=UNITS[atk.type], ud=UNITS[def.type];
+    const terr=this.terrainMap[def.col+','+def.row];
+    let terrDef=1; if (terr==='forest') terrDef=1.12; else if(terr==='mountain') terrDef=1.2; else if(terr==='river') terrDef=1.15;
+    const castle=1+Math.max(0,(def.castle||1)-1)*0.05;
+    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type);
+    const baseDef = def.count*ud.def*(1+def.stat.tou/200)*terrDef*castle;
+    const ratio = baseAtk/Math.max(1,baseDef);
+    // 致死性は中庸に。兵力・兵科相性・地形が効きつつ、技量で覆せる余地を残す
+    let defLossFrac = clamp(0.13*ratio,0.03,0.5)*(0.85+Math.random()*0.3);
+    const counter = ranged?0.0:0.5;
+    let atkLossFrac = clamp(0.13/Math.max(0.25,ratio),0,0.45)*counter*(0.85+Math.random()*0.3);
+    const defLoss=Math.min(def.count, Math.round(def.count*defLossFrac));
+    const atkLoss=Math.min(atk.count, Math.round(atk.count*atkLossFrac));
+    def.count-=defLoss; atk.count-=atkLoss;
+    return {defLoss, atkLoss};
+  }
+  _cleanupStacks(){
+    this.stacks.forEach(s=>{ if (s.count< s.count0*0.12 || s.count<=0){ s.dead=true; } });
+    this.stacks=this.stacks.filter(s=>!s.dead);
+  }
+  _flash(m){ this.message=m; this.messageT=2.0; }
+
+  _endPlayerPhase(game){
+    if (this.over) return;
+    this.selected=null; this.reach={}; this.targets={};
+    this.phase='enemy';
+    this._runEnemyPhase(game);
+  }
+  _runEnemyPhase(game){
+    // 守備側AI（greedy）
+    const enemies=this.stacks.filter(s=>s.side==='def');
+    enemies.forEach(e=>{
+      if (e.dead) return;
+      // 射程内の敵を探す
+      let target=null, bestEval=-1;
+      this.stacks.filter(s=>s.side==='atk').forEach(a=>{
+        if (hexDist(e.col,e.row,a.col,a.row)<=UNITS[e.type].range){
+          const ev=advantage(e.type,a.type)*a.count;
+          if (ev>bestEval){ bestEval=ev; target=a; }
+        }
+      });
+      if (target){ this._resolveMelee(e, target); game.audio.noise(0.12,0.12); this._cleanupStacks(); return; }
+      // 地の利のある拠点（山地・森林・河川）に居る守備隊は固守して攻撃側を待つ
+      const here=this.terrainMap[e.col+','+e.row];
+      if (here==='mountain'||here==='forest'||here==='river') return;
+      // 鉄砲・弓は射程を活かすためむやみに突出しない（半数の確率で待機）
+      if (UNITS[e.type].range>=2 && Math.random()<0.5) return;
+      // 近づく：最寄りの自軍へ1歩
+      const foes=this.stacks.filter(s=>s.side==='atk'); if (!foes.length) return;
+      let nearest=null, nd=1e9;
+      foes.forEach(a=>{ const d=hexDist(e.col,e.row,a.col,a.row); if(d<nd){nd=d;nearest=a;} });
+      if (nearest){
+        const mp=UNITS[e.type].move; let bestHex=null, bestD=hexDist(e.col,e.row,nearest.col,nearest.row);
+        // 単純：移動力内で最も敵に近づける隣接探索（BFS浅め）
+        let frontier=[[e.col,e.row,0]]; const seen={}; seen[e.col+','+e.row]=true;
+        while (frontier.length){
+          const [cc,cr,cd]=frontier.shift(); if (cd>=mp) continue;
+          hexNeighbors(cc,cr).forEach(([nc,nr])=>{
+            if (seen[nc+','+nr]) return; seen[nc+','+nr]=true;
+            if (this.stackAt(nc,nr)) return; const terr=this.terrainMap[nc+','+nr]; if(terr==='water') return;
+            const d=hexDist(nc,nr,nearest.col,nearest.row);
+            if (d<bestD){ bestD=d; bestHex=[nc,nr]; }
+            frontier.push([nc,nr,cd+1]);
+          });
+        }
+        if (bestHex){ e.col=bestHex[0]; e.row=bestHex[1]; }
+      }
+    });
+    this._cleanupStacks();
+    if (this._checkBattleEnd(game)) return;
+    // 次ラウンドへ
+    this.round++;
+    if (this.round>this.maxRounds){ this._finish(game, false, '時間切れ（守勢勝ち）'); return; }
+    this.stacks.forEach(s=>{ s.hasMoved=false; s.hasAttacked=false; });
+    this.phase='player';
+  }
+  _checkBattleEnd(game){
+    const atkAlive=this.stacks.some(s=>s.side==='atk');
+    const defAlive=this.stacks.some(s=>s.side==='def');
+    if (!defAlive){ this._finish(game, true, '敵軍を殲滅'); return true; }
+    if (!atkAlive){ this._finish(game, false, '自軍壊滅'); return true; }
+    return false;
+  }
+  _retreat(game){
+    this._finish(game, false, '撤退した');
+  }
+  _autoFinish(game){
+    // 残存兵力で自動解決
+    const atk=this.stacks.filter(s=>s.side==='atk'); const def=this.stacks.filter(s=>s.side==='def');
+    const aS=atk.reduce((s,x)=>s+x.count,0), dS=def.reduce((s,x)=>s+x.count,0);
+    const res=autoResolveBattle({
+      atkSoldiers:aS, atkGenerals:atk.map(s=>s.gen).filter(Boolean), atkFamily:this.ctx.attacker.family,
+      defSoldiers:dS, defGenerals:def.map(s=>s.gen).filter(Boolean), defFamily:this.ctx.defender.family,
+      year:this.ctx.year, castleLevel:this.ctx.defender.castleLevel, terrain:this.ctx.terrain,
+    });
+    this._finishWithCounts(game, res.attackerWins, res.atkSurvivors, res.defSurvivors, '自動解決');
+  }
+  _finish(game, win, reason){
+    const aS=this.stacks.filter(s=>s.side==='atk').reduce((s,x)=>s+x.count,0);
+    const dS=this.stacks.filter(s=>s.side==='def').reduce((s,x)=>s+x.count,0);
+    this._finishWithCounts(game, win, win?Math.max(aS,1):aS, win?dS:Math.max(dS,1), reason);
+  }
+  _finishWithCounts(game, win, atkSurv, defSurv, reason){
+    if (this.over) return; this.over=true;
+    this.result={win, atkSurv, defSurv, reason};
+    const res={attackerWins:win, atkSurvivors:Math.max(0,Math.round(atkSurv)), defSurvivors:Math.max(0,Math.round(defSurv))};
+    applyBattleResult(this.state, this.ctx, res);
+    game.audio.jingle(win?[{f:523,d:0.12},{f:659,d:0.12},{f:784,d:0.2}]:[{f:392,d:0.14},{f:294,d:0.22}]);
+  }
+
+  _buttons(){
+    const bs=[];
+    if (this.over){
+      bs.push({x:W/2-70, y:H/2+96, w:140, h:42, jp:'戦評定へ', en:'Continue', accent:'rgba(232,192,122,0.7)', action:g=>{ g.changeScene(new MapScene(this.state)); }});
+      return bs;
+    }
+    if (this.phase==='player'){
+      bs.push({x:14, y:556, w:150, h:36, jp:'手番終了', en:'End Phase', accent:'rgba(232,192,122,0.6)', action:g=>this._endPlayerPhase(g)});
+      bs.push({x:174, y:556, w:130, h:36, jp:'自動で決着', en:'Auto', accent:'rgba(251,191,36,0.6)', action:g=>this._autoFinish(g)});
+      bs.push({x:W-150, y:556, w:136, h:36, jp:'撤退', en:'Retreat', accent:'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
+    }
+    return bs;
+  }
+
+  /* ---- 描画 ---- */
+  draw(ctx, game){
+    ctx.fillStyle='#070a12'; ctx.fillRect(0,0,W,H);
+    this.particles.draw(ctx);
+    this._drawGrid(ctx);
+    this._drawStacks(ctx);
+    this._drawHUD(ctx);
+    const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t);
+    if (this.messageT>0){
+      ctx.globalAlpha=Math.min(1,this.messageT);
+      GameKit.UI.glassPanel(ctx, W/2-180, 86, 360, 30, {radius:8, fill:'rgba(10,16,28,0.9)'});
+      T(ctx, this.message, W/2, 93, {size:13, color:'#e8c07a', align:'center'}); ctx.globalAlpha=1;
+    }
+    if (this.over) this._drawResult(ctx);
+  }
+  _drawGrid(ctx){
+    for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
+      const [x,y]=hexCenter(c,r); const terr=this.terrainMap[c+','+r];
+      let fill={plain:'#16243a',forest:'#13301f',mountain:'#2e2a1c',river:'#15324a',water:'#0c2238'}[terr]||'#16243a';
+      this._hexPath(ctx,x,y); ctx.fillStyle=fill; ctx.fill();
+      // 移動可能/攻撃ハイライト
+      if (this.reach[c+','+r]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
+      if (this.targets[c+','+r]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
+      ctx.lineWidth=1; ctx.strokeStyle='rgba(120,150,180,0.18)'; this._hexPath(ctx,x,y); ctx.stroke();
+    }
+  }
+  _hexPath(ctx,x,y){
+    ctx.beginPath();
+    for (let i=0;i<6;i++){ const a=Math.PI/180*(60*i-90); const px=x+HEX.size*Math.cos(a), py=y+HEX.size*Math.sin(a); if(i===0)ctx.moveTo(px,py); else ctx.lineTo(px,py); }
+    ctx.closePath();
+  }
+  _drawStacks(ctx){
+    this.stacks.forEach(s=>{
+      const [x,y]=hexCenter(s.col,s.row);
+      const sel=this.selected===s;
+      // 駒
+      ctx.save();
+      ctx.beginPath(); ctx.arc(x,y,HEX.size*0.62,0,Math.PI*2);
+      ctx.fillStyle = s.side==='atk'? 'rgba(34,90,170,0.92)':'rgba(170,50,50,0.92)';
+      ctx.fill();
+      ctx.lineWidth= sel?3:1.5; ctx.strokeStyle= sel?'#22d3ee': (s.hasMoved&&s.hasAttacked?'rgba(255,255,255,0.25)':UNITS[s.type].color);
+      ctx.stroke(); ctx.restore();
+      T(ctx, UNITS[s.type].jp, x, y-8, {size:11, weight:'bold', color:'#f8fafc', align:'center', baseline:'middle'});
+      T(ctx, s.count+'', x, y+7, {size:11, color:'#e8eef6', align:'center', baseline:'middle'});
+      // 武将名
+      T(ctx, s.name, x, y+HEX.size*0.78, {size:9, color: s.side==='atk'?'#9ec3ff':'#ffb3b3', align:'center', baseline:'middle'});
+    });
+  }
+  _drawHUD(ctx){
+    const c=this.ctx;
+    GameKit.UI.glassPanel(ctx, 6, 6, 280, 70, {radius:10, fill:'rgba(10,16,28,0.85)'});
+    T(ctx, DATA.provById[c.dstId].nameJP+' の戦い', 18, 14, {size:16, weight:'bold', color:'#e8c07a'});
+    T(ctx, '攻: '+daimyoDef(this.state,c.attacker.daimyo).nameJP+'家  /  守: '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP+'家':'空白'), 18, 38, {size:11, color:'#cbd5e1'});
+    T(ctx, 'ラウンド '+this.round+' / '+this.maxRounds+'　手番:'+(this.phase==='player'?'自軍':'敵軍'), 18, 56, {size:11, color:'#9fb2c6'});
+    // 右: 兵科相性
+    GameKit.UI.glassPanel(ctx, W-220, 6, 214, 92, {radius:10, fill:'rgba(10,16,28,0.85)'});
+    T(ctx,'兵科相性 / Counters', W-113, 12, {size:11, color:'#e8c07a', align:'center'});
+    T(ctx,'足軽 ▶ 騎馬 ▶ 鉄砲 ▶ 足軽', W-113, 32, {size:11, color:'#cbd5e1', align:'center'});
+    T(ctx,'弓・鉄砲は射程2（反撃なし）', W-113, 52, {size:10, color:'#9fb2c6', align:'center'});
+    T(ctx,'クリック=選択→移動/攻撃', W-113, 72, {size:10, color:'#7d93ab', align:'center'});
+    // 選択中スタック詳細
+    if (this.selected){
+      const s=this.selected;
+      GameKit.UI.glassPanel(ctx, 6, H-128, 280, 64, {radius:10, fill:'rgba(10,16,28,0.85)'});
+      T(ctx, s.name+'隊 ('+UNITS[s.type].jp+')', 18, H-120, {size:13, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '兵'+s.count+'  統'+s.stat.tou+' 武'+s.stat.bu, 18, H-100, {size:11, color:'#9fb2c6'});
+      T(ctx, (s.hasMoved?'移動済 ':'移動可 ')+(s.hasAttacked?'攻撃済':'攻撃可'), 18, H-82, {size:11, color:'#7d93ab'});
+    }
+  }
+  _drawResult(ctx){
+    ctx.save(); ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,0,W,H); ctx.restore();
+    const px=W/2-210, py=H/2-120, pw=420, ph=240;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.97)', stroke:this.result.win?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
+    T(ctx, this.result.win?'勝 利':'敗 北', W/2, py+28, {size:32, weight:'bold', color:this.result.win?'#34d399':'#f87171', align:'center'});
+    T(ctx, this.result.reason, W/2, py+76, {size:14, color:'#cbd5e1', align:'center'});
+    T(ctx, '自軍残存 約'+Math.round(this.result.atkSurv)+' / 敵残存 約'+Math.round(this.result.defSurv), W/2, py+112, {size:13, color:'#e2e8f0', align:'center'});
+    const lost=this.state.pendingResult&&this.state.pendingResult.generalsLost;
+    if (lost&&lost.length) T(ctx,'討死: '+lost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), W/2, py+142, {size:12, color:'#f87171', align:'center'});
+  }
+}
+
+/* ===================================================================
+ * 起動
+ * =================================================================== */
+game.changeScene(new BootScene());
+game.start();
+</script>
+</body>
+</html>
