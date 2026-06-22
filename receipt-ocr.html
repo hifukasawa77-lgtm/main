@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!--
+    CSP: Tesseract.js を完全クライアントサイドで動かすための許可。
+    - script-src: 本体 + ワーカー/コア（CDN）。'wasm-unsafe-eval' は一部エンジンの WASM 用。
+    - worker-src/child-src blob: : v5+ は Blob URL から Web Worker を生成する。
+    - connect-src: ワーカーが wasm コアと jpn.traineddata を fetch する先。
+    - img-src/media-src blob: : プレビュー画像 / ライブカメラ映像。
+    画像は外部送信しない（OCR は端末内で完結）。CDN からはライブラリ資産のみ取得する。
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://tessdata.projectnaptha.com data: blob:; worker-src 'self' blob:; child-src 'self' blob:; font-src 'self'; base-uri 'self'; form-action 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="レシートをカメラで撮るだけで文字認識（OCR）し、品目・カテゴリー・個数・値段を自動抽出してCSV書き出し。完全ブラウザ内処理・画像は外部送信なし。Snap a receipt, OCR on-device, export CSV.">
+  <title>レシートOCR → CSV | Receipt OCR</title>
+  <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/receipt-ocr.html">
+  <link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
+  <style>
+    :root{
+      --bg:#fffbf5; --text:#1c1917; --muted:#736c66;
+      --cyan:#0ea5e9; --cyan2:#06b6d4; --purple:#a855f7;
+      --card:rgba(255,255,255,0.55); --border:rgba(14,165,233,0.18);
+      --radius:20px;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0}
+    body{
+      background:var(--bg); color:var(--text); min-height:100vh;
+      font-family:"Aptos","Segoe UI Variable","Yu Gothic UI","Hiragino Sans","Meiryo",sans-serif;
+      line-height:1.6; -webkit-font-smoothing:antialiased;
+    }
+    #bg-canvas{position:fixed; inset:0; z-index:-1; pointer-events:none}
+    .wrap{max-width:860px; margin:0 auto; padding:32px 20px 80px}
+
+    /* hero */
+    .hero{text-align:center; margin-bottom:28px}
+    .hero h1{font-size:clamp(1.8rem,5vw,2.6rem); margin:.2em 0 .1em; letter-spacing:.01em}
+    .hero .sub{color:var(--cyan2); font-weight:600; margin:0}
+    .hero .note{color:var(--muted); font-size:.86rem; margin:.8em 0 0}
+    .grad{background:linear-gradient(135deg,var(--cyan) 0%,var(--purple) 100%);
+      -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+
+    /* glass card */
+    .card{
+      background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+      backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+      box-shadow:0 2px 16px rgba(0,0,0,0.05); padding:22px; margin:18px 0;
+    }
+    .card h2{font-size:1.05rem; margin:0 0 14px; display:flex; align-items:center; gap:8px}
+    .card h2 .en{color:var(--muted); font-weight:500; font-size:.8rem}
+
+    /* capture */
+    .drop{
+      display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+      border:2px dashed rgba(14,165,233,0.4); border-radius:16px; padding:30px 16px;
+      text-align:center; cursor:pointer; transition:border-color .2s,background .2s;
+      background:rgba(14,165,233,0.04);
+    }
+    .drop:hover,.drop.drag{border-color:var(--cyan); background:rgba(14,165,233,0.08)}
+    .drop .big{font-size:2.2rem}
+    .drop .lbl{font-weight:600}
+    .drop .en{color:var(--muted); font-size:.8rem}
+    .or{text-align:center; color:var(--muted); font-size:.82rem; margin:12px 0}
+    input[type=file]{display:none}
+
+    /* buttons */
+    .btn{
+      appearance:none; border:0; cursor:pointer; font:inherit; font-weight:600;
+      border-radius:12px; padding:11px 18px; color:#fff;
+      background:linear-gradient(135deg,var(--cyan) 0%,var(--cyan2) 100%);
+      box-shadow:0 4px 14px rgba(6,182,212,0.25); transition:transform .15s,box-shadow .15s,opacity .15s;
+    }
+    .btn:hover{transform:translateY(-2px); box-shadow:0 8px 22px rgba(6,182,212,0.32)}
+    .btn:disabled{opacity:.5; cursor:not-allowed; transform:none; box-shadow:none}
+    .btn.purple{background:linear-gradient(135deg,var(--purple) 0%,#7c3aed 100%); box-shadow:0 4px 14px rgba(168,85,247,0.25)}
+    .btn.ghost{background:transparent; color:var(--cyan2); border:1px solid var(--border); box-shadow:none}
+    .btn.ghost:hover{background:rgba(14,165,233,0.08)}
+    .btn-row{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center}
+
+    /* camera + preview */
+    #camera{display:none; flex-direction:column; align-items:center; gap:12px; margin-top:14px}
+    #video{width:100%; max-width:420px; border-radius:14px; background:#000; aspect-ratio:3/4; object-fit:cover}
+    #preview{display:none; max-width:100%; max-height:340px; border-radius:14px; margin:14px auto 0;
+      box-shadow:0 4px 18px rgba(0,0,0,0.12)}
+    .preview-wrap{text-align:center}
+
+    /* progress */
+    #scan-area{display:none}
+    .bar{height:8px; border-radius:6px; background:rgba(14,165,233,0.15); overflow:hidden; margin:12px 0 6px}
+    #bar-fill{height:100%; width:0%; border-radius:6px;
+      background:linear-gradient(90deg,var(--cyan) 0%,var(--purple) 100%); transition:width .25s}
+    #status{color:var(--muted); font-size:.84rem; min-height:1.2em; text-align:center}
+
+    /* results table */
+    #results{display:none}
+    .table-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
+    table{border-collapse:collapse; width:100%; min-width:560px; font-size:.9rem}
+    th,td{padding:7px 8px; text-align:left; border-bottom:1px solid rgba(28,25,23,0.08)}
+    th{color:var(--muted); font-weight:600; font-size:.8rem; white-space:nowrap}
+    td input,td select{
+      width:100%; font:inherit; font-size:.88rem; padding:6px 7px; color:var(--text);
+      border:1px solid rgba(28,25,23,0.12); border-radius:8px; background:rgba(255,255,255,0.7);
+    }
+    td input:focus,td select:focus{outline:none; border-color:var(--cyan)}
+    td.num input{text-align:right}
+    td.idx{color:var(--muted); width:38px; text-align:center; font-variant-numeric:tabular-nums}
+    td.del{width:42px; text-align:center}
+    .del-btn{background:none; border:0; cursor:pointer; font-size:1.05rem; opacity:.55; line-height:1}
+    .del-btn:hover{opacity:1}
+    .empty{color:var(--muted); text-align:center; padding:18px 0; font-size:.88rem}
+    .results-actions{display:flex; flex-wrap:wrap; gap:10px; justify-content:space-between; align-items:center; margin-top:14px}
+
+    /* toast */
+    #toast{
+      position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px);
+      background:rgba(28,25,23,0.92); color:#fff; padding:11px 18px; border-radius:12px;
+      font-size:.88rem; opacity:0; pointer-events:none; transition:opacity .25s,transform .25s; z-index:50; max-width:90vw;
+    }
+    #toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+
+    footer{text-align:center; color:var(--muted); font-size:.78rem; margin-top:30px}
+    footer a{color:var(--cyan2); text-decoration:none}
+    .home-link{display:inline-block; margin-bottom:18px; color:var(--cyan2); text-decoration:none; font-size:.86rem}
+    .home-link:hover{text-decoration:underline}
+  </style>
+</head>
+<body>
+  <canvas id="bg-canvas"></canvas>
+  <div class="wrap">
+    <a class="home-link" href="index.html">← ポートフォリオに戻る / Home</a>
+
+    <div class="hero">
+      <h1>🧾 <span class="grad">レシートOCR → CSV</span></h1>
+      <p class="sub">Snap a receipt → editable items → CSV</p>
+      <p class="note">🔒 完全ブラウザ内処理・画像は外部送信しません / Runs fully on-device, your photo never leaves the browser.</p>
+    </div>
+
+    <!-- 1. 取り込み -->
+    <section class="card">
+      <h2>① レシートを取り込む <span class="en">/ Capture or upload</span></h2>
+
+      <label class="drop" id="drop" for="file">
+        <span class="big">📷</span>
+        <span class="lbl">タップして撮影 / 画像を選択</span>
+        <span class="en">Tap to take a photo or choose an image (JPG/PNG)</span>
+      </label>
+      <input type="file" id="file" accept="image/*" capture="environment">
+
+      <p class="or">— または / or —</p>
+      <div class="btn-row">
+        <button class="btn ghost" id="cam-start" type="button">📹 カメラを起動 / Live camera</button>
+      </div>
+
+      <div id="camera">
+        <video id="video" playsinline autoplay muted></video>
+        <div class="btn-row">
+          <button class="btn" id="cam-shot" type="button">📸 撮影 / Capture</button>
+          <button class="btn ghost" id="cam-stop" type="button">✕ 閉じる / Close</button>
+        </div>
+      </div>
+
+      <div class="preview-wrap">
+        <img id="preview" alt="receipt preview">
+      </div>
+    </section>
+
+    <!-- 2. スキャン -->
+    <section class="card" id="scan-area">
+      <h2>② 文字を読み取る <span class="en">/ Run OCR</span></h2>
+      <div class="btn-row">
+        <button class="btn purple" id="scan" type="button">🔍 スキャン / Scan</button>
+      </div>
+      <div class="bar"><div id="bar-fill"></div></div>
+      <div id="status"></div>
+    </section>
+
+    <!-- 3. 結果 -->
+    <section class="card" id="results">
+      <h2>③ 確認・編集 <span class="en">/ Review &amp; edit</span></h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th class="idx">項番</th>
+              <th>品目名 / Item</th>
+              <th>カテゴリー / Category</th>
+              <th>個数 / Qty</th>
+              <th>値段 / Price</th>
+              <th>備考 / Note</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div id="empty" class="empty" style="display:none">
+        品目を抽出できませんでした。「＋ 行を追加」で手入力できます。<br>
+        No items detected — add rows manually below.
+      </div>
+      <div class="results-actions">
+        <button class="btn ghost" id="add-row" type="button">＋ 行を追加 / Add row</button>
+        <button class="btn" id="csv" type="button">⬇️ CSV書き出し / Export CSV</button>
+      </div>
+    </section>
+
+    <footer>
+      <p>OCR: <a href="https://github.com/naptha/tesseract.js" rel="noopener" target="_blank">Tesseract.js</a>（日本語） / Vanilla JS · Canvas API<br>
+      🤖 Built with Claude · hide_0001 Portfolio</p>
+    </footer>
+  </div>
+
+  <div id="toast"></div>
+
+  <!--
+    Tesseract.js（CDN）。本リポジトリの他CDNライブラリ（chart.js / marked 等）に倣い crossorigin を付与。
+    SRI(integrity) は本ビルド環境からCDNへ到達できず正規ハッシュを取得できなかったため未付与。
+    ネットワーク到達可能な環境で下記コマンドのハッシュを integrity="sha384-..." として追加することを推奨:
+      curl -sL https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js | openssl dgst -sha384 -binary | openssl base64 -A
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    /* ---------- DOM ---------- */
+    var $ = function (id) { return document.getElementById(id); };
+    var fileInput = $('file'), drop = $('drop'), preview = $('preview');
+    var camStart = $('cam-start'), camStop = $('cam-stop'), camShot = $('cam-shot');
+    var camera = $('camera'), video = $('video');
+    var scanArea = $('scan-area'), scanBtn = $('scan'), barFill = $('bar-fill'), statusEl = $('status');
+    var results = $('results'), rowsBody = $('rows'), emptyMsg = $('empty');
+    var addRowBtn = $('add-row'), csvBtn = $('csv');
+
+    var currentFile = null;     // 現在の画像 (File/Blob)
+    var previewURL = null;      // プレビュー用 objectURL
+    var stream = null;          // getUserMedia ストリーム
+
+    /* =========================================================
+       カテゴリー自動分類（汎用辞書：食品＋日用品・衣料・文具・医薬品・家電など）
+       先頭一致で最初にヒットしたカテゴリーを返す。フォールバックは「その他」。
+       拡張は配列に語を足すだけ。
+       ※「冷凍」等は誤爆しうるが、カテゴリー欄は<select>で編集可能。
+       ========================================================= */
+    var CATS = [
+      ['野菜',        ['ナス','茄子','きゅうり','胡瓜','トマト','キャベツ','レタス','人参','にんじん','玉ねぎ','たまねぎ','じゃがいも','ジャガ','大根','ねぎ','ネギ','ほうれん','白菜','ピーマン','もやし','ブロッコリ','きのこ','椎茸','しめじ','えのき','かぼちゃ','ごぼう','れんこん','アスパラ','オクラ','ニラ','生姜','しょうが','にんにく','ニンニク']],
+      ['果物',        ['りんご','リンゴ','バナナ','みかん','ミカン','いちご','イチゴ','ぶどう','ブドウ','メロン','スイカ','桃','もも','梨','なし','キウイ','オレンジ','レモン','柿','グレープ','パイン','マンゴー','さくらんぼ']],
+      ['乳製品・卵',  ['牛乳','ミルク','ヨーグルト','チーズ','バター','マーガリン','生クリーム','卵','たまご','玉子','タマゴ']],
+      ['肉類',        ['豚','ぶた','ブタ','鶏','とり','チキン','牛','ぎゅう','ビーフ','ひき肉','挽肉','ミンチ','ベーコン','ハム','ソーセージ','ウインナ','ウィンナ','焼肉','肉']],
+      ['魚介',        ['鮭','サケ','シャケ','サーモン','まぐろ','マグロ','さば','サバ','いわし','イワシ','あじ','アジ','ぶり','ブリ','さんま','えび','エビ','いか','イカ','たこ','タコ','貝','刺身','切身','切り身','ホタテ','しらす','明太','たらこ','ちくわ','かまぼこ','魚']],
+      ['パン・米・麺',['パン','食パン','米','ごはん','ご飯','うどん','そば','ソバ','ラーメン','パスタ','スパゲ','焼そば','麺','もち','餅','シリアル','グラノーラ','小麦粉']],
+      ['飲料',        ['お茶','緑茶','麦茶','ほうじ茶','紅茶','コーヒー','珈琲','ジュース','コーラ','サイダー','水','ミネラル','炭酸','ビール','発泡','酒','日本酒','焼酎','ワイン','ハイボール','チューハイ','乳酸菌','ドリンク','飲料']],
+      ['菓子',        ['チョコ','クッキー','ビスケット','せんべい','煎餅','スナック','ポテチ','ポテト','ガム','キャンディ','飴','アイス','プリン','ゼリー','ケーキ','ドーナツ','ヨーグル','グミ','菓子']],
+      ['調味料',      ['醤油','しょうゆ','味噌','みそ','塩','砂糖','酢','みりん','料理酒','油','オイル','マヨ','ケチャップ','ソース','だし','出汁','ドレッシング','こしょう','胡椒','カレー','ルー','つゆ','めんつゆ','わさび','からし']],
+      ['冷凍食品',    ['冷凍','ピザ','餃子','ぎょうざ','チャーハン','コロッケ','メンチ','唐揚','からあげ','フライ']],
+      ['日用品',      ['ティッシュ','トイレ','洗剤','シャンプー','リンス','コンディショナ','ボディソープ','石鹸','せっけん','歯ブラシ','歯磨','ラップ','ホイル','アルミ','乾電池','電池','ゴミ袋','ポリ袋','マスク','綿棒','洗濯','柔軟剤','掃除','スポンジ','キッチンペーパー','おむつ','生理']],
+      ['衣料品',      ['シャツ','靴下','くつ下','下着','肌着','インナー','パンツ','ズボン','タオル','ハンカチ','手袋','帽子','マフラー','靴','スリッパ']],
+      ['文具',        ['ノート','ペン','ボールペン','鉛筆','シャーペン','消しゴム','のり','ノリ','テープ','ファイル','封筒','付箋','ふせん','ハサミ','定規','クリップ','文具','便箋']],
+      ['医薬品・衛生',['薬','絆創膏','ばんそうこう','バンドエイド','消毒','風邪','胃腸','頭痛','鎮痛','目薬','湿布','サプリ','ビタミン','うがい','マスク','体温計']],
+      ['家電・電子',  ['イヤホン','ヘッドホン','ケーブル','充電','アダプタ','ライト','電球','蛍光灯','USB','SDカード','リモコン','延長コード']],
+      ['書籍・メディア',['雑誌','マンガ','コミック','新聞','文庫','単行本','DVD','ブルーレイ','CD']]
+    ];
+
+    function classify(name) {
+      if (!name) return 'その他';
+      for (var i = 0; i < CATS.length; i++) {
+        var kws = CATS[i][1];
+        for (var j = 0; j < kws.length; j++) {
+          if (name.indexOf(kws[j]) !== -1) return CATS[i][0];
+        }
+      }
+      return 'その他';
+    }
+    var CAT_NAMES = CATS.map(function (c) { return c[0]; }).concat(['その他']);
+
+    /* =========================================================
+       レシート解析：OCRの生テキスト → [{name, qty, price}]
+       ========================================================= */
+    function toHalfWidth(s) {
+      return s
+        .replace(/[０-９]/g, function (c) { return '０１２３４５６７８９'.indexOf(c); })
+        .replace(/[，､]/g, ',')
+        .replace(/．/g, '.')
+        .replace(/￥/g, '¥');
+    }
+
+    // 合計/税/支払い/店舗情報など、品目でない行を除外
+    var SKIP = /合\s*計|小\s*計|総額|税|内税|外税|消費税|お?預(り|か?り)|釣|現金|クレジット|カード|電子マネー|ポイント|残高|電話|ＴＥＬ|TEL|住所|店|レジ|担当|領収|受領|発行|営業|ご利用|お買上|買上|点数|合計点|割引|値引|番号|No\.|登録/i;
+
+    function parseReceipt(text) {
+      var out = [];
+      if (!text) return out;
+      var lines = text.split(/\r?\n/);
+      for (var i = 0; i < lines.length; i++) {
+        var line = toHalfWidth(lines[i]).trim();
+        if (line.length < 2) continue;
+        if (SKIP.test(line)) continue;
+        if (/^\d{4}[-\/年.]/.test(line)) continue;        // 日付 2024/01/02 等
+        if (/\d{1,2}\s*[:：]\s*\d{2}/.test(line)) continue; // 時刻
+
+        // 行末の価格： ¥/￥ 前置 or 円 後置、カンマ区切り対応、末尾の *・※（軽減税率記号）許容
+        var pm = line.match(/[¥]?\s*(\d{1,3}(?:,\d{3})+|\d+)\s*円?\s*[*※E-]?\s*$/);
+        if (!pm) continue;
+        var price = parseInt(pm[1].replace(/,/g, ''), 10);
+        if (!(price > 0)) continue;
+
+        var name = line.slice(0, pm.index).trim();
+
+        // 個数： x2 / ×2 / *2 / 2個 / 2点 / 3本 / 2袋 等。よくある数量カウンタを拾う
+        var qty = 1;
+        var qm = name.match(/[x×X*]\s*(\d{1,3})\b/)
+              || name.match(/(\d{1,3})\s*(?:個|点|コ|本|枚|袋|缶|パック|箱|束|玉|尾|杯|膳)/);
+        if (qm) {
+          var q = parseInt(qm[1], 10);
+          if (q > 0 && q < 1000) { qty = q; name = name.replace(qm[0], ' '); }
+        }
+
+        // 記号・余分な空白を除去
+        name = name.replace(/[¥@*※#･・\-—_=\s]+$/g, '')
+                   .replace(/^[¥@*※#･・\-—_=\s]+/g, '')
+                   .replace(/\s{2,}/g, ' ')
+                   .trim();
+
+        // 実文字（漢字/かな/英字）が無ければゴミ行として除外
+        if (!/[一-龯ぁ-んァ-ヶーA-Za-z]/.test(name)) continue;
+
+        out.push({ name: name, qty: qty, price: price });
+      }
+      return out;
+    }
+
+    /* =========================================================
+       テーブル描画（編集可能）
+       ========================================================= */
+    function makeRow(item) {
+      item = item || { name: '', qty: 1, price: '', note: '', cat: '' };
+      var cat = item.cat || classify(item.name);
+      var tr = document.createElement('tr');
+
+      var tdIdx = document.createElement('td'); tdIdx.className = 'idx';
+      tr.appendChild(tdIdx);
+
+      tr.appendChild(cell('text', item.name, 'name'));
+
+      // カテゴリー select
+      var tdCat = document.createElement('td');
+      var sel = document.createElement('select'); sel.dataset.k = 'cat';
+      for (var i = 0; i < CAT_NAMES.length; i++) {
+        var op = document.createElement('option'); op.value = CAT_NAMES[i]; op.textContent = CAT_NAMES[i];
+        sel.appendChild(op);
+      }
+      sel.value = (CAT_NAMES.indexOf(cat) !== -1) ? cat : 'その他';
+      tdCat.appendChild(sel); tr.appendChild(tdCat);
+
+      // 品目名を変えたらカテゴリーを再推定（ユーザーが手で選び直すまでの初期補助）
+      var nameInput = tr.querySelector('input[data-k="name"]');
+      nameInput.addEventListener('change', function () {
+        sel.value = classify(nameInput.value);
+      });
+
+      tr.appendChild(cell('number', item.qty == null ? 1 : item.qty, 'qty', true));
+      tr.appendChild(cell('number', item.price, 'price', true));
+      tr.appendChild(cell('text', item.note || '', 'note'));
+
+      var tdDel = document.createElement('td'); tdDel.className = 'del';
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'del-btn'; del.title = '削除'; del.textContent = '🗑';
+      del.addEventListener('click', function () { tr.remove(); refreshIdx(); });
+      tdDel.appendChild(del); tr.appendChild(tdDel);
+
+      return tr;
+    }
+
+    function cell(type, value, key, num) {
+      var td = document.createElement('td');
+      if (num) td.className = 'num';
+      var inp = document.createElement('input');
+      inp.type = type; inp.dataset.k = key;
+      if (type === 'number') { inp.min = '0'; inp.step = '1'; }
+      inp.value = (value == null ? '' : value);
+      td.appendChild(inp);
+      return td;
+    }
+
+    function refreshIdx() {
+      var trs = rowsBody.querySelectorAll('tr');
+      for (var i = 0; i < trs.length; i++) trs[i].querySelector('td.idx').textContent = (i + 1);
+      emptyMsg.style.display = trs.length ? 'none' : 'block';
+    }
+
+    function renderRows(items) {
+      rowsBody.innerHTML = '';
+      for (var i = 0; i < items.length; i++) rowsBody.appendChild(makeRow(items[i]));
+      refreshIdx();
+      results.style.display = 'block';
+      results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function readRows() {
+      var rows = [];
+      var trs = rowsBody.querySelectorAll('tr');
+      for (var i = 0; i < trs.length; i++) {
+        var g = function (k) { var e = trs[i].querySelector('[data-k="' + k + '"]'); return e ? e.value : ''; };
+        var name = g('name').trim();
+        var price = g('price').trim();
+        if (!name && !price) continue; // 完全な空行はスキップ
+        rows.push({
+          name: name,
+          cat: g('cat'),
+          qty: g('qty').trim() === '' ? 1 : g('qty').trim(),
+          price: price,
+          note: g('note').trim()
+        });
+      }
+      return rows;
+    }
+
+    /* =========================================================
+       CSV 生成・ダウンロード（oshikatsu.html のパターンを踏襲）
+       ヘッダー: 項番,品目名,カテゴリー,個数,値段,備考 / UTF-8 BOM 付き
+       ========================================================= */
+    function csvCell(v) {
+      var s = String(v == null ? '' : v);
+      if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    }
+    function downloadBlob(blob, filename) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+      document.body.removeChild(a); setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+    function ymd() {
+      var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+      return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
+    }
+    function buildCSV(rows) {
+      var head = ['項番', '品目名', 'カテゴリー', '個数', '値段', '備考'];
+      var lines = [head.join(',')];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        lines.push([i + 1, r.name, r.cat, r.qty, r.price, r.note].map(csvCell).join(','));
+      }
+      return lines.join('\r\n');
+    }
+    function exportCSV() {
+      var rows = readRows();
+      if (!rows.length) { toast('書き出す品目がありません / No rows to export'); return; }
+      var blob = new Blob(['﻿' + buildCSV(rows)], { type: 'text/csv;charset=utf-8' });
+      downloadBlob(blob, 'receipt_' + ymd() + '.csv');
+      toast('CSVを書き出しました（' + rows.length + '件）/ Exported');
+    }
+
+    /* =========================================================
+       画像取り込み
+       ========================================================= */
+    function setImage(fileOrBlob) {
+      currentFile = fileOrBlob;
+      if (previewURL) URL.revokeObjectURL(previewURL);
+      previewURL = URL.createObjectURL(fileOrBlob);
+      preview.src = previewURL;
+      preview.style.display = 'block';
+      scanArea.style.display = 'block';
+      barFill.style.width = '0%';
+      statusEl.textContent = '';
+      scanArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    fileInput.addEventListener('change', function (e) {
+      var f = e.target.files && e.target.files[0];
+      if (f) setImage(f);
+    });
+
+    // ドラッグ＆ドロップ（PC）
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('drag'); });
+    });
+    ['dragleave', 'drop'].forEach(function (ev) {
+      drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('drag'); });
+    });
+    drop.addEventListener('drop', function (e) {
+      var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f && /^image\//.test(f.type)) setImage(f);
+    });
+
+    /* ---------- ライブカメラ (getUserMedia) ---------- */
+    camStart.addEventListener('click', function () {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        toast('このブラウザはカメラ非対応です / Live camera not supported'); return;
+      }
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+        .then(function (s) {
+          stream = s; video.srcObject = s; camera.style.display = 'flex';
+          camStart.style.display = 'none';
+        })
+        .catch(function (err) {
+          toast('カメラを起動できませんでした（' + (err && err.name || 'error') + '）/ Camera unavailable');
+        });
+    });
+    function stopCamera() {
+      if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+      video.srcObject = null; camera.style.display = 'none'; camStart.style.display = '';
+    }
+    camStop.addEventListener('click', stopCamera);
+    camShot.addEventListener('click', function () {
+      if (!stream) return;
+      var w = video.videoWidth || 720, h = video.videoHeight || 960;
+      var c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(video, 0, 0, w, h);
+      c.toBlob(function (blob) {
+        if (!blob) { toast('撮影に失敗しました / Capture failed'); return; }
+        stopCamera();
+        setImage(blob);
+      }, 'image/jpeg', 0.92);
+    });
+    window.addEventListener('beforeunload', stopCamera);
+
+    /* =========================================================
+       OCR 実行
+       ========================================================= */
+    scanBtn.addEventListener('click', function () {
+      if (!currentFile) { toast('先に画像を選んでください / Choose an image first'); return; }
+      if (typeof Tesseract === 'undefined') {
+        statusEl.textContent = 'OCRライブラリを読み込めませんでした（ネットワークをご確認ください）/ Failed to load OCR engine.';
+        toast('Tesseract.js を読み込めませんでした');
+        return;
+      }
+      scanBtn.disabled = true;
+      barFill.style.width = '0%';
+      statusEl.textContent = '準備中… 初回はエンジンの読み込みに数十秒かかります / Loading engine (first run can take a while)…';
+
+      Tesseract.recognize(currentFile, 'jpn', {
+        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+        logger: function (m) {
+          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+            barFill.style.width = Math.round(m.progress * 100) + '%';
+          }
+          var label = ({
+            'loading tesseract core': 'エンジン読み込み中',
+            'initializing tesseract': '初期化中',
+            'loading language traineddata': '日本語データ読み込み中',
+            'initializing api': 'API初期化中',
+            'recognizing text': '文字認識中'
+          })[m.status] || m.status;
+          statusEl.textContent = label + (typeof m.progress === 'number' && m.progress < 1
+            ? ' ' + Math.round(m.progress * 100) + '%' : '');
+        }
+      }).then(function (res) {
+        barFill.style.width = '100%';
+        var items = parseReceipt(res.data.text);
+        statusEl.textContent = '完了 / Done — ' + items.length + '件の品目を抽出（編集できます）';
+        renderRows(items);
+      }).catch(function (err) {
+        statusEl.textContent = 'OCRに失敗しました: ' + (err && err.message || err);
+        toast('OCRに失敗しました / OCR failed');
+      }).then(function () {
+        scanBtn.disabled = false;
+      });
+    });
+
+    /* ---------- 結果操作 ---------- */
+    addRowBtn.addEventListener('click', function () {
+      results.style.display = 'block';
+      rowsBody.appendChild(makeRow());
+      refreshIdx();
+    });
+    csvBtn.addEventListener('click', exportCSV);
+
+    /* ---------- トースト ---------- */
+    var toastTimer = null;
+    function toast(msg) {
+      var t = $('toast'); t.textContent = msg; t.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600);
+    }
+
+    /* =========================================================
+       パーティクル背景（agents.html 流用：80個・cyan/purple・低速ドリフト）
+       ========================================================= */
+    (function particles() {
+      var canvas = $('bg-canvas'), ctx = canvas.getContext('2d');
+      var W, H, ps;
+      function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+      function init() {
+        ps = Array.from({ length: 80 }, function () {
+          return {
+            x: Math.random() * W, y: Math.random() * H,
+            vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3,
+            r: Math.random() * 1.5 + 0.5, a: Math.random() * 0.5 + 0.1,
+            hue: Math.random() < 0.5 ? 190 : 280
+          };
+        });
+      }
+      function draw() {
+        ctx.clearRect(0, 0, W, H);
+        for (var i = 0; i < ps.length; i++) {
+          var p = ps[i];
+          p.x += p.vx; p.y += p.vy;
+          if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
+          if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fillStyle = 'hsla(' + p.hue + ',90%,65%,' + p.a + ')';
+          ctx.fill();
+        }
+        requestAnimationFrame(draw);
+      }
+      resize(); init(); draw();
+      window.addEventListener('resize', function () { resize(); init(); });
+    })();
+
+    /* ---- テストフック（Node/Playwright 検証用に純粋関数を公開） ---- */
+    window.__receiptOCR = { parseReceipt: parseReceipt, classify: classify, buildCSV: buildCSV };
+  })();
+  </script>
+</body>
+</html>
