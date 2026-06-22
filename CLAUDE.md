@@ -27,6 +27,12 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `/new-game` スキルでエージェントパイプライン一式（仕様→アセット→実装→テスト→採点）を起動できる
 - 画像生成はAPIキー不要のMCPコネクタ（Adobe / Canva / Figma）またはプロシージャル生成を使う（`.claude/agents/graphic-designer.md` 参照）
 
+## Obsidian 第二の脳（セカンドブレイン）
+- `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
+- セッション開始時に `.claude/hooks/second-brain-recall.sh`（SessionStart hook）が `MOC.md` と直近のDaily Noteを自動でコンテキストに読み込む
+- 重要な意思決定・学び・「メモして」等の指示があった場合は `obsidian-vault/` へ追記する。書き込みルールの詳細は `.claude/skills/second-brain/SKILL.md` を参照
+- PMOの `pmo/`（Google Drive、ステークホルダー向け進捗管理）とは役割が異なる。本Vaultは個人の知的資産（意思決定の理由・学び）を蓄積する
+
 ## Git
 - メインブランチ: `main`
 - 作業ブランチ: `kai_001`
