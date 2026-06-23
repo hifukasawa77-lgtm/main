@@ -29,10 +29,66 @@
   body.native-canvas canvas { max-width:none; max-height:none; }
   .hint { font-size:12px; color:#8aa0b8; text-align:center; line-height:1.6; }
   .hint b { color:var(--cyan); }
+
+  /* ---- 全画面UI（タッチ端末のみ表示） ---- */
+  .fs-toggle, .fs-gate { display:none; }
+  body.is-touch .fs-toggle { display:flex; }
+  .fs-toggle {
+    position:fixed; top:12px; right:12px; z-index:50;
+    width:44px; height:44px; align-items:center; justify-content:center;
+    font-size:20px; line-height:1; color:#e2e8f0;
+    background:rgba(12,20,36,0.8); border:1px solid rgba(34,211,238,0.5);
+    border-radius:12px; backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    box-shadow:0 6px 20px rgba(0,0,0,0.5); cursor:pointer;
+  }
+  .fs-toggle:active { background:rgba(34,211,238,0.18); }
+  body.is-touch.is-fullscreen .fs-toggle { top:max(12px, env(safe-area-inset-top)); right:max(12px, env(safe-area-inset-right)); }
+
+  body.is-touch .fs-gate { display:flex; }
+  .fs-gate {
+    position:fixed; inset:0; z-index:100;
+    align-items:center; justify-content:center; padding:20px;
+    background:radial-gradient(circle at 50% 30%, rgba(11,20,38,0.92) 0%, rgba(5,7,13,0.97) 70%);
+    -webkit-tap-highlight-color:transparent; cursor:pointer;
+  }
+  .fs-gate-card {
+    max-width:420px; width:100%; text-align:center;
+    padding:30px 26px; border-radius:20px;
+    background:rgba(8,12,22,0.7); border:1px solid rgba(232,192,122,0.45);
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    box-shadow:0 16px 60px rgba(0,0,0,0.6);
+  }
+  .fs-gate-icon { font-size:46px; line-height:1; color:var(--cyan); margin-bottom:10px; }
+  .fs-gate-title { font-size:28px; font-weight:bold; color:#e8c07a; letter-spacing:2px; }
+  .fs-gate-jp { font-size:16px; color:#e2e8f0; margin-top:14px; }
+  .fs-gate-en { font-size:12px; color:#7d93ab; margin-top:4px; }
+  .fs-gate-rotate {
+    display:none; margin-top:20px; padding:10px 12px; border-radius:10px;
+    font-size:12px; color:#a78bfa; background:rgba(167,139,250,0.10);
+    border:1px solid rgba(167,139,250,0.30);
+  }
+  @media (orientation:portrait) { body.is-touch .fs-gate-rotate { display:block; } }
+
+  /* ---- 全画面表示中はキャンバスを画面いっぱいに ---- */
+  body.is-fullscreen { padding:0; gap:0; }
+  body.is-fullscreen canvas, :fullscreen canvas {
+    border:0; border-radius:0; box-shadow:none;
+  }
+  body.is-fullscreen.fit-canvas canvas { max-width:100vw; max-height:100vh; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<button id="fsToggle" class="fs-toggle" type="button" aria-label="全画面 / Fullscreen">⛶</button>
+<div id="fsGate" class="fs-gate" role="button" tabindex="0" aria-label="タップして全画面で開始 / Tap to start fullscreen">
+  <div class="fs-gate-card">
+    <div class="fs-gate-icon">⛶</div>
+    <div class="fs-gate-title">戦国の野望</div>
+    <div class="fs-gate-jp">タップして横向き全画面で開始</div>
+    <div class="fs-gate-en">Tap to play in fullscreen landscape</div>
+    <div class="fs-gate-rotate">📱 端末を横向きにしてください / Rotate your device</div>
+  </div>
+</div>
 <p class="hint"><b>戦国の野望</b> / Sengoku no Yabou &nbsp;|&nbsp; クリックで操作 — Click to play &nbsp;|&nbsp; 全国64洲をヘックス戦で制覇せよ</p>
 
 <script src="gamekit/gamekit.js"></script>
@@ -1794,6 +1850,53 @@ class BattleScene extends GameKit.Scene {
     if (lost&&lost.length) T(ctx,'討死: '+lost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), W/2, py+142, {size:12, color:'#f87171', align:'center'});
   }
 }
+
+/* ===================================================================
+ * スマホ向け 横向きフルスクリーン
+ * =================================================================== */
+(function setupFullscreen(){
+  const IS_TOUCH = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || ('ontouchstart' in window);
+  document.body.classList.toggle('is-touch', IS_TOUCH);
+  const gate = document.getElementById('fsGate');
+  const toggle = document.getElementById('fsToggle');
+
+  function isFS(){ return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+  function requestFS(){
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    let p;
+    try { p = req ? req.call(el) : null; } catch(e){ p = null; }
+    Promise.resolve(p).then(()=>{
+      if (screen.orientation && screen.orientation.lock) {
+        return screen.orientation.lock('landscape').catch(()=>{});
+      }
+    }).catch(()=>{});
+  }
+  function exitFS(){
+    const fn = document.exitFullscreen || document.webkitExitFullscreen;
+    try { if (fn) fn.call(document); } catch(e){}
+  }
+  function toggleFS(){ isFS() ? exitFS() : requestFS(); }
+
+  function onFSChange(){
+    const on = isFS();
+    document.body.classList.toggle('is-fullscreen', on);
+    if (toggle) toggle.textContent = on ? '✕' : '⛶';
+    if (on && gate) gate.style.display = 'none';
+  }
+  document.addEventListener('fullscreenchange', onFSChange);
+  document.addEventListener('webkitfullscreenchange', onFSChange);
+
+  function closeGate(){ if (gate) gate.style.display = 'none'; }
+  if (gate){
+    const onGate = (e)=>{ e.preventDefault(); requestFS(); closeGate(); };
+    gate.addEventListener('click', onGate);
+    gate.addEventListener('touchend', onGate, {passive:false});
+  }
+  if (toggle){
+    toggle.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); toggleFS(); });
+  }
+})();
 
 /* ===================================================================
  * 起動
