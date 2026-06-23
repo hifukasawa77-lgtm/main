@@ -9,18 +9,19 @@
     - connect-src: ワーカーが wasm コアと jpn.traineddata を fetch する先。
     - img-src/media-src blob: : プレビュー画像 / ライブカメラ映像。
     画像は外部送信しない（OCR は端末内で完結）。CDN からはライブラリ資産のみ取得する。
+    ※ 画像前処理・クロップ・カテゴリー学習・履歴は全てローカル処理（CSP追加なし）。
   -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://tessdata.projectnaptha.com data: blob:; worker-src 'self' blob:; child-src 'self' blob:; font-src 'self'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta name="description" content="レシートをカメラで撮るだけで文字認識（OCR）し、品目・カテゴリー・個数・値段を自動抽出してCSV書き出し。完全ブラウザ内処理・画像は外部送信なし。Snap a receipt, OCR on-device, export CSV.">
+  <meta name="description" content="レシートをカメラで撮るだけで文字認識（OCR）し、品目・カテゴリー・個数・値段を自動抽出してCSV書き出し。画像補正・手動クロップ・カテゴリー学習・履歴・合計照合に対応。完全ブラウザ内処理・画像は外部送信なし。Snap a receipt, OCR on-device, export CSV.">
   <title>レシートOCR → CSV | Receipt OCR</title>
   <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/receipt-ocr.html">
   <link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
   <style>
     :root{
       --bg:#fffbf5; --text:#1c1917; --muted:#736c66;
-      --cyan:#0ea5e9; --cyan2:#06b6d4; --purple:#a855f7;
+      --cyan:#0ea5e9; --cyan2:#06b6d4; --purple:#a855f7; --warn:#f97316; --ok:#22c55e;
       --card:rgba(255,255,255,0.55); --border:rgba(14,165,233,0.18);
       --radius:20px;
     }
@@ -48,7 +49,7 @@
       backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
       box-shadow:0 2px 16px rgba(0,0,0,0.05); padding:22px; margin:18px 0;
     }
-    .card h2{font-size:1.05rem; margin:0 0 14px; display:flex; align-items:center; gap:8px}
+    .card h2{font-size:1.05rem; margin:0 0 14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
     .card h2 .en{color:var(--muted); font-weight:500; font-size:.8rem}
 
     /* capture */
@@ -77,14 +78,34 @@
     .btn.purple{background:linear-gradient(135deg,var(--purple) 0%,#7c3aed 100%); box-shadow:0 4px 14px rgba(168,85,247,0.25)}
     .btn.ghost{background:transparent; color:var(--cyan2); border:1px solid var(--border); box-shadow:none}
     .btn.ghost:hover{background:rgba(14,165,233,0.08)}
+    .btn.sm{padding:8px 12px; font-size:.82rem; border-radius:10px}
     .btn-row{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center}
 
-    /* camera + preview */
+    /* toggle row */
+    .opt-row{display:flex; align-items:center; gap:8px; justify-content:center; margin-top:14px; color:var(--muted); font-size:.86rem}
+    .opt-row input{width:16px; height:16px; accent-color:var(--cyan)}
+    .opt-row label{cursor:pointer; user-select:none}
+
+    /* camera + guide overlay */
     #camera{display:none; flex-direction:column; align-items:center; gap:12px; margin-top:14px}
-    #video{width:100%; max-width:420px; border-radius:14px; background:#000; aspect-ratio:3/4; object-fit:cover}
-    #preview{display:none; max-width:100%; max-height:340px; border-radius:14px; margin:14px auto 0;
-      box-shadow:0 4px 18px rgba(0,0,0,0.12)}
-    .preview-wrap{text-align:center}
+    .cam-stage{position:relative; width:100%; max-width:420px}
+    #video{width:100%; border-radius:14px; background:#000; aspect-ratio:3/4; object-fit:cover; display:block}
+    .cam-guide{position:absolute; inset:8%; border-radius:10px; pointer-events:none;
+      box-shadow:0 0 0 100vmax rgba(0,0,0,0.28); }
+    .cam-guide::before,.cam-guide::after,
+    .cam-guide i::before,.cam-guide i::after{content:""; position:absolute; width:26px; height:26px; border:3px solid var(--cyan)}
+    .cam-guide::before{top:-2px; left:-2px; border-right:0; border-bottom:0; border-top-left-radius:8px}
+    .cam-guide::after{top:-2px; right:-2px; border-left:0; border-bottom:0; border-top-right-radius:8px}
+    .cam-guide i::before{bottom:-2px; left:-2px; border-right:0; border-top:0; border-bottom-left-radius:8px}
+    .cam-guide i::after{bottom:-2px; right:-2px; border-left:0; border-top:0; border-bottom-right-radius:8px}
+    .cam-hint{position:absolute; left:0; right:0; bottom:6px; text-align:center; color:#fff;
+      font-size:.74rem; text-shadow:0 1px 3px rgba(0,0,0,.6); pointer-events:none}
+
+    /* crop stage */
+    #stage{display:none; margin-top:16px; text-align:center}
+    #crop-canvas{max-width:100%; border-radius:12px; box-shadow:0 4px 18px rgba(0,0,0,0.12);
+      touch-action:none; cursor:crosshair; background:#222}
+    .stage-hint{color:var(--muted); font-size:.8rem; margin:8px 0 0}
 
     /* progress */
     #scan-area{display:none}
@@ -96,7 +117,7 @@
     /* results table */
     #results{display:none}
     .table-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch}
-    table{border-collapse:collapse; width:100%; min-width:560px; font-size:.9rem}
+    table{border-collapse:collapse; width:100%; min-width:600px; font-size:.9rem}
     th,td{padding:7px 8px; text-align:left; border-bottom:1px solid rgba(28,25,23,0.08)}
     th{color:var(--muted); font-weight:600; font-size:.8rem; white-space:nowrap}
     td input,td select{
@@ -110,7 +131,28 @@
     .del-btn{background:none; border:0; cursor:pointer; font-size:1.05rem; opacity:.55; line-height:1}
     .del-btn:hover{opacity:1}
     .empty{color:var(--muted); text-align:center; padding:18px 0; font-size:.88rem}
-    .results-actions{display:flex; flex-wrap:wrap; gap:10px; justify-content:space-between; align-items:center; margin-top:14px}
+
+    /* totals bar (B) */
+    .totals{display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:flex-end;
+      margin-top:14px; padding:10px 14px; border-radius:12px; background:rgba(14,165,233,0.06);
+      font-size:.9rem; font-variant-numeric:tabular-nums}
+    .totals b{font-size:1.05rem}
+    .totals .diff.warn{color:var(--warn); font-weight:700}
+    .totals .diff.ok{color:var(--ok); font-weight:700}
+
+    .results-actions{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:16px}
+    .results-actions .spacer{flex:1 1 auto}
+
+    /* category summary (G) */
+    #cat-summary{display:none; margin-top:14px; padding:12px 14px; border-radius:12px;
+      background:rgba(168,85,247,0.06); border:1px solid rgba(168,85,247,0.18)}
+    #cat-summary h3{margin:0 0 8px; font-size:.92rem}
+    #cat-summary table{min-width:0}
+
+    /* history (F) */
+    #history-card{display:none}
+    .hist-info{display:flex; flex-wrap:wrap; gap:16px; align-items:baseline; font-size:.92rem; margin-bottom:12px}
+    .hist-info b{font-size:1.1rem}
 
     /* toast */
     #toast{
@@ -124,6 +166,8 @@
     footer a{color:var(--cyan2); text-decoration:none}
     .home-link{display:inline-block; margin-bottom:18px; color:var(--cyan2); text-decoration:none; font-size:.86rem}
     .home-link:hover{text-decoration:underline}
+    .mini-link{background:none; border:0; color:var(--muted); font-size:.78rem; cursor:pointer; text-decoration:underline; padding:0}
+    .mini-link:hover{color:var(--cyan2)}
   </style>
 </head>
 <body>
@@ -133,7 +177,7 @@
 
     <div class="hero">
       <h1>🧾 <span class="grad">レシートOCR → CSV</span></h1>
-      <p class="sub">Snap a receipt → editable items → CSV</p>
+      <p class="sub">Snap a receipt → crop → editable items → CSV</p>
       <p class="note">🔒 完全ブラウザ内処理・画像は外部送信しません / Runs fully on-device, your photo never leaves the browser.</p>
     </div>
 
@@ -154,15 +198,27 @@
       </div>
 
       <div id="camera">
-        <video id="video" playsinline autoplay muted></video>
+        <div class="cam-stage">
+          <video id="video" playsinline autoplay muted></video>
+          <div class="cam-guide"><i></i></div>
+          <div class="cam-hint">枠の中にレシートを収めて撮影 / Fit the receipt inside the frame</div>
+        </div>
         <div class="btn-row">
           <button class="btn" id="cam-shot" type="button">📸 撮影 / Capture</button>
           <button class="btn ghost" id="cam-stop" type="button">✕ 閉じる / Close</button>
         </div>
       </div>
 
-      <div class="preview-wrap">
-        <img id="preview" alt="receipt preview">
+      <!-- クロップUI (C) -->
+      <div id="stage">
+        <canvas id="crop-canvas"></canvas>
+        <p class="stage-hint">読み取る範囲を枠でドラッグ調整できます（角をつまんでリサイズ）。<br>
+          Drag the box to crop the OCR area. <button class="mini-link" id="reset-sel" type="button">全体を選択 / Reset</button></p>
+      </div>
+
+      <div class="opt-row">
+        <input type="checkbox" id="preprocess" checked>
+        <label for="preprocess">画像補正でOCR精度を上げる（グレースケール＋コントラスト＋拡大）/ Enhance image for OCR</label>
       </div>
     </section>
 
@@ -170,7 +226,7 @@
     <section class="card" id="scan-area">
       <h2>② 文字を読み取る <span class="en">/ Run OCR</span></h2>
       <div class="btn-row">
-        <button class="btn purple" id="scan" type="button">🔍 スキャン / Scan</button>
+        <button class="btn purple" id="scan" type="button">🔍 この範囲を読み取る / Scan</button>
       </div>
       <div class="bar"><div id="bar-fill"></div></div>
       <div id="status"></div>
@@ -199,9 +255,45 @@
         品目を抽出できませんでした。「＋ 行を追加」で手入力できます。<br>
         No items detected — add rows manually below.
       </div>
+
+      <!-- 合計集計・照合 (B) -->
+      <div class="totals" id="totals">
+        <span>品目合計 / Items: <b id="t-items">¥0</b></span>
+        <span id="t-receipt-wrap" style="display:none">レシート合計 / Receipt: <b id="t-receipt">¥0</b></span>
+        <span id="t-diff-wrap" class="diff" style="display:none"></span>
+      </div>
+
+      <!-- カテゴリー別集計 (G) -->
+      <div id="cat-summary">
+        <h3>📊 カテゴリー別集計 / By category</h3>
+        <div class="table-scroll"><table><tbody id="cat-summary-body"></tbody></table></div>
+        <div class="btn-row" style="justify-content:flex-start; margin-top:10px">
+          <button class="btn ghost sm" id="cat-csv" type="button">集計CSV / Summary CSV</button>
+        </div>
+      </div>
+
       <div class="results-actions">
-        <button class="btn ghost" id="add-row" type="button">＋ 行を追加 / Add row</button>
-        <button class="btn" id="csv" type="button">⬇️ CSV書き出し / Export CSV</button>
+        <button class="btn ghost sm" id="add-row" type="button">＋ 行を追加 / Add row</button>
+        <button class="btn ghost sm" id="summary-toggle" type="button">📊 集計 / Summary</button>
+        <span class="spacer"></span>
+        <button class="btn ghost sm" id="copy" type="button">📋 コピー / Copy</button>
+        <button class="btn ghost sm" id="json" type="button">⬇️ JSON</button>
+        <button class="btn sm" id="csv" type="button">⬇️ CSV書き出し / Export CSV</button>
+        <button class="btn purple sm" id="add-to-log" type="button">＋ 履歴に追加 / Add to log</button>
+      </div>
+    </section>
+
+    <!-- 4. 履歴 (F) -->
+    <section class="card" id="history-card">
+      <h2>🗂 履歴（複数レシート）<span class="en">/ Saved log</span></h2>
+      <div class="hist-info">
+        <span>レシート / Receipts: <b id="h-count">0</b></span>
+        <span>品目 / Items: <b id="h-items">0</b></span>
+        <span>合計金額 / Total: <b id="h-total">¥0</b></span>
+      </div>
+      <div class="btn-row" style="justify-content:flex-start">
+        <button class="btn sm" id="hist-csv" type="button">⬇️ 履歴をまとめてCSV / Export all</button>
+        <button class="btn ghost sm" id="hist-clear" type="button">🗑 履歴をクリア / Clear</button>
       </div>
     </section>
 
@@ -226,22 +318,75 @@
 
     /* ---------- DOM ---------- */
     var $ = function (id) { return document.getElementById(id); };
-    var fileInput = $('file'), drop = $('drop'), preview = $('preview');
+    var fileInput = $('file'), drop = $('drop'), preprocessChk = $('preprocess');
     var camStart = $('cam-start'), camStop = $('cam-stop'), camShot = $('cam-shot');
     var camera = $('camera'), video = $('video');
+    var stage = $('stage'), cropCanvas = $('crop-canvas'), resetSelBtn = $('reset-sel');
     var scanArea = $('scan-area'), scanBtn = $('scan'), barFill = $('bar-fill'), statusEl = $('status');
     var results = $('results'), rowsBody = $('rows'), emptyMsg = $('empty');
-    var addRowBtn = $('add-row'), csvBtn = $('csv');
+    var addRowBtn = $('add-row'), csvBtn = $('csv'), jsonBtn = $('json'), copyBtn = $('copy');
+    var summaryToggle = $('summary-toggle'), catSummary = $('cat-summary'), catSummaryBody = $('cat-summary-body'), catCsvBtn = $('cat-csv');
+    var addToLogBtn = $('add-to-log');
+    var tItems = $('t-items'), tReceiptWrap = $('t-receipt-wrap'), tReceipt = $('t-receipt'), tDiffWrap = $('t-diff-wrap');
+    var histCard = $('history-card'), hCount = $('h-count'), hItems = $('h-items'), hTotal = $('h-total');
+    var histCsvBtn = $('hist-csv'), histClearBtn = $('hist-clear');
 
-    var currentFile = null;     // 現在の画像 (File/Blob)
-    var previewURL = null;      // プレビュー用 objectURL
+    var currentFile = null;     // 取り込んだ元画像 (File/Blob)
+    var previewURL = null;      // objectURL
     var stream = null;          // getUserMedia ストリーム
+    var lastReceiptTotal = null; // OCRから抽出したレシート合計
 
     /* =========================================================
-       カテゴリー自動分類（汎用辞書：食品＋日用品・衣料・文具・医薬品・家電など）
-       先頭一致で最初にヒットしたカテゴリーを返す。フォールバックは「その他」。
-       拡張は配列に語を足すだけ。
-       ※「冷凍」等は誤爆しうるが、カテゴリー欄は<select>で編集可能。
+       H. Tesseract 永続ワーカー（プリウォーム・再利用）
+       ========================================================= */
+    var worker = null, workerReady = null;
+    function onLog(m) {
+      if (m && m.status === 'recognizing text' && typeof m.progress === 'number') {
+        barFill.style.width = Math.round(m.progress * 100) + '%';
+      }
+      if (!m) return;
+      var label = ({
+        'loading tesseract core': 'エンジン読み込み中',
+        'initializing tesseract': '初期化中',
+        'loading language traineddata': '日本語データ読み込み中',
+        'initializing api': 'API初期化中',
+        'recognizing text': '文字認識中'
+      })[m.status] || m.status;
+      statusEl.textContent = label + (typeof m.progress === 'number' && m.progress < 1
+        ? ' ' + Math.round(m.progress * 100) + '%' : '');
+    }
+    function ensureWorker() {
+      if (workerReady) return workerReady;
+      if (typeof Tesseract === 'undefined') return Promise.reject(new Error('engine-unavailable'));
+      workerReady = (function () {
+        return Promise.resolve(
+          Tesseract.createWorker('jpn', 1, {
+            langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+            logger: onLog
+          })
+        ).then(function (w) {
+          worker = w;
+          // レシートは単一ブロック想定。setParameters非対応版でも失敗させない。
+          return Promise.resolve(w.setParameters ? w.setParameters({ tessedit_pageseg_mode: '6' }) : null)
+            .catch(function () {}).then(function () { return w; });
+        });
+      })();
+      return workerReady;
+    }
+
+    /* =========================================================
+       E. カテゴリー学習（localStorage）
+       ========================================================= */
+    var LEARN_KEY = 'receiptOCR.catLearn';
+    function loadLearn() { try { return JSON.parse(localStorage.getItem(LEARN_KEY)) || {}; } catch (e) { return {}; } }
+    function saveLearn(name, cat) {
+      if (!name) return;
+      try { var m = loadLearn(); m[name] = cat; localStorage.setItem(LEARN_KEY, JSON.stringify(m)); } catch (e) {}
+    }
+    function clearLearn() { try { localStorage.removeItem(LEARN_KEY); } catch (e) {} }
+
+    /* =========================================================
+       カテゴリー自動分類（学習優先 → 汎用辞書）
        ========================================================= */
     var CATS = [
       ['野菜',        ['ナス','茄子','きゅうり','胡瓜','トマト','キャベツ','レタス','人参','にんじん','玉ねぎ','たまねぎ','じゃがいも','ジャガ','大根','ねぎ','ネギ','ほうれん','白菜','ピーマン','もやし','ブロッコリ','きのこ','椎茸','しめじ','えのき','かぼちゃ','ごぼう','れんこん','アスパラ','オクラ','ニラ','生姜','しょうが','にんにく','ニンニク']],
@@ -262,20 +407,24 @@
       ['書籍・メディア',['雑誌','マンガ','コミック','新聞','文庫','単行本','DVD','ブルーレイ','CD']]
     ];
 
-    function classify(name) {
+    // classify(name, learn?): 学習マップ（完全一致→部分一致）を優先し、無ければ辞書。
+    function classify(name, learn) {
       if (!name) return 'その他';
+      learn = learn || loadLearn();
+      if (learn) {
+        if (learn[name]) return learn[name];
+        for (var key in learn) { if (learn.hasOwnProperty(key) && key && name.indexOf(key) !== -1) return learn[key]; }
+      }
       for (var i = 0; i < CATS.length; i++) {
         var kws = CATS[i][1];
-        for (var j = 0; j < kws.length; j++) {
-          if (name.indexOf(kws[j]) !== -1) return CATS[i][0];
-        }
+        for (var j = 0; j < kws.length; j++) if (name.indexOf(kws[j]) !== -1) return CATS[i][0];
       }
       return 'その他';
     }
     var CAT_NAMES = CATS.map(function (c) { return c[0]; }).concat(['その他']);
 
     /* =========================================================
-       レシート解析：OCRの生テキスト → [{name, qty, price}]
+       レシート解析（D: 軽減税率※ / 単価×個数 対応）
        ========================================================= */
     function toHalfWidth(s) {
       return s
@@ -284,8 +433,6 @@
         .replace(/．/g, '.')
         .replace(/￥/g, '¥');
     }
-
-    // 合計/税/支払い/店舗情報など、品目でない行を除外
     var SKIP = /合\s*計|小\s*計|総額|税|内税|外税|消費税|お?預(り|か?り)|釣|現金|クレジット|カード|電子マネー|ポイント|残高|電話|ＴＥＬ|TEL|住所|店|レジ|担当|領収|受領|発行|営業|ご利用|お買上|買上|点数|合計点|割引|値引|番号|No\.|登録/i;
 
     function parseReceipt(text) {
@@ -293,28 +440,30 @@
       if (!text) return out;
       var lines = text.split(/\r?\n/);
       for (var i = 0; i < lines.length; i++) {
-        var line = toHalfWidth(lines[i]).trim();
-        if (line.length < 2) continue;
-        if (SKIP.test(line)) continue;
-        if (/^\d{4}[-\/年.]/.test(line)) continue;        // 日付 2024/01/02 等
-        if (/\d{1,2}\s*[:：]\s*\d{2}/.test(line)) continue; // 時刻
+        var raw = toHalfWidth(lines[i]).trim();
+        if (raw.length < 2) continue;
+        if (SKIP.test(raw)) continue;
+        if (/^\d{4}[-\/年.]/.test(raw)) continue;        // 日付
+        if (/\d{1,2}\s*[:：]\s*\d{2}/.test(raw)) continue; // 時刻
 
-        // 行末の価格： ¥/￥ 前置 or 円 後置、カンマ区切り対応、末尾の *・※（軽減税率記号）許容
-        var pm = line.match(/[¥]?\s*(\d{1,3}(?:,\d{3})+|\d+)\s*円?\s*[*※E-]?\s*$/);
+        // 行末の価格（合計金額）: ¥前置 or 円後置、カンマ区切り、末尾の軽減税率記号許容
+        var pm = raw.match(/[¥]?\s*(\d{1,3}(?:,\d{3})+|\d+)\s*円?\s*[*※E軽-]?\s*$/);
         if (!pm) continue;
         var price = parseInt(pm[1].replace(/,/g, ''), 10);
         if (!(price > 0)) continue;
 
-        var name = line.slice(0, pm.index).trim();
+        var name = raw.slice(0, pm.index);
 
-        // 個数： x2 / ×2 / *2 / 2個 / 2点 / 3本 / 2袋 等。よくある数量カウンタを拾う
+        // D: 軽減税率（※ / * / 軽 / 内）→ note付与
+        var taxReduced = /[※*]\s*$/.test(raw) || /軽|内税/.test(raw);
+
+        // D: 単価×個数（@128×3 / 128円x3 / x2 / 2個 / 3本 …）から個数を取得
         var qty = 1;
         var qm = name.match(/[x×X*]\s*(\d{1,3})\b/)
               || name.match(/(\d{1,3})\s*(?:個|点|コ|本|枚|袋|缶|パック|箱|束|玉|尾|杯|膳)/);
-        if (qm) {
-          var q = parseInt(qm[1], 10);
-          if (q > 0 && q < 1000) { qty = q; name = name.replace(qm[0], ' '); }
-        }
+        if (qm) { var q = parseInt(qm[1], 10); if (q > 0 && q < 1000) { qty = q; name = name.replace(qm[0], ' '); } }
+        // @単価 表記を名前から除去
+        name = name.replace(/@\s*\d[\d,]*\s*円?/g, ' ');
 
         // 記号・余分な空白を除去
         name = name.replace(/[¥@*※#･・\-—_=\s]+$/g, '')
@@ -322,12 +471,25 @@
                    .replace(/\s{2,}/g, ' ')
                    .trim();
 
-        // 実文字（漢字/かな/英字）が無ければゴミ行として除外
-        if (!/[一-龯ぁ-んァ-ヶーA-Za-z]/.test(name)) continue;
+        if (!/[一-龯ぁ-んァ-ヶーA-Za-z]/.test(name)) continue; // 実文字なし=ゴミ
 
-        out.push({ name: name, qty: qty, price: price });
+        out.push({ name: name, qty: qty, price: price, note: taxReduced ? '軽減税率' : '', taxReduced: taxReduced });
       }
       return out;
+    }
+
+    // B: OCR生テキストからレシート合計を抽出（最大の「合計 ¥xxxx」を採用、小計/中間計は除外）
+    function extractReceiptTotal(text) {
+      if (!text) return null;
+      var lines = text.split(/\r?\n/), best = null;
+      for (var i = 0; i < lines.length; i++) {
+        var line = toHalfWidth(lines[i]);
+        if (!/合\s*計|お買上|お買い上げ/.test(line)) continue;
+        if (/小\s*計|中間|点数/.test(line)) continue;
+        var m = line.match(/(\d{1,3}(?:,\d{3})+|\d+)\s*円?\s*[*※]?\s*$/);
+        if (m) { var v = parseInt(m[1].replace(/,/g, ''), 10); if (v > 0 && (best === null || v > best)) best = v; }
+      }
+      return best;
     }
 
     /* =========================================================
@@ -335,7 +497,8 @@
        ========================================================= */
     function makeRow(item) {
       item = item || { name: '', qty: 1, price: '', note: '', cat: '' };
-      var cat = item.cat || classify(item.name);
+      var learn = loadLearn();
+      var cat = item.cat || classify(item.name, learn);
       var tr = document.createElement('tr');
 
       var tdIdx = document.createElement('td'); tdIdx.className = 'idx';
@@ -343,7 +506,6 @@
 
       tr.appendChild(cell('text', item.name, 'name'));
 
-      // カテゴリー select
       var tdCat = document.createElement('td');
       var sel = document.createElement('select'); sel.dataset.k = 'cat';
       for (var i = 0; i < CAT_NAMES.length; i++) {
@@ -353,10 +515,12 @@
       sel.value = (CAT_NAMES.indexOf(cat) !== -1) ? cat : 'その他';
       tdCat.appendChild(sel); tr.appendChild(tdCat);
 
-      // 品目名を変えたらカテゴリーを再推定（ユーザーが手で選び直すまでの初期補助）
       var nameInput = tr.querySelector('input[data-k="name"]');
-      nameInput.addEventListener('change', function () {
-        sel.value = classify(nameInput.value);
+      nameInput.addEventListener('change', function () { sel.value = classify(nameInput.value); });
+      // E: ユーザーが手で選び直したら学習保存
+      sel.addEventListener('change', function () {
+        var nm = nameInput.value.trim();
+        if (nm) { saveLearn(nm, sel.value); toast('カテゴリーを学習しました / Learned: ' + nm + ' → ' + sel.value); }
       });
 
       tr.appendChild(cell('number', item.qty == null ? 1 : item.qty, 'qty', true));
@@ -366,12 +530,11 @@
       var tdDel = document.createElement('td'); tdDel.className = 'del';
       var del = document.createElement('button');
       del.type = 'button'; del.className = 'del-btn'; del.title = '削除'; del.textContent = '🗑';
-      del.addEventListener('click', function () { tr.remove(); refreshIdx(); });
+      del.addEventListener('click', function () { tr.remove(); refreshIdx(); updateTotals(); });
       tdDel.appendChild(del); tr.appendChild(tdDel);
 
       return tr;
     }
-
     function cell(type, value, key, num) {
       var td = document.createElement('td');
       if (num) td.className = 'num';
@@ -382,59 +545,70 @@
       td.appendChild(inp);
       return td;
     }
-
     function refreshIdx() {
       var trs = rowsBody.querySelectorAll('tr');
       for (var i = 0; i < trs.length; i++) trs[i].querySelector('td.idx').textContent = (i + 1);
       emptyMsg.style.display = trs.length ? 'none' : 'block';
     }
-
     function renderRows(items) {
       rowsBody.innerHTML = '';
       for (var i = 0; i < items.length; i++) rowsBody.appendChild(makeRow(items[i]));
       refreshIdx();
       results.style.display = 'block';
+      updateTotals();
+      if (catSummary.style.display === 'block') renderSummary();
       results.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-
     function readRows() {
-      var rows = [];
-      var trs = rowsBody.querySelectorAll('tr');
+      var rows = [], trs = rowsBody.querySelectorAll('tr');
       for (var i = 0; i < trs.length; i++) {
-        var g = function (k) { var e = trs[i].querySelector('[data-k="' + k + '"]'); return e ? e.value : ''; };
-        var name = g('name').trim();
-        var price = g('price').trim();
-        if (!name && !price) continue; // 完全な空行はスキップ
-        rows.push({
-          name: name,
-          cat: g('cat'),
-          qty: g('qty').trim() === '' ? 1 : g('qty').trim(),
-          price: price,
-          note: g('note').trim()
-        });
+        var tr = trs[i];
+        var g = function (k) { var e = tr.querySelector('[data-k="' + k + '"]'); return e ? e.value : ''; };
+        var name = g('name').trim(), price = g('price').trim();
+        if (!name && !price) continue;
+        rows.push({ name: name, cat: g('cat'), qty: g('qty').trim() === '' ? 1 : g('qty').trim(), price: price, note: g('note').trim() });
       }
       return rows;
     }
 
-    /* =========================================================
-       CSV 生成・ダウンロード（oshikatsu.html のパターンを踏襲）
-       ヘッダー: 項番,品目名,カテゴリー,個数,値段,備考 / UTF-8 BOM 付き
-       ========================================================= */
-    function csvCell(v) {
-      var s = String(v == null ? '' : v);
-      if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    /* ---------- B: 合計集計・照合 ---------- */
+    function yen(n) { return '¥' + (Number(n) || 0).toLocaleString('ja-JP'); }
+    function rowsSum(rows) {
+      var s = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var p = parseInt(String(rows[i].price).replace(/[^\d-]/g, ''), 10) || 0;
+        var q = parseInt(String(rows[i].qty).replace(/[^\d-]/g, ''), 10) || 1;
+        s += p * q;
+      }
       return s;
     }
+    function updateTotals() {
+      var sum = rowsSum(readRows());
+      tItems.textContent = yen(sum);
+      if (lastReceiptTotal != null) {
+        tReceiptWrap.style.display = '';
+        tReceipt.textContent = yen(lastReceiptTotal);
+        var diff = sum - lastReceiptTotal;
+        tDiffWrap.style.display = '';
+        if (diff === 0) { tDiffWrap.className = 'diff ok'; tDiffWrap.textContent = '✓ 一致 / matches'; }
+        else { tDiffWrap.className = 'diff warn'; tDiffWrap.textContent = '差 / diff: ' + (diff > 0 ? '+' : '') + yen(diff) + '（要確認）'; }
+      } else {
+        tReceiptWrap.style.display = 'none'; tDiffWrap.style.display = 'none';
+      }
+    }
+
+    /* =========================================================
+       CSV / JSON / クリップボード / 集計（G）
+       ========================================================= */
+    function csvCell(v) { var s = String(v == null ? '' : v); if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"'; return s; }
     function downloadBlob(blob, filename) {
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url; a.download = filename; document.body.appendChild(a); a.click();
       document.body.removeChild(a); setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
     }
-    function ymd() {
-      var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
-      return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
-    }
+    function ymd() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()); }
+
     function buildCSV(rows) {
       var head = ['項番', '品目名', 'カテゴリー', '個数', '値段', '備考'];
       var lines = [head.join(',')];
@@ -444,12 +618,239 @@
       }
       return lines.join('\r\n');
     }
+    function buildJSON(rows) {
+      return JSON.stringify(rows.map(function (r, i) {
+        return { 項番: i + 1, 品目名: r.name, カテゴリー: r.cat,
+          個数: parseInt(r.qty, 10) || 0, 値段: parseInt(String(r.price).replace(/[^\d-]/g, ''), 10) || 0, 備考: r.note || '' };
+      }), null, 2);
+    }
+    function aggregateByCategory(rows) {
+      var map = {}, order = [];
+      for (var i = 0; i < rows.length; i++) {
+        var c = rows[i].cat || 'その他';
+        var p = parseInt(String(rows[i].price).replace(/[^\d-]/g, ''), 10) || 0;
+        var q = parseInt(String(rows[i].qty).replace(/[^\d-]/g, ''), 10) || 1;
+        if (!map[c]) { map[c] = { category: c, count: 0, total: 0 }; order.push(c); }
+        map[c].count += 1; map[c].total += p * q;
+      }
+      return order.map(function (c) { return map[c]; });
+    }
+
     function exportCSV() {
       var rows = readRows();
-      if (!rows.length) { toast('書き出す品目がありません / No rows to export'); return; }
-      var blob = new Blob(['﻿' + buildCSV(rows)], { type: 'text/csv;charset=utf-8' });
-      downloadBlob(blob, 'receipt_' + ymd() + '.csv');
+      if (!rows.length) { toast('書き出す品目がありません / No rows'); return; }
+      downloadBlob(new Blob(['﻿' + buildCSV(rows)], { type: 'text/csv;charset=utf-8' }), 'receipt_' + ymd() + '.csv');
       toast('CSVを書き出しました（' + rows.length + '件）/ Exported');
+    }
+    function exportJSON() {
+      var rows = readRows();
+      if (!rows.length) { toast('書き出す品目がありません / No rows'); return; }
+      downloadBlob(new Blob([buildJSON(rows)], { type: 'application/json' }), 'receipt_' + ymd() + '.json');
+      toast('JSONを書き出しました / Exported JSON');
+    }
+    function copyToClipboard() {
+      var rows = readRows();
+      if (!rows.length) { toast('コピーする品目がありません / Nothing to copy'); return; }
+      var text = buildCSV(rows);
+      var done = function () { toast('クリップボードにコピーしました / Copied'); };
+      var fb = function () {
+        try { var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+          document.execCommand('copy'); document.body.removeChild(ta); done(); } catch (e) { toast('コピーに失敗しました / Copy failed'); }
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fb);
+      else fb();
+    }
+    function renderSummary() {
+      var agg = aggregateByCategory(readRows());
+      catSummaryBody.innerHTML = '';
+      var head = document.createElement('tr');
+      head.innerHTML = '<th>カテゴリー</th><th>件数</th><th>金額</th>';
+      catSummaryBody.appendChild(head);
+      for (var i = 0; i < agg.length; i++) {
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + agg[i].category + '</td><td>' + agg[i].count + '</td><td>' + yen(agg[i].total) + '</td>';
+        catSummaryBody.appendChild(tr);
+      }
+    }
+    function exportCategoryCSV() {
+      var agg = aggregateByCategory(readRows());
+      if (!agg.length) { toast('集計対象がありません / Nothing to aggregate'); return; }
+      var lines = ['カテゴリー,件数,合計金額'];
+      for (var i = 0; i < agg.length; i++) lines.push([agg[i].category, agg[i].count, agg[i].total].map(csvCell).join(','));
+      downloadBlob(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), 'receipt_summary_' + ymd() + '.csv');
+      toast('集計CSVを書き出しました / Summary exported');
+    }
+
+    /* =========================================================
+       F. 履歴（連続スキャン・localStorage保存）
+       ========================================================= */
+    var HIST_KEY = 'receiptOCR.history';
+    function loadHistory() { try { return JSON.parse(localStorage.getItem(HIST_KEY)) || []; } catch (e) { return []; } }
+    function saveHistory(arr) { try { localStorage.setItem(HIST_KEY, JSON.stringify(arr)); } catch (e) {} }
+    function updateHistoryUI() {
+      var h = loadHistory();
+      histCard.style.display = h.length ? 'block' : 'none';
+      // h は {receipts:n} ではなく行配列。レシート区切りは _receipt フラグで数える。
+      var receipts = 0, total = 0;
+      for (var i = 0; i < h.length; i++) {
+        if (h[i]._first) receipts++;
+        var p = parseInt(String(h[i].price).replace(/[^\d-]/g, ''), 10) || 0;
+        var q = parseInt(String(h[i].qty).replace(/[^\d-]/g, ''), 10) || 1;
+        total += p * q;
+      }
+      hCount.textContent = receipts; hItems.textContent = h.length; hTotal.textContent = yen(total);
+    }
+    function addCurrentToHistory() {
+      var rows = readRows();
+      if (!rows.length) { toast('追加する品目がありません / Nothing to add'); return; }
+      var h = loadHistory();
+      for (var i = 0; i < rows.length; i++) { var r = rows[i]; if (i === 0) r._first = 1; h.push(r); }
+      saveHistory(h); updateHistoryUI();
+      // 次のレシートへ：現在テーブルをクリア
+      rowsBody.innerHTML = ''; refreshIdx(); lastReceiptTotal = null; updateTotals();
+      if (catSummary.style.display === 'block') renderSummary();
+      toast('履歴に追加しました（' + rows.length + '件）/ Added to log');
+      histCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    function exportHistoryCSV() {
+      var h = loadHistory();
+      if (!h.length) { toast('履歴が空です / Log is empty'); return; }
+      downloadBlob(new Blob(['﻿' + buildCSV(h)], { type: 'text/csv;charset=utf-8' }), 'receipt_log_' + ymd() + '.csv');
+      toast('履歴をCSVで書き出しました（' + h.length + '件）/ Exported log');
+    }
+    function clearHistory() {
+      if (!loadHistory().length) return;
+      if (!window.confirm('履歴をすべて削除しますか？ / Clear all saved log?')) return;
+      saveHistory([]); updateHistoryUI(); toast('履歴をクリアしました / Cleared');
+    }
+
+    /* =========================================================
+       A. 画像前処理（グレースケール + コントラスト正規化 + 拡大）
+       ========================================================= */
+    function preprocessImage(src) {
+      var sw = src.width || src.naturalWidth, sh = src.height || src.naturalHeight;
+      var scale = Math.min(3, Math.max(1, 1500 / Math.max(1, sw)));
+      var w = Math.round(sw * scale), h = Math.round(sh * scale);
+      var c = document.createElement('canvas'); c.width = w; c.height = h;
+      var ctx = c.getContext('2d'); ctx.drawImage(src, 0, 0, w, h);
+      var img, d;
+      try { img = ctx.getImageData(0, 0, w, h); d = img.data; } catch (e) { return c; }
+      // グレースケール + ヒストグラム
+      var hist = new Array(256); for (var k = 0; k < 256; k++) hist[k] = 0;
+      for (var i = 0; i < d.length; i += 4) {
+        var g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+        d[i] = d[i + 1] = d[i + 2] = g; hist[g]++;
+      }
+      // 5–95 パーセンタイルでコントラスト・ストレッチ
+      var px = (d.length / 4), lo = 0, hi = 255, acc = 0, loCut = px * 0.05, hiCut = px * 0.95;
+      for (var a = 0; a < 256; a++) { acc += hist[a]; if (acc >= loCut) { lo = a; break; } }
+      acc = 0; for (var b = 0; b < 256; b++) { acc += hist[b]; if (acc >= hiCut) { hi = b; break; } }
+      if (hi <= lo) { lo = 0; hi = 255; }
+      var range = hi - lo;
+      for (var j = 0; j < d.length; j += 4) {
+        var v = (d[j] - lo) * 255 / range;
+        v = v < 0 ? 0 : v > 255 ? 255 : v;
+        d[j] = d[j + 1] = d[j + 2] = v;
+      }
+      ctx.putImageData(img, 0, 0);
+      return c;
+    }
+
+    /* =========================================================
+       C. クロップUI（pointer events / ライブラリ不使用）
+       ========================================================= */
+    var cropImg = null, view = { w: 0, h: 0 }, sel = null, srcScale = 1, drag = null;
+    var MAXW = 760, MAXH = 360, HANDLE = 9, HIT = 16;
+
+    function loadImageForCrop(blobOrUrl, isUrl) {
+      var img = new Image();
+      img.onload = function () {
+        cropImg = img;
+        var s = Math.min(MAXW / img.naturalWidth, MAXH / img.naturalHeight, 1);
+        // 小さすぎる場合も表示はそこそこ確保
+        s = Math.max(s, Math.min(MAXW / img.naturalWidth, 1));
+        view.w = Math.max(1, Math.round(img.naturalWidth * s));
+        view.h = Math.max(1, Math.round(img.naturalHeight * s));
+        srcScale = img.naturalWidth / view.w;
+        cropCanvas.width = view.w; cropCanvas.height = view.h;
+        sel = { x: 0, y: 0, w: view.w, h: view.h };
+        stage.style.display = 'block';
+        drawCrop();
+        scanArea.style.display = 'block';
+        barFill.style.width = '0%'; statusEl.textContent = '';
+        stage.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
+      img.src = isUrl ? blobOrUrl : URL.createObjectURL(blobOrUrl);
+    }
+    function drawCrop() {
+      if (!cropImg) return;
+      var ctx = cropCanvas.getContext('2d');
+      ctx.clearRect(0, 0, view.w, view.h);
+      ctx.drawImage(cropImg, 0, 0, view.w, view.h);
+      // 外側を暗く
+      ctx.fillStyle = 'rgba(0,0,0,0.42)';
+      ctx.fillRect(0, 0, view.w, sel.y);
+      ctx.fillRect(0, sel.y + sel.h, view.w, view.h - sel.y - sel.h);
+      ctx.fillRect(0, sel.y, sel.x, sel.h);
+      ctx.fillRect(sel.x + sel.w, sel.y, view.w - sel.x - sel.w, sel.h);
+      // 枠
+      ctx.strokeStyle = '#06b6d4'; ctx.lineWidth = 2;
+      ctx.strokeRect(sel.x + 1, sel.y + 1, sel.w - 2, sel.h - 2);
+      // ハンドル
+      ctx.fillStyle = '#06b6d4';
+      corners().forEach(function (p) { ctx.fillRect(p.x - HANDLE / 2, p.y - HANDLE / 2, HANDLE, HANDLE); });
+    }
+    function corners() {
+      return [
+        { id: 'nw', x: sel.x, y: sel.y }, { id: 'ne', x: sel.x + sel.w, y: sel.y },
+        { id: 'sw', x: sel.x, y: sel.y + sel.h }, { id: 'se', x: sel.x + sel.w, y: sel.y + sel.h }
+      ];
+    }
+    function evtPos(e) {
+      var r = cropCanvas.getBoundingClientRect();
+      var cx = (e.touches ? e.touches[0].clientX : e.clientX);
+      var cy = (e.touches ? e.touches[0].clientY : e.clientY);
+      return { x: (cx - r.left) * (cropCanvas.width / r.width), y: (cy - r.top) * (cropCanvas.height / r.height) };
+    }
+    function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+    function onDown(e) {
+      if (!cropImg) return; e.preventDefault();
+      var p = evtPos(e), cs = corners(), mode = null;
+      for (var i = 0; i < cs.length; i++) if (Math.abs(p.x - cs[i].x) <= HIT && Math.abs(p.y - cs[i].y) <= HIT) { mode = cs[i].id; break; }
+      if (!mode) mode = (p.x >= sel.x && p.x <= sel.x + sel.w && p.y >= sel.y && p.y <= sel.y + sel.h) ? 'move' : 'new';
+      if (mode === 'new') { sel = { x: p.x, y: p.y, w: 0, h: 0 }; mode = 'se'; }
+      drag = { mode: mode, sx: p.x, sy: p.y, orig: { x: sel.x, y: sel.y, w: sel.w, h: sel.h } };
+    }
+    function onMove(e) {
+      if (!drag) return; e.preventDefault();
+      var p = evtPos(e), dx = p.x - drag.sx, dy = p.y - drag.sy, o = drag.orig, m = drag.mode;
+      if (m === 'move') {
+        sel.x = clamp(o.x + dx, 0, view.w - o.w); sel.y = clamp(o.y + dy, 0, view.h - o.h); sel.w = o.w; sel.h = o.h;
+      } else {
+        var x1 = o.x, y1 = o.y, x2 = o.x + o.w, y2 = o.y + o.h;
+        if (m.indexOf('w') > -1) x1 = clamp(p.x, 0, x2 - 20);
+        if (m.indexOf('e') > -1) x2 = clamp(p.x, x1 + 20, view.w);
+        if (m.indexOf('n') > -1) y1 = clamp(p.y, 0, y2 - 20);
+        if (m.indexOf('s') > -1) y2 = clamp(p.y, y1 + 20, view.h);
+        sel = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+      }
+      drawCrop();
+    }
+    function onUp() { drag = null; }
+    cropCanvas.addEventListener('mousedown', onDown);
+    cropCanvas.addEventListener('touchstart', onDown, { passive: false });
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchend', onUp);
+    resetSelBtn.addEventListener('click', function () { if (cropImg) { sel = { x: 0, y: 0, w: view.w, h: view.h }; drawCrop(); } });
+
+    function getCropCanvas() {
+      var sx = Math.round(sel.x * srcScale), sy = Math.round(sel.y * srcScale);
+      var sw = Math.max(1, Math.round(sel.w * srcScale)), sh = Math.max(1, Math.round(sel.h * srcScale));
+      var c = document.createElement('canvas'); c.width = sw; c.height = sh;
+      c.getContext('2d').drawImage(cropImg, sx, sy, sw, sh, 0, 0, sw, sh);
+      return c;
     }
 
     /* =========================================================
@@ -459,44 +860,24 @@
       currentFile = fileOrBlob;
       if (previewURL) URL.revokeObjectURL(previewURL);
       previewURL = URL.createObjectURL(fileOrBlob);
-      preview.src = previewURL;
-      preview.style.display = 'block';
-      scanArea.style.display = 'block';
-      barFill.style.width = '0%';
-      statusEl.textContent = '';
-      scanArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      loadImageForCrop(previewURL, true);
+      // H: プリウォーム（DL/初期化を先行させる）
+      ensureWorker().then(function () {
+        if (!statusEl.textContent || /準備中|準備完了/.test(statusEl.textContent)) statusEl.textContent = 'エンジン準備完了 / Engine ready';
+      }).catch(function () {});
+      statusEl.textContent = 'エンジン準備中… / Warming up engine…';
     }
+    fileInput.addEventListener('change', function (e) { var f = e.target.files && e.target.files[0]; if (f) setImage(f); });
+    ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('drag'); }); });
+    ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('drag'); }); });
+    drop.addEventListener('drop', function (e) { var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f && /^image\//.test(f.type)) setImage(f); });
 
-    fileInput.addEventListener('change', function (e) {
-      var f = e.target.files && e.target.files[0];
-      if (f) setImage(f);
-    });
-
-    // ドラッグ＆ドロップ（PC）
-    ['dragenter', 'dragover'].forEach(function (ev) {
-      drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('drag'); });
-    });
-    ['dragleave', 'drop'].forEach(function (ev) {
-      drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('drag'); });
-    });
-    drop.addEventListener('drop', function (e) {
-      var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f && /^image\//.test(f.type)) setImage(f);
-    });
-
-    /* ---------- ライブカメラ (getUserMedia) ---------- */
+    /* ---------- ライブカメラ ---------- */
     camStart.addEventListener('click', function () {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        toast('このブラウザはカメラ非対応です / Live camera not supported'); return;
-      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('このブラウザはカメラ非対応です / Live camera not supported'); return; }
       navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
-        .then(function (s) {
-          stream = s; video.srcObject = s; camera.style.display = 'flex';
-          camStart.style.display = 'none';
-        })
-        .catch(function (err) {
-          toast('カメラを起動できませんでした（' + (err && err.name || 'error') + '）/ Camera unavailable');
-        });
+        .then(function (s) { stream = s; video.srcObject = s; camera.style.display = 'flex'; camStart.style.display = 'none'; })
+        .catch(function (err) { toast('カメラを起動できませんでした（' + (err && err.name || 'error') + '）/ Camera unavailable'); });
     });
     function stopCamera() {
       if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
@@ -508,100 +889,92 @@
       var w = video.videoWidth || 720, h = video.videoHeight || 960;
       var c = document.createElement('canvas'); c.width = w; c.height = h;
       c.getContext('2d').drawImage(video, 0, 0, w, h);
-      c.toBlob(function (blob) {
-        if (!blob) { toast('撮影に失敗しました / Capture failed'); return; }
-        stopCamera();
-        setImage(blob);
-      }, 'image/jpeg', 0.92);
+      c.toBlob(function (blob) { if (!blob) { toast('撮影に失敗しました / Capture failed'); return; } stopCamera(); setImage(blob); }, 'image/jpeg', 0.92);
     });
     window.addEventListener('beforeunload', stopCamera);
 
     /* =========================================================
-       OCR 実行
+       スキャン（C→A→H パイプライン）
        ========================================================= */
     scanBtn.addEventListener('click', function () {
-      if (!currentFile) { toast('先に画像を選んでください / Choose an image first'); return; }
+      if (!cropImg) { toast('先に画像を選んでください / Choose an image first'); return; }
       if (typeof Tesseract === 'undefined') {
         statusEl.textContent = 'OCRライブラリを読み込めませんでした（ネットワークをご確認ください）/ Failed to load OCR engine.';
-        toast('Tesseract.js を読み込めませんでした');
-        return;
+        toast('Tesseract.js を読み込めませんでした'); return;
       }
-      scanBtn.disabled = true;
-      barFill.style.width = '0%';
-      statusEl.textContent = '準備中… 初回はエンジンの読み込みに数十秒かかります / Loading engine (first run can take a while)…';
-
-      Tesseract.recognize(currentFile, 'jpn', {
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
-        logger: function (m) {
-          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
-            barFill.style.width = Math.round(m.progress * 100) + '%';
-          }
-          var label = ({
-            'loading tesseract core': 'エンジン読み込み中',
-            'initializing tesseract': '初期化中',
-            'loading language traineddata': '日本語データ読み込み中',
-            'initializing api': 'API初期化中',
-            'recognizing text': '文字認識中'
-          })[m.status] || m.status;
-          statusEl.textContent = label + (typeof m.progress === 'number' && m.progress < 1
-            ? ' ' + Math.round(m.progress * 100) + '%' : '');
-        }
+      scanBtn.disabled = true; barFill.style.width = '0%';
+      statusEl.textContent = '準備中… / Preparing…';
+      ensureWorker().then(function (w) {
+        var cropC = getCropCanvas();
+        var ocrInput = preprocessChk.checked ? preprocessImage(cropC) : cropC;
+        return w.recognize(ocrInput);
       }).then(function (res) {
         barFill.style.width = '100%';
-        var items = parseReceipt(res.data.text);
+        var text = res.data.text;
+        lastReceiptTotal = extractReceiptTotal(text);
+        var items = parseReceipt(text);
         statusEl.textContent = '完了 / Done — ' + items.length + '件の品目を抽出（編集できます）';
         renderRows(items);
       }).catch(function (err) {
         statusEl.textContent = 'OCRに失敗しました: ' + (err && err.message || err);
         toast('OCRに失敗しました / OCR failed');
-      }).then(function () {
-        scanBtn.disabled = false;
-      });
+      }).then(function () { scanBtn.disabled = false; });
     });
 
-    /* ---------- 結果操作 ---------- */
-    addRowBtn.addEventListener('click', function () {
-      results.style.display = 'block';
-      rowsBody.appendChild(makeRow());
-      refreshIdx();
-    });
+    /* ---------- 結果操作の配線 ---------- */
+    addRowBtn.addEventListener('click', function () { results.style.display = 'block'; rowsBody.appendChild(makeRow()); refreshIdx(); });
+    rowsBody.addEventListener('input', function () { updateTotals(); if (catSummary.style.display === 'block') renderSummary(); });
     csvBtn.addEventListener('click', exportCSV);
+    jsonBtn.addEventListener('click', exportJSON);
+    copyBtn.addEventListener('click', copyToClipboard);
+    catCsvBtn.addEventListener('click', exportCategoryCSV);
+    summaryToggle.addEventListener('click', function () {
+      if (catSummary.style.display === 'block') { catSummary.style.display = 'none'; }
+      else { renderSummary(); catSummary.style.display = 'block'; }
+    });
+    addToLogBtn.addEventListener('click', addCurrentToHistory);
+    histCsvBtn.addEventListener('click', exportHistoryCSV);
+    histClearBtn.addEventListener('click', clearHistory);
 
     /* ---------- トースト ---------- */
     var toastTimer = null;
     function toast(msg) {
       var t = $('toast'); t.textContent = msg; t.classList.add('show');
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600);
+      clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2600);
     }
 
+    /* ---------- 学習リセット（ヘッダーにリンクは置かず、空クリックで誤操作しないようカード内に）---------- */
+    // 取り込みカードのオプション行に学習リセットリンクを動的に追加
+    (function addResetLearnLink() {
+      var optRow = preprocessChk.parentNode;
+      var link = document.createElement('button');
+      link.type = 'button'; link.className = 'mini-link'; link.style.marginLeft = '10px';
+      link.textContent = '学習をリセット / Reset learning';
+      link.addEventListener('click', function () {
+        if (window.confirm('カテゴリー学習をすべて消去しますか？ / Clear learned categories?')) { clearLearn(); toast('学習をリセットしました / Learning reset'); }
+      });
+      optRow.appendChild(link);
+    })();
+
     /* =========================================================
-       パーティクル背景（agents.html 流用：80個・cyan/purple・低速ドリフト）
+       パーティクル背景（agents.html 流用）
        ========================================================= */
     (function particles() {
-      var canvas = $('bg-canvas'), ctx = canvas.getContext('2d');
-      var W, H, ps;
+      var canvas = $('bg-canvas'), ctx = canvas.getContext('2d'); var W, H, ps;
       function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
       function init() {
         ps = Array.from({ length: 80 }, function () {
-          return {
-            x: Math.random() * W, y: Math.random() * H,
-            vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3,
-            r: Math.random() * 1.5 + 0.5, a: Math.random() * 0.5 + 0.1,
-            hue: Math.random() < 0.5 ? 190 : 280
-          };
+          return { x: Math.random() * W, y: Math.random() * H, vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3,
+            r: Math.random() * 1.5 + 0.5, a: Math.random() * 0.5 + 0.1, hue: Math.random() < 0.5 ? 190 : 280 };
         });
       }
       function draw() {
         ctx.clearRect(0, 0, W, H);
         for (var i = 0; i < ps.length; i++) {
-          var p = ps[i];
-          p.x += p.vx; p.y += p.vy;
-          if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
-          if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+          var p = ps[i]; p.x += p.vx; p.y += p.vy;
+          if (p.x < 0) p.x = W; if (p.x > W) p.x = 0; if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
           ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-          ctx.fillStyle = 'hsla(' + p.hue + ',90%,65%,' + p.a + ')';
-          ctx.fill();
+          ctx.fillStyle = 'hsla(' + p.hue + ',90%,65%,' + p.a + ')'; ctx.fill();
         }
         requestAnimationFrame(draw);
       }
@@ -609,8 +982,14 @@
       window.addEventListener('resize', function () { resize(); init(); });
     })();
 
+    /* ---------- 初期化 ---------- */
+    updateHistoryUI();
+
     /* ---- テストフック（Node/Playwright 検証用に純粋関数を公開） ---- */
-    window.__receiptOCR = { parseReceipt: parseReceipt, classify: classify, buildCSV: buildCSV };
+    window.__receiptOCR = {
+      parseReceipt: parseReceipt, classify: classify, buildCSV: buildCSV, buildJSON: buildJSON,
+      extractReceiptTotal: extractReceiptTotal, aggregateByCategory: aggregateByCategory
+    };
   })();
   </script>
 </body>
