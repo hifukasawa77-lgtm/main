@@ -39,7 +39,7 @@
  * 64洲 / ヘックス戦 / 3シナリオ(1560,1568,1574) / 全国武将
  * ===================================================================== */
 
-const W = 960, H = 600;
+const W = 1280, H = 1040;
 const canvas = document.getElementById('game');
 const game = new GameKit.Engine(canvas, { width: W, height: H });
 const save = new GameKit.Save('sengoku');
@@ -47,11 +47,91 @@ const SAVE_VERSION = 1;
 
 /* ---- 静的データ登録（JSONロード後に格納） ---- */
 const DATA = { provinces:null, provById:{}, generals:null, genById:{}, scenarios:null };
+const GPT_ASSETS = {
+  map:'assets/sengoku/gpt/sengoku-satellite-japan-large-ne.jpg',
+  title: 'assets/sengoku/gpt/sengoku-title-gpt-image-2.jpg',
+  battle: 'assets/sengoku/gpt/sengoku-hex-battlefield-gpt-image-2.jpg',
+  battleTiles: 'assets/sengoku/gpt/sengoku-hex-terrain-atlas-gpt-image-2.jpg',
+  portrait1: 'assets/sengoku/gpt/sengoku-portraits-page-1-gpt-image-2.jpg',
+  portrait2: 'assets/sengoku/gpt/sengoku-portraits-page-2-gpt-image-2.jpg',
+  portrait3: 'assets/sengoku/gpt/sengoku-portraits-page-3-gpt-image-2.jpg',
+  portrait4: 'assets/sengoku/gpt/sengoku-portraits-page-4-gpt-image-2.jpg',
+  kamon: 'assets/sengoku/gpt/sengoku-kamon-atlas-gpt-image-2-small.jpg',
+};
+const ASSETS = { img:{}, portraitSlots:{}, portraitCols:6, portraitRows:6, kamonCols:5, kamonRows:5 };
+const KAMON_CLANS = ['date','mogami','satake','satomi','hojo','uesugi','asakura','honganji','takeda','saito','imagawa','oda','kitabatake','rokkaku','miyoshi','ukita','amago','mori','kono','chosokabe','otomo','ryuzoji','shimazu','tokugawa','azai'];
+const KAMON_SLOT = Object.fromEntries(KAMON_CLANS.map((id,i)=>[id,{col:i%5,row:Math.floor(i/5)}]));
+
+const MAP_GEO = { minLon:127.9, maxLon:146.7, minLat:29.7, maxLat:46.1, padX:18/2048, padY:24/1500, cos:Math.cos(37.5*Math.PI/180) };
+const PROVINCE_GEO = {
+  mutsu:[140.12,37.91], dewa:[140.34,38.25], hitachi:[140.53,36.54], shimotsuke:[139.88,36.56], kozuke:[138.95,36.42], shimousa:[140.22,35.72], kazusa:[140.08,35.28], awa_kanto:[139.86,34.99], musashi:[139.75,35.69], sagami:[139.15,35.25],
+  echigo:[138.24,37.15], sado:[138.36,38.02], etchu:[137.21,36.70], noto:[136.97,37.05], kaga:[136.66,36.56], echizen:[136.30,36.02], wakasa:[135.75,35.50], shinano:[138.20,36.55], kai:[138.57,35.68], hida:[137.25,36.14],
+  mino:[136.78,35.43], totomi:[137.73,34.71], suruga:[138.38,34.98], izu:[138.95,35.05], mikawa:[137.16,34.96], owari:[136.85,35.22], ise:[136.43,34.52], shima:[136.84,34.48], omi:[136.19,35.16], yamashiro:[135.75,35.01],
+  yamato:[135.83,34.69], kawachi:[135.58,34.55], izumi:[135.37,34.46], settsu:[135.59,34.87], iga:[136.13,34.77], kii:[135.17,34.22], tanba:[135.22,35.08], tango:[135.10,35.55], tajima:[134.82,35.55], harima:[134.69,34.84],
+  mimasaka:[134.00,35.06], bizen:[133.94,34.67], bitchu:[133.62,34.80], bingo:[133.38,34.55], inaba:[134.24,35.50], hoki:[133.33,35.43], izumo:[133.18,35.38], iwami:[132.44,35.17], aki:[132.70,34.67], suo:[131.47,34.18],
+  nagato:[130.93,33.96], awa_shikoku:[134.53,34.14], sanuki:[134.08,34.29], iyo:[132.78,33.85], tosa:[133.62,33.62], buzen:[130.88,33.88], bungo:[131.61,33.24], chikuzen:[130.51,33.68], chikugo:[130.41,33.16], hizen:[130.30,33.25],
+  higo:[130.71,32.81], hyuga:[131.43,32.05], osumi:[130.98,31.38], satsuma:[130.56,31.60]
+};
+function geoToScreen(lon, lat){
+  const c=MAP.clip, g=MAP_GEO;
+  const rx=(g.maxLon-g.minLon)*g.cos, ry=g.maxLat-g.minLat;
+  const padX=c.w*g.padX, padY=c.h*g.padY;
+  const scale=Math.min((c.w-padX*2)/rx, (c.h-padY*2)/ry);
+  const ox=c.x+(c.w-rx*scale)/2, oy=c.y+(c.h-ry*scale)/2;
+  return [ox+(lon-g.minLon)*g.cos*scale, oy+(g.maxLat-lat)*scale];
+}
+function provinceScreenPoint(p){
+  const ll=PROVINCE_GEO[p.id];
+  return ll ? geoToScreen(ll[0], ll[1]) : [toScreenX(p.x), toScreenY(p.y)];
+}
+
+const CASTLE_NAMES = {
+  mutsu:'米沢城', dewa:'山形城', hitachi:'太田城', shimotsuke:'宇都宮城', kozuke:'箕輪城', shimousa:'佐倉城', kazusa:'久留里城', awa_kanto:'館山城', musashi:'江戸城', sagami:'小田原城',
+  echigo:'春日山城', sado:'佐渡城', etchu:'富山城', noto:'七尾城', kaga:'金沢御坊', echizen:'一乗谷城', wakasa:'後瀬山城', shinano:'海津城', kai:'躑躅ヶ崎館', hida:'松倉城',
+  mino:'稲葉山城', totomi:'曳馬城', suruga:'駿府館', izu:'韮山城', mikawa:'岡崎城', owari:'清洲城', ise:'霧山城', shima:'鳥羽城', omi:'観音寺城', yamashiro:'二条城',
+  yamato:'多聞山城', kawachi:'高屋城', izumi:'岸和田城', settsu:'芥川山城', iga:'伊賀上野城', kii:'雑賀城', tanba:'八上城', tango:'弓木城', tajima:'此隅山城', harima:'姫路城',
+  mimasaka:'高田城', bizen:'岡山城', bitchu:'備中松山城', bingo:'神辺城', inaba:'鳥取城', hoki:'米子城', izumo:'月山富田城', iwami:'山吹城', aki:'吉田郡山城', suo:'山口館',
+  nagato:'櫛崎城', awa_shikoku:'勝瑞城', sanuki:'十河城', iyo:'湯築城', tosa:'岡豊城', buzen:'小倉城', bungo:'府内館', chikuzen:'立花山城', chikugo:'柳川城', hizen:'佐賀城',
+  higo:'隈本城', hyuga:'佐土原城', osumi:'肝付城', satsuma:'内城'
+};
+const DATA_FALLBACKS = {"provinces":{"version":1,"note":"64令制国の模式配置。x/yは論理座標(0..1000 x 0..650)。polygonは実行時にVoronoi分割で生成。neighborsは陸続き＋一部海路(sea)。kokudakaは千石単位の概算(史実着想)。","logicalWidth":1000,"logicalHeight":650,"outline":[[780,40],[840,90],[840,180],[820,250],[810,320],[820,400],[760,440],[700,440],[720,400],[700,360],[660,420],[600,460],[560,470],[520,450],[470,500],[420,480],[370,520],[340,560],[300,560],[260,540],[200,500],[120,470],[60,450],[20,480],[10,540],[40,620],[110,630],[150,590],[190,560],[260,580],[340,600],[360,540],[300,470],[260,460],[200,450],[150,470],[120,450],[170,430],[230,440],[290,440],[330,420],[300,380],[230,330],[170,360],[140,400],[180,300],[280,290],[360,290],[400,280],[440,300],[470,250],[520,170],[560,100],[620,130],[660,150],[700,120],[720,60]],"provinces":[{"id":"mutsu","nameJP":"陸奥","nameEN":"Mutsu","region":"奥羽","x":760,"y":70,"terrain":"mountain","kokudaka":1670,"neighbors":["dewa","hitachi","shimotsuke","echigo"]},{"id":"dewa","nameJP":"出羽","nameEN":"Dewa","region":"奥羽","x":680,"y":95,"terrain":"mountain","kokudaka":870,"neighbors":["mutsu","echigo"]},{"id":"hitachi","nameJP":"常陸","nameEN":"Hitachi","region":"関東","x":800,"y":255,"terrain":"plain","kokudaka":530,"neighbors":["mutsu","shimotsuke","shimousa"]},{"id":"shimotsuke","nameJP":"下野","nameEN":"Shimotsuke","region":"関東","x":725,"y":225,"terrain":"plain","kokudaka":374,"neighbors":["mutsu","hitachi","kozuke","shimousa","musashi"]},{"id":"kozuke","nameJP":"上野","nameEN":"Kozuke","region":"関東","x":655,"y":245,"terrain":"mountain","kokudaka":496,"neighbors":["shimotsuke","musashi","shinano","echigo"]},{"id":"shimousa","nameJP":"下総","nameEN":"Shimousa","region":"関東","x":795,"y":300,"terrain":"plain","kokudaka":393,"neighbors":["hitachi","shimotsuke","musashi","kazusa"]},{"id":"kazusa","nameJP":"上総","nameEN":"Kazusa","region":"関東","x":815,"y":345,"terrain":"coast","kokudaka":378,"neighbors":["shimousa","awa_kanto","sagami"]},{"id":"awa_kanto","nameJP":"安房","nameEN":"Awa(Boso)","region":"関東","x":800,"y":390,"terrain":"coast","kokudaka":45,"neighbors":["kazusa","sagami"]},{"id":"musashi","nameJP":"武蔵","nameEN":"Musashi","region":"関東","x":720,"y":300,"terrain":"plain","kokudaka":667,"neighbors":["kozuke","shimotsuke","shimousa","sagami","kai"]},{"id":"sagami","nameJP":"相模","nameEN":"Sagami","region":"関東","x":700,"y":350,"terrain":"coast","kokudaka":194,"neighbors":["musashi","kai","suruga","izu","kazusa","awa_kanto"]},{"id":"echigo","nameJP":"越後","nameEN":"Echigo","region":"北陸","x":615,"y":165,"terrain":"plain","kokudaka":390,"neighbors":["mutsu","dewa","kozuke","shinano","etchu","sado"]},{"id":"sado","nameJP":"佐渡","nameEN":"Sado","region":"北陸","x":555,"y":130,"terrain":"coast","kokudaka":17,"neighbors":["echigo"]},{"id":"etchu","nameJP":"越中","nameEN":"Etchu","region":"北陸","x":560,"y":220,"terrain":"mountain","kokudaka":380,"neighbors":["echigo","shinano","hida","noto","kaga"]},{"id":"noto","nameJP":"能登","nameEN":"Noto","region":"北陸","x":500,"y":190,"terrain":"coast","kokudaka":210,"neighbors":["etchu","kaga"]},{"id":"kaga","nameJP":"加賀","nameEN":"Kaga","region":"北陸","x":500,"y":245,"terrain":"plain","kokudaka":355,"neighbors":["etchu","noto","echizen"]},{"id":"echizen","nameJP":"越前","nameEN":"Echizen","region":"北陸","x":470,"y":295,"terrain":"plain","kokudaka":499,"neighbors":["kaga","mino","omi","wakasa"]},{"id":"wakasa","nameJP":"若狭","nameEN":"Wakasa","region":"北陸","x":450,"y":315,"terrain":"coast","kokudaka":85,"neighbors":["echizen","omi","tanba"]},{"id":"shinano","nameJP":"信濃","nameEN":"Shinano","region":"中部","x":600,"y":300,"terrain":"mountain","kokudaka":408,"neighbors":["echigo","kozuke","kai","totomi","mikawa","mino","hida","etchu"]},{"id":"kai","nameJP":"甲斐","nameEN":"Kai","region":"中部","x":660,"y":340,"terrain":"mountain","kokudaka":228,"neighbors":["musashi","sagami","suruga","shinano"]},{"id":"hida","nameJP":"飛騨","nameEN":"Hida","region":"中部","x":560,"y":280,"terrain":"mountain","kokudaka":38,"neighbors":["etchu","shinano","mino"]},{"id":"mino","nameJP":"美濃","nameEN":"Mino","region":"中部","x":540,"y":350,"terrain":"plain","kokudaka":540,"neighbors":["hida","shinano","echizen","omi","ise","owari"]},{"id":"totomi","nameJP":"遠江","nameEN":"Totomi","region":"東海","x":645,"y":390,"terrain":"plain","kokudaka":255,"neighbors":["shinano","suruga","mikawa"]},{"id":"suruga","nameJP":"駿河","nameEN":"Suruga","region":"東海","x":680,"y":380,"terrain":"coast","kokudaka":150,"neighbors":["sagami","kai","totomi","izu"]},{"id":"izu","nameJP":"伊豆","nameEN":"Izu","region":"東海","x":702,"y":415,"terrain":"coast","kokudaka":69,"neighbors":["sagami","suruga"]},{"id":"mikawa","nameJP":"三河","nameEN":"Mikawa","region":"東海","x":600,"y":392,"terrain":"plain","kokudaka":290,"neighbors":["totomi","owari","shinano"]},{"id":"owari","nameJP":"尾張","nameEN":"Owari","region":"東海","x":558,"y":392,"terrain":"plain","kokudaka":572,"neighbors":["mino","mikawa","ise"]},{"id":"ise","nameJP":"伊勢","nameEN":"Ise","region":"東海","x":530,"y":412,"terrain":"coast","kokudaka":567,"neighbors":["mino","owari","omi","iga","shima","kii"]},{"id":"shima","nameJP":"志摩","nameEN":"Shima","region":"東海","x":552,"y":432,"terrain":"coast","kokudaka":18,"neighbors":["ise"]},{"id":"omi","nameJP":"近江","nameEN":"Omi","region":"近畿","x":490,"y":352,"terrain":"plain","kokudaka":775,"neighbors":["echizen","wakasa","mino","ise","iga","yamashiro","tanba"]},{"id":"yamashiro","nameJP":"山城","nameEN":"Yamashiro","region":"近畿","x":452,"y":382,"terrain":"plain","kokudaka":225,"neighbors":["omi","tanba","settsu","kawachi","yamato","iga"]},{"id":"yamato","nameJP":"大和","nameEN":"Yamato","region":"近畿","x":452,"y":422,"terrain":"mountain","kokudaka":448,"neighbors":["yamashiro","iga","kii","kawachi"]},{"id":"kawachi","nameJP":"河内","nameEN":"Kawachi","region":"近畿","x":422,"y":412,"terrain":"plain","kokudaka":242,"neighbors":["yamashiro","yamato","izumi","settsu"]},{"id":"izumi","nameJP":"和泉","nameEN":"Izumi","region":"近畿","x":412,"y":432,"terrain":"coast","kokudaka":141,"neighbors":["kawachi","settsu","kii"]},{"id":"settsu","nameJP":"摂津","nameEN":"Settsu","region":"近畿","x":402,"y":392,"terrain":"coast","kokudaka":356,"neighbors":["yamashiro","kawachi","izumi","tanba","harima"]},{"id":"iga","nameJP":"伊賀","nameEN":"Iga","region":"近畿","x":490,"y":400,"terrain":"mountain","kokudaka":100,"neighbors":["ise","omi","yamashiro","yamato"]},{"id":"kii","nameJP":"紀伊","nameEN":"Kii","region":"近畿","x":440,"y":470,"terrain":"mountain","kokudaka":243,"neighbors":["ise","yamato","izumi","awa_shikoku"]},{"id":"tanba","nameJP":"丹波","nameEN":"Tanba","region":"近畿","x":410,"y":350,"terrain":"mountain","kokudaka":263,"neighbors":["yamashiro","settsu","tango","tajima","harima","wakasa","omi"]},{"id":"tango","nameJP":"丹後","nameEN":"Tango","region":"近畿","x":400,"y":318,"terrain":"coast","kokudaka":110,"neighbors":["tanba","tajima"]},{"id":"tajima","nameJP":"但馬","nameEN":"Tajima","region":"近畿","x":360,"y":320,"terrain":"mountain","kokudaka":114,"neighbors":["tanba","tango","harima","inaba"]},{"id":"harima","nameJP":"播磨","nameEN":"Harima","region":"中国","x":360,"y":390,"terrain":"plain","kokudaka":359,"neighbors":["settsu","tanba","tajima","mimasaka","bizen","sanuki"]},{"id":"mimasaka","nameJP":"美作","nameEN":"Mimasaka","region":"中国","x":330,"y":368,"terrain":"mountain","kokudaka":186,"neighbors":["harima","inaba","hoki","bizen","bitchu"]},{"id":"bizen","nameJP":"備前","nameEN":"Bizen","region":"中国","x":320,"y":400,"terrain":"plain","kokudaka":223,"neighbors":["harima","mimasaka","bitchu","sanuki"]},{"id":"bitchu","nameJP":"備中","nameEN":"Bitchu","region":"中国","x":290,"y":400,"terrain":"plain","kokudaka":176,"neighbors":["bizen","mimasaka","hoki","bingo"]},{"id":"bingo","nameJP":"備後","nameEN":"Bingo","region":"中国","x":250,"y":400,"terrain":"mountain","kokudaka":186,"neighbors":["bitchu","aki","izumo"]},{"id":"inaba","nameJP":"因幡","nameEN":"Inaba","region":"中国","x":320,"y":322,"terrain":"coast","kokudaka":89,"neighbors":["tajima","mimasaka","hoki"]},{"id":"hoki","nameJP":"伯耆","nameEN":"Hoki","region":"中国","x":290,"y":332,"terrain":"mountain","kokudaka":100,"neighbors":["inaba","mimasaka","bitchu","izumo"]},{"id":"izumo","nameJP":"出雲","nameEN":"Izumo","region":"中国","x":220,"y":350,"terrain":"coast","kokudaka":187,"neighbors":["hoki","bingo","iwami"]},{"id":"iwami","nameJP":"石見","nameEN":"Iwami","region":"中国","x":180,"y":380,"terrain":"mountain","kokudaka":111,"neighbors":["izumo","aki","suo"]},{"id":"aki","nameJP":"安芸","nameEN":"Aki","region":"中国","x":200,"y":420,"terrain":"coast","kokudaka":194,"neighbors":["bingo","iwami","suo","iyo"]},{"id":"suo","nameJP":"周防","nameEN":"Suo","region":"中国","x":150,"y":440,"terrain":"coast","kokudaka":167,"neighbors":["aki","iwami","nagato","iyo"]},{"id":"nagato","nameJP":"長門","nameEN":"Nagato","region":"中国","x":110,"y":450,"terrain":"coast","kokudaka":130,"neighbors":["suo","buzen"]},{"id":"awa_shikoku","nameJP":"阿波","nameEN":"Awa(Shikoku)","region":"四国","x":330,"y":480,"terrain":"mountain","kokudaka":183,"neighbors":["sanuki","tosa","iyo","kii"]},{"id":"sanuki","nameJP":"讃岐","nameEN":"Sanuki","region":"四国","x":300,"y":460,"terrain":"coast","kokudaka":126,"neighbors":["awa_shikoku","iyo","harima","bizen"]},{"id":"iyo","nameJP":"伊予","nameEN":"Iyo","region":"四国","x":230,"y":470,"terrain":"coast","kokudaka":366,"neighbors":["sanuki","awa_shikoku","tosa","aki","suo","bungo"]},{"id":"tosa","nameJP":"土佐","nameEN":"Tosa","region":"四国","x":280,"y":522,"terrain":"mountain","kokudaka":98,"neighbors":["awa_shikoku","iyo"]},{"id":"buzen","nameJP":"豊前","nameEN":"Buzen","region":"九州","x":120,"y":472,"terrain":"coast","kokudaka":140,"neighbors":["bungo","chikuzen","nagato"]},{"id":"bungo","nameJP":"豊後","nameEN":"Bungo","region":"九州","x":110,"y":510,"terrain":"mountain","kokudaka":418,"neighbors":["buzen","chikugo","higo","hyuga","iyo"]},{"id":"chikuzen","nameJP":"筑前","nameEN":"Chikuzen","region":"九州","x":70,"y":472,"terrain":"coast","kokudaka":336,"neighbors":["buzen","chikugo","hizen"]},{"id":"chikugo","nameJP":"筑後","nameEN":"Chikugo","region":"九州","x":80,"y":510,"terrain":"plain","kokudaka":265,"neighbors":["chikuzen","bungo","higo","hizen"]},{"id":"hizen","nameJP":"肥前","nameEN":"Hizen","region":"九州","x":32,"y":490,"terrain":"coast","kokudaka":309,"neighbors":["chikuzen","chikugo","higo"]},{"id":"higo","nameJP":"肥後","nameEN":"Higo","region":"九州","x":62,"y":550,"terrain":"mountain","kokudaka":341,"neighbors":["chikugo","bungo","hizen","hyuga","osumi","satsuma"]},{"id":"hyuga","nameJP":"日向","nameEN":"Hyuga","region":"九州","x":110,"y":560,"terrain":"mountain","kokudaka":120,"neighbors":["bungo","higo","osumi"]},{"id":"osumi","nameJP":"大隅","nameEN":"Osumi","region":"九州","x":80,"y":600,"terrain":"coast","kokudaka":175,"neighbors":["higo","hyuga","satsuma"]},{"id":"satsuma","nameJP":"薩摩","nameEN":"Satsuma","region":"九州","x":40,"y":592,"terrain":"coast","kokudaka":287,"neighbors":["higo","osumi"]}]},"generals":{"version":1,"note":"武将マスタ。stats: tou=統率, bu=武勇, chi=智略, sei=政治 (1-100)。能力値は史実着想のオリジナル設定(商用作品の数値は不使用)。runtimeの忠誠/生死/配属はscenarios/GameStateで管理。","generals":[{"id":"oda_nobunaga","nameJP":"織田信長","nameEN":"Oda Nobunaga","family":"oda","stats":{"tou":97,"bu":86,"chi":95,"sei":94}},{"id":"shibata_katsuie","nameJP":"柴田勝家","nameEN":"Shibata Katsuie","family":"oda","stats":{"tou":88,"bu":92,"chi":68,"sei":62}},{"id":"niwa_nagahide","nameJP":"丹羽長秀","nameEN":"Niwa Nagahide","family":"oda","stats":{"tou":80,"bu":76,"chi":80,"sei":86}},{"id":"hashiba_hideyoshi","nameJP":"羽柴秀吉","nameEN":"Hashiba Hideyoshi","family":"oda","stats":{"tou":90,"bu":72,"chi":96,"sei":95}},{"id":"akechi_mitsuhide","nameJP":"明智光秀","nameEN":"Akechi Mitsuhide","family":"oda","stats":{"tou":89,"bu":78,"chi":93,"sei":88}},{"id":"takigawa_kazumasu","nameJP":"滝川一益","nameEN":"Takigawa Kazumasu","family":"oda","stats":{"tou":84,"bu":82,"chi":83,"sei":72}},{"id":"sakuma_nobumori","nameJP":"佐久間信盛","nameEN":"Sakuma Nobumori","family":"oda","stats":{"tou":78,"bu":72,"chi":70,"sei":66}},{"id":"maeda_toshiie","nameJP":"前田利家","nameEN":"Maeda Toshiie","family":"oda","stats":{"tou":82,"bu":88,"chi":70,"sei":78}},{"id":"ikeda_tsuneoki","nameJP":"池田恒興","nameEN":"Ikeda Tsuneoki","family":"oda","stats":{"tou":78,"bu":80,"chi":68,"sei":66}},{"id":"mori_yoshinari","nameJP":"森可成","nameEN":"Mori Yoshinari","family":"oda","stats":{"tou":80,"bu":84,"chi":66,"sei":60}},{"id":"sassa_narimasa","nameJP":"佐々成政","nameEN":"Sassa Narimasa","family":"oda","stats":{"tou":79,"bu":85,"chi":64,"sei":60}},{"id":"hayashi_hidesada","nameJP":"林秀貞","nameEN":"Hayashi Hidesada","family":"oda","stats":{"tou":62,"bu":58,"chi":62,"sei":68}},{"id":"hori_hidemasa","nameJP":"堀秀政","nameEN":"Hori Hidemasa","family":"oda","stats":{"tou":81,"bu":78,"chi":82,"sei":80}},{"id":"takeda_shingen","nameJP":"武田信玄","nameEN":"Takeda Shingen","family":"takeda","stats":{"tou":98,"bu":85,"chi":94,"sei":90}},{"id":"takeda_katsuyori","nameJP":"武田勝頼","nameEN":"Takeda Katsuyori","family":"takeda","stats":{"tou":84,"bu":90,"chi":62,"sei":58}},{"id":"takeda_nobushige","nameJP":"武田信繁","nameEN":"Takeda Nobushige","family":"takeda","stats":{"tou":87,"bu":82,"chi":85,"sei":84}},{"id":"baba_nobuharu","nameJP":"馬場信春","nameEN":"Baba Nobuharu","family":"takeda","stats":{"tou":90,"bu":86,"chi":80,"sei":66}},{"id":"yamagata_masakage","nameJP":"山県昌景","nameEN":"Yamagata Masakage","family":"takeda","stats":{"tou":91,"bu":89,"chi":78,"sei":62}},{"id":"naito_masatoyo","nameJP":"内藤昌豊","nameEN":"Naito Masatoyo","family":"takeda","stats":{"tou":87,"bu":80,"chi":81,"sei":70}},{"id":"kosaka_masanobu","nameJP":"高坂昌信","nameEN":"Kosaka Masanobu","family":"takeda","stats":{"tou":88,"bu":78,"chi":84,"sei":74}},{"id":"obu_toramasa","nameJP":"飯富虎昌","nameEN":"Obu Toramasa","family":"takeda","stats":{"tou":85,"bu":87,"chi":70,"sei":58}},{"id":"sanada_yukitaka","nameJP":"真田幸隆","nameEN":"Sanada Yukitaka","family":"takeda","stats":{"tou":82,"bu":74,"chi":92,"sei":76}},{"id":"sanada_masayuki","nameJP":"真田昌幸","nameEN":"Sanada Masayuki","family":"takeda","stats":{"tou":86,"bu":76,"chi":95,"sei":82}},{"id":"anayama_baisetsu","nameJP":"穴山梅雪","nameEN":"Anayama Baisetsu","family":"takeda","stats":{"tou":74,"bu":68,"chi":72,"sei":70}},{"id":"oyamada_nobushige","nameJP":"小山田信茂","nameEN":"Oyamada Nobushige","family":"takeda","stats":{"tou":76,"bu":75,"chi":68,"sei":58}},{"id":"uesugi_kenshin","nameJP":"上杉謙信","nameEN":"Uesugi Kenshin","family":"uesugi","stats":{"tou":99,"bu":96,"chi":86,"sei":78}},{"id":"uesugi_kagekatsu","nameJP":"上杉景勝","nameEN":"Uesugi Kagekatsu","family":"uesugi","stats":{"tou":82,"bu":76,"chi":74,"sei":76}},{"id":"naoe_kagetsuna","nameJP":"直江景綱","nameEN":"Naoe Kagetsuna","family":"uesugi","stats":{"tou":80,"bu":72,"chi":82,"sei":85}},{"id":"kakizaki_kageie","nameJP":"柿崎景家","nameEN":"Kakizaki Kageie","family":"uesugi","stats":{"tou":85,"bu":92,"chi":66,"sei":58}},{"id":"usami_sadamitsu","nameJP":"宇佐美定満","nameEN":"Usami Sadamitsu","family":"uesugi","stats":{"tou":80,"bu":70,"chi":88,"sei":72}},{"id":"saito_tomonobu","nameJP":"斎藤朝信","nameEN":"Saito Tomonobu","family":"uesugi","stats":{"tou":83,"bu":80,"chi":78,"sei":70}},{"id":"honjo_shigenaga","nameJP":"本庄繁長","nameEN":"Honjo Shigenaga","family":"uesugi","stats":{"tou":84,"bu":88,"chi":70,"sei":56}},{"id":"amakasu_kagemochi","nameJP":"甘粕景持","nameEN":"Amakasu Kagemochi","family":"uesugi","stats":{"tou":82,"bu":83,"chi":72,"sei":60}},{"id":"naoe_kanetsugu","nameJP":"直江兼続","nameEN":"Naoe Kanetsugu","family":"uesugi","stats":{"tou":85,"bu":76,"chi":90,"sei":92}},{"id":"hojo_ujiyasu","nameJP":"北条氏康","nameEN":"Hojo Ujiyasu","family":"hojo","stats":{"tou":94,"bu":82,"chi":92,"sei":95}},{"id":"hojo_ujimasa","nameJP":"北条氏政","nameEN":"Hojo Ujimasa","family":"hojo","stats":{"tou":78,"bu":72,"chi":70,"sei":76}},{"id":"hojo_tsunashige","nameJP":"北条綱成","nameEN":"Hojo Tsunashige","family":"hojo","stats":{"tou":88,"bu":94,"chi":74,"sei":66}},{"id":"hojo_ujiteru","nameJP":"北条氏照","nameEN":"Hojo Ujiteru","family":"hojo","stats":{"tou":82,"bu":80,"chi":80,"sei":74}},{"id":"hojo_ujikuni","nameJP":"北条氏邦","nameEN":"Hojo Ujikuni","family":"hojo","stats":{"tou":80,"bu":81,"chi":74,"sei":70}},{"id":"matsuda_norihide","nameJP":"松田憲秀","nameEN":"Matsuda Norihide","family":"hojo","stats":{"tou":70,"bu":66,"chi":72,"sei":74}},{"id":"daidoji_masashige","nameJP":"大道寺政繁","nameEN":"Daidoji Masashige","family":"hojo","stats":{"tou":76,"bu":74,"chi":76,"sei":78}},{"id":"fuma_kotaro","nameJP":"風魔小太郎","nameEN":"Fuma Kotaro","family":"hojo","stats":{"tou":72,"bu":84,"chi":80,"sei":40}},{"id":"imagawa_yoshimoto","nameJP":"今川義元","nameEN":"Imagawa Yoshimoto","family":"imagawa","stats":{"tou":86,"bu":70,"chi":85,"sei":92}},{"id":"imagawa_ujizane","nameJP":"今川氏真","nameEN":"Imagawa Ujizane","family":"imagawa","stats":{"tou":52,"bu":48,"chi":58,"sei":64}},{"id":"taigen_sessai","nameJP":"太原雪斎","nameEN":"Taigen Sessai","family":"imagawa","stats":{"tou":88,"bu":62,"chi":96,"sei":90}},{"id":"asahina_yasutomo","nameJP":"朝比奈泰朝","nameEN":"Asahina Yasutomo","family":"imagawa","stats":{"tou":78,"bu":78,"chi":70,"sei":66}},{"id":"okabe_motonobu","nameJP":"岡部元信","nameEN":"Okabe Motonobu","family":"imagawa","stats":{"tou":80,"bu":82,"chi":70,"sei":62}},{"id":"tokugawa_ieyasu","nameJP":"徳川家康","nameEN":"Tokugawa Ieyasu","family":"tokugawa","stats":{"tou":92,"bu":78,"chi":91,"sei":96}},{"id":"sakai_tadatsugu","nameJP":"酒井忠次","nameEN":"Sakai Tadatsugu","family":"tokugawa","stats":{"tou":86,"bu":82,"chi":84,"sei":78}},{"id":"honda_tadakatsu","nameJP":"本多忠勝","nameEN":"Honda Tadakatsu","family":"tokugawa","stats":{"tou":90,"bu":97,"chi":72,"sei":64}},{"id":"sakakibara_yasumasa","nameJP":"榊原康政","nameEN":"Sakakibara Yasumasa","family":"tokugawa","stats":{"tou":85,"bu":88,"chi":80,"sei":74}},{"id":"ii_naomasa","nameJP":"井伊直政","nameEN":"Ii Naomasa","family":"tokugawa","stats":{"tou":88,"bu":91,"chi":76,"sei":78}},{"id":"ishikawa_kazumasa","nameJP":"石川数正","nameEN":"Ishikawa Kazumasa","family":"tokugawa","stats":{"tou":80,"bu":74,"chi":82,"sei":83}},{"id":"torii_mototada","nameJP":"鳥居元忠","nameEN":"Torii Mototada","family":"tokugawa","stats":{"tou":78,"bu":80,"chi":68,"sei":70}},{"id":"hattori_hanzo","nameJP":"服部半蔵","nameEN":"Hattori Hanzo","family":"tokugawa","stats":{"tou":74,"bu":82,"chi":78,"sei":50}},{"id":"saito_yoshitatsu","nameJP":"斎藤義龍","nameEN":"Saito Yoshitatsu","family":"saito","stats":{"tou":80,"bu":82,"chi":78,"sei":68}},{"id":"saito_tatsuoki","nameJP":"斎藤龍興","nameEN":"Saito Tatsuoki","family":"saito","stats":{"tou":48,"bu":52,"chi":50,"sei":46}},{"id":"takenaka_hanbei","nameJP":"竹中半兵衛","nameEN":"Takenaka Hanbei","family":"saito","stats":{"tou":82,"bu":62,"chi":96,"sei":80}},{"id":"ando_morinari","nameJP":"安藤守就","nameEN":"Ando Morinari","family":"saito","stats":{"tou":72,"bu":70,"chi":74,"sei":66}},{"id":"azai_nagamasa","nameJP":"浅井長政","nameEN":"Azai Nagamasa","family":"azai","stats":{"tou":83,"bu":86,"chi":72,"sei":74}},{"id":"azai_hisamasa","nameJP":"浅井久政","nameEN":"Azai Hisamasa","family":"azai","stats":{"tou":58,"bu":56,"chi":58,"sei":60}},{"id":"isono_kazumasa","nameJP":"磯野員昌","nameEN":"Isono Kazumasa","family":"azai","stats":{"tou":80,"bu":86,"chi":68,"sei":58}},{"id":"endo_naotsune","nameJP":"遠藤直経","nameEN":"Endo Naotsune","family":"azai","stats":{"tou":72,"bu":76,"chi":78,"sei":60}},{"id":"asakura_yoshikage","nameJP":"朝倉義景","nameEN":"Asakura Yoshikage","family":"asakura","stats":{"tou":62,"bu":58,"chi":64,"sei":70}},{"id":"magara_naotaka","nameJP":"真柄直隆","nameEN":"Magara Naotaka","family":"asakura","stats":{"tou":74,"bu":92,"chi":50,"sei":48}},{"id":"asakura_kageakira","nameJP":"朝倉景鏡","nameEN":"Asakura Kageakira","family":"asakura","stats":{"tou":70,"bu":68,"chi":66,"sei":60}},{"id":"rokkaku_yoshikata","nameJP":"六角義賢","nameEN":"Rokkaku Yoshikata","family":"rokkaku","stats":{"tou":68,"bu":66,"chi":68,"sei":72}},{"id":"rokkaku_yoshiharu","nameJP":"六角義治","nameEN":"Rokkaku Yoshiharu","family":"rokkaku","stats":{"tou":54,"bu":56,"chi":52,"sei":50}},{"id":"gamo_katahide","nameJP":"蒲生賢秀","nameEN":"Gamo Katahide","family":"rokkaku","stats":{"tou":76,"bu":74,"chi":74,"sei":78}},{"id":"gamo_ujisato","nameJP":"蒲生氏郷","nameEN":"Gamo Ujisato","family":"rokkaku","stats":{"tou":86,"bu":85,"chi":84,"sei":86}},{"id":"miyoshi_nagayoshi","nameJP":"三好長慶","nameEN":"Miyoshi Nagayoshi","family":"miyoshi","stats":{"tou":85,"bu":78,"chi":86,"sei":88}},{"id":"miyoshi_yoshitsugu","nameJP":"三好義継","nameEN":"Miyoshi Yoshitsugu","family":"miyoshi","stats":{"tou":62,"bu":64,"chi":58,"sei":56}},{"id":"matsunaga_hisahide","nameJP":"松永久秀","nameEN":"Matsunaga Hisahide","family":"miyoshi","stats":{"tou":80,"bu":68,"chi":94,"sei":82}},{"id":"miyoshi_nagayasu","nameJP":"三好長逸","nameEN":"Miyoshi Nagayasu","family":"miyoshi","stats":{"tou":72,"bu":70,"chi":74,"sei":68}},{"id":"sogo_kazumasa","nameJP":"十河一存","nameEN":"Sogo Kazumasa","family":"miyoshi","stats":{"tou":80,"bu":90,"chi":62,"sei":58}},{"id":"shinohara_nagafusa","nameJP":"篠原長房","nameEN":"Shinohara Nagafusa","family":"miyoshi","stats":{"tou":78,"bu":72,"chi":82,"sei":80}},{"id":"iwanari_tomomichi","nameJP":"岩成友通","nameEN":"Iwanari Tomomichi","family":"miyoshi","stats":{"tou":70,"bu":74,"chi":68,"sei":60}},{"id":"mori_motonari","nameJP":"毛利元就","nameEN":"Mori Motonari","family":"mori","stats":{"tou":95,"bu":76,"chi":99,"sei":94}},{"id":"mori_takamoto","nameJP":"毛利隆元","nameEN":"Mori Takamoto","family":"mori","stats":{"tou":74,"bu":68,"chi":76,"sei":82}},{"id":"mori_terumoto","nameJP":"毛利輝元","nameEN":"Mori Terumoto","family":"mori","stats":{"tou":72,"bu":66,"chi":70,"sei":74}},{"id":"kikkawa_motoharu","nameJP":"吉川元春","nameEN":"Kikkawa Motoharu","family":"mori","stats":{"tou":90,"bu":91,"chi":82,"sei":74}},{"id":"kobayakawa_takakage","nameJP":"小早川隆景","nameEN":"Kobayakawa Takakage","family":"mori","stats":{"tou":89,"bu":78,"chi":95,"sei":90}},{"id":"fukuhara_sadatoshi","nameJP":"福原貞俊","nameEN":"Fukuhara Sadatoshi","family":"mori","stats":{"tou":76,"bu":72,"chi":78,"sei":76}},{"id":"murakami_takeyoshi","nameJP":"村上武吉","nameEN":"Murakami Takeyoshi","family":"mori","stats":{"tou":84,"bu":82,"chi":80,"sei":66}},{"id":"ankokuji_ekei","nameJP":"安国寺恵瓊","nameEN":"Ankokuji Ekei","family":"mori","stats":{"tou":66,"bu":50,"chi":88,"sei":84}},{"id":"amago_haruhisa","nameJP":"尼子晴久","nameEN":"Amago Haruhisa","family":"amago","stats":{"tou":82,"bu":80,"chi":78,"sei":76}},{"id":"amago_yoshihisa","nameJP":"尼子義久","nameEN":"Amago Yoshihisa","family":"amago","stats":{"tou":60,"bu":58,"chi":56,"sei":58}},{"id":"yamanaka_shikanosuke","nameJP":"山中鹿介","nameEN":"Yamanaka Shikanosuke","family":"amago","stats":{"tou":80,"bu":90,"chi":78,"sei":62}},{"id":"ukita_naoie","nameJP":"宇喜多直家","nameEN":"Ukita Naoie","family":"ukita","stats":{"tou":80,"bu":68,"chi":93,"sei":82}},{"id":"ukita_hideie","nameJP":"宇喜多秀家","nameEN":"Ukita Hideie","family":"ukita","stats":{"tou":78,"bu":76,"chi":70,"sei":74}},{"id":"chosokabe_kunichika","nameJP":"長宗我部国親","nameEN":"Chosokabe Kunichika","family":"chosokabe","stats":{"tou":78,"bu":74,"chi":82,"sei":78}},{"id":"chosokabe_motochika","nameJP":"長宗我部元親","nameEN":"Chosokabe Motochika","family":"chosokabe","stats":{"tou":90,"bu":84,"chi":86,"sei":84}},{"id":"kosokabe_chikayasu","nameJP":"香宗我部親泰","nameEN":"Kosokabe Chikayasu","family":"chosokabe","stats":{"tou":76,"bu":74,"chi":80,"sei":78}},{"id":"kira_chikasada","nameJP":"吉良親貞","nameEN":"Kira Chikasada","family":"chosokabe","stats":{"tou":78,"bu":80,"chi":74,"sei":66}},{"id":"kono_michinao","nameJP":"河野通直","nameEN":"Kono Michinao","family":"kono","stats":{"tou":58,"bu":56,"chi":58,"sei":60}},{"id":"ichijo_kanesada","nameJP":"一条兼定","nameEN":"Ichijo Kanesada","family":"ichijo","stats":{"tou":46,"bu":48,"chi":44,"sei":52}},{"id":"otomo_sorin","nameJP":"大友宗麟","nameEN":"Otomo Sorin","family":"otomo","stats":{"tou":78,"bu":66,"chi":80,"sei":85}},{"id":"tachibana_dosetsu","nameJP":"立花道雪","nameEN":"Tachibana Dosetsu","family":"otomo","stats":{"tou":93,"bu":90,"chi":85,"sei":74}},{"id":"takahashi_joun","nameJP":"高橋紹運","nameEN":"Takahashi Joun","family":"otomo","stats":{"tou":88,"bu":86,"chi":82,"sei":76}},{"id":"tachibana_muneshige","nameJP":"立花宗茂","nameEN":"Tachibana Muneshige","family":"otomo","stats":{"tou":92,"bu":93,"chi":84,"sei":80}},{"id":"yoshioka_nagamasu","nameJP":"吉岡長増","nameEN":"Yoshioka Nagamasu","family":"otomo","stats":{"tou":76,"bu":68,"chi":84,"sei":80}},{"id":"usuki_akihaya","nameJP":"臼杵鑑速","nameEN":"Usuki Akihaya","family":"otomo","stats":{"tou":78,"bu":70,"chi":82,"sei":82}},{"id":"ryuzoji_takanobu","nameJP":"龍造寺隆信","nameEN":"Ryuzoji Takanobu","family":"ryuzoji","stats":{"tou":84,"bu":85,"chi":80,"sei":72}},{"id":"nabeshima_naoshige","nameJP":"鍋島直茂","nameEN":"Nabeshima Naoshige","family":"ryuzoji","stats":{"tou":86,"bu":80,"chi":88,"sei":86}},{"id":"ryuzoji_ieharu","nameJP":"龍造寺家就","nameEN":"Ryuzoji Ieharu","family":"ryuzoji","stats":{"tou":72,"bu":74,"chi":70,"sei":64}},{"id":"shimazu_takahisa","nameJP":"島津貴久","nameEN":"Shimazu Takahisa","family":"shimazu","stats":{"tou":86,"bu":78,"chi":86,"sei":88}},{"id":"shimazu_yoshihisa","nameJP":"島津義久","nameEN":"Shimazu Yoshihisa","family":"shimazu","stats":{"tou":90,"bu":80,"chi":90,"sei":88}},{"id":"shimazu_yoshihiro","nameJP":"島津義弘","nameEN":"Shimazu Yoshihiro","family":"shimazu","stats":{"tou":94,"bu":95,"chi":84,"sei":74}},{"id":"shimazu_toshihisa","nameJP":"島津歳久","nameEN":"Shimazu Toshihisa","family":"shimazu","stats":{"tou":82,"bu":80,"chi":86,"sei":72}},{"id":"shimazu_iehisa","nameJP":"島津家久","nameEN":"Shimazu Iehisa","family":"shimazu","stats":{"tou":88,"bu":88,"chi":92,"sei":70}},{"id":"niiro_tadamoto","nameJP":"新納忠元","nameEN":"Niiro Tadamoto","family":"shimazu","stats":{"tou":83,"bu":88,"chi":74,"sei":66}},{"id":"ijuin_tadamune","nameJP":"伊集院忠棟","nameEN":"Ijuin Tadamune","family":"shimazu","stats":{"tou":74,"bu":70,"chi":80,"sei":80}},{"id":"date_harumune","nameJP":"伊達晴宗","nameEN":"Date Harumune","family":"date","stats":{"tou":74,"bu":70,"chi":74,"sei":76}},{"id":"date_terumune","nameJP":"伊達輝宗","nameEN":"Date Terumune","family":"date","stats":{"tou":78,"bu":72,"chi":80,"sei":82}},{"id":"oniniwa_yoshinao","nameJP":"鬼庭良直","nameEN":"Oniniwa Yoshinao","family":"date","stats":{"tou":76,"bu":80,"chi":72,"sei":70}},{"id":"mogami_yoshimori","nameJP":"最上義守","nameEN":"Mogami Yoshimori","family":"mogami","stats":{"tou":68,"bu":66,"chi":66,"sei":68}},{"id":"mogami_yoshiaki","nameJP":"最上義光","nameEN":"Mogami Yoshiaki","family":"mogami","stats":{"tou":86,"bu":84,"chi":88,"sei":82}},{"id":"nanbu_harumasa","nameJP":"南部晴政","nameEN":"Nanbu Harumasa","family":"nanbu","stats":{"tou":74,"bu":72,"chi":70,"sei":68}},{"id":"ashina_moriuji","nameJP":"蘆名盛氏","nameEN":"Ashina Moriuji","family":"ashina","stats":{"tou":80,"bu":74,"chi":80,"sei":82}},{"id":"satake_yoshishige","nameJP":"佐竹義重","nameEN":"Satake Yoshishige","family":"satake","stats":{"tou":88,"bu":89,"chi":80,"sei":76}},{"id":"satomi_yoshitaka","nameJP":"里見義堯","nameEN":"Satomi Yoshitaka","family":"satomi","stats":{"tou":80,"bu":78,"chi":80,"sei":74}},{"id":"utsunomiya_hirotsuna","nameJP":"宇都宮広綱","nameEN":"Utsunomiya Hirotsuna","family":"utsunomiya","stats":{"tou":66,"bu":64,"chi":68,"sei":66}},{"id":"kitabatake_tomonori","nameJP":"北畠具教","nameEN":"Kitabatake Tomonori","family":"kitabatake","stats":{"tou":78,"bu":86,"chi":74,"sei":72}},{"id":"murakami_yoshikiyo","nameJP":"村上義清","nameEN":"Murakami Yoshikiyo","family":"murakami","stats":{"tou":82,"bu":85,"chi":72,"sei":64}},{"id":"jinbo_nagamoto","nameJP":"神保長職","nameEN":"Jinbo Nagamoto","family":"jinbo","stats":{"tou":68,"bu":66,"chi":68,"sei":64}},{"id":"hatakeyama_yoshitsugu","nameJP":"畠山義続","nameEN":"Hatakeyama Yoshitsugu","family":"hatakeyama","stats":{"tou":58,"bu":56,"chi":58,"sei":60}},{"id":"isshiki_yoshimichi","nameJP":"一色義道","nameEN":"Isshiki Yoshimichi","family":"isshiki","stats":{"tou":58,"bu":58,"chi":56,"sei":58}},{"id":"hatano_hideharu","nameJP":"波多野秀治","nameEN":"Hatano Hideharu","family":"hatano","stats":{"tou":74,"bu":74,"chi":76,"sei":68}},{"id":"tsutsui_junkei","nameJP":"筒井順慶","nameEN":"Tsutsui Junkei","family":"tsutsui","stats":{"tou":74,"bu":70,"chi":78,"sei":74}},{"id":"kennyo","nameJP":"本願寺顕如","nameEN":"Honganji Kennyo","family":"honganji","stats":{"tou":76,"bu":58,"chi":86,"sei":90}},{"id":"shimotsuma_rairyu","nameJP":"下間頼廉","nameEN":"Shimotsuma Rairyu","family":"honganji","stats":{"tou":82,"bu":84,"chi":78,"sei":66}}]},"scenarios":{"version":1,"note":"3シナリオの領有(own: 洲ID→大名ID)・武将配置(place: 洲ID→[武将ID]、大名の当主lordは自動でcapitalに配置)・大名定義。兵力/金/開発度は石高からHTML側で導出。史実着想の近似配置。","scenarios":[{"id":1560,"nameJP":"桶狭間の戦い","nameEN":"Okehazama (1560)","year":1560,"descJP":"今川義元の上洛軍が尾張に迫る。織田信長は風雲の中にあり、各地に群雄が割拠する。","descEN":"Imagawa marches west; the realm is split among warring lords.","daimyo":[{"id":"date","nameJP":"伊達","nameEN":"Date","color":"#7f8c8d","ai":"defensive","capital":"mutsu","lord":"date_harumune"},{"id":"mogami","nameJP":"最上","nameEN":"Mogami","color":"#95a5a6","ai":"opportunist","capital":"dewa","lord":"mogami_yoshimori"},{"id":"satake","nameJP":"佐竹","nameEN":"Satake","color":"#a0522d","ai":"defensive","capital":"hitachi","lord":"satake_yoshishige"},{"id":"satomi","nameJP":"里見","nameEN":"Satomi","color":"#ff7f50","ai":"defensive","capital":"awa_kanto","lord":"satomi_yoshitaka"},{"id":"hojo","nameJP":"北条","nameEN":"Hojo","color":"#8e44ad","ai":"defensive","capital":"sagami","lord":"hojo_ujiyasu"},{"id":"uesugi","nameJP":"上杉","nameEN":"Uesugi","color":"#16a085","ai":"aggressive","capital":"echigo","lord":"uesugi_kenshin"},{"id":"asakura","nameJP":"朝倉","nameEN":"Asakura","color":"#6c5ce7","ai":"defensive","capital":"echizen","lord":"asakura_yoshikage"},{"id":"honganji","nameJP":"本願寺","nameEN":"Honganji","color":"#d4af37","ai":"defensive","capital":"kaga","lord":"kennyo"},{"id":"takeda","nameJP":"武田","nameEN":"Takeda","color":"#2980b9","ai":"aggressive","capital":"kai","lord":"takeda_shingen"},{"id":"saito","nameJP":"斎藤","nameEN":"Saito","color":"#5d8a3a","ai":"defensive","capital":"mino","lord":"saito_yoshitatsu"},{"id":"imagawa","nameJP":"今川","nameEN":"Imagawa","color":"#d35400","ai":"aggressive","capital":"suruga","lord":"imagawa_yoshimoto"},{"id":"oda","nameJP":"織田","nameEN":"Oda","color":"#e74c3c","ai":"aggressive","capital":"owari","lord":"oda_nobunaga"},{"id":"kitabatake","nameJP":"北畠","nameEN":"Kitabatake","color":"#dda0dd","ai":"defensive","capital":"ise","lord":"kitabatake_tomonori"},{"id":"rokkaku","nameJP":"六角","nameEN":"Rokkaku","color":"#b8860b","ai":"defensive","capital":"omi","lord":"rokkaku_yoshikata"},{"id":"miyoshi","nameJP":"三好","nameEN":"Miyoshi","color":"#e67e22","ai":"opportunist","capital":"yamashiro","lord":"miyoshi_nagayoshi"},{"id":"ukita","nameJP":"宇喜多","nameEN":"Ukita","color":"#cd5c5c","ai":"opportunist","capital":"bizen","lord":"ukita_naoie"},{"id":"amago","nameJP":"尼子","nameEN":"Amago","color":"#8fbc8f","ai":"opportunist","capital":"izumo","lord":"amago_haruhisa"},{"id":"mori","nameJP":"毛利","nameEN":"Mori","color":"#27ae60","ai":"opportunist","capital":"aki","lord":"mori_motonari"},{"id":"kono","nameJP":"河野","nameEN":"Kono","color":"#4682b4","ai":"defensive","capital":"iyo","lord":"kono_michinao"},{"id":"chosokabe","nameJP":"長宗我部","nameEN":"Chosokabe","color":"#1abc9c","ai":"aggressive","capital":"tosa","lord":"chosokabe_kunichika"},{"id":"otomo","nameJP":"大友","nameEN":"Otomo","color":"#f39c12","ai":"defensive","capital":"bungo","lord":"otomo_sorin"},{"id":"ryuzoji","nameJP":"龍造寺","nameEN":"Ryuzoji","color":"#9acd32","ai":"aggressive","capital":"hizen","lord":"ryuzoji_takanobu"},{"id":"shimazu","nameJP":"島津","nameEN":"Shimazu","color":"#c0392b","ai":"aggressive","capital":"satsuma","lord":"shimazu_takahisa"}],"own":{"mutsu":"date","dewa":"mogami","hitachi":"satake","shimotsuke":"satake","kozuke":"hojo","shimousa":"hojo","kazusa":"hojo","awa_kanto":"satomi","musashi":"hojo","sagami":"hojo","echigo":"uesugi","sado":"uesugi","etchu":"uesugi","noto":"uesugi","kaga":"honganji","echizen":"asakura","wakasa":"asakura","shinano":"takeda","kai":"takeda","hida":"takeda","mino":"saito","totomi":"imagawa","suruga":"imagawa","izu":"hojo","mikawa":"imagawa","owari":"oda","ise":"kitabatake","shima":"kitabatake","omi":"rokkaku","yamashiro":"miyoshi","yamato":"miyoshi","kawachi":"miyoshi","izumi":"miyoshi","settsu":"miyoshi","iga":"miyoshi","kii":"honganji","tanba":"miyoshi","tango":"miyoshi","tajima":"miyoshi","harima":"ukita","mimasaka":"amago","bizen":"ukita","bitchu":"amago","bingo":"mori","inaba":"amago","hoki":"amago","izumo":"amago","iwami":"mori","aki":"mori","suo":"mori","nagato":"mori","awa_shikoku":"miyoshi","sanuki":"miyoshi","iyo":"kono","tosa":"chosokabe","buzen":"otomo","bungo":"otomo","chikuzen":"otomo","chikugo":"otomo","hizen":"ryuzoji","higo":"otomo","hyuga":"shimazu","osumi":"shimazu","satsuma":"shimazu"},"place":{"mutsu":["date_terumune","oniniwa_yoshinao"],"dewa":["mogami_yoshiaki"],"echigo":["kakizaki_kageie","naoe_kagetsuna","usami_sadamitsu","honjo_shigenaga"],"etchu":["saito_tomonobu"],"sagami":["hojo_ujimasa","hojo_tsunashige"],"musashi":["hojo_ujiteru"],"izu":["hojo_ujikuni"],"kai":["takeda_nobushige","baba_nobuharu","yamagata_masakage"],"shinano":["kosaka_masanobu","naito_masatoyo","sanada_yukitaka"],"mino":["takenaka_hanbei","ando_morinari"],"suruga":["imagawa_ujizane"],"mikawa":["okabe_motonobu"],"totomi":["asahina_yasutomo"],"owari":["shibata_katsuie","niwa_nagahide","hashiba_hideyoshi","mori_yoshinari","maeda_toshiie","ikeda_tsuneoki","hayashi_hidesada"],"yamato":["matsunaga_hisahide"],"settsu":["miyoshi_nagayasu"],"kawachi":["iwanari_tomomichi"],"awa_shikoku":["sogo_kazumasa"],"sanuki":["shinohara_nagafusa"],"aki":["mori_takamoto","kobayakawa_takakage"],"iwami":["kikkawa_motoharu"],"suo":["fukuhara_sadatoshi"],"nagato":["murakami_takeyoshi"],"izumo":["yamanaka_shikanosuke"],"echizen":["magara_naotaka"],"omi":["gamo_katahide"],"kii":["shimotsuma_rairyu"],"buzen":["tachibana_dosetsu"],"chikuzen":["takahashi_joun"],"bungo":["yoshioka_nagamasu","usuki_akihaya"],"hizen":["nabeshima_naoshige"],"satsuma":["shimazu_yoshihisa","shimazu_yoshihiro"],"osumi":["shimazu_iehisa","niiro_tadamoto"],"hyuga":["shimazu_toshihisa"],"tosa":["chosokabe_motochika"]}},{"id":1568,"nameJP":"信長上洛","nameEN":"March on the Capital (1568)","year":1568,"descJP":"美濃を制した織田信長が足利義昭を奉じて上洛せんとする。三好は退潮、武田・上杉は北で覇を競う。","descEN":"Nobunaga, master of Mino, marches to install Yoshiaki in Kyoto.","daimyo":[{"id":"date","nameJP":"伊達","nameEN":"Date","color":"#7f8c8d","ai":"defensive","capital":"mutsu","lord":"date_terumune"},{"id":"mogami","nameJP":"最上","nameEN":"Mogami","color":"#95a5a6","ai":"opportunist","capital":"dewa","lord":"mogami_yoshimori"},{"id":"satake","nameJP":"佐竹","nameEN":"Satake","color":"#a0522d","ai":"defensive","capital":"hitachi","lord":"satake_yoshishige"},{"id":"satomi","nameJP":"里見","nameEN":"Satomi","color":"#ff7f50","ai":"defensive","capital":"awa_kanto","lord":"satomi_yoshitaka"},{"id":"hojo","nameJP":"北条","nameEN":"Hojo","color":"#8e44ad","ai":"defensive","capital":"sagami","lord":"hojo_ujiyasu"},{"id":"uesugi","nameJP":"上杉","nameEN":"Uesugi","color":"#16a085","ai":"aggressive","capital":"echigo","lord":"uesugi_kenshin"},{"id":"asakura","nameJP":"朝倉","nameEN":"Asakura","color":"#6c5ce7","ai":"defensive","capital":"echizen","lord":"asakura_yoshikage"},{"id":"honganji","nameJP":"本願寺","nameEN":"Honganji","color":"#d4af37","ai":"defensive","capital":"kaga","lord":"kennyo"},{"id":"takeda","nameJP":"武田","nameEN":"Takeda","color":"#2980b9","ai":"aggressive","capital":"kai","lord":"takeda_shingen"},{"id":"oda","nameJP":"織田","nameEN":"Oda","color":"#e74c3c","ai":"aggressive","capital":"owari","lord":"oda_nobunaga"},{"id":"imagawa","nameJP":"今川","nameEN":"Imagawa","color":"#d35400","ai":"defensive","capital":"suruga","lord":"imagawa_ujizane"},{"id":"tokugawa","nameJP":"徳川","nameEN":"Tokugawa","color":"#34699a","ai":"aggressive","capital":"mikawa","lord":"tokugawa_ieyasu"},{"id":"azai","nameJP":"浅井","nameEN":"Azai","color":"#00a8a8","ai":"defensive","capital":"omi","lord":"azai_nagamasa"},{"id":"miyoshi","nameJP":"三好","nameEN":"Miyoshi","color":"#e67e22","ai":"opportunist","capital":"yamashiro","lord":"miyoshi_yoshitsugu"},{"id":"mori","nameJP":"毛利","nameEN":"Mori","color":"#27ae60","ai":"opportunist","capital":"aki","lord":"mori_motonari"},{"id":"ukita","nameJP":"宇喜多","nameEN":"Ukita","color":"#cd5c5c","ai":"opportunist","capital":"bizen","lord":"ukita_naoie"},{"id":"kono","nameJP":"河野","nameEN":"Kono","color":"#4682b4","ai":"defensive","capital":"iyo","lord":"kono_michinao"},{"id":"chosokabe","nameJP":"長宗我部","nameEN":"Chosokabe","color":"#1abc9c","ai":"aggressive","capital":"tosa","lord":"chosokabe_motochika"},{"id":"otomo","nameJP":"大友","nameEN":"Otomo","color":"#f39c12","ai":"defensive","capital":"bungo","lord":"otomo_sorin"},{"id":"ryuzoji","nameJP":"龍造寺","nameEN":"Ryuzoji","color":"#9acd32","ai":"aggressive","capital":"hizen","lord":"ryuzoji_takanobu"},{"id":"shimazu","nameJP":"島津","nameEN":"Shimazu","color":"#c0392b","ai":"aggressive","capital":"satsuma","lord":"shimazu_yoshihisa"}],"own":{"mutsu":"date","dewa":"mogami","hitachi":"satake","shimotsuke":"hojo","kozuke":"uesugi","shimousa":"hojo","kazusa":"hojo","awa_kanto":"satomi","musashi":"hojo","sagami":"hojo","echigo":"uesugi","sado":"uesugi","etchu":"uesugi","noto":"uesugi","kaga":"honganji","echizen":"asakura","wakasa":"asakura","shinano":"takeda","kai":"takeda","hida":"takeda","mino":"oda","totomi":"imagawa","suruga":"imagawa","izu":"hojo","mikawa":"tokugawa","owari":"oda","ise":"oda","shima":"oda","omi":"azai","yamashiro":"miyoshi","yamato":"miyoshi","kawachi":"miyoshi","izumi":"miyoshi","settsu":"miyoshi","iga":"oda","kii":"honganji","tanba":"miyoshi","tango":"miyoshi","tajima":"mori","harima":"ukita","mimasaka":"mori","bizen":"ukita","bitchu":"mori","bingo":"mori","inaba":"mori","hoki":"mori","izumo":"mori","iwami":"mori","aki":"mori","suo":"mori","nagato":"mori","awa_shikoku":"miyoshi","sanuki":"miyoshi","iyo":"kono","tosa":"chosokabe","buzen":"otomo","bungo":"otomo","chikuzen":"otomo","chikugo":"otomo","hizen":"ryuzoji","higo":"otomo","hyuga":"shimazu","osumi":"shimazu","satsuma":"shimazu"},"place":{"mutsu":["oniniwa_yoshinao"],"dewa":["mogami_yoshiaki"],"echigo":["kakizaki_kageie","naoe_kagetsuna","honjo_shigenaga"],"kozuke":["saito_tomonobu"],"etchu":["amakasu_kagemochi"],"sagami":["hojo_ujimasa","hojo_tsunashige"],"musashi":["hojo_ujiteru"],"izu":["hojo_ujikuni"],"shimousa":["daidoji_masashige"],"kai":["baba_nobuharu","yamagata_masakage"],"shinano":["kosaka_masanobu","naito_masatoyo","sanada_yukitaka","takeda_katsuyori"],"owari":["shibata_katsuie","niwa_nagahide","maeda_toshiie","mori_yoshinari","sakuma_nobumori"],"mino":["hashiba_hideyoshi","takenaka_hanbei","akechi_mitsuhide"],"ise":["takigawa_kazumasu"],"mikawa":["sakai_tadatsugu","honda_tadakatsu","ishikawa_kazumasa"],"suruga":["okabe_motonobu","asahina_yasutomo"],"omi":["azai_hisamasa","isono_kazumasa"],"echizen":["magara_naotaka","asakura_kageakira"],"kii":["shimotsuma_rairyu"],"yamato":["matsunaga_hisahide"],"settsu":["miyoshi_nagayasu"],"kawachi":["iwanari_tomomichi"],"awa_shikoku":["shinohara_nagafusa"],"aki":["mori_terumoto","kobayakawa_takakage"],"iwami":["kikkawa_motoharu"],"izumo":["fukuhara_sadatoshi"],"nagato":["murakami_takeyoshi"],"mimasaka":["ankokuji_ekei"],"buzen":["tachibana_dosetsu"],"chikuzen":["takahashi_joun"],"bungo":["usuki_akihaya","yoshioka_nagamasu"],"hizen":["nabeshima_naoshige"],"satsuma":["shimazu_takahisa","shimazu_yoshihiro","shimazu_iehisa"],"osumi":["niiro_tadamoto"],"hyuga":["shimazu_toshihisa"],"tosa":["kira_chikasada"]}},{"id":1574,"nameJP":"長篠前夜","nameEN":"Eve of Nagashino (1574)","year":1574,"descJP":"信長包囲網を破った織田が畿内を制す。武田勝頼は西上を伺い、本願寺・一向一揆が各地で蜂起する。","descEN":"Oda holds the capital region; Katsuyori and the Ikko leagues press the offensive.","daimyo":[{"id":"date","nameJP":"伊達","nameEN":"Date","color":"#7f8c8d","ai":"defensive","capital":"mutsu","lord":"date_terumune"},{"id":"mogami","nameJP":"最上","nameEN":"Mogami","color":"#95a5a6","ai":"opportunist","capital":"dewa","lord":"mogami_yoshiaki"},{"id":"satake","nameJP":"佐竹","nameEN":"Satake","color":"#a0522d","ai":"defensive","capital":"hitachi","lord":"satake_yoshishige"},{"id":"satomi","nameJP":"里見","nameEN":"Satomi","color":"#ff7f50","ai":"defensive","capital":"awa_kanto","lord":"satomi_yoshitaka"},{"id":"hojo","nameJP":"北条","nameEN":"Hojo","color":"#8e44ad","ai":"defensive","capital":"sagami","lord":"hojo_ujimasa"},{"id":"uesugi","nameJP":"上杉","nameEN":"Uesugi","color":"#16a085","ai":"aggressive","capital":"echigo","lord":"uesugi_kenshin"},{"id":"honganji","nameJP":"本願寺","nameEN":"Honganji","color":"#d4af37","ai":"aggressive","capital":"kaga","lord":"kennyo"},{"id":"oda","nameJP":"織田","nameEN":"Oda","color":"#e74c3c","ai":"aggressive","capital":"owari","lord":"oda_nobunaga"},{"id":"takeda","nameJP":"武田","nameEN":"Takeda","color":"#2980b9","ai":"aggressive","capital":"kai","lord":"takeda_katsuyori"},{"id":"tokugawa","nameJP":"徳川","nameEN":"Tokugawa","color":"#34699a","ai":"aggressive","capital":"mikawa","lord":"tokugawa_ieyasu"},{"id":"mori","nameJP":"毛利","nameEN":"Mori","color":"#27ae60","ai":"opportunist","capital":"aki","lord":"mori_terumoto"},{"id":"ukita","nameJP":"宇喜多","nameEN":"Ukita","color":"#cd5c5c","ai":"opportunist","capital":"bizen","lord":"ukita_naoie"},{"id":"kono","nameJP":"河野","nameEN":"Kono","color":"#4682b4","ai":"defensive","capital":"iyo","lord":"kono_michinao"},{"id":"chosokabe","nameJP":"長宗我部","nameEN":"Chosokabe","color":"#1abc9c","ai":"aggressive","capital":"tosa","lord":"chosokabe_motochika"},{"id":"otomo","nameJP":"大友","nameEN":"Otomo","color":"#f39c12","ai":"defensive","capital":"bungo","lord":"otomo_sorin"},{"id":"ryuzoji","nameJP":"龍造寺","nameEN":"Ryuzoji","color":"#9acd32","ai":"aggressive","capital":"hizen","lord":"ryuzoji_takanobu"},{"id":"shimazu","nameJP":"島津","nameEN":"Shimazu","color":"#c0392b","ai":"aggressive","capital":"satsuma","lord":"shimazu_yoshihisa"}],"own":{"mutsu":"date","dewa":"mogami","hitachi":"satake","shimotsuke":"hojo","kozuke":"uesugi","shimousa":"hojo","kazusa":"hojo","awa_kanto":"satomi","musashi":"hojo","sagami":"hojo","echigo":"uesugi","sado":"uesugi","etchu":"uesugi","noto":"uesugi","kaga":"honganji","echizen":"honganji","wakasa":"oda","shinano":"takeda","kai":"takeda","hida":"takeda","mino":"oda","totomi":"tokugawa","suruga":"takeda","izu":"hojo","mikawa":"tokugawa","owari":"oda","ise":"oda","shima":"oda","omi":"oda","yamashiro":"oda","yamato":"oda","kawachi":"oda","izumi":"oda","settsu":"oda","iga":"oda","kii":"honganji","tanba":"oda","tango":"oda","tajima":"mori","harima":"ukita","mimasaka":"mori","bizen":"ukita","bitchu":"mori","bingo":"mori","inaba":"mori","hoki":"mori","izumo":"mori","iwami":"mori","aki":"mori","suo":"mori","nagato":"mori","awa_shikoku":"chosokabe","sanuki":"chosokabe","iyo":"kono","tosa":"chosokabe","buzen":"otomo","bungo":"otomo","chikuzen":"otomo","chikugo":"otomo","hizen":"ryuzoji","higo":"otomo","hyuga":"shimazu","osumi":"shimazu","satsuma":"shimazu"},"place":{"mutsu":["oniniwa_yoshinao"],"echigo":["kakizaki_kageie","naoe_kagetsuna","uesugi_kagekatsu"],"etchu":["amakasu_kagemochi"],"kozuke":["honjo_shigenaga"],"sagami":["hojo_tsunashige"],"musashi":["hojo_ujiteru"],"izu":["hojo_ujikuni"],"shimousa":["daidoji_masashige"],"kai":["anayama_baisetsu"],"shinano":["baba_nobuharu","yamagata_masakage","kosaka_masanobu","naito_masatoyo","sanada_masayuki"],"suruga":["oyamada_nobushige"],"owari":["niwa_nagahide","sakuma_nobumori"],"mino":["hashiba_hideyoshi","takenaka_hanbei"],"omi":["shibata_katsuie","maeda_toshiie","sassa_narimasa"],"yamashiro":["akechi_mitsuhide"],"ise":["takigawa_kazumasu","ikeda_tsuneoki"],"yamato":["tsutsui_junkei"],"tanba":["hori_hidemasa"],"mikawa":["ishikawa_kazumasa"],"totomi":["honda_tadakatsu","sakakibara_yasumasa","sakai_tadatsugu","ii_naomasa"],"echizen":["shimotsuma_rairyu"],"aki":["kobayakawa_takakage"],"iwami":["kikkawa_motoharu"],"izumo":["fukuhara_sadatoshi"],"nagato":["murakami_takeyoshi"],"bingo":["ankokuji_ekei"],"buzen":["tachibana_dosetsu"],"chikuzen":["takahashi_joun","tachibana_muneshige"],"bungo":["usuki_akihaya"],"hizen":["nabeshima_naoshige"],"satsuma":["shimazu_yoshihiro","shimazu_iehisa"],"osumi":["niiro_tadamoto"],"hyuga":["shimazu_toshihisa"],"awa_shikoku":["kira_chikasada"],"sanuki":["kosokabe_chikayasu"]}}]}};
+function cloneFallbackData(key){
+  const data = DATA_FALLBACKS[key];
+  if (!data) throw new Error('Missing embedded Sengoku data: ' + key);
+  return JSON.parse(JSON.stringify(data));
+}
+function loadSengokuJSON(key, url){
+  if (location.protocol === 'file:') return Promise.resolve(cloneFallbackData(key));
+  return GameKit.Assets.loadJSON(url).catch(err=>{
+    console.warn('Using embedded Sengoku data fallback:', url, err);
+    return cloneFallbackData(key);
+  });
+}
+function loadOneImage(name, url){
+  return new Promise(resolve=>{
+    const img = new Image();
+    img.onload = () => resolve([name, img]);
+    img.onerror = err => { console.warn('Optional image failed:', url, err); resolve([name, null]); };
+    img.src = url;
+  });
+}
+async function loadOptionalImages(map){
+  const pairs = [];
+  for (const [name, url] of Object.entries(map)) pairs.push(await loadOneImage(name, url));
+  return Object.fromEntries(pairs.filter(([,img])=>!!img));
+}
 
 /* ---- マップ描画パラメータ（論理座標→画面座標） ---- */
-const MAP = { s:0.655, ox:14, oy:64, clip:{x:6,y:58,w:676,h:492}, R:80 };
+const MAP = { s:0.655, ox:14, oy:64, clip:{x:8,y:58,w:W-16,h:H-114}, R:80 };
 function toScreenX(lx){ return MAP.ox + lx * MAP.s; }
 function toScreenY(ly){ return MAP.oy + ly * MAP.s; }
+const COAST_OUTLINES = [
+  { name:'Honshu', closed:true, points:[[780,45],[820,76],[842,128],[838,195],[820,242],[828,292],[866,330],[852,376],[808,405],[760,392],[730,367],[704,390],[721,452],[690,500],[655,430],[614,405],[565,402],[528,428],[545,486],[512,552],[452,535],[405,492],[360,448],[306,430],[248,430],[204,414],[154,438],[102,452],[140,410],[196,370],[258,342],[322,322],[388,310],[448,300],[500,250],[555,215],[612,166],[672,96],[730,60]] },
+  { name:'Kyushu', closed:true, points:[[120,456],[146,492],[130,552],[105,604],[66,630],[22,606],[8,548],[34,492],[72,466]] },
+  { name:'Shikoku', closed:true, points:[[196,464],[252,446],[323,470],[342,514],[288,548],[222,522]] },
+  { name:'Sado', closed:true, points:[[540,125],[578,130],[570,152],[535,146]] },
+  { name:'Hokkaido', closed:true, points:[[806,12],[885,20],[950,58],[976,116],[946,166],[870,178],[800,142],[770,78]] }
+];
 
 /* ---- 季節 ---- */
 const SEASONS = [
@@ -108,6 +188,169 @@ function T(ctx, str, x, y, opts={}){
   ctx.fillText(str, x, y);
   ctx.restore();
 }
+function drawCoverImage(ctx, img, x, y, w, h, alpha=1){
+  if (!img) return false;
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return false;
+  const scale = Math.max(w/iw, h/ih);
+  const sw = w/scale, sh = h/scale;
+  const sx = (iw-sw)/2, sy = (ih-sh)/2;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+  ctx.restore();
+  return true;
+}
+function drawLogicalPath(ctx, points, closed){
+  if (!points || points.length<2) return;
+  ctx.beginPath();
+  ctx.moveTo(toScreenX(points[0][0]), toScreenY(points[0][1]));
+  for (let i=1;i<points.length;i++) ctx.lineTo(toScreenX(points[i][0]), toScreenY(points[i][1]));
+  if (closed) ctx.closePath();
+}
+function drawLandPath(ctx){
+  ctx.beginPath();
+  COAST_OUTLINES.forEach(outline=>{
+    if (!outline.points || outline.points.length<3) return;
+    ctx.moveTo(toScreenX(outline.points[0][0]), toScreenY(outline.points[0][1]));
+    for (let i=1;i<outline.points.length;i++) ctx.lineTo(toScreenX(outline.points[i][0]), toScreenY(outline.points[i][1]));
+    ctx.closePath();
+  });
+}
+function clipToLand(ctx){
+  ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
+  drawLandPath(ctx); ctx.clip();
+}
+function pointInLand(x, y){
+  return COAST_OUTLINES.some(outline=>{
+    const poly = outline.points.map(pt=>[toScreenX(pt[0]), toScreenY(pt[1])]);
+    return pointInPoly(x, y, poly);
+  });
+}
+function drawTerrainBackdrop(ctx, mapImg, t=0){
+  const c=MAP.clip;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(c.x,c.y,c.w,c.h); ctx.clip();
+  if (!drawCoverImage(ctx, mapImg, c.x, c.y, c.w, c.h, 1)) {
+    const sea=ctx.createLinearGradient(c.x,c.y,c.x+c.w,c.y+c.h);
+    sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
+    ctx.fillStyle=sea; ctx.fillRect(c.x,c.y,c.w,c.h);
+  }
+  ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(c.x,c.y,c.w,c.h);
+  ctx.restore();
+}
+function drawCoastlineGuide(ctx){
+  ctx.save();
+  ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
+  COAST_OUTLINES.forEach(outline=>{
+    drawLogicalPath(ctx, outline.points, outline.closed);
+    ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.setLineDash([]);
+    ctx.lineWidth=3.2; ctx.strokeStyle='rgba(2,6,23,0.58)'; ctx.stroke();
+    drawLogicalPath(ctx, outline.points, outline.closed);
+    ctx.lineWidth=1.1; ctx.strokeStyle='rgba(226,232,240,0.68)'; ctx.stroke();
+    drawLogicalPath(ctx, outline.points, outline.closed);
+    ctx.lineWidth=0.55; ctx.strokeStyle='rgba(34,211,238,0.30)'; ctx.stroke();
+  });
+  ctx.restore();
+}
+function buildPortraitSlots(){
+  ASSETS.portraitSlots = {};
+  DATA.generals.forEach((g, i)=>{
+    const page = Math.floor(i / 36) + 1;
+    const slot = i % 36;
+    ASSETS.portraitSlots[g.id] = { img:'portrait'+page, col:slot%6, row:Math.floor(slot/6) };
+  });
+}
+function drawGeneralPortrait(ctx, gid, x, y, size, opts={}){
+  const slot = ASSETS.portraitSlots[gid];
+  const img = slot && ASSETS.img[slot.img];
+  const g = DATA.genById[gid];
+  const radius = opts.radius===undefined ? Math.min(10, size/4) : opts.radius;
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, size, size, radius);
+  ctx.clip();
+  let drawn=false;
+  if (img){
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    const cw = iw / ASSETS.portraitCols, ch = ih / ASSETS.portraitRows;
+    ctx.drawImage(img, slot.col*cw, slot.row*ch, cw, ch, x, y, size, size);
+    drawn=true;
+  }
+  if (!drawn){
+    const family = g ? g.family : 'unknown';
+    const hue = Array.from(family).reduce((a,c)=>a+c.charCodeAt(0),0) % 360;
+    ctx.fillStyle = 'hsl(' + hue + ' 45% 30%)';
+    ctx.fillRect(x,y,size,size);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.beginPath(); ctx.arc(x+size*0.5, y+size*0.42, size*0.22, 0, Math.PI*2); ctx.fill();
+    ctx.fillRect(x+size*0.28, y+size*0.66, size*0.44, size*0.28);
+  }
+  ctx.restore();
+  ctx.lineWidth = opts.lineWidth || 1.2;
+  ctx.strokeStyle = opts.stroke || 'rgba(232,192,122,0.55)';
+  ctx.beginPath(); ctx.roundRect(x, y, size, size, radius); ctx.stroke();
+}
+
+function drawKamon(ctx, clanId, x, y, size, fallbackColor='#64748b'){
+  const img = ASSETS.img.kamon;
+  const slot = KAMON_SLOT[clanId];
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x+size/2, y+size/2, size/2, 0, Math.PI*2); ctx.clip();
+  if (img && slot){
+    const iw=img.naturalWidth||img.width, ih=img.naturalHeight||img.height;
+    const cw=iw/ASSETS.kamonCols, ch=ih/ASSETS.kamonRows;
+    ctx.drawImage(img, slot.col*cw, slot.row*ch, cw, ch, x, y, size, size);
+  } else {
+    ctx.fillStyle=fallbackColor; ctx.fillRect(x,y,size,size);
+    ctx.strokeStyle='rgba(255,255,255,0.75)'; ctx.lineWidth=Math.max(1,size*0.08);
+    ctx.beginPath(); ctx.arc(x+size/2,y+size/2,size*0.26,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+size*0.28,y+size*0.5); ctx.lineTo(x+size*0.72,y+size*0.5); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.lineWidth=1.3;
+  ctx.strokeStyle='rgba(3,7,14,0.75)'; ctx.beginPath(); ctx.arc(x+size/2,y+size/2,size/2,0,Math.PI*2); ctx.stroke();
+  ctx.lineWidth=0.8;
+  ctx.strokeStyle='rgba(255,255,255,0.65)'; ctx.beginPath(); ctx.arc(x+size/2,y+size/2,size/2-1.5,0,Math.PI*2); ctx.stroke();
+}
+function drawCastleIcon(ctx, x, y, size, color){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=5; ctx.shadowOffsetY=3;
+  ctx.fillStyle='rgba(10,14,20,0.92)';
+  ctx.beginPath(); ctx.moveTo(-size*0.55,size*0.30); ctx.lineTo(0,-size*0.10); ctx.lineTo(size*0.55,size*0.30); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='rgba(226,232,240,0.86)';
+  ctx.fillRect(-size*0.34,-size*0.04,size*0.68,size*0.38);
+  ctx.fillStyle='rgba(28,34,44,0.96)';
+  ctx.fillRect(-size*0.20,-size*0.32,size*0.40,size*0.34);
+  ctx.fillStyle=color || '#e8c07a';
+  ctx.beginPath(); ctx.moveTo(-size*0.30,-size*0.24); ctx.lineTo(0,-size*0.55); ctx.lineTo(size*0.30,-size*0.24); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='rgba(2,6,23,0.7)'; ctx.lineWidth=1; ctx.strokeRect(-size*0.34,-size*0.04,size*0.68,size*0.38);
+  ctx.restore();
+}
+function drawVerticalLabel(ctx, text, x, y, opts={}){
+  const chars = Array.from(text || '');
+  const size = opts.size || 11;
+  const gap = opts.gap || 11;
+  const pad = 4;
+  const h = Math.max(18, chars.length * gap + pad*2);
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(x-size/2-pad, y-pad, size+pad*2, h, 4);
+  ctx.fillStyle = opts.fill || 'rgba(8,12,18,0.68)'; ctx.fill();
+  ctx.strokeStyle = opts.stroke || 'rgba(255,255,255,0.18)'; ctx.lineWidth=0.8; ctx.stroke();
+  ctx.font = (opts.weight||'bold') + ' ' + size + 'px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  chars.forEach((ch,i)=>{
+    const yy=y+pad+i*gap+gap/2;
+    ctx.fillStyle='rgba(2,6,23,0.9)'; ctx.fillText(ch, x+0.8, yy+0.8);
+    ctx.fillStyle=opts.color || '#f8fafc'; ctx.fillText(ch, x, yy);
+  });
+  ctx.restore();
+  return h;
+}
+function castleNameForProvince(p){ return CASTLE_NAMES[p.id] || (p.nameJP + '城'); }
+
 function pointInRect(p, r){ return p.x>=r.x && p.x<=r.x+r.w && p.y>=r.y && p.y<=r.y+r.h; }
 function pointInPoly(px, py, poly){
   let inside=false;
@@ -137,7 +380,7 @@ function clipHalfPlane(poly, ax, ay, bx, by){
 }
 /* 各洲のVoronoiセル（画面座標）を計算してキャッシュ */
 function computeProvinceCells(){
-  const sites = DATA.provinces.map(p=>({id:p.id, x:toScreenX(p.x), y:toScreenY(p.y)}));
+  const sites = DATA.provinces.map(p=>{ const [x,y]=provinceScreenPoint(p); return {id:p.id, x, y}; });
   const Rpx = MAP.R * MAP.s;
   const cells = {};
   for (const s of sites){
@@ -306,10 +549,11 @@ class BootScene extends GameKit.Scene {
   enter(game){
     this.t=0; this.progress=0; this.error=null; this.done=false;
     Promise.all([
-      GameKit.Assets.loadJSON('assets/sengoku/provinces.json'),
-      GameKit.Assets.loadJSON('assets/sengoku/generals.json'),
-      GameKit.Assets.loadJSON('assets/sengoku/scenarios.json'),
-    ]).then(([prov, gen, scn])=>{
+      loadSengokuJSON('provinces', 'assets/sengoku/provinces.json'),
+      loadSengokuJSON('generals', 'assets/sengoku/generals.json'),
+      loadSengokuJSON('scenarios', 'assets/sengoku/scenarios.json'),
+      loadOptionalImages(GPT_ASSETS),
+    ]).then(([prov, gen, scn, imgs])=>{
       DATA.provinces = prov.provinces;
       DATA.provinces.forEach(p=>DATA.provById[p.id]=p);
       // 隣接を双方向に正規化
@@ -321,6 +565,8 @@ class BootScene extends GameKit.Scene {
       });
       DATA.generals = gen.generals;
       DATA.generals.forEach(g=>DATA.genById[g.id]=g);
+      ASSETS.img = imgs;
+      buildPortraitSlots();
       DATA.scenarios = scn.scenarios;
       this.done=true;
       game.changeScene(new TitleScene());
@@ -367,10 +613,14 @@ class TitleScene extends GameKit.Scene {
     }
   }
   draw(ctx){
-    ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
+    if (!drawCoverImage(ctx, ASSETS.img.title, 0, 0, W, H, 1)) { ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H); }
+    ctx.fillStyle='rgba(3,5,10,0.42)'; ctx.fillRect(0,0,W,H);
+    const shade=ctx.createLinearGradient(0,0,0,H);
+    shade.addColorStop(0,'rgba(5,7,13,0.20)'); shade.addColorStop(1,'rgba(5,7,13,0.78)');
+    ctx.fillStyle=shade; ctx.fillRect(0,0,W,H);
     this.particles.draw(ctx);
     // タイトル枠
-    GameKit.UI.glassPanel(ctx, W/2-300, 90, 600, 200, {radius:18, stroke:'rgba(232,192,122,0.4)'});
+    GameKit.UI.glassPanel(ctx, W/2-300, 90, 600, 200, {radius:18, fill:'rgba(8,12,22,0.62)', stroke:'rgba(232,192,122,0.4)'});
     T(ctx,'戦国の野望', W/2, 120, {size:64, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
     T(ctx,'SENGOKU NO YABOU', W/2, 200, {size:18, color:'#a78bfa', align:'center'});
     T(ctx,'全国64洲をヘックス戦で制覇する戦国シミュレーション', W/2, 234, {size:14, color:'#cbd5e1', align:'center'});
@@ -463,12 +713,11 @@ class ScenarioSelectScene extends GameKit.Scene {
           ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,10);
           ctx.fillStyle = b._hot? 'rgba(255,255,255,0.14)':'rgba(255,255,255,0.05)'; ctx.fill();
           ctx.strokeStyle=d.color; ctx.lineWidth=2; ctx.stroke(); ctx.restore();
-          // 家紋風マーク
-          ctx.fillStyle=d.color; ctx.beginPath(); ctx.arc(b.x+22, b.y+b.h/2, 12, 0, Math.PI*2); ctx.fill();
           const lord = DATA.genById[d.lord];
-          T(ctx, d.nameJP+'家', b.x+42, b.y+12, {size:16, weight:'bold', color:'#f1e6cf'});
-          T(ctx, lord?lord.nameJP:'', b.x+42, b.y+34, {size:12, color:'#9fb2c6'});
-          T(ctx, '統'+(lord?lord.stats.tou:'-')+' 武'+(lord?lord.stats.bu:'-'), b.x+42, b.y+50, {size:11, color:'#7d93ab'});
+          drawGeneralPortrait(ctx, d.lord, b.x+10, b.y+12, 46, {stroke:d.color, lineWidth:2});
+          T(ctx, d.nameJP+'家', b.x+64, b.y+10, {size:16, weight:'bold', color:'#f1e6cf'});
+          T(ctx, lord?lord.nameJP:'', b.x+64, b.y+32, {size:12, color:'#9fb2c6'});
+          T(ctx, '統'+(lord?lord.stats.tou:'-')+' 武'+(lord?lord.stats.bu:'-'), b.x+64, b.y+50, {size:11, color:'#7d93ab'});
         } else { drawButton(ctx, b, this.t); }
       }
     }
@@ -692,8 +941,8 @@ class MapScene extends GameKit.Scene {
       bs.push({x, y, w:120, h:36, jp:'徴兵', en:'Recruit', accent:'rgba(251,191,36,0.6)', action:g=>this._recruit(g)}); x+=128;
       bs.push({x, y, w:120, h:36, jp:'武将一覧', en:'Generals', action:()=>{ this.overlay={type:'provinceInfo', pid:this.selected}; }}); x+=128;
     }
-    bs.push({x:W-150, y:556, w:136, h:36, jp:'ターン終了', en:'End Turn', accent:'rgba(232,192,122,0.7)', action:g=>this._endTurn(g)});
-    bs.push({x:W-150, y:512, w:136, h:34, label:'タイトルへ', sz:12, action:()=>game.changeScene(new TitleScene())});
+    bs.push({x:W-150, y:H-44, w:136, h:36, jp:'ターン終了', en:'End Turn', accent:'rgba(232,192,122,0.7)', action:g=>this._endTurn(g)});
+    bs.push({x:W-150, y:H-86, w:136, h:34, label:'タイトルへ', sz:12, action:()=>game.changeScene(new TitleScene())});
     return bs;
   }
 
@@ -748,8 +997,10 @@ class MapScene extends GameKit.Scene {
   /* ---- 描画 ---- */
   draw(ctx, game){
     ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
-    // 海背景
-    ctx.fillStyle='#081120'; ctx.fillRect(MAP.clip.x,MAP.clip.y,MAP.clip.w,MAP.clip.h);
+    // GPT-image-2で描き直した日本地図を下絵にする
+    ctx.save();
+    drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
+    ctx.restore();
     this.particles.draw(ctx);
     this._drawMap(ctx);
     this._drawTopBar(ctx);
@@ -767,42 +1018,51 @@ class MapScene extends GameKit.Scene {
     if (this.overlay) this._drawOverlay(ctx);
   }
   _drawMap(ctx){
+    ctx.save();
+    ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
+    this._drawCastleLayer(ctx);
+    ctx.restore();
+  }
+  _drawCastleLayer(ctx){
     const st=this.state;
-    for (const p of DATA.provinces){
-      const cell=this.cells[p.id]; if (!cell||cell.length<3) continue;
+    const occupied=[];
+    const overlaps=(a,b)=>!(a.x+a.w<b.x || b.x+b.w<a.x || a.y+a.h<b.y || b.y+b.h<a.y);
+    const entries = DATA.provinces.map(p=>{
       const prov=st.provinces[p.id];
-      const dd = prov.owner? daimyoDef(st, prov.owner):null;
-      let fill = dd? dd.color : '#3a4452';
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(cell[0][0],cell[0][1]);
-      for (let i=1;i<cell.length;i++) ctx.lineTo(cell[i][0],cell[i][1]);
-      ctx.closePath();
-      // プレイヤー領は明るく
-      ctx.globalAlpha = prov.owner===st.playerDaimyo ? 0.92 : 0.78;
-      ctx.fillStyle=fill; ctx.fill();
-      ctx.globalAlpha=1;
-      // 枠
-      let stroke='rgba(5,7,13,0.85)', lw=1.4;
-      if (p.id===this.selected){ stroke='#22d3ee'; lw=3; }
-      else if (this.mode==='province' && this.selected && neighborsOf(this.selected).includes(p.id)){
-        stroke = (prov.owner===st.playerDaimyo)? '#34d399' : '#a78bfa'; lw=2.4;
-      } else if (p.id===this.hover){ stroke='#e8c07a'; lw=2; }
-      ctx.lineWidth=lw; ctx.strokeStyle=stroke; ctx.stroke();
-      ctx.restore();
-      // ラベル
-      const cx=toScreenX(p.x), cy=toScreenY(p.y);
-      T(ctx, p.nameJP, cx, cy-12, {size:11, weight:'bold', color:'#0c0c10', align:'center', baseline:'middle'});
-      T(ctx, p.nameJP, cx, cy-13, {size:11, weight:'bold', color:'#f8fafc', align:'center', baseline:'middle'});
-      if (prov.owner){
-        T(ctx, (prov.soldiers/1000).toFixed(1)+'千', cx, cy+4, {size:10, color:'#0c0c10', align:'center', baseline:'middle'});
-        T(ctx, (prov.soldiers/1000).toFixed(1)+'千', cx, cy+3, {size:10, color:'#dbe4ee', align:'center', baseline:'middle'});
+      const dd=prov.owner?daimyoDef(st, prov.owner):null;
+      const capital = !!(dd && dd.capital===p.id);
+      const hot = p.id===this.selected || p.id===this.hover;
+      return {p, prov, dd, capital, hot, priority:(hot?10000:0)+(capital?5000:0)+p.kokudaka};
+    }).filter(e=>e.dd).sort((a,b)=>b.priority-a.priority);
+    for (const e of entries){
+      const p=e.p, dd=e.dd;
+      const [cx, cy]=provinceScreenPoint(p);
+      const iconSize=e.capital?16:12;
+      drawCastleIcon(ctx, cx-5, cy+9, iconSize, dd.color);
+      const name=castleNameForProvince(p);
+      const labelSize=e.hot?12:(e.capital?10:9);
+      const gap=e.hot?12:(e.capital?10:9);
+      const labelH=Math.max(18, Array.from(name).length*gap+8);
+      let lx=cx+13, ly=cy-labelH-17;
+      if (ly < MAP.clip.y+6) ly=cy+9;
+      if (ly+labelH+20 > MAP.clip.y+MAP.clip.h-4) ly=MAP.clip.y+MAP.clip.h-labelH-22;
+      if (lx > MAP.clip.x+MAP.clip.w-18) lx=cx-16;
+      const labelRect={x:lx-labelSize/2-6,y:ly-5,w:labelSize+12,h:labelH+24};
+      const overlapsExisting=occupied.some(r=>overlaps(labelRect,r));
+      const force=e.hot;
+      const showLabel = force || ((e.capital || p.kokudaka>=520) && !overlapsExisting && occupied.length<22);
+      if (showLabel){
+        const h=drawVerticalLabel(ctx, name, lx, ly, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.86)':'rgba(8,12,18,0.58)', stroke:force?dd.color:'rgba(255,255,255,0.16)'});
+        drawKamon(ctx, dd.id, lx-7, ly+h+2, 14, dd.color);
+        occupied.push(labelRect);
+      } else {
+        drawKamon(ctx, dd.id, cx+4, cy-6, e.capital?12:10, dd.color);
       }
     }
   }
   _drawTopBar(ctx){
     const st=this.state; const pd=daimyoDef(st, st.playerDaimyo);
-    GameKit.UI.glassPanel(ctx, 6, 6, 676, 46, {radius:10, fill:'rgba(12,20,36,0.8)'});
+    GameKit.UI.glassPanel(ctx, 6, 6, W-12, 46, {radius:10, fill:'rgba(12,20,36,0.8)'});
     // 家マーク
     ctx.fillStyle=pd.color; ctx.beginPath(); ctx.arc(28,29,12,0,Math.PI*2); ctx.fill();
     T(ctx, pd.nameJP+'家', 48, 12, {size:16, weight:'bold', color:'#f1e6cf'});
@@ -816,8 +1076,8 @@ class MapScene extends GameKit.Scene {
     T(ctx, this.scenarioHint||'', 600, 20, {size:10, color:'#64748b'});
   }
   _drawSidePanel(ctx){
-    const st=this.state; const x=690, w=264;
-    GameKit.UI.glassPanel(ctx, x, 6, w, 540, {radius:12, fill:'rgba(10,16,28,0.82)'});
+    const st=this.state; const x=W-286, w=278;
+    GameKit.UI.glassPanel(ctx, x, 58, w, H-116, {radius:12, fill:'rgba(10,16,28,0.72)'});
     const pid = this.selected || this.hover;
     if (!pid){
       T(ctx,'洲を選択してください', x+w/2, 20, {size:13, color:'#9fb2c6', align:'center'});
@@ -828,7 +1088,7 @@ class MapScene extends GameKit.Scene {
       const clans = daimyoOf(st).filter(d=>st.daimyo[d.id].alive)
         .map(d=>({d, n:ownedProvinces(st,d.id).length})).sort((a,b)=>b.n-a.n).slice(0,12);
       clans.forEach((c,i)=>{
-        const yy=148+i*30;
+        const yy=204+i*30;
         ctx.fillStyle=c.d.color; ctx.fillRect(x+18, yy, 14, 14);
         T(ctx, c.d.nameJP+'家', x+40, yy, {size:12, color: c.d.id===st.playerDaimyo?'#e8c07a':'#cbd5e1'});
         T(ctx, c.n+'洲', x+w-24, yy, {size:12, color:'#9fb2c6', align:'right'});
@@ -837,26 +1097,27 @@ class MapScene extends GameKit.Scene {
     }
     const p=DATA.provById[pid], prov=st.provinces[pid];
     const dd=prov.owner?daimyoDef(st,prov.owner):null;
-    T(ctx, p.nameJP+' ('+p.nameEN+')', x+16, 18, {size:18, weight:'bold', color:'#f1e6cf'});
-    T(ctx, p.region+'地方 ・ 地形:'+terrainJP(p.terrain), x+16, 44, {size:11, color:'#9fb2c6'});
-    T(ctx, dd? '領主: '+dd.nameJP+'家' : '空白地（無所属）', x+16, 64, {size:13, color: dd?dd.color:'#94a3b8'});
+    T(ctx, p.nameJP+' ('+p.nameEN+')', x+16, 76, {size:18, weight:'bold', color:'#f1e6cf'});
+    T(ctx, p.region+'地方 ・ 地形:'+terrainJP(p.terrain), x+16, 102, {size:11, color:'#9fb2c6'});
+    T(ctx, dd? '領主: '+dd.nameJP+'家' : '空白地（無所属）', x+16, 122, {size:13, color: dd?dd.color:'#94a3b8'});
     const rows=[
       ['石高', p.kokudaka+'千石'],
       ['兵力', prov.soldiers+' 人'],
       ['開発度', prov.development+' / 95'],
       ['城', 'Lv '+prov.castleLevel+' / 5'],
     ];
-    rows.forEach((r,i)=>{ const yy=92+i*24;
+    rows.forEach((r,i)=>{ const yy=150+i*24;
       T(ctx, r[0], x+18, yy, {size:12, color:'#9fb2c6'});
       T(ctx, r[1], x+w-22, yy, {size:13, color:'#e2e8f0', align:'right'});
     });
-    T(ctx,'― 配属武将 ―', x+w/2, 196, {size:12, color:'#e8c07a', align:'center'});
+    T(ctx,'― 配属武将 ―', x+w/2, 254, {size:12, color:'#e8c07a', align:'center'});
     const gens=prov.generals.filter(g=>st.generals[g].alive);
-    if (gens.length===0){ T(ctx,'（在城武将なし）', x+w/2, 220, {size:11, color:'#7d93ab', align:'center'}); }
+    if (gens.length===0){ T(ctx,'（在城武将なし）', x+w/2, 278, {size:11, color:'#7d93ab', align:'center'}); }
     gens.slice(0,9).forEach((gid,i)=>{
-      const g=DATA.genById[gid]; const yy=218+i*32;
-      T(ctx, g.nameJP, x+18, yy, {size:13, weight:'bold', color:'#dbe4ee'});
-      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, x+18, yy+15, {size:10, color:'#7d93ab'});
+      const g=DATA.genById[gid]; const yy=276+i*32;
+      drawGeneralPortrait(ctx, gid, x+18, yy, 28, {stroke:'rgba(232,192,122,0.42)', lineWidth:1});
+      T(ctx, g.nameJP, x+52, yy, {size:13, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, x+52, yy+15, {size:10, color:'#7d93ab'});
       T(ctx, '忠'+st.generals[gid].loyalty, x+w-22, yy+4, {size:11, color:'#9fb2c6', align:'right'});
     });
   }
@@ -904,8 +1165,9 @@ class MapScene extends GameKit.Scene {
     gens.slice(0,8).forEach((gid,i)=>{
       const g=DATA.genById[gid]; const c=i%2, r=Math.floor(i/2);
       const gx=px+30+c*(pw/2-20), gy=py+126+r*46;
-      T(ctx, g.nameJP, gx, gy, {size:14, weight:'bold', color:'#dbe4ee'});
-      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, gx, gy+18, {size:10, color:'#7d93ab'});
+      drawGeneralPortrait(ctx, gid, gx, gy, 38, {stroke:'rgba(232,192,122,0.42)', lineWidth:1});
+      T(ctx, g.nameJP, gx+46, gy+2, {size:14, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, gx+46, gy+20, {size:10, color:'#7d93ab'});
     });
   }
   _drawBattleResult(ctx, d){
@@ -1061,7 +1323,7 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
 /* ===================================================================
  * BattleScene — ヘックス戦術戦闘
  * =================================================================== */
-const HEX = { size:25, cols:11, rows:9, ox:300, oy:120 };
+const HEX = { size:36, cols:11, rows:9, ox:300, oy:142 };
 function hexNeighbors(col,row){
   const even = (row%2)===0;
   const d = even
@@ -1357,7 +1619,8 @@ class BattleScene extends GameKit.Scene {
 
   /* ---- 描画 ---- */
   draw(ctx, game){
-    ctx.fillStyle='#070a12'; ctx.fillRect(0,0,W,H);
+    if (!drawCoverImage(ctx, ASSETS.img.battle, 0, 0, W, H, 1)) { ctx.fillStyle='#070a12'; ctx.fillRect(0,0,W,H); }
+    ctx.fillStyle='rgba(4,7,12,0.36)'; ctx.fillRect(0,0,W,H);
     this.particles.draw(ctx);
     this._drawGrid(ctx);
     this._drawStacks(ctx);
@@ -1373,8 +1636,16 @@ class BattleScene extends GameKit.Scene {
   _drawGrid(ctx){
     for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
       const [x,y]=hexCenter(c,r); const terr=this.terrainMap[c+','+r];
-      let fill={plain:'#16243a',forest:'#13301f',mountain:'#2e2a1c',river:'#15324a',water:'#0c2238'}[terr]||'#16243a';
-      this._hexPath(ctx,x,y); ctx.fillStyle=fill; ctx.fill();
+      const atlas=ASSETS.img.battleTiles;
+      const fill={plain:'#2f3525',forest:'#18351f',mountain:'#4b4633',river:'#1d5270',water:'#12324f'}[terr]||'#2f3525';
+      this._hexPath(ctx,x,y); ctx.save(); ctx.globalAlpha=0.88; ctx.fillStyle=fill; ctx.fill(); ctx.restore();
+      if (atlas && (atlas.naturalWidth||atlas.width)){
+        const tile={plain:0,forest:1,mountain:2,river:3,water:4}[terr] ?? 5;
+        const tw=(atlas.naturalWidth||atlas.width)/3, th=(atlas.naturalHeight||atlas.height)/2;
+        this._hexPath(ctx,x,y); ctx.save(); ctx.clip(); ctx.globalAlpha=0.74;
+        ctx.drawImage(atlas, (tile%3)*tw, Math.floor(tile/3)*th, tw, th, x-HEX.size*1.05, y-HEX.size*1.05, HEX.size*2.1, HEX.size*2.1);
+        ctx.restore();
+      }
       // 移動可能/攻撃ハイライト
       if (this.reach[c+','+r]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
       if (this.targets[c+','+r]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
@@ -1419,9 +1690,11 @@ class BattleScene extends GameKit.Scene {
     if (this.selected){
       const s=this.selected;
       GameKit.UI.glassPanel(ctx, 6, H-128, 280, 64, {radius:10, fill:'rgba(10,16,28,0.85)'});
-      T(ctx, s.name+'隊 ('+UNITS[s.type].jp+')', 18, H-120, {size:13, weight:'bold', color:'#dbe4ee'});
-      T(ctx, '兵'+s.count+'  統'+s.stat.tou+' 武'+s.stat.bu, 18, H-100, {size:11, color:'#9fb2c6'});
-      T(ctx, (s.hasMoved?'移動済 ':'移動可 ')+(s.hasAttacked?'攻撃済':'攻撃可'), 18, H-82, {size:11, color:'#7d93ab'});
+      if (s.gen) drawGeneralPortrait(ctx, s.gen, 18, H-118, 42, {stroke:UNITS[s.type].color, lineWidth:1.5});
+      const tx = s.gen ? 68 : 18;
+      T(ctx, s.name+'隊 ('+UNITS[s.type].jp+')', tx, H-120, {size:13, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '兵'+s.count+'  統'+s.stat.tou+' 武'+s.stat.bu, tx, H-100, {size:11, color:'#9fb2c6'});
+      T(ctx, (s.hasMoved?'移動済 ':'移動可 ')+(s.hasAttacked?'攻撃済':'攻撃可'), tx, H-82, {size:11, color:'#7d93ab'});
     }
   }
   _drawResult(ctx){
