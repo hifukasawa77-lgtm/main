@@ -1298,28 +1298,43 @@ class MapScene extends GameKit.Scene {
       const gap=force?17:(e.capital?15:14);
       const labelH=Math.max(24, Array.from(name).length*gap+10);
       const labelW=labelSize+14;
-      const candidates=[
-        [cx+23, cy-labelH-20], [cx-24, cy-labelH-20], [cx+23, cy+20], [cx-24, cy+20],
-        [cx+39, cy-labelH/2], [cx-40, cy-labelH/2], [cx+8, cy-labelH-34], [cx+8, cy+34]
-      ];
-      // ラベルが海へはみ出さないよう、衝突回避に加えて陸地率も考慮して候補を選ぶ
+      const crestSize=e.capital?24:20;
+      const icx=cx-7;                       // 城アイコンの中心X
+      const iconTopY=cy+12-iconSize*0.55;   // アイコン上端
+      const iconBotY=cy+12+iconSize*0.34;   // アイコン下端
+      const maxW=Math.max(labelW, crestSize)+4;
+      // ラベルが海へはみ出さないよう陸地率を見る（既存ロジック踏襲）
       const seaFracRect=(r)=>{ let s=0,n=0; const stepX=Math.max(6,r.w/3);
         for (let sx=r.x+4; sx<=r.x+r.w-2; sx+=stepX) for (let sy=r.y+4; sy<=r.y+r.h-2; sy+=12){ n++; if (!isLandWorld(sx,sy)) s++; }
         return n? s/n : 0; };
-      let rect=null, best=null;
-      for (const [lx,ly] of candidates){
-        const r=clampRect({x:lx-labelW/2,y:ly-6,w:labelW,h:labelH+30});
-        const collide=occupied.some(o=>overlaps(r,o));
-        const sea=seaFracRect(r);
-        if (!collide && sea<=0.12){ rect=r; break; }   // 空き＆陸地：即採用（候補優先順を維持）
-        const score=(collide?1:0)+sea;                  // 小さいほど良い
-        if (!best || score<best.score) best={r, score};
+      // 上から「城名 → 家紋 → 城アイコン」を積む。dir>0=城の上 / dir<0=城の下（上端等のフォールバック）
+      const layout=(ax,dir)=>{
+        let nameTopY, crestY;
+        if (dir>0){ crestY=iconTopY-4-crestSize; nameTopY=crestY-4-labelH; }
+        else { crestY=iconBotY+4; nameTopY=crestY+crestSize+4; }
+        const top=Math.min(nameTopY,crestY), bot=Math.max(nameTopY+labelH, crestY+crestSize);
+        const raw={x:ax-maxW/2, y:top, w:maxW, h:bot-top};
+        const r=clampRect(raw);
+        const ddx=r.x-raw.x, ddy=r.y-raw.y;
+        return {r, nameX:ax+ddx, nameTopY:nameTopY+ddy, crestX:ax-crestSize/2+ddx, crestY:crestY+ddy, shift:Math.abs(ddx)+Math.abs(ddy)};
+      };
+      const cand=[
+        {ax:icx,dir:1},{ax:icx+18,dir:1},{ax:icx-18,dir:1},{ax:icx+34,dir:1},{ax:icx-34,dir:1},
+        {ax:icx,dir:-1},{ax:icx+18,dir:-1},{ax:icx-18,dir:-1}
+      ];
+      let pick=null, best=null;
+      for (const c of cand){
+        const L=layout(c.ax,c.dir);
+        const collide=occupied.some(o=>overlaps(L.r,o));
+        const sea=seaFracRect(L.r);
+        if (!collide && sea<=0.12 && L.shift<10){ pick=L; break; }   // 城の真上に空き＆陸地：即採用
+        const score=(collide?1:0)+sea+L.shift*0.02+(c.dir<0?0.04:0); // 小さいほど良い（上を優先）
+        if (!best || score<best.score) best={L,score};
       }
-      if (!rect) rect = best ? best.r : clampRect({x:cx+23-labelW/2,y:cy-labelH-26,w:labelW,h:labelH+30});
-      const lx=rect.x+rect.w/2, ly=rect.y+6;
-      const h=drawVerticalLabel(ctx, name, lx, ly, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
-      drawKamon(ctx, dd.id, lx-10, ly+h+4, 20, dd.color);
-      occupied.push(rect);
+      if (!pick) pick = best ? best.L : layout(icx,1);
+      drawVerticalLabel(ctx, name, pick.nameX, pick.nameTopY, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
+      drawKamon(ctx, dd.id, pick.crestX, pick.crestY, crestSize, dd.color);
+      occupied.push(pick.r);
     }
   }
   _drawTopBar(ctx){
