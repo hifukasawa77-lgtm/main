@@ -1298,43 +1298,31 @@ class MapScene extends GameKit.Scene {
       const gap=force?17:(e.capital?15:14);
       const labelH=Math.max(24, Array.from(name).length*gap+10);
       const labelW=labelSize+14;
-      const crestSize=e.capital?24:20;
-      const icx=cx-7;                       // 城アイコンの中心X
-      const iconTopY=cy+12-iconSize*0.55;   // アイコン上端
-      const iconBotY=cy+12+iconSize*0.34;   // アイコン下端
-      const maxW=Math.max(labelW, crestSize)+4;
+      const crestSize=e.capital?26:22;        // 城アイコンに被せる家紋（やや大きめで覆う）
+      const icx=cx-7, icy=cy+12;              // 城アイコンの中心
+      const crestX=icx-crestSize/2, crestY=icy-crestSize/2;   // アイコン中心に重ねる
+      occupied.push({x:crestX, y:crestY, w:crestSize, h:crestSize});  // 家紋の占有（他の城名が重ならないように）
       // ラベルが海へはみ出さないよう陸地率を見る（既存ロジック踏襲）
       const seaFracRect=(r)=>{ let s=0,n=0; const stepX=Math.max(6,r.w/3);
         for (let sx=r.x+4; sx<=r.x+r.w-2; sx+=stepX) for (let sy=r.y+4; sy<=r.y+r.h-2; sy+=12){ n++; if (!isLandWorld(sx,sy)) s++; }
         return n? s/n : 0; };
-      // 上から「城名 → 家紋 → 城アイコン」を積む。dir>0=城の上 / dir<0=城の下（上端等のフォールバック）
-      const layout=(ax,dir)=>{
-        let nameTopY, crestY;
-        if (dir>0){ crestY=iconTopY-4-crestSize; nameTopY=crestY-4-labelH; }
-        else { crestY=iconBotY+4; nameTopY=crestY+crestSize+4; }
-        const top=Math.min(nameTopY,crestY), bot=Math.max(nameTopY+labelH, crestY+crestSize);
-        const raw={x:ax-maxW/2, y:top, w:maxW, h:bot-top};
-        const r=clampRect(raw);
-        const ddx=r.x-raw.x, ddy=r.y-raw.y;
-        return {r, nameX:ax+ddx, nameTopY:nameTopY+ddy, crestX:ax-crestSize/2+ddx, crestY:crestY+ddy, shift:Math.abs(ddx)+Math.abs(ddy)};
-      };
-      const cand=[
-        {ax:icx,dir:1},{ax:icx+18,dir:1},{ax:icx-18,dir:1},{ax:icx+34,dir:1},{ax:icx-34,dir:1},
-        {ax:icx,dir:-1},{ax:icx+18,dir:-1},{ax:icx-18,dir:-1}
-      ];
+      // 城名は家紋の「すぐ上」に。基本は真上中央、重なる時だけ僅かに横ずらし／少し上へ
+      const nameRect=(dx,dy)=>clampRect({x:icx+dx-labelW/2, y:crestY-3-labelH+dy, w:labelW, h:labelH});
+      const cand=[ [0,0],[14,0],[-14,0],[0,-12],[26,0],[-26,0] ];
       let pick=null, best=null;
-      for (const c of cand){
-        const L=layout(c.ax,c.dir);
-        const collide=occupied.some(o=>overlaps(L.r,o));
-        const sea=seaFracRect(L.r);
-        if (!collide && sea<=0.12 && L.shift<10){ pick=L; break; }   // 城の真上に空き＆陸地：即採用
-        const score=(collide?1:0)+sea+L.shift*0.02+(c.dir<0?0.04:0); // 小さいほど良い（上を優先）
-        if (!best || score<best.score) best={L,score};
+      for (const [dx,dy] of cand){
+        const r=nameRect(dx,dy);
+        const collide=occupied.some(o=>overlaps(r,o));
+        const sea=seaFracRect(r);
+        if (!collide && sea<=0.12){ pick=r; break; }   // 真上中央が空き＆陸地：即採用
+        const score=(collide?1:0)+sea+(Math.abs(dx)+Math.abs(dy))*0.01;  // 小さいほど良い（中央・すぐ上を優先）
+        if (!best || score<best.score) best={r,score};
       }
-      if (!pick) pick = best ? best.L : layout(icx,1);
-      drawVerticalLabel(ctx, name, pick.nameX, pick.nameTopY, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
-      drawKamon(ctx, dd.id, pick.crestX, pick.crestY, crestSize, dd.color);
-      occupied.push(pick.r);
+      const nrect = pick || (best?best.r:nameRect(0,0));
+      // 描画: 城アイコンに家紋を被せ、その上に城名
+      drawKamon(ctx, dd.id, crestX, crestY, crestSize, dd.color);
+      drawVerticalLabel(ctx, name, nrect.x+nrect.w/2, nrect.y, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
+      occupied.push(nrect);
     }
   }
   _drawTopBar(ctx){
