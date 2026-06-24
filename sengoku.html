@@ -124,6 +124,10 @@ function canvasLocalFromPointerEvent(e){
   return {x:((p.clientX-r.left)/r.width)*canvas.width, y:((p.clientY-r.top)/r.height)*canvas.height};
 }
 function clientPoint(e){ const p=e.touches ? e.touches[0] : e; return {x:p.clientX, y:p.clientY}; }
+function clientToCanvasXY(clientX, clientY){
+  const r=canvas.getBoundingClientRect();
+  return {x:((clientX-r.left)/r.width)*canvas.width, y:((clientY-r.top)/r.height)*canvas.height};
+}
 function canStartMapPan(e){
   if (!MAP_PAN.enabled) return false;
   const p=canvasLocalFromPointerEvent(e);
@@ -863,14 +867,81 @@ class MapScene extends GameKit.Scene {
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
+    this.showClans=false; this.pinching=false; this.press=null; this.dragLast=null; this._suppressTapUntil=0;
     this.particles = new GameKit.Particles(W, H, {count:24, colors:['#1e3a5f','#2a2150']});
+    // カメラ（ズーム/パン）。初期は3倍ズームで自国領中心。
+    let cx=this._clipCx, cy=this._clipCy;
+    const pd=daimyoDef(this.state, this.state.playerDaimyo);
+    const capProv = pd && DATA.provById[pd.capital];
+    if (capProv){ const pt=provinceScreenPoint(capProv); cx=pt[0]; cy=pt[1]; }
+    this.cam = { zoom:3, cx, cy, min:1, max:6 };
+    this._clampCam();
+    this._bindInput();
     // 戦闘から戻った結果の適用
     if (this.state.pendingResult){ this.overlay = {type:'battleResult', data:this.state.pendingResult}; this.state.pendingResult=null; }
     this._checkEnd(game);
     this._save();
   }
+  exit(){ this._unbindInput(); }
   _save(){ this.state.version=SAVE_VERSION; save.set('autosave', this.state); }
   _flash(jp){ this.message=jp; this.messageT=2.2; }
+
+  /* ---- カメラ（ズーム/パン） ---- */
+  get _clipCx(){ return MAP.clip.x + MAP.clip.w/2; }
+  get _clipCy(){ return MAP.clip.y + MAP.clip.h/2; }
+  _camApply(ctx){ const c=this.cam; ctx.translate(this._clipCx, this._clipCy); ctx.scale(c.zoom, c.zoom); ctx.translate(-c.cx, -c.cy); }
+  _screenToWorld(sx, sy){ const c=this.cam; return { x:(sx-this._clipCx)/c.zoom + c.cx, y:(sy-this._clipCy)/c.zoom + c.cy }; }
+  _clampCam(){
+    const c=this.cam; c.zoom = clamp(c.zoom, c.min, c.max);
+    const halfW=(MAP.clip.w/2)/c.zoom, halfH=(MAP.clip.h/2)/c.zoom;
+    const minX=MAP.clip.x+halfW, maxX=MAP.clip.x+MAP.clip.w-halfW;
+    const minY=MAP.clip.y+halfH, maxY=MAP.clip.y+MAP.clip.h-halfH;
+    c.cx = minX>maxX ? this._clipCx : clamp(c.cx, minX, maxX);
+    c.cy = minY>maxY ? this._clipCy : clamp(c.cy, minY, maxY);
+  }
+  _zoomAt(sx, sy, factor){
+    const w=this._screenToWorld(sx, sy);
+    this.cam.zoom = clamp(this.cam.zoom*factor, this.cam.min, this.cam.max);
+    this.cam.cx = w.x - (sx-this._clipCx)/this.cam.zoom;
+    this.cam.cy = w.y - (sy-this._clipCy)/this.cam.zoom;
+    this._clampCam();
+  }
+  _bindInput(){
+    this._touchState=null;
+    this._onWheel=(e)=>{ e.preventDefault(); const p=clientToCanvasXY(e.clientX,e.clientY); this._zoomAt(p.x,p.y, e.deltaY<0?1.12:1/1.12); };
+    this._onTouchStart=(e)=>{
+      if (e.touches.length===2){
+        const a=e.touches[0], b=e.touches[1];
+        const dist=Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+        const mid=clientToCanvasXY((a.clientX+b.clientX)/2,(a.clientY+b.clientY)/2);
+        this._touchState={dist, zoom:this.cam.zoom, world:this._screenToWorld(mid.x,mid.y)};
+        this.pinching=true; e.preventDefault();
+      }
+    };
+    this._onTouchMove=(e)=>{
+      if (e.touches.length===2 && this._touchState){
+        const a=e.touches[0], b=e.touches[1];
+        const dist=Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY) || 1;
+        const mid=clientToCanvasXY((a.clientX+b.clientX)/2,(a.clientY+b.clientY)/2);
+        this.cam.zoom=clamp(this._touchState.zoom*(dist/this._touchState.dist), this.cam.min, this.cam.max);
+        this.cam.cx=this._touchState.world.x-(mid.x-this._clipCx)/this.cam.zoom;
+        this.cam.cy=this._touchState.world.y-(mid.y-this._clipCy)/this.cam.zoom;
+        this._clampCam(); e.preventDefault();
+      }
+    };
+    this._onTouchEnd=(e)=>{ if (!e.touches || e.touches.length<2){ this._touchState=null; if (this.pinching){ this.pinching=false; this._suppressTapUntil=this.t+0.3; } } };
+    canvas.addEventListener('wheel', this._onWheel, {passive:false});
+    canvas.addEventListener('touchstart', this._onTouchStart, {passive:false});
+    canvas.addEventListener('touchmove', this._onTouchMove, {passive:false});
+    canvas.addEventListener('touchend', this._onTouchEnd);
+    canvas.addEventListener('touchcancel', this._onTouchEnd);
+  }
+  _unbindInput(){
+    if (this._onWheel) canvas.removeEventListener('wheel', this._onWheel);
+    if (this._onTouchStart) canvas.removeEventListener('touchstart', this._onTouchStart);
+    if (this._onTouchMove) canvas.removeEventListener('touchmove', this._onTouchMove);
+    if (this._onTouchEnd){ canvas.removeEventListener('touchend', this._onTouchEnd); canvas.removeEventListener('touchcancel', this._onTouchEnd); }
+  }
 
   /* ---- 入力 ---- */
   update(dt, game){
@@ -882,31 +953,42 @@ class MapScene extends GameKit.Scene {
 
     const btns = this._buttons();
     updateButtonHot(btns, p);
-    if (pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
+    if (!this.showClans && pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
+
+    // ピンチ中はパン/タップを無効化
+    if (this.pinching){ this.press=null; this.dragLast=null; return; }
 
     if (p.justPressed){
-      this.press = {x:p.x, y:p.y, dragged:false};
-      MAP_PAN.dragging = false;
+      this.press = {x:p.x, y:p.y, dragged:false, onBtn: btns.some(b=>b.on!==false && pointInRect(p,b))};
+      this.dragLast = {x:p.x, y:p.y};
     }
     if (this.press && p.isDown){
-      if (Math.hypot(p.x-this.press.x, p.y-this.press.y)>10 || MAP_PAN.dragging) this.press.dragged = true;
+      if (Math.hypot(p.x-this.press.x, p.y-this.press.y)>10) this.press.dragged = true;
+      // ドラッグ/スワイプで地図をパン（ボタン上開始・一覧表示中は除く）
+      if (this.press.dragged && this.dragLast && !this.press.onBtn && !this.showClans){
+        this.cam.cx -= (p.x-this.dragLast.x)/this.cam.zoom;
+        this.cam.cy -= (p.y-this.dragLast.y)/this.cam.zoom;
+        this._clampCam();
+      }
+      this.dragLast = {x:p.x, y:p.y};
     }
     if (this.press && !p.isDown){
-      const press=this.press; this.press=null;
-      if (MAP_PAN.dragging) press.dragged = true;
-      MAP_PAN.dragging = false;
+      const press=this.press; this.press=null; this.dragLast=null;
+      if (this.t < (this._suppressTapUntil||0)) return;
       if (!press.dragged) this._activateMapPoint(game, press.x, press.y, btns);
     }
   }
   _activateMapPoint(game, x, y, btns){
     const p={x,y};
     for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.06,'triangle'); b.action(game); return; } }
+    if (this.showClans) return;
     const pid = this._pickProvince(x, y);
     if (pid) this._clickProvince(game, pid);
   }
   _pickProvince(x,y){
     if (!pointInRect({x,y}, MAP.clip)) return null;
-    for (const id in this.cells){ if (this.cells[id].length>=3 && pointInPoly(x,y,this.cells[id])) return id; }
+    const w=this._screenToWorld(x,y);
+    for (const id in this.cells){ if (this.cells[id].length>=3 && pointInPoly(w.x,w.y,this.cells[id])) return id; }
     return null;
   }
   _clickProvince(game, pid){
@@ -1085,6 +1167,11 @@ class MapScene extends GameKit.Scene {
     }
     bs.push({x:W-150, y:H-44, w:136, h:36, jp:'ターン終了', en:'End Turn', accent:'rgba(232,192,122,0.7)', action:g=>this._endTurn(g)});
     bs.push({x:W-150, y:H-86, w:136, h:34, label:'タイトルへ', sz:12, action:()=>game.changeScene(new TitleScene())});
+    // 地図操作（左下）：ズーム・全体・勢力一覧
+    bs.push({x:20,  y:H-150, w:72,  h:60, label:'＋', sz:34, accent:'rgba(96,165,250,0.6)', action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }});
+    bs.push({x:100, y:H-150, w:72,  h:60, label:'－', sz:34, accent:'rgba(96,165,250,0.6)', action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }});
+    bs.push({x:182, y:H-150, w:120, h:60, label:'全体', sz:24, action:()=>{ this.cam.zoom=this.cam.min; this._clampCam(); }});
+    bs.push({x:20,  y:H-220, w:160, h:54, label:this.showClans?'一覧を閉じる':'勢力一覧', sz:22, accent:'rgba(167,139,250,0.6)', action:()=>{ this.showClans=!this.showClans; }});
     return bs;
   }
 
@@ -1139,15 +1226,12 @@ class MapScene extends GameKit.Scene {
   /* ---- 描画 ---- */
   draw(ctx, game){
     ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
-    // GPT-image-2で描き直した日本地図を下絵にする
-    ctx.save();
-    drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
-    ctx.restore();
-    this.particles.draw(ctx);
     this._drawMap(ctx);
+    this.particles.draw(ctx);
     this._drawTopBar(ctx);
     this._drawSidePanel(ctx);
-    // ボタン
+    if (this.showClans) this._drawClansOverlay(ctx);
+    // ボタン（一覧オーバーレイより前面に出して操作可能に）
     if (!this.overlay){ const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t); }
     // メッセージトースト
     if (this.messageT>0){
@@ -1162,7 +1246,11 @@ class MapScene extends GameKit.Scene {
   _drawMap(ctx){
     ctx.save();
     ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
+    ctx.save();
+    this._camApply(ctx);
+    drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
     this._drawCastleLayer(ctx);
+    ctx.restore();
     ctx.restore();
   }
   _drawCastleLayer(ctx){
@@ -1224,25 +1312,10 @@ class MapScene extends GameKit.Scene {
     T(ctx, this.scenarioHint||'', 600, 20, {size:10, color:'#64748b'});
   }
   _drawSidePanel(ctx){
-    const st=this.state; const x=W-286, w=278;
-    GameKit.UI.glassPanel(ctx, x, 58, w, H-116, {radius:12, fill:'rgba(10,16,28,0.72)'});
+    const st=this.state; const x=W-300, w=292;
     const pid = this.selected || this.hover;
-    if (!pid){
-      T(ctx,'洲を選択してください', x+w/2, 20, {size:13, color:'#9fb2c6', align:'center'});
-      T(ctx,'自国の洲をクリック → 内政・徴兵', x+16, 60, {size:11, color:'#7d93ab'});
-      T(ctx,'隣接洲をクリック → 出陣（戦／増援）', x+16, 82, {size:11, color:'#7d93ab'});
-      // 凡例（大名色 上位）
-      T(ctx,'― 勢力 / Clans ―', x+w/2, 120, {size:12, color:'#e8c07a', align:'center'});
-      const clans = daimyoOf(st).filter(d=>st.daimyo[d.id].alive)
-        .map(d=>({d, n:ownedProvinces(st,d.id).length})).sort((a,b)=>b.n-a.n).slice(0,12);
-      clans.forEach((c,i)=>{
-        const yy=204+i*30;
-        ctx.fillStyle=c.d.color; ctx.fillRect(x+18, yy, 14, 14);
-        T(ctx, c.d.nameJP+'家', x+40, yy, {size:12, color: c.d.id===st.playerDaimyo?'#e8c07a':'#cbd5e1'});
-        T(ctx, c.n+'洲', x+w-24, yy, {size:12, color:'#9fb2c6', align:'right'});
-      });
-      return;
-    }
+    if (!pid) return; // 凡例は「勢力一覧」ボタンの大型オーバーレイへ移動
+    GameKit.UI.glassPanel(ctx, x, 58, w, H-116, {radius:12, fill:'rgba(10,16,28,0.72)'});
     const p=DATA.provById[pid], prov=st.provinces[pid];
     const dd=prov.owner?daimyoDef(st,prov.owner):null;
     T(ctx, p.nameJP+' ('+p.nameEN+')', x+16, 76, {size:18, weight:'bold', color:'#f1e6cf'});
@@ -1268,6 +1341,33 @@ class MapScene extends GameKit.Scene {
       T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, x+52, yy+15, {size:10, color:'#7d93ab'});
       T(ctx, '忠'+st.generals[gid].loyalty, x+w-22, yy+4, {size:11, color:'#9fb2c6', align:'right'});
     });
+  }
+
+  /* ---- 勢力一覧（大型・開閉式） ---- */
+  _drawClansOverlay(ctx){
+    const st=this.state;
+    const clans = daimyoOf(st).filter(d=>st.daimyo[d.id].alive)
+      .map(d=>({d, n:ownedProvinces(st,d.id).length})).sort((a,b)=>b.n-a.n);
+    ctx.save();
+    ctx.fillStyle='rgba(3,6,14,0.62)'; ctx.fillRect(0,0,W,H);
+    const pw=Math.min(1720, W-220), ph=Math.min(1560, H-200);
+    const px=(W-pw)/2, py=(H-ph)/2;
+    GameKit.UI.glassPanel(ctx, px,py,pw,ph,{radius:26, fill:'rgba(8,12,22,0.94)', stroke:'rgba(232,192,122,0.5)'});
+    T(ctx,'勢力一覧 / Clans', px+pw/2, py+34, {size:48, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    T(ctx,'（'+clans.length+'家） — 「一覧を閉じる」で戻る', px+pw/2, py+104, {size:24, color:'#9fb2c6', align:'center'});
+    const cols=2, colW=(pw-140)/cols, startY=py+170, rowH=78;
+    const maxRows=Math.floor((ph-200)/rowH);
+    clans.forEach((c,i)=>{
+      const col=i%cols, row=Math.floor(i/cols);
+      if (row>=maxRows) return;
+      const cx=px+70+col*colW, cy=startY+row*rowH;
+      ctx.fillStyle=c.d.color; ctx.beginPath(); ctx.roundRect(cx, cy, 46, 46, 8); ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=2; ctx.stroke();
+      const mine=c.d.id===st.playerDaimyo;
+      T(ctx, c.d.nameJP+'家'+(mine?' ◀自国':''), cx+64, cy+4, {size:34, weight:mine?'bold':'', color: mine?'#e8c07a':'#dbe4ee'});
+      T(ctx, c.n+' 洲', cx+colW-80, cy+8, {size:30, color:'#9fb2c6', align:'right'});
+    });
+    ctx.restore();
   }
 
   _drawOverlay(ctx){
