@@ -29,11 +29,75 @@
   body.native-canvas canvas { max-width:none; max-height:none; }
   .hint { font-size:12px; color:#8aa0b8; text-align:center; line-height:1.6; }
   .hint b { color:var(--cyan); }
+
+  /* ---- 全画面UI（タッチ端末のみ表示） ---- */
+  .fs-toggle, .fs-gate { display:none; }
+  body.is-touch .fs-toggle { display:flex; }
+  .fs-toggle {
+    position:fixed; top:12px; right:12px; z-index:50;
+    width:44px; height:44px; align-items:center; justify-content:center;
+    font-size:20px; line-height:1; color:#e2e8f0;
+    background:rgba(12,20,36,0.8); border:1px solid rgba(34,211,238,0.5);
+    border-radius:12px; backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    box-shadow:0 6px 20px rgba(0,0,0,0.5); cursor:pointer;
+  }
+  .fs-toggle:active { background:rgba(34,211,238,0.18); }
+  body.is-touch.is-fullscreen .fs-toggle { top:max(12px, env(safe-area-inset-top)); right:max(12px, env(safe-area-inset-right)); }
+
+  body.is-touch .fs-gate { display:flex; }
+  .fs-gate {
+    position:fixed; inset:0; z-index:100;
+    align-items:center; justify-content:center; padding:20px;
+    background:radial-gradient(circle at 50% 30%, rgba(11,20,38,0.92) 0%, rgba(5,7,13,0.97) 70%);
+    -webkit-tap-highlight-color:transparent; cursor:pointer;
+  }
+  .fs-gate-card {
+    max-width:420px; width:100%; text-align:center;
+    padding:30px 26px; border-radius:20px;
+    background:rgba(8,12,22,0.7); border:1px solid rgba(232,192,122,0.45);
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    box-shadow:0 16px 60px rgba(0,0,0,0.6);
+  }
+  .fs-gate-icon { font-size:46px; line-height:1; color:var(--cyan); margin-bottom:10px; }
+  .fs-gate-title { font-size:28px; font-weight:bold; color:#e8c07a; letter-spacing:2px; }
+  .fs-gate-jp { font-size:16px; color:#e2e8f0; margin-top:14px; }
+  .fs-gate-en { font-size:12px; color:#7d93ab; margin-top:4px; }
+  .fs-gate-rotate {
+    display:none; margin-top:20px; padding:10px 12px; border-radius:10px;
+    font-size:12px; color:#a78bfa; background:rgba(167,139,250,0.10);
+    border:1px solid rgba(167,139,250,0.30);
+  }
+  @media (orientation:portrait) { body.is-touch .fs-gate-rotate { display:block; } }
+
+  /* ---- 全画面表示中はキャンバスを画面いっぱいに ---- */
+  body.is-fullscreen { padding:0; gap:0; }
+  body.is-fullscreen canvas, :fullscreen canvas {
+    border:0; border-radius:0; box-shadow:none;
+  }
+  body.is-fullscreen.fit-canvas canvas { max-width:100vw; max-height:100vh; }
+  /* 横向きフルスクリーン時は画面いっぱいに引き伸ばす（左右の黒帯を解消） */
+  @media (orientation:landscape){
+    body.is-fullscreen canvas {
+      width:100vw; height:100vh;
+      max-width:none; max-height:none;
+    }
+  }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<button id="fsToggle" class="fs-toggle" type="button" aria-label="全画面 / Fullscreen">⛶</button>
+<div id="fsGate" class="fs-gate" role="button" tabindex="0" aria-label="タップして全画面で開始 / Tap to start fullscreen">
+  <div class="fs-gate-card">
+    <div class="fs-gate-icon">⛶</div>
+    <div class="fs-gate-title">戦国の野望</div>
+    <div class="fs-gate-jp">タップして横向き全画面で開始</div>
+    <div class="fs-gate-en">Tap to play in fullscreen landscape</div>
+    <div class="fs-gate-rotate">📱 端末を横向きにしてください / Rotate your device</div>
+  </div>
+</div>
 <p class="hint"><b>戦国の野望</b> / Sengoku no Yabou &nbsp;|&nbsp; クリックで操作 — Click to play &nbsp;|&nbsp; 全国64洲をヘックス戦で制覇せよ</p>
+
 <script src="gamekit/gamekit.js"></script>
 <script>
 'use strict';
@@ -43,9 +107,7 @@
  * 64洲 / ヘックス戦 / 3シナリオ(1560,1568,1574) / 全国武将
  * ===================================================================== */
 
-const W = 5120, H = 4160;
-const MENU_SCALE = 2;
-const MENU_W = W / MENU_SCALE, MENU_H = H / MENU_SCALE;
+const W = 2560, H = 2080;
 const canvas = document.getElementById('game');
 const MAP_PAN = { enabled:false, active:false, dragging:false, startX:0, startY:0, scrollX:0, scrollY:0 };
 const CASTLE_POS_STORE = 'sengokuCastleScreenPositions:v1';
@@ -54,7 +116,6 @@ function loadCastlePositionOverrides(){
   catch (_) { return {}; }
 }
 const CASTLE_POS_OVERRIDES = loadCastlePositionOverrides();
-function saveCastlePositionOverrides(){ localStorage.setItem(CASTLE_POS_STORE, JSON.stringify(CASTLE_POS_OVERRIDES)); }
 function setCanvasViewportMode(mode){
   const fit = mode !== 'native';
   document.body.classList.toggle('fit-canvas', fit);
@@ -69,10 +130,14 @@ function canvasLocalFromPointerEvent(e){
   return {x:((p.clientX-r.left)/r.width)*canvas.width, y:((p.clientY-r.top)/r.height)*canvas.height};
 }
 function clientPoint(e){ const p=e.touches ? e.touches[0] : e; return {x:p.clientX, y:p.clientY}; }
+function clientToCanvasXY(clientX, clientY){
+  const r=canvas.getBoundingClientRect();
+  return {x:((clientX-r.left)/r.width)*canvas.width, y:((clientY-r.top)/r.height)*canvas.height};
+}
 function canStartMapPan(e){
   if (!MAP_PAN.enabled) return false;
   const p=canvasLocalFromPointerEvent(e);
-  return p.x>=MAP.clip.x && p.x<=MAP_UI.sideX-24 && p.y>=MAP.clip.y+72 && p.y<=MAP.clip.y+MAP.clip.h-160;
+  return p.x>=MAP.clip.x && p.x<=MAP.clip.x+MAP.clip.w-320 && p.y>=MAP.clip.y+56 && p.y<=MAP.clip.y+MAP.clip.h-140;
 }
 function startMapPan(e){
   if (!canStartMapPan(e)) return;
@@ -116,29 +181,47 @@ const KAMON_CLANS = ['date','mogami','satake','satomi','hojo','uesugi','asakura'
 const KAMON_SLOT = Object.fromEntries(KAMON_CLANS.map((id,i)=>[id,{col:i%5,row:Math.floor(i/5)}]));
 
 const MAP_GEO = { minLon:127.9, maxLon:146.7, minLat:29.7, maxLat:46.1, padX:18/2048, padY:24/1500, cos:Math.cos(37.5*Math.PI/180) };
-const CASTLE_GEO = {
-  mutsu:[140.118,37.910], dewa:[140.340,38.255], hitachi:[140.528,36.538], shimotsuke:[139.883,36.559], kozuke:[138.954,36.412], shimousa:[140.222,35.724], kazusa:[140.077,35.296], awa_kanto:[139.861,34.992], musashi:[139.752,35.685], sagami:[139.154,35.251],
-  echigo:[138.236,37.147], sado:[138.241,38.034], etchu:[137.213,36.696], noto:[136.967,37.044], kaga:[136.659,36.565], echizen:[136.295,35.999], wakasa:[135.747,35.497], shinano:[138.198,36.558], kai:[138.570,35.686], hida:[137.249,36.142],
-  mino:[136.782,35.434], totomi:[137.728,34.711], suruga:[138.383,34.976], izu:[138.948,35.041], mikawa:[137.158,34.956], owari:[136.844,35.213], ise:[136.407,34.515], shima:[136.843,34.481], omi:[136.139,35.153], yamashiro:[135.748,35.014],
-  yamato:[135.839,34.685], kawachi:[135.585,34.556], izumi:[135.371,34.460], settsu:[135.622,34.867], iga:[136.130,34.768], kii:[135.171,34.226], tanba:[135.220,35.075], tango:[135.190,35.536], tajima:[134.873,35.471], harima:[134.694,34.839],
-  mimasaka:[134.004,35.062], bizen:[133.936,34.666], bitchu:[133.622,34.809], bingo:[133.362,34.489], inaba:[134.239,35.507], hoki:[133.331,35.428], izumo:[133.178,35.386], iwami:[132.438,35.160], aki:[132.704,34.666], suo:[131.472,34.178],
-  nagato:[130.927,33.958], awa_shikoku:[134.526,34.126], sanuki:[134.050,34.349], iyo:[132.775,33.850], tosa:[133.621,33.620], buzen:[130.881,33.884], bungo:[131.609,33.239], chikuzen:[130.510,33.682], chikugo:[130.405,33.163], hizen:[130.300,33.249],
-  higo:[130.706,32.806], hyuga:[131.430,32.050], osumi:[130.980,31.735], satsuma:[130.557,31.596]
+const PROVINCE_GEO = {
+  mutsu:[140.12,37.91], dewa:[140.34,38.25], hitachi:[140.53,36.54], shimotsuke:[139.88,36.56], kozuke:[138.95,36.42], shimousa:[140.22,35.72], kazusa:[140.08,35.28], awa_kanto:[140.012,35.199], musashi:[139.75,35.69], sagami:[139.117,35.228],
+  echigo:[138.24,37.15], sado:[138.447,38.02], etchu:[137.21,36.70], noto:[136.97,37.05], kaga:[136.66,36.56], echizen:[136.30,36.02], wakasa:[135.75,35.50], shinano:[138.20,36.55], kai:[138.57,35.68], hida:[137.25,36.14],
+  mino:[136.78,35.43], totomi:[137.671,34.84], suruga:[138.337,34.974], izu:[138.95,35.05], mikawa:[137.16,34.96], owari:[136.85,35.22], ise:[136.43,34.52], shima:[136.84,34.48], omi:[136.19,35.16], yamashiro:[135.75,35.01],
+  yamato:[135.83,34.69], kawachi:[135.58,34.55], izumi:[135.37,34.46], settsu:[135.59,34.87], iga:[136.13,34.77], kii:[135.3,34.22], tanba:[135.22,35.08], tango:[135.10,35.55], tajima:[134.82,35.55], harima:[134.645,34.937],
+  mimasaka:[134.00,35.06], bizen:[133.94,34.67], bitchu:[133.62,34.80], bingo:[133.38,34.55], inaba:[134.24,35.50], hoki:[133.33,35.43], izumo:[133.18,35.38], iwami:[132.483,35.17], aki:[132.70,34.67], suo:[131.47,34.18],
+  nagato:[130.93,33.96], awa_shikoku:[134.53,34.14], sanuki:[134.08,34.29], iyo:[132.823,33.85], tosa:[133.598,33.65], buzen:[130.88,33.88], bungo:[131.61,33.24], chikuzen:[130.51,33.68], chikugo:[130.584,33.16], hizen:[130.233,33.294],
+  higo:[130.753,32.81], hyuga:[131.43,32.05], osumi:[130.98,31.38], satsuma:[130.527,31.578]
 };
 function geoToScreen(lon, lat){
-  const f=MAP_FRAME;
-  const latN=clamp((lat-MAP_GEO.minLat)/(MAP_GEO.maxLat-MAP_GEO.minLat), 0, 1);
-  const lonN=clamp((lon-MAP_GEO.minLon)/(MAP_GEO.maxLon-MAP_GEO.minLon), 0, 1);
-  const nx=clamp(lonN - (latN-0.48)*0.10, 0, 1);
-  const ny=clamp(1-latN, 0, 1);
-  return [f.x+f.geoX+nx*f.geoW, f.y+f.geoY+ny*f.geoH];
+  const c=MAP.clip, g=MAP_GEO;
+  const rx=(g.maxLon-g.minLon)*g.cos, ry=g.maxLat-g.minLat;
+  const padX=c.w*g.padX, padY=c.h*g.padY;
+  const scale=Math.min((c.w-padX*2)/rx, (c.h-padY*2)/ry);
+  const ox=c.x+(c.w-rx*scale)/2, oy=c.y+(c.h-ry*scale)/2;
+  return [ox+(lon-g.minLon)*g.cos*scale, oy+(g.maxLat-lat)*scale];
 }
 function provinceScreenPoint(p){
   const manual=CASTLE_POS_OVERRIDES[p.id];
   if (manual) return [manual.x, manual.y];
-  const ll=CASTLE_GEO[p.id];
+  const ll=PROVINCE_GEO[p.id];
   return ll ? geoToScreen(ll[0], ll[1]) : [toScreenX(p.x), toScreenY(p.y)];
 }
+
+/* ---- 陸/海マスク（オフライン生成: 地図画像をDS=8で縮小したビットマスク。城ラベルを陸側へ寄せる判定に使用） ---- */
+const LAND_MASK = { ds:8, mw:318, mh:246, _bits:null, b64:'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAICADgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABg4AcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACPgDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABj/AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADG/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4X8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPgfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/wcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwP8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPD/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/z8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwP8/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPD/HwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8/w8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA//8HAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4P//BwDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPj//w8AOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+//9/AAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA////P+ABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4P///w88AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPz/////BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAID//////wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4/////38AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v////8fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgP//////DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD//////w8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4//////8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/P////9/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAP//////HwcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPMD//////+8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ/4//////8PAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD/////////AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADg////////DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8P///////wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7/////zwcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD//////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8/////x8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA//////8DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+P////9/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP//////DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAf/8H//wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwgx/g/z8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/MAB4P8PAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD8wAPD/AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAPAADwfwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIDxBwAA8B8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABg+BsAAPAHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACPgPAADgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+BwAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA/wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4P8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPj/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB/CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADABwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABHwwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgH8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEB5AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4xwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPjAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8MAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAzAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4/gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/n8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8P8fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD//wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADg//8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+P//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7/PwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//x8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADA//8HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8P//AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7//wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAID//z8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8//8fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA////BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgPz//wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//38AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADA//8fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8P//BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPz//wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADA//8/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8P//BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7//wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAID//38AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADw//8PAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/P//AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP//fwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD//w8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4//8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v8/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwP//DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPj//wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+//8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA//8/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8P//DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPz//wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//88AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATg//8gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAB+P8/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABwAP7/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPsD//wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/8/38AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDB//8fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAw+P//BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAv///wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADw//8/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v//DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAwP///wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+APD///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwBwD+//8/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/AHg////DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB8A/P///wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOADwP////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAPz///8/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPMD/////DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA///////wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIDD/////z8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADw8P////8HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/P//////AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgP//////PwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPD//////w8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8//////8DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA//////9/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8P//////HwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAP7//////wcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAMD///////8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAD4//////9/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAA////////HwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAwP///////w8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAPj///////8DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8////////AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA////////fwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgP///////z8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADvj///////8PAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/4P///////9/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAB8P/C//////+PDwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB+////////////8wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADg////////////f34AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+P///////////88fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7////////////7BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOD///////////+H/QEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8////////////YX8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA////////////PMAHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8P//////////Hw9wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7//////7///+cDDgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD////////v/3/4AQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4////////+f8fPgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//////7/P4z/h8cAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAA+P///wP+/w/4/+AhAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAEAAP7//38A4f8HBzAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAAAMD///9PYPj/FwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAD4///fHwz//wcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwDw////AAHj//8BAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAA/v/7P/jg/P9/AAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADgAgP///AF/vP//DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAOD/H3fw/8P/HwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQD4/2cM+D/w/wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v8JA/8P/H8AAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgH1+6Oj/h/8fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHwD/vz//+H/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIMAfAB7////wfwAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABjwB8DB//8f+B8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC/AEA+P//A/wDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4P9wAP//PwD/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPz/H+D//weAHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGL//wf+//8AgAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8///h/x88AIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADg//8/zP8DDgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABA/P//A/B/AAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEP///x/wHwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACT+//8D/gMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACBn///g38AAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAYMf/f/AfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAONjz/3/4AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAd2/P8P+gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOCBf/7/Ax4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOwBn/f8APAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAzDn/w8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYADE9v8DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmP5/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAL7/HwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIDv/wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADw/P8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPP8fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOb/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA/38AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4P8PAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPj/AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACD+/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACE/z8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAwP8PAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIPD8AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8fwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA5x8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwPkHAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPycAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACA3wMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATAgAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgCcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' };
+function landMaskBits(){
+  if (LAND_MASK._bits) return LAND_MASK._bits;
+  const bin=atob(LAND_MASK.b64), u=new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i);
+  LAND_MASK._bits=u; return u;
+}
+// ワールド座標（=ズーム前のクリップ画面座標）が陸地かどうか
+function isLandWorld(wx, wy){
+  const c=MAP.clip;
+  const mx=Math.floor((wx-c.x)/c.w*LAND_MASK.mw), my=Math.floor((wy-c.y)/c.h*LAND_MASK.mh);
+  if (mx<0||mx>=LAND_MASK.mw||my<0||my>=LAND_MASK.mh) return false;
+  const k=my*LAND_MASK.mw+mx;
+  return !!((landMaskBits()[k>>3]>>(k&7))&1);
+}
+
 const CASTLE_NAMES = {
   mutsu:'米沢城', dewa:'山形城', hitachi:'太田城', shimotsuke:'宇都宮城', kozuke:'箕輪城', shimousa:'佐倉城', kazusa:'久留里城', awa_kanto:'館山城', musashi:'江戸城', sagami:'小田原城',
   echigo:'春日山城', sado:'佐渡城', etchu:'富山城', noto:'七尾城', kaga:'金沢御坊', echizen:'一乗谷城', wakasa:'後瀬山城', shinano:'海津城', kai:'躑躅ヶ崎館', hida:'松倉城',
@@ -176,16 +259,7 @@ async function loadOptionalImages(map){
 }
 
 /* ---- マップ描画パラメータ（論理座標→画面座標） ---- */
-const MAP_UI = { sideW:560, sideX:W-620, sideTop:96, sideBottom:220 };
-const MAP_FRAME = {
-  x:24, y:96, w:MAP_UI.sideX-64, h:Math.round((MAP_UI.sideX-64)*1024/1536),
-  geoX:0, geoY:0, geoW:0, geoH:0,
-};
-MAP_FRAME.geoX = MAP_FRAME.w * 0.04;
-MAP_FRAME.geoY = MAP_FRAME.h * 0.04;
-MAP_FRAME.geoW = MAP_FRAME.w * 0.92;
-MAP_FRAME.geoH = MAP_FRAME.h * 0.90;
-const MAP = { s:2.62, ox:56, oy:256, clip:MAP_FRAME, R:70 };
+const MAP = { s:0.655, ox:14, oy:64, clip:{x:8,y:58,w:W-16,h:H-114}, R:80 };
 function toScreenX(lx){ return MAP.ox + lx * MAP.s; }
 function toScreenY(ly){ return MAP.oy + ly * MAP.s; }
 const COAST_OUTLINES = [
@@ -291,14 +365,15 @@ function pointInLand(x, y){
   });
 }
 function drawTerrainBackdrop(ctx, mapImg, t=0){
-  const c=MAP_FRAME;
+  const c=MAP.clip;
   ctx.save();
-  const sea=ctx.createLinearGradient(c.x,c.y,c.x+c.w,c.y+c.h);
-  sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
-  ctx.fillStyle=sea; ctx.fillRect(c.x,c.y,c.w,c.h);
   ctx.beginPath(); ctx.rect(c.x,c.y,c.w,c.h); ctx.clip();
-  if (mapImg && (mapImg.naturalWidth || mapImg.width)) ctx.drawImage(mapImg, c.x, c.y, c.w, c.h);
-  ctx.fillStyle='rgba(3,7,14,0.04)'; ctx.fillRect(c.x,c.y,c.w,c.h);
+  if (!drawCoverImage(ctx, mapImg, c.x, c.y, c.w, c.h, 1)) {
+    const sea=ctx.createLinearGradient(c.x,c.y,c.x+c.w,c.y+c.h);
+    sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
+    ctx.fillStyle=sea; ctx.fillRect(c.x,c.y,c.w,c.h);
+  }
+  ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(c.x,c.y,c.w,c.h);
   ctx.restore();
 }
 function drawCoastlineGuide(ctx){
@@ -737,13 +812,13 @@ class ScenarioSelectScene extends GameKit.Scene {
   }
   _rebuild(){
     this.buttons=[];
-    const cx=MENU_W/2;
+    const cx=W/2;
     if (this.step==='scenario'){
       const cardW=1760, cardH=220, gap=54, startY=440;
       DATA.scenarios.forEach((s,i)=>{
         this.buttons.push({x:cx-cardW/2, y:startY+i*(cardH+gap), w:cardW, h:cardH, scn:s, action:()=>{ this.scn=s; this.step='daimyo'; this._rebuild(); }});
       });
-      this.buttons.push({x:cx-220, y:MENU_H-185, w:440, h:92, label:'← 戻る Back', sz:31, action:()=>game.changeScene(new TitleScene())});
+      this.buttons.push({x:cx-220, y:H-185, w:440, h:92, label:'← 戻る Back', sz:31, action:()=>game.changeScene(new TitleScene())});
     } else {
       const list = this.scn.daimyo.filter(d=>this.scn.own[d.capital]===d.id);
       this._daimyoList = list;
@@ -756,29 +831,25 @@ class ScenarioSelectScene extends GameKit.Scene {
           game.changeScene(new MapScene(buildGameState(this.scn.id, d.id)));
         }});
       });
-      this.buttons.push({x:80, y:MENU_H-175, w:420, h:88, label:'← シナリオ選択', sz:28, action:()=>{ this.step='scenario'; this._rebuild(); }});
+      this.buttons.push({x:80, y:H-175, w:420, h:88, label:'← シナリオ選択', sz:28, action:()=>{ this.step='scenario'; this._rebuild(); }});
     }
   }
   update(dt, game){
     this.t+=dt; this.particles.update(dt);
-    const raw=game.input.pointer;
-    const p={x:raw.x/MENU_SCALE, y:raw.y/MENU_SCALE, justPressed:raw.justPressed};
-    updateButtonHot(this.buttons, p);
+    const p=game.input.pointer; updateButtonHot(this.buttons, p);
     if (p.justPressed){
       for (const b of this.buttons){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(620,0.07,'triangle'); b.action(); return; } }
     }
   }
   draw(ctx){
     ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
-    ctx.save();
-    ctx.scale(MENU_SCALE, MENU_SCALE);
-    const bg=ctx.createRadialGradient(MENU_W/2, MENU_H*0.34, 120, MENU_W/2, MENU_H/2, MENU_H*0.78);
+    const bg=ctx.createRadialGradient(W/2, H*0.34, 120, W/2, H/2, H*0.78);
     bg.addColorStop(0,'rgba(30,41,59,0.26)'); bg.addColorStop(1,'rgba(2,6,23,0)');
-    ctx.fillStyle=bg; ctx.fillRect(0,0,MENU_W,MENU_H);
+    ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
     this.particles.draw(ctx);
     if (this.step==='scenario'){
-      T(ctx,'シナリオを選択 / Choose a Scenario', MENU_W/2, 200, {size:62, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
-      T(ctx,'開始年代を選び、次に操作する大名を選んでください', MENU_W/2, 285, {size:28, color:'#9fb2c6', align:'center'});
+      T(ctx,'シナリオを選択 / Choose a Scenario', W/2, 200, {size:62, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+      T(ctx,'開始年代を選び、次に操作する大名を選んでください', W/2, 285, {size:28, color:'#9fb2c6', align:'center'});
       for (const b of this.buttons){
         if (b.scn){
           ctx.save();
@@ -791,8 +862,8 @@ class ScenarioSelectScene extends GameKit.Scene {
         } else { drawButton(ctx, b, this.t); }
       }
     } else {
-      T(ctx, this.scn.year+'年 '+this.scn.nameJP+' — 大名を選択 / Choose your clan', MENU_W/2, 170, {size:54, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
-      T(ctx, this.scn.descEN, MENU_W/2, 240, {size:26, color:'#9fb2c6', align:'center'});
+      T(ctx, this.scn.year+'年 '+this.scn.nameJP+' — 大名を選択 / Choose your clan', W/2, 170, {size:54, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+      T(ctx, this.scn.descEN, W/2, 240, {size:26, color:'#9fb2c6', align:'center'});
       for (const b of this.buttons){
         if (b.daimyo){
           const d=b.daimyo;
@@ -808,7 +879,6 @@ class ScenarioSelectScene extends GameKit.Scene {
         } else { drawButton(ctx, b, this.t); }
       }
     }
-    ctx.restore();
   }
 }
 
@@ -818,28 +888,85 @@ class ScenarioSelectScene extends GameKit.Scene {
 class MapScene extends GameKit.Scene {
   constructor(state){ super(); this.state=state; }
   enter(game){
-    setCanvasViewportMode('native');
+    setCanvasViewportMode('fit');
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
+    this.showClans=false; this.pinching=false; this.press=null; this.dragLast=null; this._suppressTapUntil=0;
     this.particles = new GameKit.Particles(W, H, {count:24, colors:['#1e3a5f','#2a2150']});
+    // カメラ（ズーム/パン）。初期は3倍ズームで自国領中心。
+    let cx=this._clipCx, cy=this._clipCy;
+    const pd=daimyoDef(this.state, this.state.playerDaimyo);
+    const capProv = pd && DATA.provById[pd.capital];
+    if (capProv){ const pt=provinceScreenPoint(capProv); cx=pt[0]; cy=pt[1]; }
+    this.cam = { zoom:3, cx, cy, min:1, max:6 };
+    this._clampCam();
+    this._bindInput();
     // 戦闘から戻った結果の適用
     if (this.state.pendingResult){ this.overlay = {type:'battleResult', data:this.state.pendingResult}; this.state.pendingResult=null; }
     this._checkEnd(game);
     this._save();
-    requestAnimationFrame(()=>this._centerInitialView());
-    setTimeout(()=>this._centerInitialView(), 80);
   }
-  _centerInitialView(){
-    if (!MAP_PAN.enabled) return;
-    const centerX = MAP_FRAME.x + MAP_FRAME.w / 2;
-    const centerY = MAP_FRAME.y + MAP_FRAME.h / 2;
-    const maxScrollX = Math.max(0, document.documentElement.scrollWidth - window.innerWidth);
-    const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-    window.scrollTo(clamp(centerX - window.innerWidth / 2, 0, maxScrollX), clamp(centerY - window.innerHeight / 2, 0, maxScrollY));
-  }
+  exit(){ this._unbindInput(); }
   _save(){ this.state.version=SAVE_VERSION; save.set('autosave', this.state); }
   _flash(jp){ this.message=jp; this.messageT=2.2; }
+
+  /* ---- カメラ（ズーム/パン） ---- */
+  get _clipCx(){ return MAP.clip.x + MAP.clip.w/2; }
+  get _clipCy(){ return MAP.clip.y + MAP.clip.h/2; }
+  _camApply(ctx){ const c=this.cam; ctx.translate(this._clipCx, this._clipCy); ctx.scale(c.zoom, c.zoom); ctx.translate(-c.cx, -c.cy); }
+  _screenToWorld(sx, sy){ const c=this.cam; return { x:(sx-this._clipCx)/c.zoom + c.cx, y:(sy-this._clipCy)/c.zoom + c.cy }; }
+  _clampCam(){
+    const c=this.cam; c.zoom = clamp(c.zoom, c.min, c.max);
+    const halfW=(MAP.clip.w/2)/c.zoom, halfH=(MAP.clip.h/2)/c.zoom;
+    const minX=MAP.clip.x+halfW, maxX=MAP.clip.x+MAP.clip.w-halfW;
+    const minY=MAP.clip.y+halfH, maxY=MAP.clip.y+MAP.clip.h-halfH;
+    c.cx = minX>maxX ? this._clipCx : clamp(c.cx, minX, maxX);
+    c.cy = minY>maxY ? this._clipCy : clamp(c.cy, minY, maxY);
+  }
+  _zoomAt(sx, sy, factor){
+    const w=this._screenToWorld(sx, sy);
+    this.cam.zoom = clamp(this.cam.zoom*factor, this.cam.min, this.cam.max);
+    this.cam.cx = w.x - (sx-this._clipCx)/this.cam.zoom;
+    this.cam.cy = w.y - (sy-this._clipCy)/this.cam.zoom;
+    this._clampCam();
+  }
+  _bindInput(){
+    this._touchState=null;
+    this._onWheel=(e)=>{ e.preventDefault(); const p=clientToCanvasXY(e.clientX,e.clientY); this._zoomAt(p.x,p.y, e.deltaY<0?1.12:1/1.12); };
+    this._onTouchStart=(e)=>{
+      if (e.touches.length===2){
+        const a=e.touches[0], b=e.touches[1];
+        const dist=Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+        const mid=clientToCanvasXY((a.clientX+b.clientX)/2,(a.clientY+b.clientY)/2);
+        this._touchState={dist, zoom:this.cam.zoom, world:this._screenToWorld(mid.x,mid.y)};
+        this.pinching=true; e.preventDefault();
+      }
+    };
+    this._onTouchMove=(e)=>{
+      if (e.touches.length===2 && this._touchState){
+        const a=e.touches[0], b=e.touches[1];
+        const dist=Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY) || 1;
+        const mid=clientToCanvasXY((a.clientX+b.clientX)/2,(a.clientY+b.clientY)/2);
+        this.cam.zoom=clamp(this._touchState.zoom*(dist/this._touchState.dist), this.cam.min, this.cam.max);
+        this.cam.cx=this._touchState.world.x-(mid.x-this._clipCx)/this.cam.zoom;
+        this.cam.cy=this._touchState.world.y-(mid.y-this._clipCy)/this.cam.zoom;
+        this._clampCam(); e.preventDefault();
+      }
+    };
+    this._onTouchEnd=(e)=>{ if (!e.touches || e.touches.length<2){ this._touchState=null; if (this.pinching){ this.pinching=false; this._suppressTapUntil=this.t+0.3; } } };
+    canvas.addEventListener('wheel', this._onWheel, {passive:false});
+    canvas.addEventListener('touchstart', this._onTouchStart, {passive:false});
+    canvas.addEventListener('touchmove', this._onTouchMove, {passive:false});
+    canvas.addEventListener('touchend', this._onTouchEnd);
+    canvas.addEventListener('touchcancel', this._onTouchEnd);
+  }
+  _unbindInput(){
+    if (this._onWheel) canvas.removeEventListener('wheel', this._onWheel);
+    if (this._onTouchStart) canvas.removeEventListener('touchstart', this._onTouchStart);
+    if (this._onTouchMove) canvas.removeEventListener('touchmove', this._onTouchMove);
+    if (this._onTouchEnd){ canvas.removeEventListener('touchend', this._onTouchEnd); canvas.removeEventListener('touchcancel', this._onTouchEnd); }
+  }
 
   /* ---- 入力 ---- */
   update(dt, game){
@@ -851,32 +978,42 @@ class MapScene extends GameKit.Scene {
 
     const btns = this._buttons();
     updateButtonHot(btns, p);
+    if (!this.showClans && pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
 
-    if (pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
+    // ピンチ中はパン/タップを無効化
+    if (this.pinching){ this.press=null; this.dragLast=null; return; }
 
     if (p.justPressed){
-      this.press = {x:p.x, y:p.y, dragged:false};
-      MAP_PAN.dragging = false;
+      this.press = {x:p.x, y:p.y, dragged:false, onBtn: btns.some(b=>b.on!==false && pointInRect(p,b))};
+      this.dragLast = {x:p.x, y:p.y};
     }
     if (this.press && p.isDown){
-      if (Math.hypot(p.x-this.press.x, p.y-this.press.y)>10 || MAP_PAN.dragging) this.press.dragged = true;
+      if (Math.hypot(p.x-this.press.x, p.y-this.press.y)>10) this.press.dragged = true;
+      // ドラッグ/スワイプで地図をパン（ボタン上開始・一覧表示中は除く）
+      if (this.press.dragged && this.dragLast && !this.press.onBtn && !this.showClans){
+        this.cam.cx -= (p.x-this.dragLast.x)/this.cam.zoom;
+        this.cam.cy -= (p.y-this.dragLast.y)/this.cam.zoom;
+        this._clampCam();
+      }
+      this.dragLast = {x:p.x, y:p.y};
     }
     if (this.press && !p.isDown){
-      const press=this.press; this.press=null;
-      if (MAP_PAN.dragging) press.dragged = true;
-      MAP_PAN.dragging = false;
+      const press=this.press; this.press=null; this.dragLast=null;
+      if (this.t < (this._suppressTapUntil||0)) return;
       if (!press.dragged) this._activateMapPoint(game, press.x, press.y, btns);
     }
   }
   _activateMapPoint(game, x, y, btns){
     const p={x,y};
     for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.06,'triangle'); b.action(game); return; } }
+    if (this.showClans) return;
     const pid = this._pickProvince(x, y);
     if (pid) this._clickProvince(game, pid);
   }
   _pickProvince(x,y){
     if (!pointInRect({x,y}, MAP.clip)) return null;
-    for (const id in this.cells){ if (this.cells[id].length>=3 && pointInPoly(x,y,this.cells[id])) return id; }
+    const w=this._screenToWorld(x,y);
+    for (const id in this.cells){ if (this.cells[id].length>=3 && pointInPoly(w.x,w.y,this.cells[id])) return id; }
     return null;
   }
   _clickProvince(game, pid){
@@ -1047,14 +1184,19 @@ class MapScene extends GameKit.Scene {
     const st=this.state; const bs=[];
     // 下部コマンドバー
     if (this.mode==='province' && this.selected){
-      const y=556; let x=14;
-      bs.push({x, y, w:120, h:36, jp:'内政 開発', en:'Develop', accent:'rgba(52,211,153,0.6)', action:g=>this._develop(g)}); x+=128;
-      bs.push({x, y, w:120, h:36, jp:'城強化', en:'Castle', accent:'rgba(96,165,250,0.6)', action:g=>this._castle(g)}); x+=128;
-      bs.push({x, y, w:120, h:36, jp:'徴兵', en:'Recruit', accent:'rgba(251,191,36,0.6)', action:g=>this._recruit(g)}); x+=128;
-      bs.push({x, y, w:120, h:36, jp:'武将一覧', en:'Generals', action:()=>{ this.overlay={type:'provinceInfo', pid:this.selected}; }}); x+=128;
+      const y=560; let x=14;
+      bs.push({x, y, w:192, h:62, jp:'内政 開発', en:'Develop', sz:26, accent:'rgba(52,211,153,0.6)', action:g=>this._develop(g)}); x+=200;
+      bs.push({x, y, w:192, h:62, jp:'城強化', en:'Castle', sz:26, accent:'rgba(96,165,250,0.6)', action:g=>this._castle(g)}); x+=200;
+      bs.push({x, y, w:192, h:62, jp:'徴兵', en:'Recruit', sz:26, accent:'rgba(251,191,36,0.6)', action:g=>this._recruit(g)}); x+=200;
+      bs.push({x, y, w:192, h:62, jp:'武将一覧', en:'Generals', sz:26, action:()=>{ this.overlay={type:'provinceInfo', pid:this.selected}; }}); x+=200;
     }
-    bs.push({x:W-150, y:H-44, w:136, h:36, jp:'ターン終了', en:'End Turn', accent:'rgba(232,192,122,0.7)', action:g=>this._endTurn(g)});
-    bs.push({x:W-150, y:H-86, w:136, h:34, label:'タイトルへ', sz:12, action:()=>game.changeScene(new TitleScene())});
+    bs.push({x:W-252, y:H-100, w:232, h:76, jp:'ターン終了', en:'End Turn', sz:30, accent:'rgba(232,192,122,0.7)', action:g=>this._endTurn(g)});
+    bs.push({x:W-252, y:H-186, w:232, h:64, label:'タイトルへ', sz:22, action:()=>game.changeScene(new TitleScene())});
+    // 地図操作（左下）：ズーム・全体・勢力一覧
+    bs.push({x:24,  y:H-210, w:110, h:90, label:'＋', sz:52, accent:'rgba(96,165,250,0.6)', action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }});
+    bs.push({x:148, y:H-210, w:110, h:90, label:'－', sz:52, accent:'rgba(96,165,250,0.6)', action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }});
+    bs.push({x:272, y:H-210, w:172, h:90, label:'全体', sz:34, action:()=>{ this.cam.zoom=this.cam.min; this._clampCam(); }});
+    bs.push({x:24,  y:H-322, w:240, h:80, label:this.showClans?'一覧を閉じる':'勢力一覧', sz:30, accent:'rgba(167,139,250,0.6)', action:()=>{ this.showClans=!this.showClans; }});
     return bs;
   }
 
@@ -1071,37 +1213,38 @@ class MapScene extends GameKit.Scene {
     const ov=this.overlay; const bs=[]; const st=this.state;
     if (!ov) return bs;
     if (ov.type==='march'){
-      const m=this.march; const px=W/2-230, py=H/2-150, pw=460;
+      const m=this.march; const px=W/2-390, py=H/2-330, pw=780, ph=720;
       // troops -/+
-      bs.push({x:px+30, y:py+96, w:44, h:34, label:'-100', sz:12, action:()=>{ m.troops=clamp(m.troops-100,100,m.maxSend); }});
-      bs.push({x:px+30, y:py+136, w:44, h:30, label:'-500', sz:11, action:()=>{ m.troops=clamp(m.troops-500,100,m.maxSend); }});
-      bs.push({x:px+pw-74, y:py+96, w:44, h:34, label:'+100', sz:12, action:()=>{ m.troops=clamp(m.troops+100,100,m.maxSend); }});
-      bs.push({x:px+pw-74, y:py+136, w:44, h:30, label:'+500', sz:11, action:()=>{ m.troops=clamp(m.troops+500,100,m.maxSend); }});
-      bs.push({x:px+pw/2-70, y:py+128, w:60, h:24, label:'半数', sz:11, action:()=>{ m.troops=clamp(Math.round(m.maxSend*0.5/100)*100,100,m.maxSend); }});
-      bs.push({x:px+pw/2+10, y:py+128, w:60, h:24, label:'全軍', sz:11, action:()=>{ m.troops=m.maxSend; }});
+      bs.push({x:px+44, y:py+196, w:88, h:54, label:'-100', sz:20, action:()=>{ m.troops=clamp(m.troops-100,100,m.maxSend); }});
+      bs.push({x:px+44, y:py+256, w:88, h:46, label:'-500', sz:16, action:()=>{ m.troops=clamp(m.troops-500,100,m.maxSend); }});
+      bs.push({x:px+pw-132, y:py+196, w:88, h:54, label:'+100', sz:20, action:()=>{ m.troops=clamp(m.troops+100,100,m.maxSend); }});
+      bs.push({x:px+pw-132, y:py+256, w:88, h:46, label:'+500', sz:16, action:()=>{ m.troops=clamp(m.troops+500,100,m.maxSend); }});
+      bs.push({x:px+pw/2-150, y:py+270, w:130, h:44, label:'半数', sz:18, action:()=>{ m.troops=clamp(Math.round(m.maxSend*0.5/100)*100,100,m.maxSend); }});
+      bs.push({x:px+pw/2+20, y:py+270, w:130, h:44, label:'全軍', sz:18, action:()=>{ m.troops=m.maxSend; }});
       // generals toggles
       m.generals.forEach((g,i)=>{
-        const gx=px+24+(i%2)*(pw/2-20), gy=py+196+Math.floor(i/2)*30;
-        bs.push({x:gx, y:gy, w:pw/2-40, h:26, _gen:g, action:()=>{ m.pick[g]=!m.pick[g]; }});
+        const gx=px+40+(i%2)*(pw/2-30), gy=py+366+Math.floor(i/2)*48;
+        bs.push({x:gx, y:gy, w:pw/2-60, h:40, _gen:g, action:()=>{ m.pick[g]=!m.pick[g]; }});
       });
       const dst=st.provinces[m.dstId];
       const enemy = dst.owner!==st.playerDaimyo;
-      const by=py+300;
+      const by=py+ph-86;
       if (enemy){
-        bs.push({x:px+24, y:by, w:130, h:40, jp:'出陣（戦）', en:'Hex Battle', accent:'rgba(248,113,113,0.7)', action:g=>this._confirmMarch(g,false)});
-        bs.push({x:px+164, y:by, w:130, h:40, jp:'自動解決', en:'Auto', accent:'rgba(251,191,36,0.7)', action:g=>this._confirmMarch(g,true)});
-        bs.push({x:px+pw-110, y:by, w:90, h:40, jp:'取消', en:'Cancel', action:()=>{ this.overlay=null; this.march=null; }});
+        bs.push({x:px+40, y:by, w:210, h:60, jp:'出陣（戦）', en:'Hex Battle', sz:26, accent:'rgba(248,113,113,0.7)', action:g=>this._confirmMarch(g,false)});
+        bs.push({x:px+270, y:by, w:210, h:60, jp:'自動解決', en:'Auto', sz:26, accent:'rgba(251,191,36,0.7)', action:g=>this._confirmMarch(g,true)});
+        bs.push({x:px+pw-190, y:by, w:150, h:60, jp:'取消', en:'Cancel', sz:24, action:()=>{ this.overlay=null; this.march=null; }});
       } else {
-        bs.push({x:px+24, y:by, w:150, h:40, jp:'増援を送る', en:'Reinforce', accent:'rgba(52,211,153,0.7)', action:g=>this._confirmMarch(g,false)});
-        bs.push({x:px+pw-110, y:by, w:90, h:40, jp:'取消', en:'Cancel', action:()=>{ this.overlay=null; this.march=null; }});
+        bs.push({x:px+40, y:by, w:260, h:60, jp:'増援を送る', en:'Reinforce', sz:26, accent:'rgba(52,211,153,0.7)', action:g=>this._confirmMarch(g,false)});
+        bs.push({x:px+pw-190, y:by, w:150, h:60, jp:'取消', en:'Cancel', sz:24, action:()=>{ this.overlay=null; this.march=null; }});
       }
     } else if (ov.type==='provinceInfo'){
-      bs.push({x:W/2+150, y:H/2+150, w:120, h:36, jp:'閉じる', en:'Close', action:()=>{ this.overlay=null; }});
+      const px=W/2-380, py=H/2-300, pw=760, ph=620;
+      bs.push({x:px+pw-220, y:py+ph-72, w:200, h:54, jp:'閉じる', en:'Close', sz:24, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='battleResult' || ov.type==='turnSummary'){
-      bs.push({x:W/2-60, y:H/2+150, w:120, h:40, jp:'了解', en:'OK', accent:'rgba(232,192,122,0.7)', action:()=>{ this.overlay=null; }});
+      bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:()=>{ this.overlay=null; }});
     } else if (ov.type==='gameover'){
-      bs.push({x:W/2-130, y:H/2+120, w:120, h:42, jp:'タイトルへ', en:'Title', action:()=>{ save.set('autosave',null); game.changeScene(new TitleScene()); }});
-      bs.push({x:W/2+10, y:H/2+120, w:120, h:42, jp:'続ける', en:'Keep', action:()=>{ this.overlay=null; }});
+      bs.push({x:W/2-260, y:H/2+170, w:240, h:64, jp:'タイトルへ', en:'Title', sz:24, action:()=>{ save.set('autosave',null); game.changeScene(new TitleScene()); }});
+      bs.push({x:W/2+20, y:H/2+170, w:240, h:64, jp:'続ける', en:'Keep', sz:24, action:()=>{ this.overlay=null; }});
     }
     return bs;
   }
@@ -1109,22 +1252,19 @@ class MapScene extends GameKit.Scene {
   /* ---- 描画 ---- */
   draw(ctx, game){
     ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
-    // GPT-image-2で描き直した日本地図を下絵にする
-    ctx.save();
-    drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
-    ctx.restore();
-    this.particles.draw(ctx);
     this._drawMap(ctx);
+    this.particles.draw(ctx);
     this._drawTopBar(ctx);
     this._drawSidePanel(ctx);
-    // ボタン
+    if (this.showClans) this._drawClansOverlay(ctx);
+    // ボタン（一覧オーバーレイより前面に出して操作可能に）
     if (!this.overlay){ const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t); }
     // メッセージトースト
     if (this.messageT>0){
       const a=Math.min(1,this.messageT);
       ctx.globalAlpha=a;
-      GameKit.UI.glassPanel(ctx, W/2-160, 510, 320, 34, {radius:10, fill:'rgba(20,30,50,0.9)'});
-      T(ctx, this.message, W/2, 519, {size:14, color:'#e8c07a', align:'center'});
+      GameKit.UI.glassPanel(ctx, W/2-280, 120, 560, 58, {radius:14, fill:'rgba(20,30,50,0.9)'});
+      T(ctx, this.message, W/2, 136, {size:26, color:'#e8c07a', align:'center'});
       ctx.globalAlpha=1;
     }
     if (this.overlay) this._drawOverlay(ctx);
@@ -1132,99 +1272,139 @@ class MapScene extends GameKit.Scene {
   _drawMap(ctx){
     ctx.save();
     ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
+    ctx.save();
+    this._camApply(ctx);
+    drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
     this._drawCastleLayer(ctx);
+    ctx.restore();
     ctx.restore();
   }
   _drawCastleLayer(ctx){
     const st=this.state;
+    const occupied=[];
+    const overlaps=(a,b)=>!(a.x+a.w<b.x || b.x+b.w<a.x || a.y+a.h<b.y || b.y+b.h<a.y);
+    const clampRect=(r)=>({
+      x:clamp(r.x, MAP.clip.x+4, MAP.clip.x+MAP.clip.w-r.w-4),
+      y:clamp(r.y, MAP.clip.y+4, MAP.clip.y+MAP.clip.h-r.h-4),
+      w:r.w, h:r.h
+    });
     const entries = DATA.provinces.map(p=>{
-      const owner=st.provinces[p.id].owner; const dd=daimyoDef(st, owner);
-      return {p, dd, hot:(this.hover===p.id||this.selected===p.id), capital:dd&&dd.capital===p.id, priority:(this.selected===p.id?4:0)+(this.hover===p.id?3:0)+(dd&&dd.capital===p.id?2:0)};
+      const prov=st.provinces[p.id];
+      const dd=prov.owner?daimyoDef(st, prov.owner):null;
+      const capital = !!(dd && dd.capital===p.id);
+      const hot = p.id===this.selected || p.id===this.hover;
+      return {p, prov, dd, capital, hot, priority:(hot?10000:0)+(capital?5000:0)+p.kokudaka};
     }).filter(e=>e.dd).sort((a,b)=>b.priority-a.priority);
     for (const e of entries){
       const p=e.p, dd=e.dd;
       const [cx, cy]=provinceScreenPoint(p);
-      const iconSize=e.capital?42:36;
-      const kamonSize=e.capital?34:30;
+      const iconSize=e.capital?25:20;
+      drawCastleIcon(ctx, cx-7, cy+12, iconSize, dd.color);
       const name=castleNameForProvince(p);
       const force=e.hot;
-      const labelSize=force?24:(e.capital?21:19);
-      const gap=force?24:(e.capital?21:19);
+      const labelSize=force?17:(e.capital?15:14);
+      const gap=force?17:(e.capital?15:14);
       const labelH=Math.max(24, Array.from(name).length*gap+10);
-      const labelW=labelSize+18;
-      const stackW=Math.max(labelW, iconSize, kamonSize)+18;
-      const markerX=clamp(cx, MAP.clip.x+stackW/2+4, Math.min(MAP_UI.sideX-28, MAP.clip.x+MAP.clip.w-stackW/2-4));
-      let kamonY=cy-kamonSize/2;
-      let castleY=cy+kamonSize*0.38;
-      let labelY=kamonY-labelH-8;
-      let stackTop=labelY-6;
-      let stackBottom=castleY+iconSize*0.48;
-      const topLimit=MAP.clip.y+8, bottomLimit=MAP.clip.y+MAP.clip.h-8;
-      if (stackTop<topLimit){ const dy=topLimit-stackTop; castleY+=dy; kamonY+=dy; labelY+=dy; stackTop+=dy; stackBottom+=dy; }
-      if (stackBottom>bottomLimit){ const dy=bottomLimit-stackBottom; castleY+=dy; kamonY+=dy; labelY+=dy; stackTop+=dy; stackBottom+=dy; }
-      drawVerticalLabel(ctx, name, markerX, labelY, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
-      drawCastleIcon(ctx, markerX, castleY, iconSize, dd.color);
-      drawKamon(ctx, dd.id, markerX-kamonSize/2, kamonY, kamonSize, dd.color);
+      const labelW=labelSize+14;
+      const crestSize=e.capital?26:22;        // 城アイコンに被せる家紋（やや大きめで覆う）
+      const icx=cx-7, icy=cy+12;              // 城アイコンの中心
+      const crestX=icx-crestSize/2, crestY=icy-crestSize/2;   // アイコン中心に重ねる
+      occupied.push({x:crestX, y:crestY, w:crestSize, h:crestSize});  // 家紋の占有（他の城名が重ならないように）
+      // ラベルが海へはみ出さないよう陸地率を見る（既存ロジック踏襲）
+      const seaFracRect=(r)=>{ let s=0,n=0; const stepX=Math.max(6,r.w/3);
+        for (let sx=r.x+4; sx<=r.x+r.w-2; sx+=stepX) for (let sy=r.y+4; sy<=r.y+r.h-2; sy+=12){ n++; if (!isLandWorld(sx,sy)) s++; }
+        return n? s/n : 0; };
+      // 城名は家紋の「すぐ上」に。基本は真上中央、重なる時だけ僅かに横ずらし／少し上へ
+      const nameRect=(dx,dy)=>clampRect({x:icx+dx-labelW/2, y:crestY-3-labelH+dy, w:labelW, h:labelH});
+      const cand=[ [0,0],[14,0],[-14,0],[0,-12],[26,0],[-26,0] ];
+      let pick=null, best=null;
+      for (const [dx,dy] of cand){
+        const r=nameRect(dx,dy);
+        const collide=occupied.some(o=>overlaps(r,o));
+        const sea=seaFracRect(r);
+        if (!collide && sea<=0.12){ pick=r; break; }   // 真上中央が空き＆陸地：即採用
+        const score=(collide?1:0)+sea+(Math.abs(dx)+Math.abs(dy))*0.01;  // 小さいほど良い（中央・すぐ上を優先）
+        if (!best || score<best.score) best={r,score};
+      }
+      const nrect = pick || (best?best.r:nameRect(0,0));
+      // 描画: 城アイコンに家紋を被せ、その上に城名
+      drawKamon(ctx, dd.id, crestX, crestY, crestSize, dd.color);
+      drawVerticalLabel(ctx, name, nrect.x+nrect.w/2, nrect.y, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
+      occupied.push(nrect);
     }
   }
   _drawTopBar(ctx){
     const st=this.state; const pd=daimyoDef(st, st.playerDaimyo);
-    GameKit.UI.glassPanel(ctx, 10, 8, W-20, 68, {radius:14, fill:'rgba(12,20,36,0.86)'});
-    ctx.fillStyle=pd.color; ctx.beginPath(); ctx.arc(36,42,16,0,Math.PI*2); ctx.fill();
-    T(ctx, pd.nameJP+'家', 64, 18, {size:23, weight:'bold', color:'#f1e6cf'});
-    T(ctx, st.year+'年 '+SEASONS[st.season].jp+' （第'+st.turn+'ターン）', 64, 47, {size:15, color:'#9fb2c6'});
+    GameKit.UI.glassPanel(ctx, 8, 8, W-16, 90, {radius:14, fill:'rgba(12,20,36,0.8)'});
+    // 家マーク
+    ctx.fillStyle=pd.color; ctx.beginPath(); ctx.arc(50,53,22,0,Math.PI*2); ctx.fill();
+    T(ctx, pd.nameJP+'家', 86, 20, {size:30, weight:'bold', color:'#f1e6cf'});
+    T(ctx, st.year+'年 '+SEASONS[st.season].jp+' （第'+st.turn+'ターン）', 86, 60, {size:20, color:'#9fb2c6'});
     const mine=ownedProvinces(st,st.playerDaimyo).length;
-    T(ctx, '金 '+st.daimyo[st.playerDaimyo].gold+'貫', 390, 18, {size:20, color:'#e8c07a'});
-    T(ctx, '領国 '+mine+' / '+DATA.provinces.length+' 国', 390, 47, {size:15, color:'#9fb2c6'});
+    T(ctx, '金 '+st.daimyo[st.playerDaimyo].gold+'貫', 580, 20, {size:26, color:'#e8c07a'});
+    T(ctx, '領国 '+mine+' / '+DATA.provinces.length+' 洲', 580, 62, {size:22, color:'#9fb2c6'});
     let totalS=0; ownedProvinces(st,st.playerDaimyo).forEach(pid=>totalS+=st.provinces[pid].soldiers);
-    T(ctx, '総兵力 '+(totalS/1000).toFixed(1)+'千', 610, 18, {size:19, color:'#cbd5e1'});
-    T(ctx, '目標 全国64国制覇', 610, 47, {size:14, color:'#7d93ab'});
-    T(ctx, this.scenarioHint||'', 835, 36, {size:14, color:'#64748b'});
-  }  _drawSidePanel(ctx){
-    const st=this.state; const x=W-286, w=278;
-    GameKit.UI.glassPanel(ctx, x, 58, w, H-116, {radius:12, fill:'rgba(10,16,28,0.72)'});
+    T(ctx, '総兵力 '+(totalS/1000).toFixed(1)+'千', 880, 20, {size:24, color:'#cbd5e1'});
+    T(ctx, '目標: 全64洲制覇', 880, 62, {size:20, color:'#7d93ab'});
+    T(ctx, this.scenarioHint||'', 1180, 38, {size:18, color:'#64748b'});
+  }
+  _drawSidePanel(ctx){
+    const st=this.state; const x=W-466, w=452;
     const pid = this.selected || this.hover;
-    if (!pid){
-      T(ctx,'洲を選択してください', x+w/2, 20, {size:13, color:'#9fb2c6', align:'center'});
-      T(ctx,'自国の洲をクリック → 内政・徴兵', x+16, 60, {size:11, color:'#7d93ab'});
-      T(ctx,'隣接洲をクリック → 出陣（戦／増援）', x+16, 82, {size:11, color:'#7d93ab'});
-      // 凡例（大名色 上位）
-      T(ctx,'― 勢力 / Clans ―', x+w/2, 120, {size:12, color:'#e8c07a', align:'center'});
-      const clans = daimyoOf(st).filter(d=>st.daimyo[d.id].alive)
-        .map(d=>({d, n:ownedProvinces(st,d.id).length})).sort((a,b)=>b.n-a.n).slice(0,12);
-      clans.forEach((c,i)=>{
-        const yy=204+i*30;
-        ctx.fillStyle=c.d.color; ctx.fillRect(x+18, yy, 14, 14);
-        T(ctx, c.d.nameJP+'家', x+40, yy, {size:12, color: c.d.id===st.playerDaimyo?'#e8c07a':'#cbd5e1'});
-        T(ctx, c.n+'洲', x+w-24, yy, {size:12, color:'#9fb2c6', align:'right'});
-      });
-      return;
-    }
+    if (!pid) return; // 凡例は「勢力一覧」ボタンの大型オーバーレイへ移動
+    GameKit.UI.glassPanel(ctx, x, 108, w, H-168, {radius:16, fill:'rgba(10,16,28,0.72)'});
     const p=DATA.provById[pid], prov=st.provinces[pid];
     const dd=prov.owner?daimyoDef(st,prov.owner):null;
-    T(ctx, p.nameJP+' ('+p.nameEN+')', x+16, 76, {size:18, weight:'bold', color:'#f1e6cf'});
-    T(ctx, p.region+'地方 ・ 地形:'+terrainJP(p.terrain), x+16, 102, {size:11, color:'#9fb2c6'});
-    T(ctx, dd? '領主: '+dd.nameJP+'家' : '空白地（無所属）', x+16, 122, {size:13, color: dd?dd.color:'#94a3b8'});
+    T(ctx, p.nameJP+' ('+p.nameEN+')', x+24, 130, {size:30, weight:'bold', color:'#f1e6cf'});
+    T(ctx, p.region+'地方 ・ 地形:'+terrainJP(p.terrain), x+24, 172, {size:18, color:'#9fb2c6'});
+    T(ctx, dd? '領主: '+dd.nameJP+'家' : '空白地（無所属）', x+24, 202, {size:22, color: dd?dd.color:'#94a3b8'});
     const rows=[
       ['石高', p.kokudaka+'千石'],
       ['兵力', prov.soldiers+' 人'],
       ['開発度', prov.development+' / 95'],
       ['城', 'Lv '+prov.castleLevel+' / 5'],
     ];
-    rows.forEach((r,i)=>{ const yy=150+i*24;
-      T(ctx, r[0], x+18, yy, {size:12, color:'#9fb2c6'});
-      T(ctx, r[1], x+w-22, yy, {size:13, color:'#e2e8f0', align:'right'});
+    rows.forEach((r,i)=>{ const yy=246+i*40;
+      T(ctx, r[0], x+28, yy, {size:20, color:'#9fb2c6'});
+      T(ctx, r[1], x+w-30, yy, {size:22, color:'#e2e8f0', align:'right'});
     });
-    T(ctx,'― 配属武将 ―', x+w/2, 254, {size:12, color:'#e8c07a', align:'center'});
+    T(ctx,'― 配属武将 ―', x+w/2, 432, {size:20, color:'#e8c07a', align:'center'});
     const gens=prov.generals.filter(g=>st.generals[g].alive);
-    if (gens.length===0){ T(ctx,'（在城武将なし）', x+w/2, 278, {size:11, color:'#7d93ab', align:'center'}); }
+    if (gens.length===0){ T(ctx,'（在城武将なし）', x+w/2, 474, {size:18, color:'#7d93ab', align:'center'}); }
     gens.slice(0,9).forEach((gid,i)=>{
-      const g=DATA.genById[gid]; const yy=276+i*32;
-      drawGeneralPortrait(ctx, gid, x+18, yy, 28, {stroke:'rgba(232,192,122,0.42)', lineWidth:1});
-      T(ctx, g.nameJP, x+52, yy, {size:13, weight:'bold', color:'#dbe4ee'});
-      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, x+52, yy+15, {size:10, color:'#7d93ab'});
-      T(ctx, '忠'+st.generals[gid].loyalty, x+w-22, yy+4, {size:11, color:'#9fb2c6', align:'right'});
+      const g=DATA.genById[gid]; const yy=470+i*48;
+      drawGeneralPortrait(ctx, gid, x+28, yy, 42, {stroke:'rgba(232,192,122,0.42)', lineWidth:1});
+      T(ctx, g.nameJP, x+82, yy+2, {size:22, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, x+82, yy+26, {size:16, color:'#7d93ab'});
+      T(ctx, '忠'+st.generals[gid].loyalty, x+w-30, yy+6, {size:18, color:'#9fb2c6', align:'right'});
     });
+  }
+
+  /* ---- 勢力一覧（大型・開閉式） ---- */
+  _drawClansOverlay(ctx){
+    const st=this.state;
+    const clans = daimyoOf(st).filter(d=>st.daimyo[d.id].alive)
+      .map(d=>({d, n:ownedProvinces(st,d.id).length})).sort((a,b)=>b.n-a.n);
+    ctx.save();
+    ctx.fillStyle='rgba(3,6,14,0.62)'; ctx.fillRect(0,0,W,H);
+    const pw=Math.min(1720, W-220), ph=Math.min(1560, H-200);
+    const px=(W-pw)/2, py=(H-ph)/2;
+    GameKit.UI.glassPanel(ctx, px,py,pw,ph,{radius:26, fill:'rgba(8,12,22,0.94)', stroke:'rgba(232,192,122,0.5)'});
+    T(ctx,'勢力一覧 / Clans', px+pw/2, py+34, {size:48, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    T(ctx,'（'+clans.length+'家） — 「一覧を閉じる」で戻る', px+pw/2, py+104, {size:24, color:'#9fb2c6', align:'center'});
+    const cols=2, colW=(pw-140)/cols, startY=py+170, rowH=78;
+    const maxRows=Math.floor((ph-200)/rowH);
+    clans.forEach((c,i)=>{
+      const col=i%cols, row=Math.floor(i/cols);
+      if (row>=maxRows) return;
+      const cx=px+70+col*colW, cy=startY+row*rowH;
+      ctx.fillStyle=c.d.color; ctx.beginPath(); ctx.roundRect(cx, cy, 46, 46, 8); ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=2; ctx.stroke();
+      const mine=c.d.id===st.playerDaimyo;
+      T(ctx, c.d.nameJP+'家'+(mine?' ◀自国':''), cx+64, cy+4, {size:34, weight:mine?'bold':'', color: mine?'#e8c07a':'#dbe4ee'});
+      T(ctx, c.n+' 洲', cx+colW-80, cy+8, {size:30, color:'#9fb2c6', align:'right'});
+    });
+    ctx.restore();
   }
 
   _drawOverlay(ctx){
@@ -1241,72 +1421,72 @@ class MapScene extends GameKit.Scene {
   }
   _drawMarch(ctx){
     const st=this.state, m=this.march;
-    const px=W/2-230, py=H/2-150, pw=460, ph=380;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.96)', stroke:'rgba(232,192,122,0.4)'});
+    const px=W/2-390, py=H/2-330, pw=780, ph=720;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.96)', stroke:'rgba(232,192,122,0.4)'});
     const src=DATA.provById[m.srcId], dst=DATA.provById[m.dstId];
     const dstProv=st.provinces[m.dstId];
     const enemy=dstProv.owner!==st.playerDaimyo;
-    T(ctx, (enemy?'出陣 / March to Battle':'増援 / Reinforce'), px+pw/2, py+16, {size:20, weight:'bold', color:'#e8c07a', align:'center'});
-    T(ctx, src.nameJP+'  →  '+dst.nameJP+(dstProv.owner?'（'+daimyoDef(st,dstProv.owner).nameJP+'家）':'（空白地）'), px+pw/2, py+48, {size:13, color:'#cbd5e1', align:'center'});
-    T(ctx, '敵兵力 約'+dstProv.soldiers+'人 ・ 城Lv'+dstProv.castleLevel+' ・ 地形'+terrainJP(dst.terrain), px+pw/2, py+68, {size:11, color:'#9fb2c6', align:'center'});
+    T(ctx, (enemy?'出陣 / March to Battle':'増援 / Reinforce'), px+pw/2, py+30, {size:34, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx, src.nameJP+'  →  '+dst.nameJP+(dstProv.owner?'（'+daimyoDef(st,dstProv.owner).nameJP+'家）':'（空白地）'), px+pw/2, py+86, {size:22, color:'#cbd5e1', align:'center'});
+    T(ctx, '敵兵力 約'+dstProv.soldiers+'人 ・ 城Lv'+dstProv.castleLevel+' ・ 地形'+terrainJP(dst.terrain), px+pw/2, py+122, {size:18, color:'#9fb2c6', align:'center'});
     // troops
-    T(ctx, '出陣兵数', px+pw/2, py+96, {size:12, color:'#9fb2c6', align:'center'});
-    T(ctx, m.troops+' 人', px+pw/2, py+112, {size:22, weight:'bold', color:'#f1e6cf', align:'center'});
-    T(ctx, '（最大 '+m.maxSend+'）', px+pw/2, py+158, {size:10, color:'#7d93ab', align:'center'});
-    T(ctx, '― 従軍武将 ―', px+pw/2, py+176, {size:12, color:'#e8c07a', align:'center'});
-    if (m.generals.length===0) T(ctx,'（武将なし）', px+pw/2, py+198, {size:11, color:'#7d93ab', align:'center'});
+    T(ctx, '出陣兵数', px+pw/2, py+170, {size:20, color:'#9fb2c6', align:'center'});
+    T(ctx, m.troops+' 人', px+pw/2, py+205, {size:40, weight:'bold', color:'#f1e6cf', align:'center'});
+    T(ctx, '（最大 '+m.maxSend+'）', px+pw/2, py+250, {size:17, color:'#7d93ab', align:'center'});
+    T(ctx, '― 従軍武将 ―', px+pw/2, py+332, {size:20, color:'#e8c07a', align:'center'});
+    if (m.generals.length===0) T(ctx,'（武将なし）', px+pw/2, py+372, {size:18, color:'#7d93ab', align:'center'});
   }
   _drawProvinceInfo(ctx, pid){
     const st=this.state, p=DATA.provById[pid], prov=st.provinces[pid];
     const dd=prov.owner?daimyoDef(st,prov.owner):null;
-    const px=W/2-230, py=H/2-170, pw=460, ph=350;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.96)'});
-    T(ctx, p.nameJP+' / '+p.nameEN, px+pw/2, py+18, {size:22, weight:'bold', color:'#f1e6cf', align:'center'});
-    T(ctx, (dd?dd.nameJP+'家':'無所属')+' ・ '+p.region+' ・ '+terrainJP(p.terrain), px+pw/2, py+50, {size:12, color: dd?dd.color:'#94a3b8', align:'center'});
-    T(ctx, '石高 '+p.kokudaka+'千石  兵 '+prov.soldiers+'  開発 '+prov.development+'  城Lv'+prov.castleLevel, px+pw/2, py+74, {size:12, color:'#cbd5e1', align:'center'});
-    T(ctx, '― 配属武将 ―', px+pw/2, py+102, {size:12, color:'#e8c07a', align:'center'});
+    const px=W/2-380, py=H/2-300, pw=760, ph=620;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.96)'});
+    T(ctx, p.nameJP+' / '+p.nameEN, px+pw/2, py+28, {size:34, weight:'bold', color:'#f1e6cf', align:'center'});
+    T(ctx, (dd?dd.nameJP+'家':'無所属')+' ・ '+p.region+' ・ '+terrainJP(p.terrain), px+pw/2, py+82, {size:20, color: dd?dd.color:'#94a3b8', align:'center'});
+    T(ctx, '石高 '+p.kokudaka+'千石  兵 '+prov.soldiers+'  開発 '+prov.development+'  城Lv'+prov.castleLevel, px+pw/2, py+118, {size:20, color:'#cbd5e1', align:'center'});
+    T(ctx, '― 配属武将 ―', px+pw/2, py+162, {size:20, color:'#e8c07a', align:'center'});
     const gens=prov.generals.filter(g=>st.generals[g].alive);
-    if (!gens.length) T(ctx,'（在城武将なし）', px+pw/2, py+126, {size:11, color:'#7d93ab', align:'center'});
+    if (!gens.length) T(ctx,'（在城武将なし）', px+pw/2, py+206, {size:18, color:'#7d93ab', align:'center'});
     gens.slice(0,8).forEach((gid,i)=>{
       const g=DATA.genById[gid]; const c=i%2, r=Math.floor(i/2);
-      const gx=px+30+c*(pw/2-20), gy=py+126+r*46;
-      drawGeneralPortrait(ctx, gid, gx, gy, 38, {stroke:'rgba(232,192,122,0.42)', lineWidth:1});
-      T(ctx, g.nameJP, gx+46, gy+2, {size:14, weight:'bold', color:'#dbe4ee'});
-      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, gx+46, gy+20, {size:10, color:'#7d93ab'});
+      const gx=px+40+c*(pw/2-30), gy=py+204+r*72;
+      drawGeneralPortrait(ctx, gid, gx, gy, 56, {stroke:'rgba(232,192,122,0.42)', lineWidth:1});
+      T(ctx, g.nameJP, gx+68, gy+6, {size:22, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, gx+68, gy+34, {size:16, color:'#7d93ab'});
     });
   }
   _drawBattleResult(ctx, d){
-    const px=W/2-220, py=H/2-150, pw=440, ph=320;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.96)', stroke: d.win?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
-    T(ctx, d.win?'勝利 / Victory':'敗北 / Defeat', px+pw/2, py+24, {size:26, weight:'bold', color: d.win?'#34d399':'#f87171', align:'center'});
-    T(ctx, DATA.provById[d.dstId].nameJP+' の戦い', px+pw/2, py+62, {size:14, color:'#cbd5e1', align:'center'});
-    T(ctx, (d.win?'を攻略した！':'攻略に失敗…'), px+pw/2, py+84, {size:13, color:'#9fb2c6', align:'center'});
-    T(ctx, '自軍生存 '+d.atkSurvivors+' 人 / 敵残存 '+d.defSurvivors+' 人', px+pw/2, py+120, {size:13, color:'#e2e8f0', align:'center'});
+    const px=W/2-360, py=H/2-280, pw=720, ph=580;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.96)', stroke: d.win?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
+    T(ctx, d.win?'勝利 / Victory':'敗北 / Defeat', px+pw/2, py+44, {size:44, weight:'bold', color: d.win?'#34d399':'#f87171', align:'center'});
+    T(ctx, DATA.provById[d.dstId].nameJP+' の戦い', px+pw/2, py+114, {size:24, color:'#cbd5e1', align:'center'});
+    T(ctx, (d.win?'を攻略した！':'攻略に失敗…'), px+pw/2, py+154, {size:22, color:'#9fb2c6', align:'center'});
+    T(ctx, '自軍生存 '+d.atkSurvivors+' 人 / 敵残存 '+d.defSurvivors+' 人', px+pw/2, py+214, {size:22, color:'#e2e8f0', align:'center'});
     if (d.generalsLost && d.generalsLost.length){
-      T(ctx, '討死: '+d.generalsLost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), px+pw/2, py+150, {size:12, color:'#f87171', align:'center'});
+      T(ctx, '討死: '+d.generalsLost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), px+pw/2, py+264, {size:20, color:'#f87171', align:'center'});
     } else {
-      T(ctx, '武将の損失なし', px+pw/2, py+150, {size:12, color:'#7d93ab', align:'center'});
+      T(ctx, '武将の損失なし', px+pw/2, py+264, {size:20, color:'#7d93ab', align:'center'});
     }
   }
   _drawTurnSummary(ctx, log){
-    const px=W/2-240, py=H/2-180, pw=480, ph=360;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.96)'});
+    const px=W/2-420, py=H/2-330, pw=840, ph=700;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.96)'});
     const st=this.state;
-    T(ctx, st.year+'年 '+SEASONS[st.season].jp+' — 評定 / Council', px+pw/2, py+18, {size:18, weight:'bold', color:'#e8c07a', align:'center'});
-    T(ctx, '諸国の動向 / News of the realm', px+pw/2, py+46, {size:11, color:'#9fb2c6', align:'center'});
-    if (!log || !log.length){ T(ctx,'目立った動きはなかった。', px+pw/2, py+90, {size:13, color:'#9fb2c6', align:'center'}); }
+    T(ctx, st.year+'年 '+SEASONS[st.season].jp+' — 評定 / Council', px+pw/2, py+30, {size:30, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx, '諸国の動向 / News of the realm', px+pw/2, py+74, {size:18, color:'#9fb2c6', align:'center'});
+    if (!log || !log.length){ T(ctx,'目立った動きはなかった。', px+pw/2, py+150, {size:22, color:'#9fb2c6', align:'center'}); }
     else {
-      log.slice(0,9).forEach((line,i)=>{ T(ctx, '・'+line, px+30, py+78+i*26, {size:12, color:'#cbd5e1'}); });
-      if (log.length>9) T(ctx, '…他 '+(log.length-9)+' 件', px+30, py+78+9*26, {size:11, color:'#7d93ab'});
+      log.slice(0,9).forEach((line,i)=>{ T(ctx, '・'+line, px+50, py+130+i*42, {size:20, color:'#cbd5e1'}); });
+      if (log.length>9) T(ctx, '…他 '+(log.length-9)+' 件', px+50, py+130+9*42, {size:18, color:'#7d93ab'});
     }
   }
   _drawGameOver(ctx, win){
-    const px=W/2-240, py=H/2-150, pw=480, ph=300;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:18, fill:'rgba(14,22,38,0.97)', stroke: win?'rgba(232,192,122,0.6)':'rgba(248,113,113,0.5)'});
-    T(ctx, win?'天下統一！':'落 城', px+pw/2, py+40, {size:40, weight:'bold', color: win?'#e8c07a':'#f87171', align:'center'});
-    T(ctx, win?'全64洲を制覇した！ All 64 provinces conquered!':'貴家は滅亡した… Your clan has fallen.', px+pw/2, py+110, {size:14, color:'#cbd5e1', align:'center'});
+    const px=W/2-380, py=H/2-260, pw=760, ph=520;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(14,22,38,0.97)', stroke: win?'rgba(232,192,122,0.6)':'rgba(248,113,113,0.5)'});
+    T(ctx, win?'天下統一！':'落 城', px+pw/2, py+60, {size:60, weight:'bold', color: win?'#e8c07a':'#f87171', align:'center'});
+    T(ctx, win?'全64洲を制覇した！ All 64 provinces conquered!':'貴家は滅亡した… Your clan has fallen.', px+pw/2, py+180, {size:22, color:'#cbd5e1', align:'center'});
     const st=this.state;
-    T(ctx, st.scenarioNameJP+' / '+st.year+'年 / '+st.turn+'ターン', px+pw/2, py+140, {size:12, color:'#9fb2c6', align:'center'});
+    T(ctx, st.scenarioNameJP+' / '+st.year+'年 / '+st.turn+'ターン', px+pw/2, py+230, {size:18, color:'#9fb2c6', align:'center'});
   }
 }
 function terrainJP(t){ return {plain:'平地',mountain:'山地',coast:'沿岸',river:'河川'}[t]||t; }
@@ -1316,8 +1496,8 @@ function drawGenToggle(ctx, b, march, st){
   ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,7);
   ctx.fillStyle= on?'rgba(52,211,153,0.22)':'rgba(255,255,255,0.05)'; ctx.fill();
   ctx.strokeStyle= on?'#34d399':'rgba(255,255,255,0.15)'; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
-  T(ctx, (on?'☑ ':'☐ ')+g.nameJP, b.x+8, b.y+5, {size:12, color: on?'#d7f5e8':'#9fb2c6'});
-  T(ctx, '武'+g.stats.bu, b.x+b.w-30, b.y+6, {size:10, color:'#7d93ab'});
+  T(ctx, (on?'☑ ':'☐ ')+g.nameJP, b.x+14, b.y+9, {size:20, color: on?'#d7f5e8':'#9fb2c6'});
+  T(ctx, '武'+g.stats.bu, b.x+b.w-58, b.y+11, {size:16, color:'#7d93ab'});
 }
 
 /* ===================================================================
@@ -1428,7 +1608,7 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
 /* ===================================================================
  * BattleScene — ヘックス戦術戦闘
  * =================================================================== */
-const HEX = { size:36, cols:11, rows:9, ox:300, oy:142 };
+const HEX = { size:88, cols:11, rows:9, ox:480, oy:320 };
 function hexNeighbors(col,row){
   const even = (row%2)===0;
   const d = even
@@ -1712,13 +1892,13 @@ class BattleScene extends GameKit.Scene {
   _buttons(){
     const bs=[];
     if (this.over){
-      bs.push({x:W/2-70, y:H/2+96, w:140, h:42, jp:'戦評定へ', en:'Continue', accent:'rgba(232,192,122,0.7)', action:g=>{ g.changeScene(new MapScene(this.state)); }});
+      bs.push({x:W/2-170, y:H/2+100, w:340, h:96, sz:34, jp:'戦評定へ', en:'Continue', accent:'rgba(232,192,122,0.7)', action:g=>{ g.changeScene(new MapScene(this.state)); }});
       return bs;
     }
     if (this.phase==='player'){
-      bs.push({x:14, y:556, w:150, h:36, jp:'手番終了', en:'End Phase', accent:'rgba(232,192,122,0.6)', action:g=>this._endPlayerPhase(g)});
-      bs.push({x:174, y:556, w:130, h:36, jp:'自動で決着', en:'Auto', accent:'rgba(251,191,36,0.6)', action:g=>this._autoFinish(g)});
-      bs.push({x:W-150, y:556, w:136, h:36, jp:'撤退', en:'Retreat', accent:'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
+      bs.push({x:780, y:H-150, w:320, h:96, sz:34, jp:'手番終了', en:'End Phase', accent:'rgba(232,192,122,0.6)', action:g=>this._endPlayerPhase(g)});
+      bs.push({x:1120, y:H-150, w:300, h:96, sz:34, jp:'自動で決着', en:'Auto', accent:'rgba(251,191,36,0.6)', action:g=>this._autoFinish(g)});
+      bs.push({x:W-340, y:H-150, w:320, h:96, sz:34, jp:'撤退', en:'Retreat', accent:'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
     }
     return bs;
   }
@@ -1734,8 +1914,8 @@ class BattleScene extends GameKit.Scene {
     const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t);
     if (this.messageT>0){
       ctx.globalAlpha=Math.min(1,this.messageT);
-      GameKit.UI.glassPanel(ctx, W/2-180, 86, 360, 30, {radius:8, fill:'rgba(10,16,28,0.9)'});
-      T(ctx, this.message, W/2, 93, {size:13, color:'#e8c07a', align:'center'}); ctx.globalAlpha=1;
+      GameKit.UI.glassPanel(ctx, W/2-360, 1540, 720, 66, {radius:12, fill:'rgba(10,16,28,0.9)'});
+      T(ctx, this.message, W/2, 1558, {size:28, color:'#e8c07a', align:'center'}); ctx.globalAlpha=1;
     }
     if (this.over) this._drawResult(ctx);
   }
@@ -1772,48 +1952,95 @@ class BattleScene extends GameKit.Scene {
       ctx.beginPath(); ctx.arc(x,y,HEX.size*0.62,0,Math.PI*2);
       ctx.fillStyle = s.side==='atk'? 'rgba(34,90,170,0.92)':'rgba(170,50,50,0.92)';
       ctx.fill();
-      ctx.lineWidth= sel?3:1.5; ctx.strokeStyle= sel?'#22d3ee': (s.hasMoved&&s.hasAttacked?'rgba(255,255,255,0.25)':UNITS[s.type].color);
+      ctx.lineWidth= sel?5:2.5; ctx.strokeStyle= sel?'#22d3ee': (s.hasMoved&&s.hasAttacked?'rgba(255,255,255,0.25)':UNITS[s.type].color);
       ctx.stroke(); ctx.restore();
-      T(ctx, UNITS[s.type].jp, x, y-8, {size:11, weight:'bold', color:'#f8fafc', align:'center', baseline:'middle'});
-      T(ctx, s.count+'', x, y+7, {size:11, color:'#e8eef6', align:'center', baseline:'middle'});
+      T(ctx, UNITS[s.type].jp, x, y-HEX.size*0.18, {size:26, weight:'bold', color:'#f8fafc', align:'center', baseline:'middle'});
+      T(ctx, s.count+'', x, y+HEX.size*0.20, {size:24, color:'#e8eef6', align:'center', baseline:'middle'});
       // 武将名
-      T(ctx, s.name, x, y+HEX.size*0.78, {size:9, color: s.side==='atk'?'#9ec3ff':'#ffb3b3', align:'center', baseline:'middle'});
+      T(ctx, s.name, x, y+HEX.size*0.80, {size:20, color: s.side==='atk'?'#9ec3ff':'#ffb3b3', align:'center', baseline:'middle'});
     });
   }
   _drawHUD(ctx){
     const c=this.ctx;
-    GameKit.UI.glassPanel(ctx, 6, 6, 280, 70, {radius:10, fill:'rgba(10,16,28,0.85)'});
-    T(ctx, DATA.provById[c.dstId].nameJP+' の戦い', 18, 14, {size:16, weight:'bold', color:'#e8c07a'});
-    T(ctx, '攻: '+daimyoDef(this.state,c.attacker.daimyo).nameJP+'家  /  守: '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP+'家':'空白'), 18, 38, {size:11, color:'#cbd5e1'});
-    T(ctx, 'ラウンド '+this.round+' / '+this.maxRounds+'　手番:'+(this.phase==='player'?'自軍':'敵軍'), 18, 56, {size:11, color:'#9fb2c6'});
+    GameKit.UI.glassPanel(ctx, 16, 16, 660, 184, {radius:14, fill:'rgba(10,16,28,0.85)'});
+    T(ctx, DATA.provById[c.dstId].nameJP+' の戦い', 36, 32, {size:34, weight:'bold', color:'#e8c07a'});
+    T(ctx, '攻: '+daimyoDef(this.state,c.attacker.daimyo).nameJP+'家  /  守: '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP+'家':'空白'), 36, 92, {size:24, color:'#cbd5e1'});
+    T(ctx, 'ラウンド '+this.round+' / '+this.maxRounds+'　手番:'+(this.phase==='player'?'自軍':'敵軍'), 36, 140, {size:24, color:'#9fb2c6'});
     // 右: 兵科相性
-    GameKit.UI.glassPanel(ctx, W-220, 6, 214, 92, {radius:10, fill:'rgba(10,16,28,0.85)'});
-    T(ctx,'兵科相性 / Counters', W-113, 12, {size:11, color:'#e8c07a', align:'center'});
-    T(ctx,'足軽 ▶ 騎馬 ▶ 鉄砲 ▶ 足軽', W-113, 32, {size:11, color:'#cbd5e1', align:'center'});
-    T(ctx,'弓・鉄砲は射程2（反撃なし）', W-113, 52, {size:10, color:'#9fb2c6', align:'center'});
-    T(ctx,'クリック=選択→移動/攻撃', W-113, 72, {size:10, color:'#7d93ab', align:'center'});
+    GameKit.UI.glassPanel(ctx, W-560, 16, 544, 200, {radius:14, fill:'rgba(10,16,28,0.85)'});
+    T(ctx,'兵科相性 / Counters', W-288, 30, {size:24, color:'#e8c07a', align:'center'});
+    T(ctx,'足軽 ▶ 騎馬 ▶ 鉄砲 ▶ 足軽', W-288, 76, {size:24, color:'#cbd5e1', align:'center'});
+    T(ctx,'弓・鉄砲は射程2（反撃なし）', W-288, 120, {size:22, color:'#9fb2c6', align:'center'});
+    T(ctx,'クリック=選択→移動/攻撃', W-288, 162, {size:22, color:'#7d93ab', align:'center'});
     // 選択中スタック詳細
     if (this.selected){
       const s=this.selected;
-      GameKit.UI.glassPanel(ctx, 6, H-128, 280, 64, {radius:10, fill:'rgba(10,16,28,0.85)'});
-      if (s.gen) drawGeneralPortrait(ctx, s.gen, 18, H-118, 42, {stroke:UNITS[s.type].color, lineWidth:1.5});
-      const tx = s.gen ? 68 : 18;
-      T(ctx, s.name+'隊 ('+UNITS[s.type].jp+')', tx, H-120, {size:13, weight:'bold', color:'#dbe4ee'});
-      T(ctx, '兵'+s.count+'  統'+s.stat.tou+' 武'+s.stat.bu, tx, H-100, {size:11, color:'#9fb2c6'});
-      T(ctx, (s.hasMoved?'移動済 ':'移動可 ')+(s.hasAttacked?'攻撃済':'攻撃可'), tx, H-82, {size:11, color:'#7d93ab'});
+      GameKit.UI.glassPanel(ctx, 16, H-300, 720, 240, {radius:14, fill:'rgba(10,16,28,0.85)'});
+      if (s.gen) drawGeneralPortrait(ctx, s.gen, 36, H-280, 100, {stroke:UNITS[s.type].color, lineWidth:2.5});
+      const tx = s.gen ? 160 : 36;
+      T(ctx, s.name+'隊 ('+UNITS[s.type].jp+')', tx, H-282, {size:30, weight:'bold', color:'#dbe4ee'});
+      T(ctx, '兵'+s.count+'  統'+s.stat.tou+' 武'+s.stat.bu, tx, H-228, {size:24, color:'#9fb2c6'});
+      T(ctx, (s.hasMoved?'移動済 ':'移動可 ')+(s.hasAttacked?'攻撃済':'攻撃可'), tx, H-182, {size:24, color:'#7d93ab'});
     }
   }
   _drawResult(ctx){
     ctx.save(); ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,0,W,H); ctx.restore();
-    const px=W/2-210, py=H/2-120, pw=420, ph=240;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:16, fill:'rgba(14,22,38,0.97)', stroke:this.result.win?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
-    T(ctx, this.result.win?'勝 利':'敗 北', W/2, py+28, {size:32, weight:'bold', color:this.result.win?'#34d399':'#f87171', align:'center'});
-    T(ctx, this.result.reason, W/2, py+76, {size:14, color:'#cbd5e1', align:'center'});
-    T(ctx, '自軍残存 約'+Math.round(this.result.atkSurv)+' / 敵残存 約'+Math.round(this.result.defSurv), W/2, py+112, {size:13, color:'#e2e8f0', align:'center'});
+    const px=W/2-420, py=H/2-260, pw=840, ph=480;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.97)', stroke:this.result.win?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
+    T(ctx, this.result.win?'勝 利':'敗 北', W/2, py+56, {size:64, weight:'bold', color:this.result.win?'#34d399':'#f87171', align:'center'});
+    T(ctx, this.result.reason, W/2, py+160, {size:28, color:'#cbd5e1', align:'center'});
+    T(ctx, '自軍残存 約'+Math.round(this.result.atkSurv)+' / 敵残存 約'+Math.round(this.result.defSurv), W/2, py+228, {size:26, color:'#e2e8f0', align:'center'});
     const lost=this.state.pendingResult&&this.state.pendingResult.generalsLost;
-    if (lost&&lost.length) T(ctx,'討死: '+lost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), W/2, py+142, {size:12, color:'#f87171', align:'center'});
+    if (lost&&lost.length) T(ctx,'討死: '+lost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), W/2, py+288, {size:24, color:'#f87171', align:'center'});
   }
 }
+
+/* ===================================================================
+ * スマホ向け 横向きフルスクリーン
+ * =================================================================== */
+(function setupFullscreen(){
+  const IS_TOUCH = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || ('ontouchstart' in window);
+  document.body.classList.toggle('is-touch', IS_TOUCH);
+  const gate = document.getElementById('fsGate');
+  const toggle = document.getElementById('fsToggle');
+
+  function isFS(){ return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+  function requestFS(){
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    let p;
+    try { p = req ? req.call(el) : null; } catch(e){ p = null; }
+    Promise.resolve(p).then(()=>{
+      if (screen.orientation && screen.orientation.lock) {
+        return screen.orientation.lock('landscape').catch(()=>{});
+      }
+    }).catch(()=>{});
+  }
+  function exitFS(){
+    const fn = document.exitFullscreen || document.webkitExitFullscreen;
+    try { if (fn) fn.call(document); } catch(e){}
+  }
+  function toggleFS(){ isFS() ? exitFS() : requestFS(); }
+
+  function onFSChange(){
+    const on = isFS();
+    document.body.classList.toggle('is-fullscreen', on);
+    if (toggle) toggle.textContent = on ? '✕' : '⛶';
+    if (on && gate) gate.style.display = 'none';
+  }
+  document.addEventListener('fullscreenchange', onFSChange);
+  document.addEventListener('webkitfullscreenchange', onFSChange);
+
+  function closeGate(){ if (gate) gate.style.display = 'none'; }
+  if (gate){
+    const onGate = (e)=>{ e.preventDefault(); requestFS(); closeGate(); };
+    gate.addEventListener('click', onGate);
+    gate.addEventListener('touchend', onGate, {passive:false});
+  }
+  if (toggle){
+    toggle.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); toggleFS(); });
+  }
+})();
 
 /* ===================================================================
  * 起動
