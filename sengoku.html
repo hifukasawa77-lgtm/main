@@ -110,7 +110,7 @@
 const W = 2560, H = 2080;
 const canvas = document.getElementById('game');
 const MAP_PAN = { enabled:false, active:false, dragging:false, startX:0, startY:0, scrollX:0, scrollY:0 };
-const CASTLE_POS_STORE = 'sengokuCastleScreenPositions:v1';
+const CASTLE_POS_STORE = 'sengokuCastleMapPositions:v2';
 function loadCastlePositionOverrides(){
   try { return JSON.parse(localStorage.getItem(CASTLE_POS_STORE) || '{}') || {}; }
   catch (_) { return {}; }
@@ -119,6 +119,22 @@ const CASTLE_POS_OVERRIDES = loadCastlePositionOverrides();
 function saveCastlePositionOverrides(){
   try { localStorage.setItem(CASTLE_POS_STORE, JSON.stringify(CASTLE_POS_OVERRIDES)); }
   catch (_) {}
+}
+function clamp01(v){ return Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0)); }
+function normalizedCastlePoint(x, y){
+  const c=MAP.clip;
+  return { u:clamp01((x-c.x)/c.w), v:clamp01((y-c.y)/c.h) };
+}
+function castleOverridePoint(id){
+  const p=CASTLE_POS_OVERRIDES[id];
+  if (!p) return null;
+  const c=MAP.clip;
+  if (Number.isFinite(p.u) && Number.isFinite(p.v)) return [c.x+p.u*c.w, c.y+p.v*c.h];
+  if (Number.isFinite(p.x) && Number.isFinite(p.y)) return [p.x, p.y];
+  return null;
+}
+function setCastlePositionOverride(id, x, y){
+  CASTLE_POS_OVERRIDES[id] = normalizedCastlePoint(x, y);
 }
 function setCanvasViewportMode(mode){
   const fit = mode !== 'native';
@@ -215,8 +231,8 @@ function geoToScreen(lon, lat){
   return [ox+(lon-g.minLon)*g.cos*scale, oy+(g.maxLat-lat)*scale];
 }
 function provinceScreenPoint(p){
-  const manual=CASTLE_POS_OVERRIDES[p.id];
-  const raw = manual ? [manual.x, manual.y] : (PROVINCE_GEO[p.id] ? geoToScreen(PROVINCE_GEO[p.id][0], PROVINCE_GEO[p.id][1]) : [toScreenX(p.x), toScreenY(p.y)]);
+  const manual=castleOverridePoint(p.id);
+  const raw = manual || (PROVINCE_GEO[p.id] ? geoToScreen(PROVINCE_GEO[p.id][0], PROVINCE_GEO[p.id][1]) : [toScreenX(p.x), toScreenY(p.y)]);
   return snapCastlePointToLand(p.id, raw[0], raw[1]);
 }
 
@@ -1182,22 +1198,22 @@ class MapScene extends GameKit.Scene {
       if (hit){
         const w=this._screenToWorld(p.x,p.y);
         this.dragCastle={id:hit.id, ox:0, oy:0};
-        CASTLE_POS_OVERRIDES[hit.id]={x:w.x, y:w.y};
-        CASTLE_LAND_SNAP_CACHE[hit.id + ':' + Math.round(w.x) + ',' + Math.round(w.y)] = CASTLE_POS_OVERRIDES[hit.id];
+        setCastlePositionOverride(hit.id, w.x, w.y);
+        const pt=castleOverridePoint(hit.id);
+        CASTLE_LAND_SNAP_CACHE[hit.id + ':' + Math.round(pt[0]) + ',' + Math.round(pt[1])] = {x:pt[0], y:pt[1]};
         this.selected=hit.id;
       }
     }
     if (this.dragCastle && p.isDown){
       const w=this._screenToWorld(p.x,p.y), d=this.dragCastle, c=MAP.clip;
-      CASTLE_POS_OVERRIDES[d.id]={
-        x:clamp(w.x-d.ox, c.x+16, c.x+c.w-16),
-        y:clamp(w.y-d.oy, c.y+16, c.y+c.h-16)
-      };
-      CASTLE_LAND_SNAP_CACHE[d.id + ':' + Math.round(CASTLE_POS_OVERRIDES[d.id].x) + ',' + Math.round(CASTLE_POS_OVERRIDES[d.id].y)] = CASTLE_POS_OVERRIDES[d.id];
+      const nx=clamp(w.x-d.ox, c.x+16, c.x+c.w-16), ny=clamp(w.y-d.oy, c.y+16, c.y+c.h-16);
+      setCastlePositionOverride(d.id, nx, ny);
+      const pt=castleOverridePoint(d.id);
+      CASTLE_LAND_SNAP_CACHE[d.id + ':' + Math.round(pt[0]) + ',' + Math.round(pt[1])] = {x:pt[0], y:pt[1]};
     }
     if (this.dragCastle && !p.isDown){
-      const d=this.dragCastle, cur=CASTLE_POS_OVERRIDES[d.id];
-      if (cur){ const fixed=snapCastlePointToLand(d.id, cur.x, cur.y); CASTLE_POS_OVERRIDES[d.id]={x:fixed[0], y:fixed[1]}; }
+      const d=this.dragCastle, cur=castleOverridePoint(d.id);
+      if (cur){ const fixed=snapCastlePointToLand(d.id, cur[0], cur[1]); setCastlePositionOverride(d.id, fixed[0], fixed[1]); }
       saveCastlePositionOverrides();
       this.cells=computeProvinceCells();
       this.dragCastle=null;
