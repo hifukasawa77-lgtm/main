@@ -82,6 +82,33 @@
       max-width:none; max-height:none;
     }
   }
+  .castle-add-panel {
+    position:fixed; top:160px; right:24px; z-index:85;
+    width:min(390px, calc(100vw - 32px)); display:none;
+    padding:18px; border-radius:14px;
+    background:rgba(8,13,24,0.92); border:1px solid rgba(232,192,122,0.55);
+    box-shadow:0 16px 44px rgba(0,0,0,0.58); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    color:#e2e8f0; font-family:"Hiragino Sans","Yu Gothic","Segoe UI",sans-serif;
+  }
+  body.castle-add-open .castle-add-panel { display:block; }
+  .castle-add-title { font-size:22px; font-weight:800; color:#facc15; margin-bottom:10px; }
+  .castle-add-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .castle-add-field { display:flex; flex-direction:column; gap:5px; }
+  .castle-add-field.wide { grid-column:1 / -1; }
+  .castle-add-field label { font-size:13px; color:#9fb2c6; }
+  .castle-add-field input, .castle-add-field select {
+    min-height:42px; border-radius:8px; border:1px solid rgba(148,163,184,0.45);
+    background:rgba(15,23,42,0.88); color:#f8fafc; padding:8px 10px; font-size:16px; outline:none;
+  }
+  .castle-add-field input:focus, .castle-add-field select:focus { border-color:#38bdf8; box-shadow:0 0 0 2px rgba(56,189,248,0.18); }
+  .castle-add-help { margin-top:10px; font-size:12px; line-height:1.55; color:#cbd5e1; }
+  .castle-add-actions { display:flex; gap:10px; margin-top:14px; }
+  .castle-add-actions button {
+    flex:1; min-height:44px; border-radius:8px; border:1px solid rgba(232,192,122,0.55);
+    background:rgba(30,41,59,0.92); color:#f8fafc; font-weight:800; font-size:16px; cursor:pointer;
+  }
+  .castle-add-actions button.primary { background:rgba(217,119,6,0.88); border-color:rgba(251,191,36,0.75); }
+  .castle-add-actions button:hover { filter:brightness(1.12); }
 </style>
 </head>
 <body>
@@ -96,6 +123,18 @@
     <div class="fs-gate-rotate">📱 端末を横向きにしてください / Rotate your device</div>
   </div>
 </div>
+<div id="castleAddPanel" class="castle-add-panel" aria-label="城追加モード">
+  <div class="castle-add-title">城追加モード</div>
+  <div class="castle-add-grid">
+    <div class="castle-add-field wide"><label for="castleAddName">城名</label><input id="castleAddName" type="text" placeholder="例: 新城" autocomplete="off"></div>
+    <div class="castle-add-field"><label for="castleAddX">城位置 x</label><input id="castleAddX" type="number" inputmode="numeric" step="1"></div>
+    <div class="castle-add-field"><label for="castleAddY">城位置 y</label><input id="castleAddY" type="number" inputmode="numeric" step="1"></div>
+    <div class="castle-add-field wide"><label for="castleAddDaimyo">所属大名</label><select id="castleAddDaimyo"></select></div>
+    <div class="castle-add-field wide"><label for="castleAddProvince">国名</label><input id="castleAddProvince" type="text" placeholder="例: 武蔵" autocomplete="off"></div>
+  </div>
+  <div class="castle-add-help">地図をクリック/タップすると x,y が入ります。確定するとその座標に城を配置します。</div>
+  <div class="castle-add-actions"><button id="castleAddCancel" type="button">閉じる</button><button id="castleAddConfirm" class="primary" type="button">確定</button></div>
+</div>
 <p class="hint"><b>戦国の野望</b> / Sengoku no Yabou &nbsp;|&nbsp; クリックで操作 — Click to play &nbsp;|&nbsp; 全国64洲をヘックス戦で制覇せよ</p>
 
 <script src="gamekit/gamekit.js"></script>
@@ -107,6 +146,7 @@
  * 64洲 / ヘックス戦 / 3シナリオ(1560,1568,1574) / 全国武将
  * ===================================================================== */
 
+const castleAddPanel = document.getElementById('castleAddPanel');
 const W = 2560, H = 2080;
 const canvas = document.getElementById('game');
 const MAP_PAN = { enabled:false, active:false, dragging:false, startX:0, startY:0, scrollX:0, scrollY:0 };
@@ -160,6 +200,64 @@ function castleOverridePoint(id){
 function setCastlePositionOverride(id, x, y){
   CASTLE_POS_OVERRIDES[id] = normalizedCastlePoint(x, y);
 }
+const CUSTOM_CASTLE_STORE = 'sengokuCustomCastles:v1';
+function loadCustomCastles(){
+  try { const v=JSON.parse(localStorage.getItem(CUSTOM_CASTLE_STORE) || '[]'); return Array.isArray(v)?v:[]; }
+  catch (_) { return []; }
+}
+const CUSTOM_CASTLES = loadCustomCastles();
+function saveCustomCastles(){
+  try { localStorage.setItem(CUSTOM_CASTLE_STORE, JSON.stringify(CUSTOM_CASTLES)); }
+  catch (_) {}
+}
+function mapWorldToImagePoint(wx, wy){
+  const m=mapImageMetrics();
+  if (!m) return null;
+  const ix = clampRange(m.sx + (wx-m.c.x)/m.c.w*m.sw, 0, m.iw);
+  const iy = clampRange(m.sy + (wy-m.c.y)/m.c.h*m.sh, 0, m.ih);
+  return {x:Math.round(ix), y:Math.round(iy), mx:clamp01(ix/m.iw), my:clamp01(iy/m.ih)};
+}
+function mapImagePointToWorld(mx, my){
+  const m=mapImageMetrics();
+  if (!m) return {x:MAP.clip.x+MAP.clip.w*clamp01(mx), y:MAP.clip.y+MAP.clip.h*clamp01(my)};
+  const ix=clamp01(mx)*m.iw, iy=clamp01(my)*m.ih;
+  return {
+    x:clampRange(m.c.x + ((ix-m.sx)/m.sw)*m.c.w, m.c.x, m.c.x+m.c.w),
+    y:clampRange(m.c.y + ((iy-m.sy)/m.sh)*m.c.h, m.c.y, m.c.y+m.c.h)
+  };
+}
+function customCastleId(name){
+  const suffix = Date.now().toString(36) + Math.floor(Math.random()*9999).toString(36);
+  return 'custom_castle_' + suffix;
+}
+function addCustomCastleToData(c){
+  if (!c || !c.id) return;
+  const p={id:c.id, nameJP:c.provinceName||c.castleName||'追加国', nameEN:'Custom Castle', region:'追加', x:500, y:325, terrain:c.terrain||'plain', kokudaka:c.kokudaka||50, neighbors:c.neighborId?[c.neighborId]:[]};
+  if (DATA.provById[c.id]) Object.assign(DATA.provById[c.id], p);
+  else { DATA.provinces.push(p); DATA.provById[c.id]=p; }
+  if (c.neighborId && DATA.provById[c.neighborId]){
+    const nb=DATA.provById[c.neighborId];
+    if (!(nb.neighbors||[]).includes(c.id)) (nb.neighbors=nb.neighbors||[]).push(c.id);
+  }
+  CASTLE_NAMES[c.id]=c.castleName||p.nameJP;
+  if (Number.isFinite(c.mx) && Number.isFinite(c.my)) CASTLE_POS_OVERRIDES[c.id]={mx:clamp01(c.mx), my:clamp01(c.my)};
+  if (DATA.scenarios){
+    DATA.scenarios.forEach(scn=>{
+      scn.own=scn.own||{}; scn.place=scn.place||{};
+      scn.own[c.id]=c.daimyoId;
+      if (!scn.place[c.id]) scn.place[c.id]=[];
+    });
+  }
+}
+function applyCustomCastlesToData(){ CUSTOM_CASTLES.forEach(addCustomCastleToData); saveCastlePositionOverrides(); }
+function ensureCustomCastlesInState(state){
+  if (!state || !state.provinces) return;
+  CUSTOM_CASTLES.forEach(c=>{
+    if (!DATA.provById[c.id]) addCustomCastleToData(c);
+    if (!state.provinces[c.id]) state.provinces[c.id]={owner:c.daimyoId, soldiers:800, development:35, castleLevel:1, generals:[], hasActed:false};
+    else state.provinces[c.id].owner=c.daimyoId;
+  });
+}
 function setCanvasViewportMode(mode){
   const fit = mode !== 'native';
   document.body.classList.toggle('fit-canvas', fit);
@@ -210,7 +308,7 @@ const SAVE_VERSION = 1;
 /* ---- 静的データ登録（JSONロード後に格納） ---- */
 const DATA = { provinces:null, provById:{}, generals:null, genById:{}, scenarios:null };
 const GPT_ASSETS = {
-  map:'assets/sengoku/gpt/sengoku-satellite-japan-gpt-image-2-v4.png',
+  map:'assets/sengoku/gpt/sengoku-satellite-japan-gpt-image-2-v6.png',
   title: 'assets/sengoku/gpt/sengoku-title-gpt-image-2.jpg',
   battle: 'assets/sengoku/gpt/sengoku-hex-battlefield-gpt-image-2.jpg',
   battleTiles: 'assets/sengoku/gpt/sengoku-hex-terrain-atlas-gpt-image-2.jpg',
@@ -219,6 +317,8 @@ const GPT_ASSETS = {
   portrait3: 'assets/sengoku/gpt/sengoku-portraits-page-3-gpt-image-2.jpg',
   portrait4: 'assets/sengoku/gpt/sengoku-portraits-page-4-gpt-image-2.jpg',
   portrait5: 'assets/sengoku/gpt/sengoku-portraits-page-5-northern-clans-gpt-image-2.png',
+  portrait6: 'assets/sengoku/gpt/sengoku-portraits-page-6-added-clans-gpt-image-2.png',
+  portraitFixHojoUjiyasu: 'assets/sengoku/gpt/sengoku-portrait-fix-hojo-ujiyasu-gpt-image-2.png',
   kamon: 'assets/sengoku/gpt/sengoku-kamon-atlas-gpt-image-2-small.jpg',
   kamonExtra: 'assets/sengoku/gpt/sengoku-kamon-extra-northern-clans-gpt-image-2.png',
 };
@@ -228,12 +328,20 @@ const KAMON_SLOT = Object.fromEntries(KAMON_CLANS.map((id,i)=>[id,{col:i%5,row:M
 const EXTRA_KAMON_CLANS = ['tsugaru','nanbu','kasai','soma','ashina','ando','jinbo','miki'];
 const EXTRA_KAMON_SLOT = Object.fromEntries(EXTRA_KAMON_CLANS.map((id,i)=>[id,{img:'kamonExtra',col:i%4,row:Math.floor(i/4),cols:4,rows:2}]));
 
+const PORTRAIT_FIX_SLOTS = {
+  hojo_ujiyasu:{img:'portraitFixHojoUjiyasu',col:0,row:0,cols:1,rows:1}
+};
+
 const EXTRA_PORTRAIT_SLOTS = {
   tsugaru_tamenobu:{img:'portrait5',col:0,row:0}, tsugaru_nobuhira:{img:'portrait5',col:1,row:0}, numata_sukemitsu:{img:'portrait5',col:2,row:0},
   nanbu_nobunao:{img:'portrait5',col:3,row:0}, kunohe_masazane:{img:'portrait5',col:4,row:0}, kasai_harunobu:{img:'portrait5',col:5,row:0},
   kasai_chikanobu:{img:'portrait5',col:0,row:1}, soma_morotane:{img:'portrait5',col:1,row:1}, soma_takamitsu:{img:'portrait5',col:2,row:1},
-  ando_chikasue:{img:'portrait5',col:3,row:1}, minato_suehide:{img:'portrait5',col:4,row:1}, inawashiro_morikuni:{img:'portrait5',col:5,row:1},
-  kojima_motoshige:{img:'portrait5',col:0,row:2}, miki_yoritsuna:{img:'portrait5',col:1,row:2}, miki_naoyori:{img:'portrait5',col:2,row:2}
+  ando_chikasue:{img:'portrait5',col:3,row:1}, minato_suehide:{img:'portrait5',col:4,row:1}, inawashiro_morikuni:{img:'portrait5',col:5,row:1},  kojima_motoshige:{img:'portrait5',col:0,row:2},
+  daihoji_yoshimasu:{img:'portrait6',col:0,row:0,cols:4,rows:2}, tozenji_yoshinaga:{img:'portrait6',col:1,row:0,cols:4,rows:2},
+  osaki_yoshinao:{img:'portrait6',col:2,row:0,cols:4,rows:2}, ujiie_yoshitsugu:{img:'portrait6',col:3,row:0,cols:4,rows:2},
+  miki_yoritsuna:{img:'portrait5',col:1,row:2}, miki_naoyori:{img:'portrait5',col:2,row:2},
+  bessho_nagaharu:{img:'portrait6',col:0,row:1,cols:4,rows:2}, bessho_shigemune:{img:'portrait6',col:1,row:1,cols:4,rows:2},
+  ichijo_kanesada:{img:'portrait6',col:2,row:1,cols:4,rows:2}, doi_soshan:{img:'portrait6',col:3,row:1,cols:4,rows:2}
 };
 
 const MAP_GEO = { minLon:127.9, maxLon:146.7, minLat:29.7, maxLat:46.1, padX:18/2048, padY:24/1500, cos:Math.cos(37.5*Math.PI/180) };
@@ -520,7 +628,7 @@ function buildPortraitSlots(){
     const slot = i % 36;
     ASSETS.portraitSlots[g.id] = { img:'portrait'+page, col:slot%6, row:Math.floor(slot/6) };
   });
-  Object.assign(ASSETS.portraitSlots, EXTRA_PORTRAIT_SLOTS);
+  Object.assign(ASSETS.portraitSlots, EXTRA_PORTRAIT_SLOTS, PORTRAIT_FIX_SLOTS);
 }
 function applySengokuExpansions(){
   const provinces = [
@@ -529,14 +637,23 @@ function applySengokuExpansions(){
     {id:'rikuzen', nameJP:'陸前', nameEN:'Rikuzen', region:'奥羽', x:775, y:122, terrain:'coast', kokudaka:180, neighbors:['tsugaru','rikuchu','iwashiro','iwaki','mutsu']},
     {id:'iwaki', nameJP:'磐城', nameEN:'Iwaki', region:'奥羽', x:800, y:190, terrain:'coast', kokudaka:120, neighbors:['rikuzen','iwashiro','hitachi']},
     {id:'iwashiro', nameJP:'岩代', nameEN:'Iwashiro', region:'奥羽', x:735, y:168, terrain:'mountain', kokudaka:180, neighbors:['rikuzen','iwaki','dewa','mutsu']},
-    {id:'kita_ugo', nameJP:'北羽後', nameEN:'Northern Ugo', region:'奥羽', x:675, y:58, terrain:'mountain', kokudaka:120, neighbors:['dewa','tsugaru']}
+    {id:'kita_ugo', nameJP:'北羽後', nameEN:'Northern Ugo', region:'奥羽', x:675, y:58, terrain:'mountain', kokudaka:120, neighbors:['dewa','tsugaru']},
+    {id:'kita_echigo', nameJP:'北越後', nameEN:'Northern Echigo', region:'北陸', x:640, y:122, terrain:'plain', kokudaka:110, neighbors:['echigo','dewa','iwashiro']},
+    {id:'minami_shinano', nameJP:'南信濃', nameEN:'Southern Shinano', region:'中部', x:612, y:330, terrain:'mountain', kokudaka:150, neighbors:['shinano','kai','hida','mino','totomi']},
+    {id:'hachioji', nameJP:'武蔵(八王子)', nameEN:'Musashi - Hachioji', region:'関東', x:690, y:320, terrain:'mountain', kokudaka:80, neighbors:['musashi','sagami','kai','kozuke']},
+    {id:'kita_uzen', nameJP:'北羽前', nameEN:'Northern Uzen', region:'奥羽', x:700, y:110, terrain:'coast', kokudaka:140, neighbors:['dewa','kita_ugo','iwashiro']},
+    {id:'osaki', nameJP:'陸前(大崎)', nameEN:'Rikuzen - Osaki', region:'奥羽', x:760, y:132, terrain:'plain', kokudaka:130, neighbors:['rikuzen','rikuchu','iwashiro','mutsu']},
+    {id:'harima_miki', nameJP:'播磨(三木)', nameEN:'Harima - Miki', region:'中国', x:382, y:388, terrain:'plain', kokudaka:90, neighbors:['harima','settsu','tanba','bizen']},
+    {id:'nishi_tosa', nameJP:'西土佐', nameEN:'Western Tosa', region:'四国', x:238, y:528, terrain:'mountain', kokudaka:45, neighbors:['tosa','iyo']}
   ];
   const geo = {
     tsugaru:[140.464,40.607], rikuchu:[141.168,39.554], rikuzen:[141.187,38.690],
     iwaki:[140.994,37.563], iwashiro:[139.930,37.496], kita_ugo:[140.105,40.240],
-    etchu:[137.213,36.695], hida:[137.249,36.142]
+    etchu:[137.213,36.695], hida:[137.249,36.142],
+    kita_echigo:[139.327,37.950], minami_shinano:[137.969,36.238], hachioji:[139.252,35.653],
+    kita_uzen:[139.826,38.728], osaki:[140.956,38.583], harima_miki:[134.986,34.800], nishi_tosa:[132.934,32.992]
   };
-  const castleNames = { tsugaru:'弘前城', rikuchu:'高水寺城', rikuzen:'寺池城', iwaki:'小高城', iwashiro:'黒川城', kita_ugo:'檜山城', etchu:'富山城', hida:'松倉城' };
+  const castleNames = { tsugaru:'弘前城', rikuchu:'高水寺城', rikuzen:'寺池城', iwaki:'小高城', iwashiro:'黒川城', kita_ugo:'檜山城', etchu:'富山城', hida:'松倉城', kita_echigo:'新発田城', minami_shinano:'深志城', hachioji:'八王子城', kita_uzen:'大宝寺城', osaki:'名生城', harima_miki:'三木城', nishi_tosa:'中村御所' };
   const generals = [
     {id:'tsugaru_tamenobu', nameJP:'津軽為信', nameEN:'Tsugaru Tamenobu', family:'tsugaru', stats:{tou:82,bu:78,chi:84,sei:80}},
     {id:'tsugaru_nobuhira', nameJP:'津軽信枚', nameEN:'Tsugaru Nobuhira', family:'tsugaru', stats:{tou:68,bu:64,chi:70,sei:72}},
@@ -552,7 +669,14 @@ function applySengokuExpansions(){
     {id:'inawashiro_morikuni', nameJP:'猪苗代盛国', nameEN:'Inawashiro Morikuni', family:'ashina', stats:{tou:66,bu:68,chi:62,sei:58}},
     {id:'kojima_motoshige', nameJP:'小島職鎮', nameEN:'Kojima Motoshige', family:'jinbo', stats:{tou:68,bu:66,chi:70,sei:64}},
     {id:'miki_yoritsuna', nameJP:'三木自綱', nameEN:'Miki Yoritsuna', family:'miki', stats:{tou:74,bu:72,chi:76,sei:70}},
-    {id:'miki_naoyori', nameJP:'三木直頼', nameEN:'Miki Naoyori', family:'miki', stats:{tou:70,bu:68,chi:72,sei:66}}
+    {id:'miki_naoyori', nameJP:'三木直頼', nameEN:'Miki Naoyori', family:'miki', stats:{tou:70,bu:68,chi:72,sei:66}},
+    {id:'daihoji_yoshimasu', nameJP:'大宝寺義増', nameEN:'Daihoji Yoshimasu', family:'daihoji', stats:{tou:68,bu:64,chi:70,sei:72}},
+    {id:'tozenji_yoshinaga', nameJP:'東禅寺義長', nameEN:'Tozenji Yoshinaga', family:'daihoji', stats:{tou:64,bu:66,chi:68,sei:62}},
+    {id:'osaki_yoshinao', nameJP:'大崎義直', nameEN:'Osaki Yoshinao', family:'osaki', stats:{tou:66,bu:62,chi:68,sei:70}},
+    {id:'ujiie_yoshitsugu', nameJP:'氏家吉継', nameEN:'Ujiie Yoshitsugu', family:'osaki', stats:{tou:70,bu:72,chi:68,sei:64}},
+    {id:'bessho_nagaharu', nameJP:'別所長治', nameEN:'Bessho Nagaharu', family:'bessho', stats:{tou:72,bu:70,chi:68,sei:62}},
+    {id:'bessho_shigemune', nameJP:'別所重宗', nameEN:'Bessho Shigemune', family:'bessho', stats:{tou:70,bu:68,chi:72,sei:70}},
+    {id:'doi_soshan', nameJP:'土居宗珊', nameEN:'Doi Soshan', family:'ichijo', stats:{tou:62,bu:48,chi:78,sei:74}}
   ];
   provinces.forEach(p=>{
     const cur = DATA.provById[p.id];
@@ -579,17 +703,24 @@ function applySengokuExpansions(){
     {id:'soma', nameJP:'相馬', nameEN:'Soma', color:'#ef4444', ai:'opportunist', capital:'iwaki', lord:'soma_morotane'},
     {id:'ashina', nameJP:'蘆名', nameEN:'Ashina', color:'#a855f7', ai:'defensive', capital:'iwashiro', lord:'ashina_moriuji'},
     {id:'ando', nameJP:'安東', nameEN:'Ando', color:'#84cc16', ai:'opportunist', capital:'kita_ugo', lord:'ando_chikasue'},
+    {id:'daihoji', nameJP:'大宝寺', nameEN:'Daihoji', color:'#f97316', ai:'defensive', capital:'kita_uzen', lord:'daihoji_yoshimasu'},
+    {id:'osaki', nameJP:'大崎', nameEN:'Osaki', color:'#22c55e', ai:'defensive', capital:'osaki', lord:'osaki_yoshinao'},
     {id:'jinbo', nameJP:'神保', nameEN:'Jinbo', color:'#14b8a6', ai:'defensive', capital:'etchu', lord:'jinbo_nagamoto'},
-    {id:'miki', nameJP:'三木', nameEN:'Miki', color:'#fb7185', ai:'defensive', capital:'hida', lord:'miki_yoritsuna'}
+    {id:'miki', nameJP:'三木', nameEN:'Miki', color:'#fb7185', ai:'defensive', capital:'hida', lord:'miki_yoritsuna'},
+    {id:'bessho', nameJP:'別所', nameEN:'Bessho', color:'#f97316', ai:'defensive', capital:'harima_miki', lord:'bessho_nagaharu'},
+    {id:'ichijo', nameJP:'一条', nameEN:'Ichijo', color:'#facc15', ai:'defensive', capital:'nishi_tosa', lord:'ichijo_kanesada'}
   ];
-  const owners = { tsugaru:'tsugaru', rikuchu:'nanbu', rikuzen:'kasai', iwaki:'soma', iwashiro:'ashina', kita_ugo:'ando', etchu:'jinbo', hida:'miki' };
+  const owners = { tsugaru:'tsugaru', rikuchu:'nanbu', rikuzen:'kasai', iwaki:'soma', iwashiro:'ashina', kita_ugo:'ando', etchu:'jinbo', hida:'miki', kita_echigo:'uesugi', minami_shinano:'takeda', hachioji:'hojo', kita_uzen:'daihoji', osaki:'osaki', harima_miki:'bessho', nishi_tosa:'ichijo' };
   const places = {
     tsugaru:['tsugaru_nobuhira','numata_sukemitsu'], rikuchu:['nanbu_nobunao','kunohe_masazane'], rikuzen:['kasai_chikanobu'],
-    iwaki:['soma_takamitsu'], iwashiro:['inawashiro_morikuni'], kita_ugo:['minato_suehide'], etchu:['kojima_motoshige'], hida:['miki_naoyori']
+    iwaki:['soma_takamitsu'], iwashiro:['inawashiro_morikuni'], kita_ugo:['minato_suehide'], etchu:['kojima_motoshige'], hida:['miki_naoyori'],
+    kita_uzen:['tozenji_yoshinaga'], osaki:['ujiie_yoshitsugu'], harima_miki:['bessho_shigemune'], nishi_tosa:['doi_soshan']
   };
   DATA.scenarios.forEach(scn=>{
-    daimyoDefs.forEach(d=>{ if(!scn.daimyo.some(x=>x.id===d.id)) scn.daimyo.push({...d}); });
+    const activeDaimyoDefs = scn.id===1574 ? daimyoDefs.filter(d=>d.id!=='ichijo') : daimyoDefs;
+    activeDaimyoDefs.forEach(d=>{ if(!scn.daimyo.some(x=>x.id===d.id)) scn.daimyo.push({...d}); });
     scn.own = scn.own || {}; Object.assign(scn.own, owners);
+    if (scn.id===1574) scn.own.nishi_tosa='chosokabe';
     scn.place = scn.place || {};
     Object.keys(places).forEach(pid=>{ scn.place[pid] = places[pid].slice(); });
   });
@@ -606,7 +737,7 @@ function drawGeneralPortrait(ctx, gid, x, y, size, opts={}){
   let drawn=false;
   if (img){
     const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-    const cw = iw / ASSETS.portraitCols, ch = ih / ASSETS.portraitRows;
+    const cw = iw / (slot.cols || ASSETS.portraitCols), ch = ih / (slot.rows || ASSETS.portraitRows);
     ctx.drawImage(img, slot.col*cw, slot.row*ch, cw, ch, x, y, size, size);
     drawn=true;
   }
@@ -910,6 +1041,7 @@ class BootScene extends GameKit.Scene {
       ASSETS.img = imgs;
       DATA.scenarios = scn.scenarios;
       applySengokuExpansions();
+      applyCustomCastlesToData();
       buildPortraitSlots();
       this.done=true;
       game.changeScene(new TitleScene());
@@ -1089,10 +1221,11 @@ class MapScene extends GameKit.Scene {
   constructor(state){ super(); this.state=state; }
   enter(game){
     setCanvasViewportMode('fit');
+    ensureCustomCastlesInState(this.state);
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
-    this.showClans=false; this.castleEdit=false; this.dragCastle=null; this.pinching=false; this.press=null; this.dragLast=null; this._suppressTapUntil=0;
+    this.showClans=false; this.castleEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
     this.particles = new GameKit.Particles(W, H, {count:24, colors:['#1e3a5f','#2a2150']});
     // カメラ（ズーム/パン）。初期は3倍ズームで自国領中心。
     let cx=this._clipCx, cy=this._clipCy;
@@ -1107,7 +1240,7 @@ class MapScene extends GameKit.Scene {
     this._checkEnd(game);
     this._save();
   }
-  exit(){ this._unbindInput(); }
+  exit(){ this._hideCastleAddPanel(); this._unbindInput(); }
   _save(){ this.state.version=SAVE_VERSION; save.set('autosave', this.state); }
   _flash(jp){ this.message=jp; this.messageT=2.2; }
 
@@ -1156,17 +1289,26 @@ class MapScene extends GameKit.Scene {
       }
     };
     this._onTouchEnd=(e)=>{ if (!e.touches || e.touches.length<2){ this._touchState=null; if (this.pinching){ this.pinching=false; this._suppressTapUntil=this.t+0.3; } } };
+    this._onPointerUpCoord=(e)=>{
+      if (this.pinching || this.t < (this._suppressTapUntil||0)) return;
+      const p=clientToCanvasXY(e.clientX, e.clientY);
+      if (!pointInRect(p, MAP.clip)) return;
+      if (this.press && this.press.dragged) return;
+      this._recordMapCoordinateFromScreen(p.x, p.y);
+    };
     canvas.addEventListener('wheel', this._onWheel, {passive:false});
     canvas.addEventListener('touchstart', this._onTouchStart, {passive:false});
     canvas.addEventListener('touchmove', this._onTouchMove, {passive:false});
     canvas.addEventListener('touchend', this._onTouchEnd);
     canvas.addEventListener('touchcancel', this._onTouchEnd);
+    canvas.addEventListener('pointerup', this._onPointerUpCoord);
   }
   _unbindInput(){
     if (this._onWheel) canvas.removeEventListener('wheel', this._onWheel);
     if (this._onTouchStart) canvas.removeEventListener('touchstart', this._onTouchStart);
     if (this._onTouchMove) canvas.removeEventListener('touchmove', this._onTouchMove);
     if (this._onTouchEnd){ canvas.removeEventListener('touchend', this._onTouchEnd); canvas.removeEventListener('touchcancel', this._onTouchEnd); }
+    if (this._onPointerUpCoord) canvas.removeEventListener('pointerup', this._onPointerUpCoord);
   }
 
   /* ---- 入力 ---- */
@@ -1205,6 +1347,85 @@ class MapScene extends GameKit.Scene {
       if (!press.dragged) this._activateMapPoint(game, press.x, press.y, btns);
     }
   }
+  _castleAddUi(){
+    if (!castleAddPanel) return null;
+    return {
+      panel:castleAddPanel,
+      name:document.getElementById('castleAddName'),
+      x:document.getElementById('castleAddX'),
+      y:document.getElementById('castleAddY'),
+      daimyo:document.getElementById('castleAddDaimyo'),
+      province:document.getElementById('castleAddProvince'),
+      confirm:document.getElementById('castleAddConfirm'),
+      cancel:document.getElementById('castleAddCancel')
+    };
+  }
+  _startCastleAdd(game){
+    const ui=this._castleAddUi(); if (!ui) return;
+    this.castleAddOpen=true; this.castleEdit=false; this.showClans=false;
+    document.body.classList.add('castle-add-open');
+    ui.daimyo.innerHTML='';
+    daimyoOf(this.state).filter(d=>this.state.daimyo[d.id] && this.state.daimyo[d.id].alive!==false).forEach(d=>{
+      const opt=document.createElement('option'); opt.value=d.id; opt.textContent=d.nameJP+'家'; ui.daimyo.appendChild(opt);
+    });
+    ui.daimyo.value=this.state.playerDaimyo;
+    if (this.lastMapCoord){ ui.x.value=this.lastMapCoord.x; ui.y.value=this.lastMapCoord.y; }
+    ui.confirm.onclick=()=>this._confirmCastleAdd(game);
+    ui.cancel.onclick=()=>this._hideCastleAddPanel();
+    if (game && game.audio) game.audio.beep(720,0.06,'triangle');
+    this._flash('地図をクリックして城の座標を指定してください');
+  }
+  _hideCastleAddPanel(){
+    this.castleAddOpen=false;
+    if (castleAddPanel) document.body.classList.remove('castle-add-open');
+  }
+  _syncCastleAddCoord(pt){
+    const ui=this._castleAddUi();
+    if (!ui || !pt) return;
+    ui.x.value=pt.x; ui.y.value=pt.y;
+  }
+  _recordMapCoordinateFromScreen(x, y){
+    if (!pointInRect({x,y}, MAP.clip)) return null;
+    const w=this._screenToWorld(x,y);
+    const pt=mapWorldToImagePoint(w.x,w.y);
+    if (!pt) return null;
+    this.lastMapCoord=pt;
+    if (this.castleAddOpen) this._syncCastleAddCoord(pt);
+    return pt;
+  }
+  _nearestProvinceByWorld(wx, wy){
+    let best=null, bestD=Infinity;
+    for (const p of DATA.provinces){
+      if (p.id && p.id.startsWith('custom_castle_')) continue;
+      const [px,py]=provinceScreenPoint(p);
+      const d=Math.hypot(px-wx, py-wy);
+      if (d<bestD){ bestD=d; best=p.id; }
+    }
+    return best;
+  }
+  _confirmCastleAdd(game){
+    const ui=this._castleAddUi(); if (!ui) return;
+    const castleName=(ui.name.value||'').trim();
+    const provinceName=(ui.province.value||castleName.replace(/城$/,'')||'追加国').trim();
+    const daimyoId=ui.daimyo.value || this.state.playerDaimyo;
+    const img=ASSETS.img.map;
+    const iw=img && (img.naturalWidth||img.width), ih=img && (img.naturalHeight||img.height);
+    const rawX=(ui.x.value||'').trim(), rawY=(ui.y.value||'').trim();
+    const x=Number(rawX), y=Number(rawY);
+    if (!castleName){ this._flash('城名を入力してください'); return; }
+    if (!iw || !ih || rawX==='' || rawY==='' || !Number.isFinite(x) || !Number.isFinite(y)){ this._flash('地図上をクリックして座標を指定してください'); return; }
+    const mx=clamp01(x/iw), my=clamp01(y/ih);
+    const world=mapImagePointToWorld(mx,my);
+    const neighborId=this._nearestProvinceByWorld(world.x, world.y);
+    const id=customCastleId(castleName);
+    const c={id, castleName, provinceName, daimyoId, mx, my, x:Math.round(x), y:Math.round(y), neighborId, terrain:'plain', kokudaka:50};
+    CUSTOM_CASTLES.push(c); saveCustomCastles(); addCustomCastleToData(c); saveCastlePositionOverrides();
+    ensureCustomCastlesInState(this.state);
+    this.cells=computeProvinceCells(); this.selected=id; this.mode='select'; this.hover=null;
+    this._hideCastleAddPanel(); this._save();
+    if (game && game.audio) game.audio.beep(880,0.08,'triangle');
+    this._flash(castleName+'を追加しました');
+  }
   _startCastleEdit(game){
     this.castleEdit=true; this.showClans=false; this.mode='select'; this.selected=null; this.hover=null; this.dragCastle=null;
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
@@ -1217,8 +1438,15 @@ class MapScene extends GameKit.Scene {
   }
   _updateCastleEditor(game, p, btns){
     if (p.justPressed){
-      for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.05,'sine'); b.action(game); return; } }
+      for (const b of btns){
+        if ((b.on!==false)&&pointInRect(p,b)){
+          this.press=null; this.dragLast=null; this.dragCastle=null;
+          game.audio.beep(600,0.05,'sine'); b.action(game); return;
+        }
+      }
       const hit=this._pickCastleMarker(p.x,p.y);
+      this.press = {x:p.x, y:p.y, dragged:false, onBtn:false, onCastle:!!hit};
+      this.dragLast = {x:p.x, y:p.y};
       if (hit){
         const w=this._screenToWorld(p.x,p.y);
         this.dragCastle={id:hit.id, ox:0, oy:0};
@@ -1226,21 +1454,36 @@ class MapScene extends GameKit.Scene {
         const pt=castleOverridePoint(hit.id);
         CASTLE_LAND_SNAP_CACHE[hit.id + ':' + Math.round(pt[0]) + ',' + Math.round(pt[1])] = {x:pt[0], y:pt[1]};
         this.selected=hit.id;
+      } else {
+        this.dragCastle=null;
       }
     }
-    if (this.dragCastle && p.isDown){
-      const w=this._screenToWorld(p.x,p.y), d=this.dragCastle, c=MAP.clip;
-      const nx=clamp(w.x-d.ox, c.x+16, c.x+c.w-16), ny=clamp(w.y-d.oy, c.y+16, c.y+c.h-16);
-      setCastlePositionOverride(d.id, nx, ny);
-      const pt=castleOverridePoint(d.id);
-      CASTLE_LAND_SNAP_CACHE[d.id + ':' + Math.round(pt[0]) + ',' + Math.round(pt[1])] = {x:pt[0], y:pt[1]};
+    if (this.press && p.isDown){
+      if (Math.hypot(p.x-this.press.x, p.y-this.press.y)>10) this.press.dragged = true;
+      if (this.dragCastle){
+        const w=this._screenToWorld(p.x,p.y), d=this.dragCastle, c=MAP.clip;
+        const nx=clamp(w.x-d.ox, c.x+16, c.x+c.w-16), ny=clamp(w.y-d.oy, c.y+16, c.y+c.h-16);
+        setCastlePositionOverride(d.id, nx, ny);
+        const pt=castleOverridePoint(d.id);
+        CASTLE_LAND_SNAP_CACHE[d.id + ':' + Math.round(pt[0]) + ',' + Math.round(pt[1])] = {x:pt[0], y:pt[1]};
+      } else if (this.press.dragged && this.dragLast){
+        this.cam.cx -= (p.x-this.dragLast.x)/this.cam.zoom;
+        this.cam.cy -= (p.y-this.dragLast.y)/this.cam.zoom;
+        this._clampCam();
+      }
+      this.dragLast = {x:p.x, y:p.y};
     }
-    if (this.dragCastle && !p.isDown){
-      const d=this.dragCastle, cur=castleOverridePoint(d.id);
-      if (cur){ const fixed=snapCastlePointToLand(d.id, cur[0], cur[1]); setCastlePositionOverride(d.id, fixed[0], fixed[1]); }
-      saveCastlePositionOverrides();
-      this.cells=computeProvinceCells();
-      this.dragCastle=null;
+    if (this.press && !p.isDown){
+      const press=this.press; this.press=null; this.dragLast=null;
+      if (this.dragCastle){
+        const d=this.dragCastle, cur=castleOverridePoint(d.id);
+        if (cur){ const fixed=snapCastlePointToLand(d.id, cur[0], cur[1]); setCastlePositionOverride(d.id, fixed[0], fixed[1]); }
+        saveCastlePositionOverrides();
+        this.cells=computeProvinceCells();
+        this.dragCastle=null;
+      } else if (!press.dragged){
+        this._recordMapCoordinateFromScreen(p.x, p.y);
+      }
     }
   }
   _pickCastleMarker(x,y){
@@ -1451,6 +1694,7 @@ class MapScene extends GameKit.Scene {
     }
     bs.push({x:W-348, y:H-124, w:320, h:104, jp:'ターン終了', en:'End Turn', sz:38, ensz:20, accent:'rgba(232,192,122,0.82)', action:g=>this._endTurn(g)});
     bs.push({x:W-348, y:H-224, w:320, h:82, label:'タイトルへ', sz:28, action:()=>game.changeScene(new TitleScene())});
+    bs.push({x:28, y:H-674, w:360, h:104, label:'城追加', sz:34, accent:this.castleAddOpen?'rgba(52,211,153,0.88)':'rgba(217,119,6,0.76)', action:g=>this._startCastleAdd(g)});
     bs.push({x:28, y:H-536, w:360, h:104, label:this.castleEdit?'完了':'城位置編集', sz:34, accent:this.castleEdit?'rgba(52,211,153,0.88)':'rgba(251,191,36,0.76)', action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }});
     bs.push({x:28,  y:H-400, w:130, h:118, label:'＋', sz:58, accent:'rgba(96,165,250,0.72)', action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }});
     bs.push({x:176, y:H-400, w:130, h:118, label:'－', sz:58, accent:'rgba(96,165,250,0.72)', action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }});
@@ -1514,6 +1758,7 @@ class MapScene extends GameKit.Scene {
     this.particles.draw(ctx);
     this._drawTopBar(ctx);
     this._drawSidePanel(ctx);
+    this._drawMapCoordinateReadout(ctx);
     if (this.showClans) this._drawClansOverlay(ctx);
     if (this.castleEdit) this._drawCastleEditOverlay(ctx);
     // ボタン（一覧オーバーレイより前面に出して操作可能に）
@@ -1592,6 +1837,13 @@ class MapScene extends GameKit.Scene {
       drawVerticalLabel(ctx, name, nrect.x+nrect.w/2, nrect.y, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
       occupied.push(nrect);
     }
+  }
+  _drawMapCoordinateReadout(ctx){
+    if (!this.lastMapCoord) return;
+    const x=W-642, y=156, w=610, h=92;
+    GameKit.UI.glassPanel(ctx, x, y, w, h, {radius:14, fill:'rgba(8,13,24,0.88)', stroke:'rgba(56,189,248,0.42)'});
+    T(ctx, '地図座標', x+24, y+14, {size:24, weight:'bold', color:'#facc15'});
+    T(ctx, 'x '+this.lastMapCoord.x+'   y '+this.lastMapCoord.y, x+24, y+48, {size:32, weight:'bold', color:'#f8fafc'});
   }
   _drawCastleEditHints(ctx){
     if (!this.castleEdit) return;
