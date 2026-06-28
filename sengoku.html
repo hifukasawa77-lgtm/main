@@ -308,7 +308,7 @@ const SAVE_VERSION = 1;
 /* ---- 静的データ登録（JSONロード後に格納） ---- */
 const DATA = { provinces:null, provById:{}, generals:null, genById:{}, scenarios:null };
 const GPT_ASSETS = {
-  map:'assets/sengoku/gpt/sengoku-satellite-japan-gpt-image-2-v6.png',
+  map:'assets/sengoku/gpt/sengoku-japan-map-3x-gpt-image-2.png',
   title: 'assets/sengoku/gpt/sengoku-title-gpt-image-2.jpg',
   battle: 'assets/sengoku/gpt/sengoku-hex-battlefield-gpt-image-2.jpg',
   battleTiles: 'assets/sengoku/gpt/sengoku-hex-terrain-atlas-gpt-image-2.jpg',
@@ -389,7 +389,7 @@ function mapImageLandWorld(wx, wy){
       ctx.drawImage(img, 0, 0);
       MAP_LAND_SAMPLE.img = img; MAP_LAND_SAMPLE.canvas = cnv; MAP_LAND_SAMPLE.ctx = ctx;
     }
-    const c=MAP.clip;
+    const c=MAP.world || MAP.clip;
     if (wx<c.x || wx>c.x+c.w || wy<c.y || wy>c.y+c.h) return false;
     const scale = Math.max(c.w/iw, c.h/ih);
     const sw = c.w/scale, sh = c.h/scale;
@@ -417,7 +417,7 @@ function mapImageLandWorld(wx, wy){
 function isLandWorld(wx, wy){
   const imageLand = mapImageLandWorld(wx, wy);
   if (imageLand !== null) return imageLand;
-  const c=MAP.clip;
+  const c=MAP.world || MAP.clip;
   const mx=Math.floor((wx-c.x)/c.w*LAND_MASK.mw), my=Math.floor((wy-c.y)/c.h*LAND_MASK.mh);
   if (mx<0||mx>=LAND_MASK.mw||my<0||my>=LAND_MASK.mh) return false;
   const k=my*LAND_MASK.mw+mx;
@@ -428,7 +428,7 @@ function snapCastlePointToLand(id, x, y){
   const key = id + ':' + Math.round(x) + ',' + Math.round(y);
   const cached = CASTLE_LAND_SNAP_CACHE[key];
   if (cached) return [cached.x, cached.y];
-  const c = MAP.clip;
+  const c = MAP.world || MAP.clip;
   const insideX = clamp(x, c.x+10, c.x+c.w-10), insideY = clamp(y, c.y+10, c.y+c.h-10);
   if (isLandWorld(insideX, insideY)){
     CASTLE_LAND_SNAP_CACHE[key] = {x:insideX, y:insideY};
@@ -489,7 +489,9 @@ async function loadOptionalImages(map){
 }
 
 /* ---- マップ描画パラメータ（論理座標→画面座標） ---- */
-const MAP = { s:0.655, ox:14, oy:64, clip:{x:8,y:58,w:W-16,h:H-114}, R:80 };
+const MAP_SCALE_MULTIPLIER = 3;
+const MAP = { s:0.655 * MAP_SCALE_MULTIPLIER, ox:14, oy:64, clip:{x:8,y:58,w:W-16,h:H-114}, R:80 };
+MAP.world = { x:MAP.ox, y:MAP.oy, w:1000 * MAP.s, h:650 * MAP.s };
 function toScreenX(lx){ return MAP.ox + lx * MAP.s; }
 function toScreenY(ly){ return MAP.oy + ly * MAP.s; }
 const COAST_OUTLINES = [
@@ -598,10 +600,10 @@ function drawTerrainBackdrop(ctx, mapImg, t=0){
   const c=MAP.clip;
   ctx.save();
   ctx.beginPath(); ctx.rect(c.x,c.y,c.w,c.h); ctx.clip();
-  if (!drawCoverImage(ctx, mapImg, c.x, c.y, c.w, c.h, 1)) {
+  if (!drawCoverImage(ctx, mapImg, MAP.world.x, MAP.world.y, MAP.world.w, MAP.world.h, 1)) {
     const sea=ctx.createLinearGradient(c.x,c.y,c.x+c.w,c.y+c.h);
     sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
-    ctx.fillStyle=sea; ctx.fillRect(c.x,c.y,c.w,c.h);
+    ctx.fillStyle=sea; ctx.fillRect(MAP.world.x, MAP.world.y, MAP.world.w, MAP.world.h);
   }
   ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(c.x,c.y,c.w,c.h);
   ctx.restore();
@@ -1227,12 +1229,12 @@ class MapScene extends GameKit.Scene {
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
     this.showClans=false; this.castleEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
     this.particles = new GameKit.Particles(W, H, {count:24, colors:['#1e3a5f','#2a2150']});
-    // カメラ（ズーム/パン）。初期は3倍ズームで自国領中心。
+    // カメラ（ズーム/パン）。3倍化したワールドを自国領中心で表示。
     let cx=this._clipCx, cy=this._clipCy;
     const pd=daimyoDef(this.state, this.state.playerDaimyo);
     const capProv = pd && DATA.provById[pd.capital];
     if (capProv){ const pt=provinceScreenPoint(capProv); cx=pt[0]; cy=pt[1]; }
-    this.cam = { zoom:3, cx, cy, min:1, max:6 };
+    this.cam = { zoom:1, cx, cy, min:0.45, max:6 };
     this._clampCam();
     this._bindInput();
     // 戦闘から戻った結果の適用
@@ -1253,8 +1255,9 @@ class MapScene extends GameKit.Scene {
   _clampCam(){
     const c=this.cam; c.zoom = clamp(c.zoom, c.min, c.max);
     const halfW=(MAP.clip.w/2)/c.zoom, halfH=(MAP.clip.h/2)/c.zoom;
-    const minX=MAP.clip.x+halfW, maxX=MAP.clip.x+MAP.clip.w-halfW;
-    const minY=MAP.clip.y+halfH, maxY=MAP.clip.y+MAP.clip.h-halfH;
+    const bounds = MAP.world || MAP.clip;
+    const minX=bounds.x+halfW, maxX=bounds.x+bounds.w-halfW;
+    const minY=bounds.y+halfH, maxY=bounds.y+bounds.h-halfH;
     c.cx = minX>maxX ? this._clipCx : clamp(c.cx, minX, maxX);
     c.cy = minY>maxY ? this._clipCy : clamp(c.cy, minY, maxY);
   }
@@ -1461,7 +1464,7 @@ class MapScene extends GameKit.Scene {
     if (this.press && p.isDown){
       if (Math.hypot(p.x-this.press.x, p.y-this.press.y)>10) this.press.dragged = true;
       if (this.dragCastle){
-        const w=this._screenToWorld(p.x,p.y), d=this.dragCastle, c=MAP.clip;
+        const w=this._screenToWorld(p.x,p.y), d=this.dragCastle, c=MAP.world || MAP.clip;
         const nx=clamp(w.x-d.ox, c.x+16, c.x+c.w-16), ny=clamp(w.y-d.oy, c.y+16, c.y+c.h-16);
         setCastlePositionOverride(d.id, nx, ny);
         const pt=castleOverridePoint(d.id);
