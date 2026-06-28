@@ -6612,6 +6612,7 @@
     (function () {
       const TRANS = {
         ja: {
+          'skip-to-main': '本文へスキップ',
           'nav-local': '地域情報',
           'nav-gourmet': 'グルメまとめ',
           'nav-hobby': '趣味',
@@ -6855,6 +6856,7 @@
           'agent-more': 'もっと見る',
         },
         en: {
+          'skip-to-main': 'Skip to main content',
           'nav-local': 'Local',
           'nav-gourmet': 'Gourmet',
           'nav-hobby': 'Hobbies',
@@ -9643,29 +9645,36 @@
       }
       if (legacy) legacy.style.display = 'none';
 
-      games.forEach(g => {
-        const homeMark = NPB_TEAM_MARK[g.homeShort] || { bg:'#444', fg:'#fff', abbr: g.homeShort.slice(0,2) };
-        const awayMark = NPB_TEAM_MARK[g.awayShort] || { bg:'#444', fg:'#fff', abbr: g.awayShort.slice(0,2) };
+      // 外部プロキシ由来の文字列を innerHTML へ展開するため HTML/属性エスケープを徹底（XSS防御）
+      const esc = s => String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      // ロゴURLは http(s) のみ許可。それ以外は空にしてバッジへフォールバック
+      const safeUrl = u => /^https?:\/\//i.test(String(u || '')) ? esc(u) : '';
 
-        const makeLogo = (url, mark, name) => url
-          ? `<img class="npb-team-logo" src="${url}" alt="${name}" loading="lazy" onerror="this.outerHTML='<span class=npb-team-badge style=background:${encodeURIComponent(mark.bg)};color:${encodeURIComponent(mark.fg)}>${mark.abbr}</span>'">`
-          : `<span class="npb-team-badge" style="background:${mark.bg};color:${mark.fg}">${mark.abbr}</span>`;
+      games.forEach(g => {
+        const homeMark = NPB_TEAM_MARK[g.homeShort] || { bg:'#444', fg:'#fff', abbr: esc(String(g.homeShort).slice(0,2)) };
+        const awayMark = NPB_TEAM_MARK[g.awayShort] || { bg:'#444', fg:'#fff', abbr: esc(String(g.awayShort).slice(0,2)) };
+
+        const makeLogo = (url, mark, name) => safeUrl(url)
+          ? `<img class="npb-team-logo" src="${safeUrl(url)}" alt="${esc(name)}" loading="lazy" onerror="this.outerHTML='<span class=npb-team-badge style=background:${encodeURIComponent(mark.bg)};color:${encodeURIComponent(mark.fg)}>${esc(mark.abbr)}</span>'">`
+          : `<span class="npb-team-badge" style="background:${esc(mark.bg)};color:${esc(mark.fg)}">${esc(mark.abbr)}</span>`;
 
         const hasScore = g.homeScore !== null && g.awayScore !== null;
         const scoreHtml = hasScore
-          ? `<div class="npb-score-box">${g.homeScore} - ${g.awayScore}</div>`
-          : `<div class="npb-score-box kick">${g.timeLocal}</div>`;
+          ? `<div class="npb-score-box">${esc(g.homeScore)} - ${esc(g.awayScore)}</div>`
+          : `<div class="npb-score-box kick">${esc(g.timeLocal)}</div>`;
 
         const row = document.createElement('div');
         row.className = 'npb-game-row';
         row.innerHTML =
           makeLogo(g.homeLogo, homeMark, g.homeJP) +
-          `<span class="npb-team-name home">${g.homeJP}</span>` +
+          `<span class="npb-team-name home">${esc(g.homeJP)}</span>` +
           scoreHtml +
-          `<span class="npb-team-name">${g.awayJP}</span>` +
+          `<span class="npb-team-name">${esc(g.awayJP)}</span>` +
           makeLogo(g.awayLogo, awayMark, g.awayJP) +
-          `<span class="npb-status-badge ${g.statusCls}">${g.statusText}</span>` +
-          `<span class="npb-game-venue">${g.venue}</span>`;
+          `<span class="npb-status-badge ${esc(g.statusCls)}">${esc(g.statusText)}</span>` +
+          `<span class="npb-game-venue">${esc(g.venue)}</span>`;
         container.appendChild(row);
       });
     }
