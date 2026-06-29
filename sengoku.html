@@ -108,6 +108,7 @@
     background:rgba(30,41,59,0.92); color:#f8fafc; font-weight:800; font-size:16px; cursor:pointer;
   }
   .castle-add-actions button.primary { background:rgba(217,119,6,0.88); border-color:rgba(251,191,36,0.75); }
+  .castle-add-actions button.danger { background:rgba(153,27,27,0.92); border-color:rgba(248,113,113,0.72); }
   .castle-add-actions button:hover { filter:brightness(1.12); }
 </style>
 </head>
@@ -123,17 +124,17 @@
     <div class="fs-gate-rotate">📱 端末を横向きにしてください / Rotate your device</div>
   </div>
 </div>
-<div id="castleAddPanel" class="castle-add-panel" aria-label="城追加モード">
-  <div class="castle-add-title">城追加モード</div>
+<div id="castleAddPanel" class="castle-add-panel" aria-label="城編集パネル">
+  <div id="castlePanelTitle" class="castle-add-title">城追加モード</div>
   <div class="castle-add-grid">
-    <div class="castle-add-field wide"><label for="castleAddName">城名</label><input id="castleAddName" type="text" placeholder="例: 新城" autocomplete="off"></div>
-    <div class="castle-add-field"><label for="castleAddX">城位置 x</label><input id="castleAddX" type="number" inputmode="numeric" step="1"></div>
-    <div class="castle-add-field"><label for="castleAddY">城位置 y</label><input id="castleAddY" type="number" inputmode="numeric" step="1"></div>
+    <div class="castle-add-field wide"><label for="castleAddName">城名称</label><input id="castleAddName" type="text" placeholder="例: 新城" autocomplete="off"></div>
+    <div class="castle-add-field coord-field"><label for="castleAddX">城位置 x</label><input id="castleAddX" type="number" inputmode="numeric" step="1"></div>
+    <div class="castle-add-field coord-field"><label for="castleAddY">城位置 y</label><input id="castleAddY" type="number" inputmode="numeric" step="1"></div>
     <div class="castle-add-field wide"><label for="castleAddDaimyo">所属大名</label><select id="castleAddDaimyo"></select></div>
     <div class="castle-add-field wide"><label for="castleAddProvince">国名</label><input id="castleAddProvince" type="text" placeholder="例: 武蔵" autocomplete="off"></div>
   </div>
-  <div class="castle-add-help">地図をクリック/タップすると x,y が入ります。確定するとその座標に城を配置します。</div>
-  <div class="castle-add-actions"><button id="castleAddCancel" type="button">閉じる</button><button id="castleAddConfirm" class="primary" type="button">確定</button></div>
+  <div id="castlePanelHelp" class="castle-add-help">地図をクリック/タップすると x,y が入ります。確定するとその座標に城を配置します。</div>
+  <div class="castle-add-actions"><button id="castleAddDelete" class="danger" type="button" style="display:none">削除</button><button id="castleAddCancel" type="button">閉じる</button><button id="castleAddConfirm" class="primary" type="button">確定</button></div>
 </div>
 <p class="hint"><b>戦国の野望</b> / Sengoku no Yabou &nbsp;|&nbsp; クリックで操作 — Click to play &nbsp;|&nbsp; 全国64洲をヘックス戦で制覇せよ</p>
 
@@ -211,6 +212,68 @@ function saveCustomCastles(){
   try { localStorage.setItem(CUSTOM_CASTLE_STORE, JSON.stringify(CUSTOM_CASTLES)); }
   catch (_) {}
 }
+const CASTLE_META_STORE = 'sengokuCastleMetaOverrides:v1';
+function loadCastleMetaOverrides(){
+  try { const v=JSON.parse(localStorage.getItem(CASTLE_META_STORE) || '{}'); return v && typeof v==='object' && !Array.isArray(v) ? v : {}; }
+  catch (_) { return {}; }
+}
+const CASTLE_META_OVERRIDES = loadCastleMetaOverrides();
+function saveCastleMetaOverrides(){
+  try { localStorage.setItem(CASTLE_META_STORE, JSON.stringify(CASTLE_META_OVERRIDES)); }
+  catch (_) {}
+}
+function isCastleDeleted(id){ return !!(CASTLE_META_OVERRIDES[id] && CASTLE_META_OVERRIDES[id].deleted); }
+function setCastleMetaOverride(id, patch){
+  if (!id) return;
+  const next = Object.assign({}, CASTLE_META_OVERRIDES[id] || {}, patch || {});
+  Object.keys(next).forEach(k=>{ if (next[k]===undefined || next[k]===null || next[k]==='') delete next[k]; });
+  CASTLE_META_OVERRIDES[id]=next;
+  saveCastleMetaOverrides();
+}
+function removeCastleFromData(id){
+  if (!id) return;
+  DATA.provinces = (DATA.provinces || []).filter(p=>p.id!==id);
+  delete DATA.provById[id];
+  delete CASTLE_NAMES[id];
+  delete CASTLE_POS_OVERRIDES[id];
+  DATA.provinces.forEach(p=>{ p.neighbors=(p.neighbors||[]).filter(nb=>nb!==id); });
+  if (DATA.scenarios){
+    DATA.scenarios.forEach(scn=>{
+      if (scn.own) delete scn.own[id];
+      if (scn.place) delete scn.place[id];
+      (scn.daimyo||[]).forEach(d=>{ if (d.capital===id) d.capital=Object.keys(scn.own||{}).find(pid=>scn.own[pid]===d.id) || d.capital; });
+    });
+  }
+}
+function removeCastleFromState(state, id){
+  if (!state || !state.provinces || !state.provinces[id]) return;
+  (state.provinces[id].generals||[]).forEach(gid=>{ if (state.generals && state.generals[gid]) state.generals[gid].location=null; });
+  delete state.provinces[id];
+}
+function applyCastleMetaToData(id){
+  const meta=CASTLE_META_OVERRIDES[id];
+  if (!meta) return;
+  if (meta.deleted){ removeCastleFromData(id); return; }
+  const p=DATA.provById[id];
+  if (!p) return;
+  if (meta.provinceName) p.nameJP=meta.provinceName;
+  if (meta.castleName) CASTLE_NAMES[id]=meta.castleName;
+  if (meta.daimyoId && DATA.scenarios){ DATA.scenarios.forEach(scn=>{ scn.own=scn.own||{}; scn.own[id]=meta.daimyoId; }); }
+}
+function applyCastleMetaOverridesToData(){ Object.keys(CASTLE_META_OVERRIDES).forEach(applyCastleMetaToData); }
+function applyCastleMetaOverridesToState(state){
+  if (!state || !state.provinces) return;
+  Object.entries(CASTLE_META_OVERRIDES).forEach(([id, meta])=>{
+    if (meta.deleted){ removeCastleFromState(state, id); return; }
+    if (meta.daimyoId && state.provinces[id]) state.provinces[id].owner=meta.daimyoId;
+  });
+}
+function updateCustomCastleRecord(id, patch){
+  const c=CUSTOM_CASTLES.find(v=>v.id===id);
+  if (!c) return;
+  Object.assign(c, patch || {});
+  saveCustomCastles();
+}
 function mapWorldToImagePoint(wx, wy){
   const m=mapImageMetrics();
   if (!m) return null;
@@ -232,7 +295,7 @@ function customCastleId(name){
   return 'custom_castle_' + suffix;
 }
 function addCustomCastleToData(c){
-  if (!c || !c.id) return;
+  if (!c || !c.id || isCastleDeleted(c.id)) return;
   const p={id:c.id, nameJP:c.provinceName||c.castleName||'追加国', nameEN:'Custom Castle', region:'追加', x:500, y:325, terrain:c.terrain||'plain', kokudaka:c.kokudaka||50, neighbors:c.neighborId?[c.neighborId]:[]};
   if (DATA.provById[c.id]) Object.assign(DATA.provById[c.id], p);
   else { DATA.provinces.push(p); DATA.provById[c.id]=p; }
@@ -250,7 +313,7 @@ function addCustomCastleToData(c){
     });
   }
 }
-function applyCustomCastlesToData(){ CUSTOM_CASTLES.forEach(addCustomCastleToData); saveCastlePositionOverrides(); }
+function applyCustomCastlesToData(){ CUSTOM_CASTLES.forEach(addCustomCastleToData); applyCastleMetaOverridesToData(); saveCastlePositionOverrides(); }
 function ensureCustomCastlesInState(state){
   if (!state || !state.provinces) return;
   CUSTOM_CASTLES.forEach(c=>{
@@ -932,6 +995,7 @@ function buildGameState(scenarioId, playerDaimyo){
       }
     });
   }
+  applyCastleMetaOverridesToState(state);
   return state;
 }
 
@@ -1254,10 +1318,11 @@ class MapScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
     ensureCustomCastlesInState(this.state);
+    applyCastleMetaOverridesToState(this.state);
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
-    this.showClans=false; this.castleEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
+    this.showClans=false; this.castleEdit=false; this.castleMetaEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
     this.particles = new GameKit.Particles(W, H, {count:24, colors:['#1e3a5f','#2a2150']});
     // カメラ（ズーム/パン）。3倍化したワールドを自国領中心で表示。
     let cx=this._clipCx, cy=this._clipCy;
@@ -1354,11 +1419,12 @@ class MapScene extends GameKit.Scene {
 
     const btns = this._buttons();
     updateButtonHot(btns, p);
-    if (!this.showClans && !this.castleEdit && pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
+    if (!this.showClans && !this.castleEdit && !this.castleMetaEdit && pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
 
     // ピンチ中はパン/タップを無効化
     if (this.pinching){ this.press=null; this.dragLast=null; return; }
     if (this.castleEdit){ this._updateCastleEditor(game, p, btns); return; }
+    if (this.castleMetaEdit){ this._updateCastleMetaEditor(game, p, btns); return; }
 
     if (p.justPressed){
       this.press = {x:p.x, y:p.y, dragged:false, onBtn: btns.some(b=>b.on!==false && pointInRect(p,b))};
@@ -1384,33 +1450,113 @@ class MapScene extends GameKit.Scene {
     if (!castleAddPanel) return null;
     return {
       panel:castleAddPanel,
+      title:document.getElementById('castlePanelTitle'),
+      help:document.getElementById('castlePanelHelp'),
       name:document.getElementById('castleAddName'),
       x:document.getElementById('castleAddX'),
       y:document.getElementById('castleAddY'),
       daimyo:document.getElementById('castleAddDaimyo'),
       province:document.getElementById('castleAddProvince'),
       confirm:document.getElementById('castleAddConfirm'),
-      cancel:document.getElementById('castleAddCancel')
+      cancel:document.getElementById('castleAddCancel'),
+      del:document.getElementById('castleAddDelete')
     };
   }
-  _startCastleAdd(game){
-    const ui=this._castleAddUi(); if (!ui) return;
-    this.castleAddOpen=true; this.castleEdit=false; this.showClans=false;
-    document.body.classList.add('castle-add-open');
+  _setCastleCoordFieldsVisible(ui, visible){
+    [ui.x, ui.y].forEach(el=>{ const row=el && el.closest ? el.closest('.castle-add-field') : null; if (row) row.style.display=visible?'flex':'none'; });
+  }
+  _populateCastleDaimyoOptions(ui, selectedId){
     ui.daimyo.innerHTML='';
     daimyoOf(this.state).filter(d=>this.state.daimyo[d.id] && this.state.daimyo[d.id].alive!==false).forEach(d=>{
       const opt=document.createElement('option'); opt.value=d.id; opt.textContent=d.nameJP+'家'; ui.daimyo.appendChild(opt);
     });
-    ui.daimyo.value=this.state.playerDaimyo;
+    ui.daimyo.value=selectedId || this.state.playerDaimyo;
+  }
+  _startCastleAdd(game){
+    const ui=this._castleAddUi(); if (!ui) return;
+    this.castleAddOpen=true; this.castleEdit=false; this.castleMetaEdit=false; this.showClans=false; this.editCastleId=null;
+    document.body.classList.add('castle-add-open');
+    if (ui.title) ui.title.textContent='城追加モード';
+    if (ui.help) ui.help.textContent='地図をクリック/タップすると x,y が入ります。確定するとその座標に城を配置します。';
+    this._setCastleCoordFieldsVisible(ui, true);
+    if (ui.del) ui.del.style.display='none';
+    this._populateCastleDaimyoOptions(ui, this.state.playerDaimyo);
+    ui.name.value=''; ui.province.value='';
     if (this.lastMapCoord){ ui.x.value=this.lastMapCoord.x; ui.y.value=this.lastMapCoord.y; }
+    else { ui.x.value=''; ui.y.value=''; }
     ui.confirm.onclick=()=>this._confirmCastleAdd(game);
     ui.cancel.onclick=()=>this._hideCastleAddPanel();
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
     this._flash('地図をクリックして城の座標を指定してください');
   }
   _hideCastleAddPanel(){
-    this.castleAddOpen=false;
+    this.castleAddOpen=false; this.editCastleId=null;
     if (castleAddPanel) document.body.classList.remove('castle-add-open');
+  }
+  _startCastleMetaEdit(game){
+    this.castleMetaEdit=true; this.castleEdit=false; this.showClans=false; this.mode='select'; this.selected=null; this.hover=null; this.dragCastle=null;
+    this._hideCastleAddPanel();
+    if (game && game.audio) game.audio.beep(720,0.06,'triangle');
+    this._flash('編集したい城をクリックしてください');
+  }
+  _finishCastleMetaEdit(game){
+    this.castleMetaEdit=false; this._hideCastleAddPanel();
+    if (game && game.audio) game.audio.beep(880,0.08,'triangle');
+    this._flash('城編集モードを終了しました');
+  }
+  _updateCastleMetaEditor(game, p, btns){
+    if (!p.justPressed) return;
+    for (const b of btns){
+      if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.05,'sine'); b.action(game); return; }
+    }
+    const hit=this._pickCastleMarker(p.x,p.y);
+    if (hit) this._openCastleMetaPanel(game, hit.id);
+  }
+  _openCastleMetaPanel(game, id){
+    const ui=this._castleAddUi(); const p=DATA.provById[id], prov=this.state.provinces[id];
+    if (!ui || !p || !prov) return;
+    this.editCastleId=id; this.castleAddOpen=true;
+    document.body.classList.add('castle-add-open');
+    if (ui.title) ui.title.textContent='城編集モード';
+    if (ui.help) ui.help.textContent='城名称・所属大名・国名を変更できます。削除ボタンでこの城を削除します。';
+    this._setCastleCoordFieldsVisible(ui, false);
+    this._populateCastleDaimyoOptions(ui, prov.owner || this.state.playerDaimyo);
+    ui.name.value=castleNameForProvince(p);
+    ui.province.value=p.nameJP || '';
+    if (ui.del) ui.del.style.display='block';
+    ui.confirm.onclick=()=>this._confirmCastleMetaEdit(game, id);
+    ui.cancel.onclick=()=>this._hideCastleAddPanel();
+    if (ui.del) ui.del.onclick=()=>this._deleteCastle(game, id);
+  }
+  _confirmCastleMetaEdit(game, id){
+    const ui=this._castleAddUi(); const p=DATA.provById[id], prov=this.state.provinces[id];
+    if (!ui || !p || !prov) return;
+    const castleName=(ui.name.value||'').trim();
+    const provinceName=(ui.province.value||'').trim();
+    const daimyoId=ui.daimyo.value || prov.owner || this.state.playerDaimyo;
+    if (!castleName){ this._flash('城名称を入力してください'); return; }
+    if (!provinceName){ this._flash('国名を入力してください'); return; }
+    setCastleMetaOverride(id, {castleName, provinceName, daimyoId, deleted:false});
+    p.nameJP=provinceName; CASTLE_NAMES[id]=castleName; prov.owner=daimyoId;
+    updateCustomCastleRecord(id, {castleName, provinceName, daimyoId});
+    applyCastleMetaToData(id); applyCastleMetaOverridesToState(this.state);
+    this.cells=computeProvinceCells(); this.selected=id; this.mode='select'; this.hover=null;
+    this._hideCastleAddPanel(); this._save();
+    if (game && game.audio) game.audio.beep(880,0.08,'triangle');
+    this._flash(castleName+'を更新しました');
+  }
+  _deleteCastle(game, id){
+    const p=DATA.provById[id]; if (!p) return;
+    const name=castleNameForProvince(p);
+    if (typeof window!=='undefined' && window.confirm && !window.confirm(name+'を削除しますか？')) return;
+    setCastleMetaOverride(id, {deleted:true});
+    const ci=CUSTOM_CASTLES.findIndex(c=>c.id===id);
+    if (ci>=0){ CUSTOM_CASTLES.splice(ci,1); saveCustomCastles(); }
+    removeCastleFromState(this.state, id); removeCastleFromData(id); saveCastlePositionOverrides();
+    this.selected=null; this.hover=null; this.mode='select'; this.cells=computeProvinceCells();
+    this._hideCastleAddPanel(); this._save();
+    if (game && game.audio) game.audio.beep(260,0.12,'sawtooth');
+    this._flash(name+'を削除しました');
   }
   _syncCastleAddCoord(pt){
     const ui=this._castleAddUi();
@@ -1749,6 +1895,7 @@ class MapScene extends GameKit.Scene {
     bs.push({x:34, y:H-310, w:84, h:72, skin:'topBar', label:'＋', sz:36, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }});
     bs.push({x:132, y:H-310, w:84, h:72, skin:'topBar', label:'－', sz:36, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }});
     bs.push({x:34, y:H-218, w:212, h:86, skin:'topBar', label:'城追加', sz:28, action:g=>this._startCastleAdd(g)});
+    bs.push({x:260, y:H-218, w:212, h:86, skin:'topBar', label:this.castleMetaEdit?'完了':'城編集', sz:26, action:g=>{ this.castleMetaEdit?this._finishCastleMetaEdit(g):this._startCastleMetaEdit(g); }});
     bs.push({x:34, y:H-118, w:212, h:86, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:26, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }});
     return bs;
   }
@@ -1811,6 +1958,7 @@ class MapScene extends GameKit.Scene {
     this._drawMapCoordinateReadout(ctx);
     if (this.showClans) this._drawClansOverlay(ctx);
     if (this.castleEdit) this._drawCastleEditOverlay(ctx);
+    if (this.castleMetaEdit) this._drawCastleMetaEditOverlay(ctx);
     // ボタン（一覧オーバーレイより前面に出して操作可能に）
     if (!this.overlay){ const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t); }
     // メッセージトースト
@@ -1914,6 +2062,11 @@ class MapScene extends GameKit.Scene {
     GameKit.UI.glassPanel(ctx, W/2-430, 154, 860, 86, {radius:14, fill:'rgba(8,13,24,0.84)'});
     T(ctx, '城位置編集モード', W/2, 170, {size:28, weight:'bold', color:'#facc15', align:'center'});
     T(ctx, '城マークをドラッグして移動し、左下の「完了」で確定します', W/2, 204, {size:22, color:'#e2e8f0', align:'center'});
+  }
+  _drawCastleMetaEditOverlay(ctx){
+    GameKit.UI.glassPanel(ctx, W/2-430, 250, 860, 86, {radius:14, fill:'rgba(8,13,24,0.84)'});
+    T(ctx, '城編集モード', W/2, 266, {size:28, weight:'bold', color:'#facc15', align:'center'});
+    T(ctx, '城をクリックして、城名称・所属大名・国名を編集できます', W/2, 300, {size:22, color:'#e2e8f0', align:'center'});
   }
   _drawTopBar(ctx){
     const st=this.state; const pd=daimyoDef(st, st.playerDaimyo) || {nameJP:'', color:'#d9b86c'};
