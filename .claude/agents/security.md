@@ -84,3 +84,13 @@ document.getElementById('msg').textContent = userInput;
 - `shogi_rpg.html` / `shogi_rpg_local.html` は localStorage を多用（ゲームデータのみ、機密データなし）
 - `game.html` は `shogi_rpg_enhanced.jsx` を fetch して Babel でトランスパイル（ローカルサーバー必須）
 - `.edge-test-profile/` はブラウザデータ。git に含めないこと
+
+## このリポジトリ固有のXSS/セキュリティ知見（過去の実調査より）
+
+- **escHtml のスコープに注意**: `assets/js/app.js` の `escHtml`（around L346）は深くネストしたスコープにあり、スポーツ描画など別スコープの関数からは参照できない。新規の `innerHTML` 描画コードを足す/監査する時は「**そのスコープから escHtml が見えるか**」を必ず確認する。見えない場合は当該関数内にローカルな `esc` を定義し、外部API由来の文字列（チーム名・球場名・スコア・ロゴURL等）を全て通す。
+- **外部由来URLは allowlist**: 描画に使う外部URLは `^https?://` のみ許可し、外れる場合はフォールバックする（`javascript:` 等のスキーム注入を防ぐ）。
+- **静的ホスティング（GitHub Pages）の制約**: HTTPレスポンスヘッダを付与できない。
+  - `X-Frame-Options` の `<meta http-equiv>` は**無効**（ヘッダ専用）。クリックジャッキング対策は `<head>` 冒頭の JS フレームバスターで代替する。
+  - CSP の `frame-ancestors` も meta 配信では無視される。`script-src` 等の他ディレクティブは meta でも有効。
+  - **クライアントサイド認証は実現不可**（`sessionStorage`/`localStorage` チェックは DevTools で自明にバイパス可能、ソース内のハッシュも丸見え）。守れない認証は公開しない。
+- 詳細は `obsidian-vault/04-Knowledge/static-hosting-security-limits.md` を参照。
