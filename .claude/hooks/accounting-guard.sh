@@ -23,7 +23,11 @@ TOOL_NAME="$(printf '%s' "$PAYLOAD" \
 
 [ -n "${TOOL_NAME:-}" ] || exit 0
 
-# --- 課金リスクツール一覧（accounting-agent.md の監視対象テーブルと同期させること）---
+# --- 課金リスクツール一覧 ---
+# 次の3箇所を必ず同一に保つこと: (1) accounting-agent.md の監視対象テーブル,
+# (2) この BILLING_RISK_TOOLS, (3) .claude/settings.json の PreToolUse matcher。
+# settings.json の matcher は hook 起動の外側ゲートなので、ここに無いツール名は
+# このスクリプトが走らない → matcher は本リストの上位集合（＝同一文字列）であること。
 # 部分一致でマッチさせる正規表現（パイプ区切り）
 BILLING_RISK_TOOLS='asset_license_and_download_stock|license_and_download|purchase|checkout|subscribe|billing|payment'
 
