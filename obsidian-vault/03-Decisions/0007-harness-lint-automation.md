@@ -27,4 +27,8 @@ related: ["[[recursive-self-improvement]]", "[[0004-code-generator-color-scheme-
 
 ## 影響・トレードオフ
 - 色ドリフト検査はヒューリスティック（禁止文の除外・自スクリプト除外）。新パターンが出たら誤検知/見逃しが起き得るため、検査はスクリプトに追記して育てる前提。
-- クリーン時 exit 0 / 問題検出時 exit 1 を正常系・異常系の両テストで確認済み。将来CIやhookから呼ぶ余地もある（現状は /self-improve 手順0で手動実行）。
+- クリーン時 exit 0 / 問題検出時 exit 1 を正常系・異常系の両テストで確認済み。
+
+## 追記（2026-06-30 CI強制化）
+- `.github/workflows/harness-lint.yml` を新設し、`.claude/**` 変更を含む push/PR で harness-lint.sh を自動実行するようにした（既存のGitHub Actions運用に追随）。これで「構造→監査→自動化→**強制**」の最終段が揃い、ドリフト/死蔵/同期ズレが手作業に頼らずCIでガードされる。
+- スクリプトは `CLAUDE_PROJECT_DIR` 未設定時に `git rev-parse --show-toplevel` へフォールバックするため、CIのクリーンチェックアウトでもサブディレクトリからでも動作する（検証済み）。
