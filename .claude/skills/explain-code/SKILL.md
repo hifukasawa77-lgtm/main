@@ -1,3 +1,8 @@
+---
+name: explain-code
+description: Canvas APIでキャラクター（特に妖怪・精霊系）を描画する実装ガイドライン。arc/fillRectの単純多用を禁じ有機的なベジェ曲線で輪郭を描く・createRadialGradient/createLinearGradientでリッチな陰影と立体感・globalCompositeOperationとパーティクルで霊的オーラやエフェクト。Canvasでキャラクター/生物/妖怪を描画する時に参照する。
+---
+
 # Canvas API キャラクター描画スキル集
 
 Canvas APIでキャラクター（特に妖怪・精霊系）を描画する際の実装ガイドライン。
