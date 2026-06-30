@@ -32,7 +32,12 @@ tools: Read, Write, Edit, Grep, Glob, Bash, WebFetch
 | **MED（アカウント種別次第で課金し得る）** | 無料/有料が混在するコネクタ機能、未知の外部SaaS、トライアル後に自動課金されるサービス | **`get_account_type`等で要確認**。確認できるまで保留（[YELLOW]） |
 | **LOW / GREEN（課金なし）** | OAuth接続MCPコネクタの無料機能、Web Audio API等のプロシージャル生成、CC0/フリー素材、公開リポジトリ操作 | そのまま実行可。記録のみ（[GREEN]） |
 
-> 課金リスクツール名のリストは `.claude/hooks/accounting-guard.sh` 内 `BILLING_RISK_TOOLS` と同期させること。新たな課金リスク操作を見つけたら両方に追記する。
+> 課金リスクツール名のリストは**次の3箇所を必ず同期**させること。新たな課金リスク操作を見つけたら3箇所すべてに追記する。
+> 1. この監視対象テーブル（上記）
+> 2. `.claude/hooks/accounting-guard.sh` 内 `BILLING_RISK_TOOLS`（ask/deny判定）
+> 3. `.claude/settings.json` の PreToolUse `matcher`（hook起動の外側ゲート）
+>
+> ⚠️ `matcher` は hook を起動するか否かの**外側ゲート**であり、ここに無いツール名は guard.sh が一切走らない。よって `matcher` は `BILLING_RISK_TOOLS` の**上位集合**でなければならない（両者を同一文字列に保つのが最も安全）。
 
 ## リスク分類と対処方針（RED / YELLOW / GREEN）
 
