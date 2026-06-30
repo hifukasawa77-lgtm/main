@@ -138,6 +138,7 @@
 </div>
 <p class="hint"><b>戦国の野望</b> / Sengoku no Yabou &nbsp;|&nbsp; クリックで操作 — Click to play &nbsp;|&nbsp; 全国64洲をヘックス戦で制覇せよ</p>
 
+<script id="castleMapPointsData" type="application/json">{}</script>
 <script src="gamekit/gamekit.js"></script>
 <script>
 'use strict';
@@ -154,8 +155,15 @@ const canvas = document.getElementById('game');
 const MAP_PAN = { enabled:false, active:false, dragging:false, startX:0, startY:0, scrollX:0, scrollY:0 };
 const CASTLE_POS_STORE = 'sengokuCastleMapPositions:v2';
 function loadCastlePositionOverrides(){
-  try { return JSON.parse(localStorage.getItem(CASTLE_POS_STORE) || '{}') || {}; }
-  catch (_) { return {}; }
+  const out = {};
+  try {
+    const el = document.getElementById('castleMapPointsData');
+    const raw = el && el.textContent ? el.textContent.trim() : '';
+    if (raw) Object.assign(out, JSON.parse(raw) || {});
+  } catch (_) {}
+  try { Object.assign(out, JSON.parse(localStorage.getItem(CASTLE_POS_STORE) || '{}') || {}); }
+  catch (_) {}
+  return out;
 }
 const CASTLE_POS_OVERRIDES = loadCastlePositionOverrides();
 function saveCastlePositionOverrides(){
@@ -200,8 +208,12 @@ function castleOverridePoint(id){
   return null;
 }
 function setCastlePositionOverride(id, x, y){
-  CASTLE_POS_OVERRIDES[id] = normalizedCastlePoint(x, y);
+  const p = normalizedCastlePoint(x, y);
+  const imgPt = mapWorldToImagePoint(x, y);
+  if (imgPt){ p.x=imgPt.x; p.y=imgPt.y; p.mx=round6(imgPt.mx); p.my=round6(imgPt.my); }
+  CASTLE_POS_OVERRIDES[id] = p;
 }
+function round6(v){ return Math.round((Number(v)||0)*1000000)/1000000; }
 const CUSTOM_CASTLE_STORE = 'sengokuCustomCastles:v1';
 function loadCustomCastles(){
   try { const v=JSON.parse(localStorage.getItem(CUSTOM_CASTLE_STORE) || '[]'); return Array.isArray(v)?v:[]; }
@@ -290,6 +302,57 @@ function mapImagePointToWorld(mx, my){
     y:clampRange(m.c.y + ((iy-m.sy)/m.sh)*m.c.h, m.c.y, m.c.y+m.c.h)
   };
 }
+function castleMapRecordToWorld(record){
+  if (!record) return null;
+  if (Number.isFinite(record.mx) && Number.isFinite(record.my)) return mapImagePointToWorld(record.mx, record.my);
+  const img=ASSETS && ASSETS.img && ASSETS.img.map;
+  const iw=img && (img.naturalWidth || img.width), ih=img && (img.naturalHeight || img.height);
+  if (iw && ih && Number.isFinite(record.x) && Number.isFinite(record.y)) return mapImagePointToWorld(record.x/iw, record.y/ih);
+  const c=MAP.clip;
+  if (Number.isFinite(record.u) && Number.isFinite(record.v)) return {x:c.x+record.u*c.w, y:c.y+record.v*c.h};
+  return null;
+}
+function castlePositionRecordFromWorld(x, y){
+  const pt=mapWorldToImagePoint(x, y);
+  if (!pt) return null;
+  return {x:pt.x, y:pt.y, mx:round6(pt.mx), my:round6(pt.my)};
+}
+function collectCastlePositionRecords(){
+  const out={};
+  if (!DATA || !Array.isArray(DATA.provinces)) return out;
+  DATA.provinces.forEach(p=>{
+    let world=castleMapRecordToWorld(CASTLE_POS_OVERRIDES[p.id] || CASTLE_MAP_POINTS[p.id]);
+    if (!world){
+      const pt=PROVINCE_GEO[p.id] ? geoToScreen(PROVINCE_GEO[p.id][0], PROVINCE_GEO[p.id][1]) : [toScreenX(p.x), toScreenY(p.y)];
+      world={x:pt[0], y:pt[1]};
+    }
+    const fixed=snapCastlePointToLand(p.id, world.x, world.y);
+    const rec=castlePositionRecordFromWorld(fixed[0], fixed[1]);
+    if (rec) out[p.id]=rec;
+  });
+  return out;
+}
+function writeCastlePositionRecordsToHtmlBody(records){
+  let el=document.getElementById('castleMapPointsData');
+  if (!el){
+    el=document.createElement('script');
+    el.id='castleMapPointsData';
+    el.type='application/json';
+    document.body.appendChild(el);
+  }
+  el.textContent=JSON.stringify(records, null, 2);
+  document.body.dataset.castleMapPointsUpdated='true';
+}
+function persistAllCastlePositionRecords(){
+  const records=collectCastlePositionRecords();
+  Object.keys(CASTLE_POS_OVERRIDES).forEach(id=>delete CASTLE_POS_OVERRIDES[id]);
+  Object.assign(CASTLE_POS_OVERRIDES, records);
+  Object.assign(CASTLE_MAP_POINTS, records);
+  saveCastlePositionOverrides();
+  writeCastlePositionRecordsToHtmlBody(records);
+  return records;
+}
+
 function customCastleId(name){
   const suffix = Date.now().toString(36) + Math.floor(Math.random()*9999).toString(36);
   return 'custom_castle_' + suffix;
@@ -1708,9 +1771,11 @@ class MapScene extends GameKit.Scene {
     this._flash('城をドラッグして位置を調整できます');
   }
   _finishCastleEdit(game){
-    this.castleEdit=false; this.dragCastle=null; saveCastlePositionOverrides(); this.cells=computeProvinceCells();
+    this.castleEdit=false; this.dragCastle=null;
+    const records=persistAllCastlePositionRecords();
+    this.cells=computeProvinceCells();
     if (game && game.audio) game.audio.beep(880,0.08,'triangle');
-    this._flash('城の位置を確定しました');
+    this._flash('\u5168'+Object.keys(records).length+'\u57ce\u306e\u5ea7\u6a19\u3092HTML\u672c\u4f53\u30c7\u30fc\u30bf\u3078\u4fdd\u5b58\u3057\u307e\u3057\u305f');
   }
   _updateCastleEditor(game, p, btns){
     if (p.justPressed){
@@ -2201,20 +2266,28 @@ class MapScene extends GameKit.Scene {
     const p=DATA.provById[pid], prov=st.provinces[pid];
     if (!p || !prov) return;
     const dd=prov.owner?daimyoDef(st,prov.owner):null;
-    const w=610, h=228, x=W-w-28, y=H-h-34;
+    const castleName=castleNameForProvince(p);
+    const countryName=p.nameEN ? p.nameJP+' / '+p.nameEN : p.nameJP;
+    const w=660, h=292, x=W-w-28, y=H-h-34;
     ctx.save();
     ctx.beginPath(); ctx.roundRect(x,y,w,h,8);
     ctx.fillStyle='rgba(10,12,16,0.78)'; ctx.fill();
     ctx.lineWidth=1.6; ctx.strokeStyle='rgba(199,151,66,0.58)'; ctx.stroke();
     ctx.fillStyle='rgba(246,213,138,0.12)'; ctx.fillRect(x+2,y+2,w-4,3);
     ctx.restore();
-    T(ctx, p.nameJP+' / '+p.nameEN, x+26, y+22, {size:30, weight:'bold', color:'#f8f0dc', shadow:true});
+    T(ctx, castleName, x+26, y+22, {size:31, weight:'bold', color:'#f8f0dc', shadow:true});
     T(ctx, dd?dd.nameJP+'家':'空白地', x+w-28, y+24, {size:26, weight:'bold', color:dd?dd.color:'#94a3b8', align:'right'});
-    const rows=[['石高', p.kokudaka+'千石'],['兵士', prov.soldiers],['開発', prov.development],['城', 'Lv '+prov.castleLevel]];
+    const rows=[
+      ['国名', countryName],
+      ['国総石高', p.kokudaka+'千石'],
+      ['常駐兵士', prov.soldiers+'人'],
+      ['城下開発', prov.development],
+      ['城LV', 'Lv '+prov.castleLevel]
+    ];
     rows.forEach((r,i)=>{
-      const rx=x+28+(i%2)*286, ry=y+82+Math.floor(i/2)*58;
-      T(ctx, r[0], rx, ry, {size:22, color:'#b7a06a'});
-      T(ctx, String(r[1]), rx+96, ry, {size:25, weight:'bold', color:'#e2e8f0'});
+      const rx=x+28+(i%2)*316, ry=y+82+Math.floor(i/2)*58;
+      T(ctx, r[0], rx, ry, {size:21, color:'#b7a06a'});
+      T(ctx, String(r[1]), rx+116, ry, {size:i===0?23:25, weight:'bold', color:'#e2e8f0'});
     });
   }
   _drawClansOverlay(ctx){
