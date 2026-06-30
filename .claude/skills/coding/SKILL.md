@@ -1,3 +1,8 @@
+---
+name: coding
+description: 素のHTML/CSS/JavaScript（フレームワーク不使用）環境のコーディングガイドライン。デバッグ手順（console.table/group/time・rAF停止検証・try/catch）・リファクタリングパターン（DRY・状態のオブジェクト集約・純粋関数・名前付き定数）・パフォーマンス最適化（requestAnimationFrame・オブジェクトプール・ダーティレクト・オフスクリーンCanvas）。コードを書く/直す、バグを調べる、60fpsを維持したい時に参照する。
+---
+
 # コーディングスキル集
 
 素のHTML / CSS / JavaScript（フレームワーク不使用）環境でのコーディングガイドライン。
