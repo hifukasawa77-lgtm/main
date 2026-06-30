@@ -12,6 +12,7 @@ related: ["[[recursive-self-improvement]]", "[[0004-code-generator-color-scheme-
 - **色ドリフトは3層すべてに出る**: コード / エージェント定義 / スキルのいずれにも、CLAUDE.md禁止の「ネオングロウ過多・マゼンタ #ff00ff・原色ネオン」が紛れ込む（code-generator → planner → design で実際に3度発生）。CLAUDE.mdの色ルールは全層に波及する前提で grep 横串点検する。
 - **具体値は重複させない**: カラーコード・閾値・ブランチ名などCLAUDE.mdに正がある値をエージェント定義/スキルに重複記述すると必ずドリフトする。正は1箇所（CLAUDE.md）に集約し、各定義は「CLAUDE.md準拠」と参照させる。
 - 同種ドリフトは1箇所直すと他にも潜んでいる。1件見つけたら必ず横串で全件を grep する。
+- **色以外の具体値ドリフトも機械検査済み（2026-06-30, 9th）**: 予算上限（budget.md `MONTHLY_LIMIT` が正）/ Evaluator合格閾値（CLAUDE.md 80・16点が正）/ 作業ブランチ（CLAUDE.md `kai_001` が正）を `harness-lint.sh` 検査#5が正の単一ソースから導出して再掲先と突き合わせる。→ [[0008-value-drift-lint]]
 
 ## スキル定義
 - スキルは **ファイル名が厳密に `SKILL.md`** かつ **frontmatter（1行目`---`・`name:`・`description:`・閉じ`---`）** が必須。どちらかを欠くとサイレントにロードされず死蔵される（`Skills.md` のまま5スキルが死んでいた実例）。

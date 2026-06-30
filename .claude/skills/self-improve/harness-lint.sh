@@ -64,7 +64,34 @@ else
   done <<< "$DRIFT"
 fi
 
-echo "== 5. 主要参照パスの実在 =="
+echo "== 5. CLAUDE.md正の具体値ドリフト（予算/採点閾値/作業ブランチが再掲先と一致するか）=="
+# 色以外の重複した具体値（閾値・予算・ブランチ名）も必ずドリフトする（[[harness-maintenance-patterns]]）。
+# 正の単一ソースから値を導出し、再掲している各ファイルと突き合わせる（カンマ表記差は除去して比較）。
+# 6a. 予算上限: 正=accounting/budget.md の MONTHLY_LIMIT（ガードが実際に読む値）
+if [ -f accounting/budget.md ]; then
+  LIM=$(grep -oE 'MONTHLY_LIMIT:[[:space:]]*[0-9]+' accounting/budget.md | grep -oE '[0-9]+' | head -1)
+  if [ -n "$LIM" ]; then
+    for f in CLAUDE.md .claude/agents/accounting-agent.md; do
+      [ -f "$f" ] || continue
+      if grep -qE "¥?${LIM}" <(tr -d ',' < "$f"); then ok "予算上限 ¥${LIM} 整合: $f"
+      else note_fail "予算上限ドリフト: $f が budget.md の ¥${LIM} と不一致"; fi
+    done
+  fi
+fi
+# 6b. Evaluator合格閾値: 正=CLAUDE.md「N点以上 かつ … M点以上」
+read -r T1 T2 < <(grep -oE '[0-9]+点以上' CLAUDE.md | grep -oE '[0-9]+' | head -2 | tr '\n' ' ')
+if [ -n "${T1:-}" ] && [ -n "${T2:-}" ]; then
+  if grep -qE "${T1}.*${T2}|${T2}.*${T1}" .claude/agents/evaluator.md; then ok "採点閾値 ${T1}/${T2} 整合: evaluator.md"
+  else note_fail "採点閾値ドリフト: evaluator.md が CLAUDE.md の ${T1}点/${T2}点 と不一致"; fi
+fi
+# 6c. 作業ブランチ: 正=CLAUDE.md「作業ブランチ: \`xxx\`」
+WB=$(grep -E '作業ブランチ:' CLAUDE.md | grep -oE '`[^`]+`' | head -1 | tr -d '`')
+if [ -n "$WB" ]; then
+  if grep -qE "作業ブランチ.*${WB}" .claude/agents/pmo.md; then ok "作業ブランチ ${WB} 整合: pmo.md"
+  else note_fail "作業ブランチドリフト: pmo.md が CLAUDE.md の ${WB} と不一致"; fi
+fi
+
+echo "== 6. 主要参照パスの実在 =="
 for p in \
   .claude/hooks/second-brain-recall.sh .claude/hooks/accounting-guard.sh .claude/hooks/notify-slack.sh \
   .claude/skills/second-brain/SKILL.md .claude/skills/self-improve/SKILL.md \
