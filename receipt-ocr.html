@@ -112,6 +112,48 @@
     .empty{color:var(--muted); text-align:center; padding:18px 0; font-size:.88rem}
     .results-actions{display:flex; flex-wrap:wrap; gap:10px; justify-content:space-between; align-items:center; margin-top:14px}
 
+    /* preview tools (rotate / view toggle) */
+    .preview-tools{display:none; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:12px}
+    .preview-tools.show{display:flex}
+    .chip{
+      appearance:none; cursor:pointer; font:inherit; font-size:.8rem; font-weight:600;
+      border:1px solid var(--border); border-radius:999px; padding:6px 13px;
+      color:var(--cyan2); background:rgba(14,165,233,0.06); transition:background .15s,border-color .15s;
+    }
+    .chip:hover{background:rgba(14,165,233,0.12)}
+    .chip.active{background:rgba(14,165,233,0.16); border-color:var(--cyan)}
+
+    /* metadata fields (store / date) */
+    .meta-row{display:flex; flex-wrap:wrap; gap:12px; margin:0 0 14px}
+    .meta-field{flex:1 1 160px; min-width:0}
+    .meta-field label{display:block; color:var(--muted); font-size:.76rem; font-weight:600; margin:0 0 4px}
+    .meta-field input{
+      width:100%; font:inherit; font-size:.9rem; padding:8px 10px; color:var(--text);
+      border:1px solid rgba(28,25,23,0.12); border-radius:10px; background:rgba(255,255,255,0.7);
+    }
+    .meta-field input:focus{outline:none; border-color:var(--cyan)}
+
+    /* summary bar (count / subtotal / reconcile) */
+    .summary{
+      display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin-top:14px;
+      padding:12px 14px; border-radius:12px; background:rgba(14,165,233,0.06);
+      border:1px solid var(--border); font-size:.9rem;
+    }
+    .summary .big-num{font-weight:700; color:var(--cyan2); font-variant-numeric:tabular-nums}
+    .summary .warn{
+      flex-basis:100%; color:#b45309; font-size:.84rem; font-weight:600;
+      padding-top:4px; border-top:1px dashed rgba(180,83,9,0.3);
+    }
+    .summary .ok{color:var(--purple); font-size:.82rem; font-weight:600}
+
+    /* draft-restored note */
+    .draft-note{
+      display:none; align-items:center; flex-wrap:wrap; gap:10px; justify-content:space-between;
+      margin:0 0 14px; padding:10px 14px; border-radius:12px; font-size:.84rem;
+      background:rgba(168,85,247,0.07); border:1px solid rgba(168,85,247,0.2); color:var(--text);
+    }
+    .draft-note.show{display:flex}
+
     /* toast */
     #toast{
       position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px);
@@ -164,6 +206,11 @@
       <div class="preview-wrap">
         <img id="preview" alt="receipt preview">
       </div>
+      <div class="preview-tools" id="preview-tools">
+        <button class="chip" id="rotate" type="button">↻ 回転 / Rotate 90°</button>
+        <button class="chip active" id="view-proc" type="button">処理後 / Processed</button>
+        <button class="chip" id="view-orig" type="button">原画像 / Original</button>
+      </div>
     </section>
 
     <!-- 2. スキャン -->
@@ -179,6 +226,23 @@
     <!-- 3. 結果 -->
     <section class="card" id="results">
       <h2>③ 確認・編集 <span class="en">/ Review &amp; edit</span></h2>
+
+      <div class="draft-note" id="draft-note">
+        <span>📝 前回の下書きを復元しました / Draft restored</span>
+        <button class="chip" id="draft-clear" type="button">クリア / Clear</button>
+      </div>
+
+      <div class="meta-row">
+        <div class="meta-field">
+          <label for="meta-store">店名 / Store</label>
+          <input type="text" id="meta-store" placeholder="例: ◯◯スーパー">
+        </div>
+        <div class="meta-field">
+          <label for="meta-date">購入日 / Date</label>
+          <input type="text" id="meta-date" placeholder="例: 2026-06-30" inputmode="numeric">
+        </div>
+      </div>
+
       <div class="table-scroll">
         <table>
           <thead>
@@ -199,6 +263,14 @@
         品目を抽出できませんでした。「＋ 行を追加」で手入力できます。<br>
         No items detected — add rows manually below.
       </div>
+
+      <div class="summary" id="summary">
+        <span><span class="big-num" id="sum-count">0</span> 件 / items</span>
+        <span>抽出合計 / Subtotal <span class="big-num" id="sum-total">¥0</span></span>
+        <span id="reconcile" class="ok" style="display:none"></span>
+        <span id="reconcile-warn" class="warn" style="display:none"></span>
+      </div>
+
       <div class="results-actions">
         <button class="btn ghost" id="add-row" type="button">＋ 行を追加 / Add row</button>
         <button class="btn" id="csv" type="button">⬇️ CSV書き出し / Export CSV</button>
@@ -232,10 +304,20 @@
     var scanArea = $('scan-area'), scanBtn = $('scan'), barFill = $('bar-fill'), statusEl = $('status');
     var results = $('results'), rowsBody = $('rows'), emptyMsg = $('empty');
     var addRowBtn = $('add-row'), csvBtn = $('csv');
+    var previewTools = $('preview-tools'), rotateBtn = $('rotate'), viewProcBtn = $('view-proc'), viewOrigBtn = $('view-orig');
+    var metaStore = $('meta-store'), metaDate = $('meta-date');
+    var draftNote = $('draft-note'), draftClear = $('draft-clear');
+    var sumCount = $('sum-count'), sumTotal = $('sum-total'), reconcileEl = $('reconcile'), reconcileWarn = $('reconcile-warn');
 
     var currentFile = null;     // 現在の画像 (File/Blob)
     var previewURL = null;      // プレビュー用 objectURL
     var stream = null;          // getUserMedia ストリーム
+    var srcImage = null;        // 取り込んだ原画像 (Image)
+    var processed = null;       // 前処理後 { canvas, dataURL }
+    var rotateDeg = 0;          // 手動回転 (0/90/180/270)
+    var viewMode = 'proc';      // プレビュー表示: 'proc' | 'orig'
+    var detectedTotal = null;   // レシート記載の合計（検算用）
+    var ocrWorker = null;       // 永続 Tesseract ワーカー（使い回し）
 
     /* =========================================================
        カテゴリー自動分類（汎用辞書：食品＋日用品・衣料・文具・医薬品・家電など）
@@ -330,6 +412,136 @@
       return out;
     }
 
+    // レシート記載の「合計」を抽出（検算用）。割引・小計より「合計/お会計」を優先。
+    var TOTAL_RE = /(合\s*計|お?会計|お?買上\s*計|総\s*額|お?支払)/;
+    function detectTotal(text) {
+      if (!text) return null;
+      var lines = text.split(/\r?\n/), found = null;
+      for (var i = 0; i < lines.length; i++) {
+        var line = toHalfWidth(lines[i]).trim();
+        if (!TOTAL_RE.test(line)) continue;
+        if (/小\s*計/.test(line) && !/合\s*計/.test(line)) continue; // 「小計」単独は除外
+        var pm = line.match(/[¥]?\s*(\d{1,3}(?:,\d{3})+|\d+)\s*円?\s*[*※E-]?\s*$/);
+        if (!pm) continue;
+        var v = parseInt(pm[1].replace(/,/g, ''), 10);
+        if (v > 0) found = v; // 後方の「合計」ほど確からしいので上書き
+      }
+      return found;
+    }
+
+    // 店名・購入日を抽出（ヒューリスティック、ユーザー編集前提）
+    function detectMeta(text) {
+      var meta = { store: '', date: '' };
+      if (!text) return meta;
+      var lines = text.split(/\r?\n/).map(function (l) { return toHalfWidth(l).trim(); });
+
+      // 日付：西暦 YYYY/M/D・YYYY年M月D日、和暦 R6.1.2 等
+      for (var i = 0; i < lines.length && !meta.date; i++) {
+        var dm = lines[i].match(/(20\d{2})\s*[-\/年.]\s*(\d{1,2})\s*[-\/月.]\s*(\d{1,2})/);
+        if (dm) { meta.date = dm[1] + '-' + ('0' + dm[2]).slice(-2) + '-' + ('0' + dm[3]).slice(-2); break; }
+        var wm = lines[i].match(/([RHＲＨ令平])\s*(\d{1,2})\s*[-\/年.]\s*(\d{1,2})\s*[-\/月.]\s*(\d{1,2})/);
+        if (wm) {
+          var era = /[R令]/i.test(wm[1]) ? 2018 : 1988; // 令和元年=2019 / 平成元年=1989
+          meta.date = (era + parseInt(wm[2], 10)) + '-' + ('0' + wm[3]).slice(-2) + '-' + ('0' + wm[4]).slice(-2);
+          break;
+        }
+      }
+
+      // 店名：先頭付近の行を採用。SKIPは「店」を含むため店名検出には使わず専用フィルタで判定。
+      // （「◯◯店」「本店」を残しつつ、価格・電話・日付・レジ情報行を除外）
+      for (var j = 0; j < Math.min(lines.length, 6); j++) {
+        var s = lines[j];
+        if (s.length < 2 || s.length > 30) continue;
+        if (TOTAL_RE.test(s)) continue;
+        if (/[¥￥]|円|ＴＥＬ|TEL|電話|領収|レジ|担当|発行|登録|No\./i.test(s)) continue;
+        if (/\d{2,}/.test(s)) continue;                 // 電話番号・金額・日付っぽい行を除外
+        if (!/[一-龯ぁ-んァ-ヶーA-Za-z]/.test(s)) continue;
+        meta.store = s.replace(/[（(].*$/, '').trim();   // 「（本店）」等の付帯を簡易除去
+        break;
+      }
+      return meta;
+    }
+
+    /* =========================================================
+       画像前処理（Canvas）：リサイズ＋グレースケール＋コントラスト＋大津二値化
+       OCR精度を上げるため、撮影画像を白黒・適正サイズに整えてから渡す。
+       ========================================================= */
+    var MAX_EDGE = 1600; // 長辺の目標px（大きすぎ＝遅い／小さすぎ＝精度低下）
+
+    function loadImage(fileOrBlob) {
+      return new Promise(function (resolve, reject) {
+        var url = URL.createObjectURL(fileOrBlob);
+        var img = new Image();
+        img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('画像を読み込めませんでした')); };
+        img.src = url;
+      });
+    }
+
+    // 256ビンの輝度ヒストグラムから大津のしきい値を返す
+    function otsuThreshold(hist) {
+      var total = 0, sum = 0, i;
+      for (i = 0; i < 256; i++) { total += hist[i]; sum += i * hist[i]; }
+      if (!total) return 128;
+      var sumB = 0, wB = 0, maxVar = -1, thr = 128;
+      for (i = 0; i < 256; i++) {
+        wB += hist[i];
+        if (!wB) continue;
+        var wF = total - wB;
+        if (!wF) break;
+        sumB += i * hist[i];
+        var mB = sumB / wB, mF = (sum - sumB) / wF;
+        var between = wB * wF * (mB - mF) * (mB - mF);
+        if (between > maxVar) { maxVar = between; thr = i; }
+      }
+      return thr;
+    }
+
+    function preprocess(img, deg) {
+      var w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+      // 長辺をMAX_EDGEへ正規化
+      var scale = Math.min(MAX_EDGE / Math.max(w, h), 2); // アップスケールは2倍まで
+      var dw = Math.round(w * scale), dh = Math.round(h * scale);
+
+      var canvas = document.createElement('canvas');
+      var swap = (deg === 90 || deg === 270);
+      canvas.width = swap ? dh : dw;
+      canvas.height = swap ? dw : dh;
+      var ctx = canvas.getContext('2d');
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate((deg || 0) * Math.PI / 180);
+      ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+      ctx.restore();
+
+      // グレースケール化 ＋ ヒストグラム収集
+      var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      var d = imgData.data, hist = new Array(256), k;
+      for (k = 0; k < 256; k++) hist[k] = 0;
+      var lo = 255, hi = 0;
+      for (k = 0; k < d.length; k += 4) {
+        var g = (d[k] * 0.299 + d[k + 1] * 0.587 + d[k + 2] * 0.114) | 0;
+        d[k] = d[k + 1] = d[k + 2] = g;
+        if (g < lo) lo = g; if (g > hi) hi = g;
+      }
+      // コントラストストレッチ（外れ値を捨てて [lo,hi]→[0,255]）
+      var range = (hi - lo) || 1;
+      for (k = 0; k < d.length; k += 4) {
+        var v = ((d[k] - lo) * 255 / range) | 0;
+        if (v < 0) v = 0; else if (v > 255) v = 255;
+        d[k] = d[k + 1] = d[k + 2] = v;
+        hist[v]++;
+      }
+      // 大津の手法で二値化
+      var thr = otsuThreshold(hist);
+      for (k = 0; k < d.length; k += 4) {
+        var bw = d[k] > thr ? 255 : 0;
+        d[k] = d[k + 1] = d[k + 2] = bw;
+      }
+      ctx.putImageData(imgData, 0, 0);
+      return { canvas: canvas, dataURL: canvas.toDataURL('image/png') };
+    }
+
     /* =========================================================
        テーブル描画（編集可能）
        ========================================================= */
@@ -387,6 +599,40 @@
       var trs = rowsBody.querySelectorAll('tr');
       for (var i = 0; i < trs.length; i++) trs[i].querySelector('td.idx').textContent = (i + 1);
       emptyMsg.style.display = trs.length ? 'none' : 'block';
+      recomputeSummary();
+    }
+
+    var yen = function (n) { return '¥' + (n || 0).toLocaleString('ja-JP'); };
+
+    // 件数・抽出合計を再計算し、レシート記載合計と検算
+    function recomputeSummary() {
+      var trs = rowsBody.querySelectorAll('tr'), count = 0, subtotal = 0;
+      for (var i = 0; i < trs.length; i++) {
+        var pe = trs[i].querySelector('[data-k="price"]');
+        var qe = trs[i].querySelector('[data-k="qty"]');
+        var p = pe ? parseFloat(pe.value) : NaN;
+        if (!isNaN(p)) {
+          var q = qe ? parseInt(qe.value, 10) : 1;
+          if (isNaN(q) || q < 1) q = 1;
+          subtotal += p * q; count++;
+        }
+      }
+      sumCount.textContent = count;
+      sumTotal.textContent = yen(subtotal);
+
+      reconcileEl.style.display = 'none';
+      reconcileWarn.style.display = 'none';
+      if (detectedTotal != null) {
+        var diff = subtotal - detectedTotal;
+        if (Math.abs(diff) <= 1) {
+          reconcileEl.textContent = '✓ レシート記載合計 ' + yen(detectedTotal) + ' と一致 / Matches receipt total';
+          reconcileEl.style.display = '';
+        } else {
+          reconcileWarn.textContent = '⚠ レシート記載合計 ' + yen(detectedTotal) + ' と ' +
+            (diff > 0 ? '+' : '−') + yen(Math.abs(diff)) + ' の差 / Total mismatch — 抽出漏れ・誤読の可能性';
+          reconcileWarn.style.display = '';
+        }
+      }
     }
 
     function renderRows(items) {
@@ -417,6 +663,46 @@
     }
 
     /* =========================================================
+       下書き自動保存（localStorage・テーブル＋メタのみ。画像は保存しない）
+       ========================================================= */
+    var DRAFT_KEY = 'receiptOCR.draft.v1';
+    var draftTimer = null;
+
+    function currentMeta() { return { store: metaStore.value.trim(), date: metaDate.value.trim() }; }
+
+    function saveDraft() {
+      try {
+        var rows = readRows(), meta = currentMeta();
+        if (!rows.length && !meta.store && !meta.date) { localStorage.removeItem(DRAFT_KEY); return; }
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+          rows: rows, meta: meta, total: detectedTotal, ts: Date.now()
+        }));
+      } catch (e) { /* 容量超過・プライベートモード等は黙殺 */ }
+    }
+    function scheduleSave() {
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(saveDraft, 500);
+    }
+    function loadDraft() {
+      try {
+        var raw = localStorage.getItem(DRAFT_KEY);
+        if (!raw) return null;
+        var d = JSON.parse(raw);
+        return (d && d.rows && d.rows.length) || (d && d.meta && (d.meta.store || d.meta.date)) ? d : null;
+      } catch (e) { return null; }
+    }
+    function clearDraft() {
+      try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+      draftNote.classList.remove('show');
+    }
+
+    // テーブル/メタの編集で検算ライブ更新＋下書き保存（イベント委譲）
+    rowsBody.addEventListener('input', function () { recomputeSummary(); scheduleSave(); });
+    rowsBody.addEventListener('change', function () { recomputeSummary(); scheduleSave(); });
+    metaStore.addEventListener('input', scheduleSave);
+    metaDate.addEventListener('input', scheduleSave);
+
+    /* =========================================================
        CSV 生成・ダウンロード（oshikatsu.html のパターンを踏襲）
        ヘッダー: 項番,品目名,カテゴリー,個数,値段,備考 / UTF-8 BOM 付き
        ========================================================= */
@@ -435,19 +721,28 @@
       var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
       return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
     }
-    function buildCSV(rows) {
-      var head = ['項番', '品目名', 'カテゴリー', '個数', '値段', '備考'];
+    // meta 省略時は従来ヘッダーで出力（後方互換）。meta 指定時は購入日・店名列を前置。
+    function buildCSV(rows, meta) {
+      var hasMeta = !!meta;
+      var date = meta && meta.date != null ? meta.date : '';
+      var store = meta && meta.store != null ? meta.store : '';
+      var head = hasMeta
+        ? ['購入日', '店名', '項番', '品目名', 'カテゴリー', '個数', '値段', '備考']
+        : ['項番', '品目名', 'カテゴリー', '個数', '値段', '備考'];
       var lines = [head.join(',')];
       for (var i = 0; i < rows.length; i++) {
         var r = rows[i];
-        lines.push([i + 1, r.name, r.cat, r.qty, r.price, r.note].map(csvCell).join(','));
+        var cols = hasMeta
+          ? [date, store, i + 1, r.name, r.cat, r.qty, r.price, r.note]
+          : [i + 1, r.name, r.cat, r.qty, r.price, r.note];
+        lines.push(cols.map(csvCell).join(','));
       }
       return lines.join('\r\n');
     }
     function exportCSV() {
       var rows = readRows();
       if (!rows.length) { toast('書き出す品目がありません / No rows to export'); return; }
-      var blob = new Blob(['﻿' + buildCSV(rows)], { type: 'text/csv;charset=utf-8' });
+      var blob = new Blob(['﻿' + buildCSV(rows, currentMeta())], { type: 'text/csv;charset=utf-8' });
       downloadBlob(blob, 'receipt_' + ymd() + '.csv');
       toast('CSVを書き出しました（' + rows.length + '件）/ Exported');
     }
@@ -457,15 +752,50 @@
        ========================================================= */
     function setImage(fileOrBlob) {
       currentFile = fileOrBlob;
+      rotateDeg = 0; viewMode = 'proc';
       if (previewURL) URL.revokeObjectURL(previewURL);
       previewURL = URL.createObjectURL(fileOrBlob);
-      preview.src = previewURL;
+      preview.src = previewURL;          // まず原画像で即時表示
       preview.style.display = 'block';
       scanArea.style.display = 'block';
       barFill.style.width = '0%';
-      statusEl.textContent = '';
+      statusEl.textContent = '画像を整えています… / Preparing image…';
       scanArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      loadImage(fileOrBlob).then(function (img) {
+        srcImage = img;
+        runPreprocess();
+        statusEl.textContent = '';
+      }).catch(function () {
+        // 前処理に失敗しても原画像でOCRは試せるよう preview だけ出す
+        srcImage = null; processed = null;
+        preview.src = previewURL;
+        statusEl.textContent = '';
+        previewTools.classList.remove('show');
+      });
     }
+
+    // 現在の rotateDeg で前処理し直し、プレビューへ反映
+    function runPreprocess() {
+      if (!srcImage) return;
+      processed = preprocess(srcImage, rotateDeg);
+      updatePreview();
+      previewTools.classList.add('show');
+    }
+    function updatePreview() {
+      if (viewMode === 'orig' || !processed) { preview.src = previewURL; }
+      else { preview.src = processed.dataURL; }
+      viewProcBtn.classList.toggle('active', viewMode === 'proc');
+      viewOrigBtn.classList.toggle('active', viewMode === 'orig');
+    }
+
+    rotateBtn.addEventListener('click', function () {
+      if (!srcImage) return;
+      rotateDeg = (rotateDeg + 90) % 360;
+      runPreprocess();
+    });
+    viewProcBtn.addEventListener('click', function () { viewMode = 'proc'; updatePreview(); });
+    viewOrigBtn.addEventListener('click', function () { viewMode = 'orig'; updatePreview(); });
 
     fileInput.addEventListener('change', function (e) {
       var f = e.target.files && e.target.files[0];
@@ -514,11 +844,45 @@
         setImage(blob);
       }, 'image/jpeg', 0.92);
     });
-    window.addEventListener('beforeunload', stopCamera);
+    window.addEventListener('beforeunload', function () {
+      stopCamera();
+      if (ocrWorker) { ocrWorker.then(function (w) { w.terminate(); }).catch(function () {}); }
+    });
 
     /* =========================================================
        OCR 実行
        ========================================================= */
+    // 進捗ロガー（ワーカー生成・認識の双方で発火）
+    function ocrLogger(m) {
+      if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+        barFill.style.width = Math.round(m.progress * 100) + '%';
+      }
+      var label = ({
+        'loading tesseract core': 'エンジン読み込み中',
+        'initializing tesseract': '初期化中',
+        'loading language traineddata': '日本語データ読み込み中',
+        'initializing api': 'API初期化中',
+        'recognizing text': '文字認識中'
+      })[m.status] || m.status;
+      statusEl.textContent = label + (typeof m.progress === 'number' && m.progress < 1
+        ? ' ' + Math.round(m.progress * 100) + '%' : '');
+    }
+
+    // 永続ワーカー（初回のみ生成、以降は使い回し → 2回目以降が速い）
+    function getWorker() {
+      if (ocrWorker) return ocrWorker;
+      ocrWorker = Tesseract.createWorker('jpn', 1, {
+        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+        logger: ocrLogger
+      }).then(function (worker) {
+        return worker.setParameters({
+          tessedit_pageseg_mode: '4',          // 可変サイズの単一カラム（レシート向き）
+          preserve_interword_spaces: '1'
+        }).then(function () { return worker; });
+      });
+      return ocrWorker;
+    }
+
     scanBtn.addEventListener('click', function () {
       if (!currentFile) { toast('先に画像を選んでください / Choose an image first'); return; }
       if (typeof Tesseract === 'undefined') {
@@ -530,27 +894,22 @@
       barFill.style.width = '0%';
       statusEl.textContent = '準備中… 初回はエンジンの読み込みに数十秒かかります / Loading engine (first run can take a while)…';
 
-      Tesseract.recognize(currentFile, 'jpn', {
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
-        logger: function (m) {
-          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
-            barFill.style.width = Math.round(m.progress * 100) + '%';
-          }
-          var label = ({
-            'loading tesseract core': 'エンジン読み込み中',
-            'initializing tesseract': '初期化中',
-            'loading language traineddata': '日本語データ読み込み中',
-            'initializing api': 'API初期化中',
-            'recognizing text': '文字認識中'
-          })[m.status] || m.status;
-          statusEl.textContent = label + (typeof m.progress === 'number' && m.progress < 1
-            ? ' ' + Math.round(m.progress * 100) + '%' : '');
-        }
+      // 前処理済みcanvasを優先（無ければ原画像でフォールバック）
+      var target = (processed && processed.canvas) || currentFile;
+
+      getWorker().then(function (worker) {
+        return worker.recognize(target);
       }).then(function (res) {
         barFill.style.width = '100%';
-        var items = parseReceipt(res.data.text);
+        var text = res.data.text;
+        var items = parseReceipt(text);
+        detectedTotal = detectTotal(text);
+        var meta = detectMeta(text);
+        if (meta.store && !metaStore.value) metaStore.value = meta.store;
+        if (meta.date && !metaDate.value) metaDate.value = meta.date;
         statusEl.textContent = '完了 / Done — ' + items.length + '件の品目を抽出（編集できます）';
         renderRows(items);
+        saveDraft();
       }).catch(function (err) {
         statusEl.textContent = 'OCRに失敗しました: ' + (err && err.message || err);
         toast('OCRに失敗しました / OCR failed');
@@ -564,8 +923,30 @@
       results.style.display = 'block';
       rowsBody.appendChild(makeRow());
       refreshIdx();
+      scheduleSave();
     });
     csvBtn.addEventListener('click', exportCSV);
+
+    /* ---------- 下書き復元 ---------- */
+    draftClear.addEventListener('click', function () {
+      clearDraft();
+      rowsBody.innerHTML = ''; metaStore.value = ''; metaDate.value = ''; detectedTotal = null;
+      refreshIdx();
+      toast('下書きを削除しました / Draft cleared');
+    });
+    (function restoreDraft() {
+      var d = loadDraft();
+      if (!d) return;
+      if (d.meta) { metaStore.value = d.meta.store || ''; metaDate.value = d.meta.date || ''; }
+      detectedTotal = (typeof d.total === 'number') ? d.total : null;
+      if (d.rows && d.rows.length) {
+        rowsBody.innerHTML = '';
+        for (var i = 0; i < d.rows.length; i++) rowsBody.appendChild(makeRow(d.rows[i]));
+      }
+      refreshIdx();
+      results.style.display = 'block';
+      draftNote.classList.add('show');
+    })();
 
     /* ---------- トースト ---------- */
     var toastTimer = null;
@@ -610,7 +991,10 @@
     })();
 
     /* ---- テストフック（Node/Playwright 検証用に純粋関数を公開） ---- */
-    window.__receiptOCR = { parseReceipt: parseReceipt, classify: classify, buildCSV: buildCSV };
+    window.__receiptOCR = {
+      parseReceipt: parseReceipt, classify: classify, buildCSV: buildCSV,
+      detectTotal: detectTotal, detectMeta: detectMeta, otsuThreshold: otsuThreshold
+    };
   })();
   </script>
 </body>
