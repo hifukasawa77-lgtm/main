@@ -6739,8 +6739,8 @@
           'tool-portfolio-desc': 'このサイト自体もClaude Codeと一緒に設計・実装しました。GitHub Pages でホスティング、ビルドツール不使用の素のHTML/CSS/JS構成。',
           'tool-github-link': 'GitHubを見る →',
           'tool-engteacher-title': '英語先生エージェント',
-          'tool-engteacher-desc': 'Claude Code のAIエージェントとして動作する英語講師。英会話・英作文添削・文法解説・発音指導の4モードを日英バイリンガルで提供。ネイティブが使う自然な表現を学べます。',
-          'tool-engteacher-usage': '🤖 Claude Codeで起動',
+          'tool-engteacher-desc': 'ブラウザの音声合成・音声認識で、ネイティブ英語の先生と「声」で会話・発音練習・リスニングができる英語学習ツール。日英バイリンガル・キー不要・無料。',
+          'tool-engteacher-usage': '🎙️ 音声で会話する',
           'ttag-english': '英語学習',
           // dashboard
           'dash-layout-toggle': '表示・並び替え',
@@ -6983,8 +6983,8 @@
           'tool-portfolio-desc': 'Designed and built together with Claude Code. Hosted on GitHub Pages — pure HTML/CSS/JS, no build tools.',
           'tool-github-link': 'View on GitHub →',
           'tool-engteacher-title': 'English Teacher Agent',
-          'tool-engteacher-desc': 'An AI English tutor running as a Claude Code agent. Offers 4 teaching modes — conversation, writing correction, grammar, and pronunciation — all in bilingual Japanese/English.',
-          'tool-engteacher-usage': '🤖 Launch in Claude Code',
+          'tool-engteacher-desc': 'Talk out loud with a native English teacher right in your browser — conversation roleplay, pronunciation practice, and listening quizzes using the Web Speech API. Bilingual, no API key, free.',
+          'tool-engteacher-usage': '🎙️ Talk with Voice',
           'ttag-english': 'English Learning',
           // dashboard
           'dash-layout-toggle': 'Show / Reorder',
