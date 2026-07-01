@@ -6,7 +6,8 @@ const filePath = process.argv[2];
 if (!filePath) { console.error('Usage: node dynamic-test.cjs <path-to-html>'); process.exit(1); }
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  // CHROMIUM_PATH: 同梱ブラウザとplaywrightのバージョンが合わない環境（CI等）向けの上書き。未設定なら従来どおり
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
   const page = await browser.newPage();
 
   const jsErrors = [];
