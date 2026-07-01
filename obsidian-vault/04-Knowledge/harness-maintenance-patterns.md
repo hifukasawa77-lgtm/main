@@ -28,3 +28,6 @@ related: ["[[recursive-self-improvement]]", "[[0004-code-generator-color-scheme-
 
 ## セカンドブレイン運用
 - recall hook は直近Dailyを**全文**投入する。Dailyに大量追記すると毎セッションのコンテキストを圧迫する。再利用可能な学びは Daily に溜めず `04-Knowledge/` へ昇格し（索引で常時surface・コンパクト）、Daily は1行サマリー＋ADR/知見へのリンクに圧縮する。
+
+---
+> ♻️ **昇格済み（2026-07-01, /self-improve）**: 「ドリフト」「スキル定義」「hook 2段ゲート」は `harness-lint.sh` 検査#1〜#5で機械強制済み（[[0007-harness-lint-automation]] / [[0008-value-drift-lint]]）。「bash罠」は `/self-improve` 手順0の追記注意へ、「セカンドブレイン運用（Daily圧縮）」は `second-brain/SKILL.md` 書式ルールへ反映済み（[[0009-daily-hygiene-rule]]）。
