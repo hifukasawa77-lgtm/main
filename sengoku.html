@@ -353,6 +353,136 @@ function persistAllCastlePositionRecords(){
   return records;
 }
 
+/* ===================================================================
+ * 城位置CSV（siro_ichi.csv）— 位置編集の「確定」で出力し、起動時に読込む
+ * 列: 城名,国名,所属大名,城LV,X城の配置位置の座標,城の配置位置のY座標
+ * =================================================================== */
+const CASTLE_POS_CSV_FILE = 'siro_ichi.csv';
+const CASTLE_POS_CSV_HEADER = ['城名','国名','所属大名','城LV','X城の配置位置の座標','城の配置位置のY座標'];
+const CASTLE_POS_CSV_STORE = 'sengokuCastlePositionCsv:v1';
+function csvEscapeField(v){
+  const s = (v===undefined || v===null) ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function csvParseLine(line){
+  const out=[]; let cur=''; let quoted=false;
+  for (let i=0;i<line.length;i++){
+    const ch=line[i];
+    if (quoted){
+      if (ch==='"'){ if (line[i+1]==='"'){ cur+='"'; i++; } else { quoted=false; } }
+      else cur+=ch;
+    } else {
+      if (ch==='"') quoted=true;
+      else if (ch===','){ out.push(cur); cur=''; }
+      else cur+=ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+// 現在の城配置からCSV文字列を生成する（座標は地図画像ピクセル）
+function buildCastlePositionCsv(state){
+  const records=collectCastlePositionRecords();
+  const lines=[CASTLE_POS_CSV_HEADER.join(',')];
+  (DATA.provinces||[]).forEach(p=>{
+    if (isCastleDeleted(p.id)) return;
+    const rec=records[p.id];
+    if (!rec || !Number.isFinite(rec.x) || !Number.isFinite(rec.y)) return;
+    const prov = state && state.provinces ? state.provinces[p.id] : null;
+    const ownerId = prov ? prov.owner : null;
+    let daimyoName='';
+    if (ownerId && state){ const d=daimyoDef(state, ownerId); if (d) daimyoName=d.nameJP; }
+    const castleLv = prov && Number.isFinite(prov.castleLevel) ? prov.castleLevel : '';
+    const row=[castleNameForProvince(p), p.nameJP, daimyoName, castleLv, Math.round(rec.x), Math.round(rec.y)];
+    lines.push(row.map(csvEscapeField).join(','));
+  });
+  return lines.join('\r\n') + '\r\n';
+}
+function saveCastlePositionCsvToLocal(csv){
+  try { localStorage.setItem(CASTLE_POS_CSV_STORE, csv); } catch (_) {}
+}
+// CSVファイル（siro_ichi.csv）をダウンロード出力する
+function downloadCastlePositionCsv(csv){
+  try {
+    const blob=new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'}); // BOM付でExcel等の文字化け防止
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=CASTLE_POS_CSV_FILE;
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ try{ URL.revokeObjectURL(url); a.remove(); }catch(_){} }, 0);
+    return true;
+  } catch (_) { return false; }
+}
+// 位置編集の確定時に呼ぶ: CSVを生成→localStorage保存→ファイル出力
+function exportCastlePositionCsv(state){
+  const csv=buildCastlePositionCsv(state);
+  saveCastlePositionCsvToLocal(csv);
+  const downloaded=downloadCastlePositionCsv(csv);
+  const rows=csv.trim().split(/\r?\n/).length-1;
+  return {csv, rows, downloaded};
+}
+// CSV文字列 → [{castleName, provinceName, daimyo, level, x, y}]
+function parseCastlePositionCsv(text){
+  const rows=[];
+  if (!text) return rows;
+  const lines=text.replace(/^﻿/, '').split(/\r?\n/);
+  for (let i=0;i<lines.length;i++){
+    const line=lines[i];
+    if (!line.trim()) continue;
+    const cols=csvParseLine(line);
+    if (i===0 && (cols[0]==='城名')) continue; // ヘッダ行
+    if (cols.length<6) continue;
+    const x=Number(cols[4]), y=Number(cols[5]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    rows.push({castleName:(cols[0]||'').trim(), provinceName:(cols[1]||'').trim(), daimyo:(cols[2]||'').trim(), level:(cols[3]||'').trim(), x, y});
+  }
+  return rows;
+}
+// CSVの座標(地図画像ピクセル)を城配置オーバーライドへ反映する
+// fillOnly=true の場合、既にオーバーライド済みの城は上書きしない（同梱シード用）
+function applyCastlePositionCsvRows(rows, fillOnly){
+  if (!Array.isArray(rows) || !rows.length) return 0;
+  const byCastle={}, byProv={};
+  (DATA.provinces||[]).forEach(p=>{
+    if (isCastleDeleted(p.id)) return;
+    byCastle[castleNameForProvince(p)]=p.id;
+    if (!(p.nameJP in byProv)) byProv[p.nameJP]=p.id;
+  });
+  const img=ASSETS && ASSETS.img && ASSETS.img.map;
+  const iw=img && (img.naturalWidth || img.width);
+  const ih=img && (img.naturalHeight || img.height);
+  let applied=0;
+  rows.forEach(r=>{
+    const id = byCastle[r.castleName] || byProv[r.provinceName];
+    if (!id) return;
+    if (fillOnly && CASTLE_POS_OVERRIDES[id]) return; // ユーザー編集済みは温存
+    const rec={x:r.x, y:r.y};
+    if (iw && ih){ rec.mx=round6(clamp01(r.x/iw)); rec.my=round6(clamp01(r.y/ih)); }
+    CASTLE_POS_OVERRIDES[id]=rec;
+    CASTLE_MAP_POINTS[id]=rec;
+    applied++;
+  });
+  if (applied){
+    saveCastlePositionOverrides();
+    writeCastlePositionRecordsToHtmlBody(collectCastlePositionRecords());
+  }
+  return applied;
+}
+// 起動時ロード: localStorageのCSV(ユーザー編集) → 無ければ同梱の siro_ichi.csv を取得して反映
+async function loadCastlePositionsFromCsv(){
+  let text=null, fromSeed=false;
+  try { text=localStorage.getItem(CASTLE_POS_CSV_STORE) || null; } catch (_) {}
+  if (!text && location.protocol !== 'file:'){
+    try {
+      const res=await fetch(CASTLE_POS_CSV_FILE, {cache:'no-store'});
+      if (res && res.ok){ text=await res.text(); fromSeed=true; }
+    } catch (_) {}
+  }
+  if (!text) return 0;
+  try { return applyCastlePositionCsvRows(parseCastlePositionCsv(text), fromSeed); }
+  catch (_) { return 0; }
+}
+
 function customCastleId(name){
   const suffix = Date.now().toString(36) + Math.floor(Math.random()*9999).toString(36);
   return 'custom_castle_' + suffix;
@@ -1267,6 +1397,8 @@ class BootScene extends GameKit.Scene {
       DATA.scenarios = scn.scenarios;
       applySengokuExpansions();
       applyCustomCastlesToData();
+      return loadCastlePositionsFromCsv().catch(()=>0);
+    }).then(()=>{
       buildPortraitSlots();
       this.done=true;
       game.changeScene(new TitleScene());
@@ -1773,9 +1905,10 @@ class MapScene extends GameKit.Scene {
   _finishCastleEdit(game){
     this.castleEdit=false; this.dragCastle=null;
     const records=persistAllCastlePositionRecords();
+    const csv=exportCastlePositionCsv(this.state);
     this.cells=computeProvinceCells();
     if (game && game.audio) game.audio.beep(880,0.08,'triangle');
-    this._flash('\u5168'+Object.keys(records).length+'\u57ce\u306e\u5ea7\u6a19\u3092HTML\u672c\u4f53\u30c7\u30fc\u30bf\u3078\u4fdd\u5b58\u3057\u307e\u3057\u305f');
+    this._flash('\u5168'+Object.keys(records).length+'\u57ce\u306e\u5ea7\u6a19\u3092 siro_ichi.csv \u306b\u51fa\u529b\u3057\u307e\u3057\u305f'+(csv.downloaded?'':'\uff08\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u4e0d\u53ef\uff09'));
   }
   _updateCastleEditor(game, p, btns){
     if (p.justPressed){
