@@ -13,6 +13,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 ## 📁 構成
 - `00-Inbox/` — 未整理の一時メモ
 - `01-Daily/` — セッションごとの作業記録（`YYYY-MM-DD.md`）
+- `01-Daily/sessions/` — Claude Codeのやりとり自動ログ（hook生成・生ログ。リンク不要・削除自由）
 - `02-Projects/` — プロジェクト/ゲーム単位のノート
 - `03-Decisions/` — 意思決定ログ（ADR形式）
 - `04-Knowledge/` — 再利用可能な知見・ハマりどころ・パターン集
@@ -32,6 +33,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0008-value-drift-lint]] — 色以外の具体値（予算/閾値/ブランチ）ドリフトをharness-lint検査#5で機械検査
 - [[0009-daily-hygiene-rule]] — Daily圧縮（recallコンテキスト節約）をsecond-brainスキルの書式ルールへ昇格
 - [[0010-skills-expansion]] — スキル一括拡充（8本→23本、監査スクリプト同梱型）
+- [[0011-mobile-vault-private-repo-sync]] — スマホObsidian連携（専用プライベートリポジトリ経由の双方向同期＋セッションログ自動記録）
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
@@ -39,5 +41,6 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[harness-maintenance-patterns]] — ハーネス保守のパターン・ハマりどころ（色ドリフト/スキル/hook2段/bash罠）
 
 ## 🔗 関連
-- リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール
+- [[MOBILE-SETUP]] — 📱 スマホObsidian連携のセットアップ手順
+- リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール（全文ミラー: [[claude-md-mirror]]）
 - `.claude/skills/second-brain/SKILL.md` — 運用ルール詳細

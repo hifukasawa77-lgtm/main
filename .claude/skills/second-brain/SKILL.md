@@ -15,8 +15,10 @@ description: Obsidian Vault（obsidian-vault/）をClaude Codeの第二の脳と
 ```
 obsidian-vault/
   MOC.md          # 目次（Map of Content）。プロジェクト一覧・各フォルダへのリンクのハブ
-  00-Inbox/       # 未整理の一時メモ・思いつき
+  MOBILE-SETUP.md # スマホObsidian連携のセットアップ手順
+  00-Inbox/       # 未整理の一時メモ・思いつき（スマホからのメモもここに届く）
   01-Daily/       # YYYY-MM-DD.md 形式のセッション作業記録
+  01-Daily/sessions/  # やりとりの自動ログ（hook生成・自動生成のため手編集/リンク不要・削除自由）
   02-Projects/    # プロジェクト/ゲーム単位のノート（1ファイル1プロジェクト）
   03-Decisions/   # 意思決定ログ（ADR形式、NNNN-スラッグ.md で連番）
   04-Knowledge/   # 再利用可能な知見・ハマりどころ・パターン集
@@ -38,6 +40,11 @@ obsidian-vault/
 - 新規ノートは必ず `MOC.md` または親ノートからリンクする（孤立ノートを作らない）
 - ファイル全体を読み直す必要はない。追記は対象ノートの末尾セクションにEditで差分追加する（`CLAUDE.md`のコンテキスト節約ルールに従う）
 - **Dailyは肥大化させない（recallコンテキスト節約）**: recall hookは直近Dailyを**全文**投入するため、Dailyへの大量追記は毎セッションのコンテキストを圧迫する。再利用可能な学びはDailyに溜めず `04-Knowledge/` へ昇格し（知見インデックスで常時surface）、同日の過去セッション分は「1行サマリー＋ADR/知見ノートへのwikilink」に圧縮する（詳細: [[harness-maintenance-patterns]]）
+
+## スマホ連携・自動記録（2026-07-02〜）
+- **やりとりの自動記録**: Stop/SessionEnd hook（`.claude/hooks/second-brain-session-log.sh`）が会話ログを `01-Daily/sessions/YYYY-MM-DD-<sid>.md` へ自動生成する。生ログなのでDaily Noteの代わりにはならない（要点の記録・昇格は従来どおりClaudeが行う）。セッション終了時のコミットでは、`01-Daily/sessions/` の未コミットログがあれば一緒にコミットする
+- **CLAUDE.md全文ミラー**: `04-Knowledge/claude-md-mirror.md` は同期時の自動生成。**編集禁止**（編集はリポジトリ直下のCLAUDE.mdへ）
+- **スマホ同期**: GitHub Actions `vault-sync.yml` が専用Vaultリポジトリと双方向同期する。スマホからのメモは `00-Inbox/` に届くので、見つけたら通常のInbox仕分け基準で整理する。詳細: [[0011-mobile-vault-private-repo-sync]] / [[MOBILE-SETUP]]
 
 ## 書かないこと（禁止事項）
 - APIキー・パスワード・個人の機微情報は書かない（このVaultはgit管理されGitHub Pagesと同じリポジトリにある）

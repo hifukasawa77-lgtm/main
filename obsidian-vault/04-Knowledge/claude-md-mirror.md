@@ -1,3 +1,12 @@
+---
+type: knowledge
+tags: [knowledge, claude-md, auto-generated]
+---
+
+# CLAUDE.md（全文ミラー）
+
+> ⚠️ 自動生成（.github/scripts/vault-sync.sh）。編集はリポジトリ直下の CLAUDE.md へ。このファイルへの編集は次回同期で上書きされる。
+
 # CLAUDE.md — hide_0001 Portfolio
 
 ## プロジェクト概要

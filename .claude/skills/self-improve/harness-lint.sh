@@ -94,10 +94,12 @@ fi
 echo "== 6. 主要参照パスの実在 =="
 for p in \
   .claude/hooks/second-brain-recall.sh .claude/hooks/accounting-guard.sh .claude/hooks/notify-slack.sh \
+  .claude/hooks/second-brain-session-log.sh \
   .claude/skills/second-brain/SKILL.md .claude/skills/self-improve/SKILL.md \
+  .github/workflows/vault-sync.yml .github/scripts/vault-sync.sh \
   gamekit/gamekit.js gamekit/template.html \
   accounting/budget.md accounting/ledger.md \
-  obsidian-vault/MOC.md obsidian-vault/Templates/decision-note.md ; do
+  obsidian-vault/MOC.md obsidian-vault/MOBILE-SETUP.md obsidian-vault/Templates/decision-note.md ; do
   [ -e "$p" ] && ok "$p" || note_fail "参照先なし: $p"
 done
 

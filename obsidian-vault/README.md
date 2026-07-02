@@ -6,6 +6,8 @@ GitHub Pages で公開される `index.html` 等とは無関係の、プロジ�
 ## 使い方（人間側）
 Obsidian アプリでこのフォルダ（`obsidian-vault/`）をVaultとして開くと、`[[wikilink]]` やグラフビュー・バックリンクがそのまま機能します。
 
+**スマホで使う場合**: GitHub Actions（`vault-sync.yml`）が専用の軽量Vaultリポジトリへ自動同期しており、スマホのObsidian Gitプラグインでそれをクローンして読み書きできます。セットアップ手順は [MOBILE-SETUP.md](MOBILE-SETUP.md) を参照。
+
 ## 使い方（Claude Code側）
 - **読み込み**: セッション開始時に `.claude/hooks/second-brain-recall.sh` が `MOC.md` と直近の `01-Daily/` ノートを自動で読み込み、コンテキストに追加する
 - **書き込み**: いつ・何をどう書くかは `.claude/skills/second-brain/SKILL.md` のルールに従う

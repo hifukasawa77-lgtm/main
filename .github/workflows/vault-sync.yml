@@ -1,0 +1,62 @@
+name: Vault同期（スマホObsidian連携）
+
+# obsidian-vault/ を専用Vaultリポジトリ（スマホのObsidian Gitがクローンする軽量リポジトリ）
+# と双方向同期する。仕組みの詳細: .github/scripts/vault-sync.sh / obsidian-vault/MOBILE-SETUP.md
+# - push時: main のVault変更・CLAUDE.md変更を公開
+# - 30分毎: スマホ側の編集を取込（cron）
+# - 手動: workflow_dispatch（force_publish=true でコンフリクト時に main の内容へ強制統一）
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'obsidian-vault/**'
+      - 'CLAUDE.md'
+      - '.github/workflows/vault-sync.yml'
+      - '.github/scripts/vault-sync.sh'
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: '取込をスキップし main の内容で強制上書き公開（スマホ編集は破棄）'
+        type: boolean
+        default: false
+
+concurrency:
+  group: vault-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: シークレット確認
+        id: check
+        env:
+          TOKEN: ${{ secrets.VAULT_SYNC_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "VAULT_SYNC_TOKEN 未設定のため同期をスキップ（設定手順: obsidian-vault/MOBILE-SETUP.md）" >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 巨大リポジトリ対策: blobless + sparse-checkout で obsidian-vault/ とルート直下のみ取得
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.enabled == 'true'
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            obsidian-vault
+
+      - name: 双方向同期を実行
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          VAULT_REPO: ${{ vars.VAULT_REPO || 'hifukasawa77-lgtm/obsidian-vault' }}
+          TOKEN: ${{ secrets.VAULT_SYNC_TOKEN }}
+          FORCE_PUBLISH: ${{ inputs.force_publish == true && '1' || '0' }}
+        run: bash .github/scripts/vault-sync.sh
