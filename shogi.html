@@ -870,11 +870,17 @@ function copyKifu(){
 
 // ===== AI =====
 // ===== 思考エンジン（negamax + αβ + 反復深化 / Web Worker） =====
+// ブラッシュアップ版エンジン:
+//  - Zobristハッシュ + 置換表（TT） / PVS（Principal Variation Search） / Aspiration Window
+//  - Null Move枝刈り / LMR（Late Move Reductions） / 王手延長
+//  - ムーブオーダリング強化（TT手 → MVV-LVA → キラー手 → ヒストリー）
+//  - 静止探索の強化（王手回避・成りを読む / デルタ枝刈り / 時間打ち切り）
+//  - 打ち歩詰め（禁じ手）の判定 / 経路上の千日手回避
 // DOM非依存の純粋エンジン。Blob URL でWorker化し、思考中もUIを固めない。
 // Worker生成に失敗した環境（file:// 等）では同期フォールバックで実行する。
 const SHOGI_ENGINE_SRC = `
 'use strict';
-var PVALS={FU:1,KYO:3,KEI:3,GIN:5,KIN:6,KAKU:8,HI:10,OU:0,TO:7,NKYO:6,NKEI:6,NGIN:6,RYUMA:12,RYUO:13};
+var PVALS={FU:1,KYO:3,KEI:4,GIN:5,KIN:6,KAKU:8,HI:10,OU:0,TO:7,NKYO:6,NKEI:6,NGIN:6,RYUMA:13,RYUO:15};
 var CAN_PROM={FU:1,KYO:1,KEI:1,GIN:1,KAKU:1,HI:1};
 var TO_PROM={FU:'TO',KYO:'NKYO',KEI:'NKEI',GIN:'NGIN',KAKU:'RYUMA',HI:'RYUO'};
 var DEMOTE={TO:'FU',NKYO:'KYO',NKEI:'KEI',NGIN:'GIN',RYUMA:'KAKU',RYUO:'HI'};
@@ -882,9 +888,9 @@ var GOLD={KIN:1,TO:1,NKYO:1,NKEI:1,NGIN:1};
 var DROP_TYPES=['FU','KYO','KEI','GIN','KIN','KAKU','HI'];
 var MATE=1000000;
 var PROFILES={
-  fuji:{advance:0.6,kingAtk:0.55,defense:0.12,hand:1.15,noise:0},
-  habu:{advance:0.32,kingAtk:0.30,defense:0.5,hand:1.15,noise:0.5},
-  none:{advance:0.3,kingAtk:0.25,defense:0.3,hand:1.1,noise:0}
+  fuji:{advance:0.6,kingAtk:0.55,defense:0.12,hand:1.15,noise:0,thinkMs:2000},
+  habu:{advance:0.32,kingAtk:0.30,defense:0.5,hand:1.15,noise:0.5,thinkMs:1500},
+  none:{advance:0.3,kingAtk:0.25,defense:0.3,hand:1.1,noise:0,thinkMs:1500}
 };
 function inB(r,c){return r>=0&&r<9&&c>=0&&c<9;}
 function rawMoves(b,r,c){
@@ -978,22 +984,88 @@ function genMoves(st,p){
   }
   return moves;
 }
-function make(st,m,p){
-  var b=st.b,u;
-  if(m.k==='dr'){ b[m.tr][m.tc]={t:m.t,p:p}; st.hands[p][m.t]--; u={drop:m.t}; }
-  else{
-    var mv=b[m.fr][m.fc],cap=b[m.tr][m.tc];
-    u={fr:m.fr,fc:m.fc,tr:m.tr,tc:m.tc,moved:mv,cap:cap};
-    b[m.fr][m.fc]=null;
-    b[m.tr][m.tc]=m.promo?{t:TO_PROM[mv.t],p:p}:{t:mv.t,p:p};
-    if(cap){var bt=DEMOTE[cap.t]||cap.t;st.hands[p][bt]++;u.capBase=bt;}
+// 静止探索用：取る手・成る手のみ生成（打ち手は含めない）
+function genTactical(st,p){
+  var b=st.b,out=[];
+  for(var r=0;r<9;r++)for(var c=0;c<9;c++){
+    var pc=b[r][c];if(!pc||pc.p!==p)continue;
+    var rm=rawMoves(b,r,c);
+    for(var i=0;i<rm.length;i++){
+      var tr=rm[i][0],tc=rm[i][1],tg=b[tr][tc];
+      var canP=CAN_PROM[pc.t]&&(inZone(tr,p)||inZone(r,p));
+      if(tg){
+        if(canP){
+          out.push({k:'mv',fr:r,fc:c,tr:tr,tc:tc,promo:true});
+          if(!mustProm(pc.t,tr,p)&&(pc.t==='GIN'||pc.t==='KEI'))out.push({k:'mv',fr:r,fc:c,tr:tr,tc:tc,promo:false});
+        } else out.push({k:'mv',fr:r,fc:c,tr:tr,tc:tc,promo:false});
+      } else if(canP&&(pc.t==='FU'||pc.t==='KAKU'||pc.t==='HI')){
+        out.push({k:'mv',fr:r,fc:c,tr:tr,tc:tc,promo:true});
+      }
+    }
   }
+  return out;
+}
+// ===== Zobrist ハッシュ =====
+var PIDX={FU:0,KYO:1,KEI:2,GIN:3,KIN:4,KAKU:5,HI:6,OU:7,TO:8,NKYO:9,NKEI:10,NGIN:11,RYUMA:12,RYUO:13};
+var DIDX={FU:0,KYO:1,KEI:2,GIN:3,KIN:4,KAKU:5,HI:6};
+var _zs=2463534242;
+function zrnd(){_zs^=_zs<<13;_zs>>>=0;_zs^=_zs>>>17;_zs^=_zs<<5;_zs>>>=0;return _zs;}
+var ZP1=new Int32Array(14*2*81),ZP2=new Int32Array(14*2*81);
+var ZH1=new Int32Array(7*2*19),ZH2=new Int32Array(7*2*19);
+(function(){
+  for(var i=0;i<ZP1.length;i++){ZP1[i]=zrnd()|0;ZP2[i]=zrnd()|0;}
+  for(var j=0;j<ZH1.length;j++){ZH1[j]=zrnd()|0;ZH2[j]=zrnd()|0;}
+})();
+var ZS1=zrnd()|0,ZS2=zrnd()|0;
+function pzi(t,p,r,c){return (PIDX[t]*2+p-1)*81+r*9+c;}
+function hzi(t,p,n){return (DIDX[t]*2+p-1)*19+n;}
+function computeHash(st,p){
+  var h1=0,h2=0,b=st.b;
+  for(var r=0;r<9;r++)for(var c=0;c<9;c++){
+    var pc=b[r][c];if(!pc)continue;
+    var i=pzi(pc.t,pc.p,r,c);h1^=ZP1[i];h2^=ZP2[i];
+  }
+  for(var s=1;s<=2;s++)for(var d=0;d<DROP_TYPES.length;d++){
+    var t=DROP_TYPES[d],j=hzi(t,s,st.hands[s][t]||0);h1^=ZH1[j];h2^=ZH2[j];
+  }
+  if(p===2){h1^=ZS1;h2^=ZS2;}
+  st.h1=h1>>>0;st.h2=h2>>>0;
+}
+function make(st,m,p){
+  var b=st.b,u={h1:st.h1,h2:st.h2},h1=st.h1|0,h2=st.h2|0,i;
+  if(m.k==='dr'){
+    var cnt=st.hands[p][m.t];
+    i=hzi(m.t,p,cnt);h1^=ZH1[i];h2^=ZH2[i];
+    st.hands[p][m.t]=cnt-1;
+    i=hzi(m.t,p,cnt-1);h1^=ZH1[i];h2^=ZH2[i];
+    b[m.tr][m.tc]={t:m.t,p:p};
+    i=pzi(m.t,p,m.tr,m.tc);h1^=ZP1[i];h2^=ZP2[i];
+    u.drop=m.t;
+  } else {
+    var mv=b[m.fr][m.fc],cap=b[m.tr][m.tc];
+    u.fr=m.fr;u.fc=m.fc;u.tr=m.tr;u.tc=m.tc;u.moved=mv;u.cap=cap;
+    i=pzi(mv.t,p,m.fr,m.fc);h1^=ZP1[i];h2^=ZP2[i];
+    b[m.fr][m.fc]=null;
+    var nt=m.promo?TO_PROM[mv.t]:mv.t;
+    if(cap){
+      i=pzi(cap.t,cap.p,m.tr,m.tc);h1^=ZP1[i];h2^=ZP2[i];
+      var bt=DEMOTE[cap.t]||cap.t,c0=st.hands[p][bt];
+      i=hzi(bt,p,c0);h1^=ZH1[i];h2^=ZH2[i];
+      st.hands[p][bt]=c0+1;
+      i=hzi(bt,p,c0+1);h1^=ZH1[i];h2^=ZH2[i];
+      u.capBase=bt;
+    }
+    b[m.tr][m.tc]={t:nt,p:p};
+    i=pzi(nt,p,m.tr,m.tc);h1^=ZP1[i];h2^=ZP2[i];
+  }
+  st.h1=((h1^ZS1)>>>0);st.h2=((h2^ZS2)>>>0);
   return u;
 }
 function unmake(st,m,p,u){
   var b=st.b;
   if(m.k==='dr'){ b[m.tr][m.tc]=null; st.hands[p][u.drop]++; }
   else{ b[u.fr][u.fc]=u.moved; b[u.tr][u.tc]=u.cap; if(u.cap)st.hands[p][u.capBase]--; }
+  st.h1=u.h1;st.h2=u.h2;
 }
 function evaluate(st,W){
   var b=st.b,sc={1:0,2:0},king={1:null,2:null};
@@ -1017,66 +1089,210 @@ function evaluate(st,W){
   }
   return sc;
 }
+function scoreOf(st,p,W){var sc=evaluate(st,W);return p===2?sc[2]-sc[1]:sc[1]-sc[2];}
+function hasLegal(st,p){
+  var ms=genMoves(st,p);
+  for(var i=0;i<ms.length;i++){var u=make(st,ms[i],p);var ok=!inCheck(st.b,p);unmake(st,ms[i],p,u);if(ok)return true;}
+  return false;
+}
+// 打ち歩詰め判定：直前の歩打ちで相手玉が詰んでいるか（make後に呼ぶ）
+function isPawnDropMate(st,opp){
+  if(!inCheck(st.b,opp))return false;
+  return !hasLegal(st,opp);
+}
 function legalChildren(st,p){
-  var ms=genMoves(st,p),out=[];
-  for(var i=0;i<ms.length;i++){var m=ms[i];var u=make(st,m,p);if(!inCheck(st.b,p))out.push(m);unmake(st,m,p,u);}
+  var ms=genMoves(st,p),out=[],opp=p===1?2:1;
+  for(var i=0;i<ms.length;i++){
+    var m=ms[i],u=make(st,m,p);
+    var ok=!inCheck(st.b,p);
+    if(ok&&m.k==='dr'&&m.t==='FU'&&isPawnDropMate(st,opp))ok=false; // 打ち歩詰めは禁じ手
+    unmake(st,m,p,u);
+    if(ok)out.push(m);
+  }
   return out;
 }
-function orderScore(st,m){var s=0;if(m.k==='mv'){var cap=st.b[m.tr][m.tc];if(cap)s+=PVALS[cap.t]*10;if(m.promo)s+=4;}else s+=1;return s;}
-function quiesce(st,alpha,beta,p,W,qd){
-  var sc=evaluate(st,W);var stand=(p===2?sc[2]-sc[1]:sc[1]-sc[2]);
-  if(stand>=beta)return beta;if(stand>alpha)alpha=stand;
-  if(qd<=0)return alpha;
-  var ms=genMoves(st,p),opp=p===1?2:1;
-  ms.sort(function(a,b){return orderScore(st,b)-orderScore(st,a);});
+// ===== 探索 =====
+var TT=new Map(),DEADLINE=0,ABORT=false,NODES=0;
+var KIL=new Int32Array(256),HIST=new Float64Array(14*2*81);
+var PATH1=new Int32Array(160),PATH2=new Int32Array(160);
+function encMove(m){return m.k==='mv'?(((m.fr*9+m.fc)*81+m.tr*9+m.tc)*2+(m.promo?1:0)):(13200+DIDX[m.t]*81+m.tr*9+m.tc);}
+function histIdxOf(st,m,p){var t=m.k==='mv'?st.b[m.fr][m.fc].t:m.t;return (PIDX[t]*2+p-1)*81+m.tr*9+m.tc;}
+function orderMoves(st,ms,p,ttEnc,ply){
   for(var i=0;i<ms.length;i++){
-    var m=ms[i];if(m.k!=='mv'||!st.b[m.tr][m.tc])continue; // 取りのみ
-    var u=make(st,m,p);if(inCheck(st.b,p)){unmake(st,m,p,u);continue;}
-    var v=-quiesce(st,-beta,-alpha,opp,W,qd-1);unmake(st,m,p,u);
-    if(v>=beta)return beta;if(v>alpha)alpha=v;
+    var m=ms[i],s=0,e=encMove(m);
+    if(e===ttEnc)s=1e9;
+    else{
+      var cap=m.k==='mv'?st.b[m.tr][m.tc]:null;
+      if(cap)s=1000000+PVALS[cap.t]*160-PVALS[st.b[m.fr][m.fc].t]; // MVV-LVA
+      else if(e===KIL[ply*2])s=900000;
+      else if(e===KIL[ply*2+1])s=850000;
+      else s=Math.min(HIST[histIdxOf(st,m,p)],800000);
+      if(m.k==='mv'&&m.promo)s+=1200;
+    }
+    m._s=s;
   }
+  ms.sort(function(a,b){return b._s-a._s;});
+}
+function quiesce(st,alpha,beta,p,W,qd,ply){
+  NODES++;
+  if((NODES&255)===0&&Date.now()>DEADLINE)ABORT=true;
+  if(ABORT)return 0;
+  var chk=inCheck(st.b,p),opp=p===1?2:1,stand=0;
+  if(!chk){
+    stand=scoreOf(st,p,W);
+    if(stand>=beta)return stand;
+    if(stand>alpha)alpha=stand;
+    if(qd<=0||ply>=100)return alpha;
+  } else if(qd<=0||ply>=100){
+    return scoreOf(st,p,W);
+  }
+  var ms=chk?genMoves(st,p):genTactical(st,p);
+  for(var i=0;i<ms.length;i++){
+    var m=ms[i],s=0;
+    if(m.k==='mv'){var cp=st.b[m.tr][m.tc];if(cp)s=PVALS[cp.t]*160-PVALS[st.b[m.fr][m.fc].t];if(m.promo)s+=40;}
+    m._s=s;
+  }
+  ms.sort(function(a,b){return b._s-a._s;});
+  var any=false;
+  for(var j=0;j<ms.length;j++){
+    var m2=ms[j];
+    if(!chk&&m2.k==='mv'){
+      // デルタ枝刈り：最大でも alpha に届かない取り/成りは読まない
+      var cap2=st.b[m2.tr][m2.tc],mv2=st.b[m2.fr][m2.fc];
+      var gain=(cap2?PVALS[cap2.t]*10:0)+(m2.promo?(PVALS[TO_PROM[mv2.t]]-PVALS[mv2.t])*10:0);
+      if(stand+gain+20<alpha)continue;
+    }
+    var u=make(st,m2,p);
+    if(inCheck(st.b,p)){unmake(st,m2,p,u);continue;}
+    if(chk&&m2.k==='dr'&&m2.t==='FU'&&isPawnDropMate(st,opp)){unmake(st,m2,p,u);continue;}
+    any=true;
+    var v=-quiesce(st,-beta,-alpha,opp,W,qd-1,ply+1);
+    unmake(st,m2,p,u);
+    if(ABORT)return 0;
+    if(v>=beta)return v;
+    if(v>alpha)alpha=v;
+  }
+  if(chk&&!any)return -MATE+ply; // 王手回避不能＝詰み
   return alpha;
 }
-function negamax(st,depth,alpha,beta,p,W,deadline){
-  if(Date.now()>deadline)return null; // 時間切れシグナル
-  if(depth<=0)return quiesce(st,alpha,beta,p,W,6);
-  var ms=genMoves(st,p),opp=p===1?2:1,any=false,best=-MATE-100;
-  ms.sort(function(a,b){return orderScore(st,b)-orderScore(st,a);});
-  for(var i=0;i<ms.length;i++){
-    var m=ms[i];var u=make(st,m,p);
-    if(inCheck(st.b,p)){unmake(st,m,p,u);continue;}
-    any=true;
-    var v=negamax(st,depth-1,-beta,-alpha,opp,W,deadline);
-    unmake(st,m,p,u);
-    if(v===null)return null;
-    v=-v;
-    if(v>best)best=v;
-    if(v>alpha)alpha=v;
-    if(alpha>=beta)break;
+function negamax(st,depth,alpha,beta,p,W,ply){
+  NODES++;
+  if((NODES&255)===0&&Date.now()>DEADLINE)ABORT=true;
+  if(ABORT)return 0;
+  if(ply>=100)return scoreOf(st,p,W);
+  var h1s=st.h1|0,h2s=st.h2|0;
+  PATH1[ply]=h1s;PATH2[ply]=h2s;
+  for(var ri=ply-4;ri>=0;ri-=2)if(PATH1[ri]===h1s&&PATH2[ri]===h2s)return 0; // 経路上の千日手→引き分け評価
+  var chk=inCheck(st.b,p);
+  if(chk)depth++; // 王手延長
+  if(depth<=0)return quiesce(st,alpha,beta,p,W,8,ply);
+  var alphaOrig=alpha,ttEnc=-1,e=TT.get(st.h1);
+  if(e&&e.h2===st.h2){
+    ttEnc=e.m;
+    if(e.d>=depth&&Math.abs(e.s)<MATE-1000){
+      if(e.f===0)return e.s;
+      if(e.f===1&&e.s>=beta)return e.s;
+      if(e.f===2&&e.s<=alpha)return e.s;
+    }
   }
-  if(!any)return inCheck(st.b,p)?-MATE+ (50-depth):-MATE/2; // 詰み/手詰まり=負け
+  var opp=p===1?2:1;
+  // Null Move枝刈り（将棋は持ち駒によりツークツワンクが稀なので有効）
+  if(!chk&&depth>=3&&beta<MATE-1000){
+    var s1=st.h1,s2=st.h2;
+    st.h1=(st.h1^ZS1)>>>0;st.h2=(st.h2^ZS2)>>>0;
+    var nv=-negamax(st,depth-3,-beta,-beta+1,opp,W,ply+1);
+    st.h1=s1;st.h2=s2;
+    if(ABORT)return 0;
+    if(nv>=beta)return beta;
+  }
+  var ms=genMoves(st,p);
+  orderMoves(st,ms,p,ttEnc,ply);
+  var best=-MATE-100,bestEnc=-1,any=false,searched=0;
+  for(var i=0;i<ms.length;i++){
+    var m=ms[i],isCap=m.k==='mv'&&!!st.b[m.tr][m.tc];
+    var u=make(st,m,p);
+    if(inCheck(st.b,p)){unmake(st,m,p,u);continue;}
+    if(m.k==='dr'&&m.t==='FU'&&isPawnDropMate(st,opp)){unmake(st,m,p,u);continue;} // 打ち歩詰め
+    any=true;
+    var v;
+    if(searched===0){
+      v=-negamax(st,depth-1,-beta,-alpha,opp,W,ply+1);
+    } else {
+      var d2=depth-1;
+      // LMR：後方の静かな手は浅く読み、良さそうなら読み直す
+      if(searched>=4&&depth>=3&&!isCap&&!(m.k==='mv'&&m.promo)&&!chk&&!inCheck(st.b,opp))d2=depth-2;
+      v=-negamax(st,d2,-alpha-1,-alpha,opp,W,ply+1); // PVS: null window
+      if(!ABORT&&v>alpha&&(d2<depth-1||v<beta))v=-negamax(st,depth-1,-beta,-alpha,opp,W,ply+1);
+    }
+    unmake(st,m,p,u);
+    if(ABORT)return 0;
+    searched++;
+    if(v>best){best=v;bestEnc=encMove(m);}
+    if(v>alpha)alpha=v;
+    if(alpha>=beta){
+      if(!isCap){ // キラー手・ヒストリー更新
+        var enc=encMove(m);
+        if(KIL[ply*2]!==enc){KIL[ply*2+1]=KIL[ply*2];KIL[ply*2]=enc;}
+        HIST[histIdxOf(st,m,p)]+=depth*depth;
+      }
+      break;
+    }
+  }
+  if(!any)return -MATE+ply; // 詰み（将棋は指せる手がなければ負け）
+  if(Math.abs(best)<MATE-1000){
+    var f=best<=alphaOrig?2:(best>=beta?1:0);
+    TT.set(st.h1,{h2:st.h2,d:depth,f:f,s:best,m:bestEnc});
+  }
   return best;
 }
 function shogiSearch(req){
   var st={b:req.board,hands:req.hands},p=req.p,W=PROFILES[req.style]||PROFILES.none;
-  var deadline=Date.now()+(req.deadlineMs||1500);
+  DEADLINE=Date.now()+(req.deadlineMs||W.thinkMs||1500);
+  ABORT=false;NODES=0;
+  if(TT.size>400000)TT.clear();
+  KIL=new Int32Array(256);
+  HIST=new Float64Array(14*2*81);
+  computeHash(st,p);
+  PATH1[0]=st.h1|0;PATH2[0]=st.h2|0;
   var roots=legalChildren(st,p);
   if(!roots.length)return null;
-  var opp=p===1?2:1,bestMove=roots[0];
-  for(var depth=1;depth<=20;depth++){
-    var localBest=-MATE-100,localMove=null,aborted=false;
-    var ordered=roots.slice().sort(function(a,b){return orderScore(st,b)-orderScore(st,a);});
-    for(var i=0;i<ordered.length;i++){
-      var m=ordered[i];var u=make(st,m,p);
-      var v=negamax(st,depth-1,-MATE-200,MATE+200,opp,W,deadline);
+  if(roots.length===1)return roots[0];
+  var opp=p===1?2:1,bestMove=roots[0],bestScore=-MATE-100;
+  for(var ii=0;ii<roots.length;ii++)roots[ii]._rs=0;
+  function searchRoot(depth,a0,b0){
+    var alpha=a0,localBest=-MATE-100;
+    for(var i=0;i<roots.length;i++){
+      var m=roots[i],u=make(st,m,p),v;
+      if(i===0)v=-negamax(st,depth-1,-b0,-alpha,opp,W,1);
+      else{
+        v=-negamax(st,depth-1,-alpha-1,-alpha,opp,W,1);
+        if(!ABORT&&v>alpha&&v<b0)v=-negamax(st,depth-1,-b0,-alpha,opp,W,1);
+      }
       unmake(st,m,p,u);
-      if(v===null){aborted=true;break;}
-      v=-v + (W.noise?(Math.random()*W.noise):0);
-      if(v>localBest){localBest=v;localMove=m;}
+      if(ABORT)return{best:localBest,done:false};
+      if(W.noise)v+=Math.random()*W.noise; // 人間味（プロファイル別の揺らぎ）
+      m._rs=v;
+      if(v>localBest){
+        localBest=v;
+        if(v>a0||i===0)bestMove=m; // 読み切った手のみ採用
+      }
+      if(v>alpha)alpha=v;
+      if(alpha>=b0)return{best:localBest,done:true};
     }
-    if(localMove&&!aborted)bestMove=localMove;
-    if(aborted||Date.now()>deadline)break;
-    if(localBest>MATE-100)break; // 詰み発見
+    return{best:localBest,done:true};
+  }
+  for(var depth=1;depth<=30;depth++){
+    roots.sort(function(a,b){return b._rs-a._rs;}); // 前回反復のスコア順
+    var res;
+    if(depth>=3){
+      // Aspiration Window：前回スコア近傍の狭い窓で探索、外れたら全窓で再探索
+      var a=bestScore-45,b2=bestScore+45;
+      res=searchRoot(depth,a,b2);
+      if(res.done&&(res.best<=a||res.best>=b2))res=searchRoot(depth,-MATE-200,MATE+200);
+    } else res=searchRoot(depth,-MATE-200,MATE+200);
+    if(res.done)bestScore=res.best;
+    if(ABORT||Date.now()>DEADLINE)break;
+    if(bestScore>MATE-1000)break; // 詰み発見
   }
   return bestMove;
 }
@@ -1117,7 +1333,7 @@ function aiMove(){
     hands: shogiHandsFromCap(),
     p: 2,
     style: aiStyle,
-    deadlineMs: 1500
+    deadlineMs: aiStyle==='fuji' ? 2000 : 1500  // 電竜は長考型
   };
   runShogiSearch(req).then((best)=>{
     // 思考完了までに局面が変わっていたら破棄
