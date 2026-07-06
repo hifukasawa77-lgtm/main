@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!-- CSP: 完全クライアントサイド。外部通信なし。映像はカメラから取得しCanvas内で解析するのみ。 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'self'; form-action 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="スマホのカメラとライトに指先をあてて心拍数を推定する非接触メーター（rPPG）。完全ブラウザ内処理・映像は外部送信なし。医療機器ではありません。Estimate your pulse with your phone camera — on-device, not a medical device.">
+  <title>心拍数メーター | Heart Rate</title>
+  <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/heart-rate.html">
+  <link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="心拍数メーター | Heart Rate">
+  <meta property="og:description" content="カメラとライトに指先をあてて心拍数を推定（rPPG）。完全ブラウザ内処理・映像は外部送信なし。医療機器ではありません。">
+  <meta property="og:url" content="https://hifukasawa77-lgtm.github.io/main/heart-rate.html">
+  <meta property="og:image" content="https://hifukasawa77-lgtm.github.io/main/assets/logo/favicon.svg">
+  <meta name="twitter:card" content="summary">
+  <style>
+    :root{
+      --bg:#05070d; --text:#e6edf6; --muted:#8b97a8;
+      --cyan:#22d3ee; --purple:#a78bfa; --pink:#fb7185;
+      --card:rgba(255,255,255,0.04); --border:rgba(255,255,255,0.09); --radius:20px;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0}
+    body{background:var(--bg); color:var(--text); min-height:100vh;
+      font-family:"Aptos","Segoe UI Variable","Yu Gothic UI","Hiragino Sans","Meiryo",sans-serif;
+      line-height:1.6; -webkit-font-smoothing:antialiased}
+    a{color:var(--cyan)}
+    #bg-canvas{position:fixed; inset:0; z-index:-1; pointer-events:none}
+    .wrap{max-width:820px; margin:0 auto; padding:28px 18px 72px}
+    .topbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px}
+    .home{color:var(--muted); text-decoration:none; font-size:.85rem}
+    .home:hover{color:var(--cyan)}
+    .hero{text-align:center; margin-bottom:22px}
+    .hero h1{font-size:clamp(1.7rem,5vw,2.5rem); margin:.2em 0 .1em}
+    .hero .sub{color:var(--muted); font-weight:600; margin:0; font-size:.9rem}
+    .hero .note{color:var(--muted); font-size:.82rem; margin:.7em 0 0}
+    .grad{background:linear-gradient(135deg,var(--cyan) 0%,var(--purple) 100%);
+      -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+    .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+      backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+      box-shadow:0 8px 30px rgba(0,0,0,0.35); padding:20px; margin:18px 0}
+
+    .disclaimer{border:1px solid rgba(251,113,133,0.35); background:rgba(251,113,133,0.08);
+      border-radius:14px; padding:12px 16px; font-size:.8rem; color:#fecdd3; margin-bottom:6px}
+    .disclaimer strong{color:#fb7185}
+
+    .bpm-box{display:flex; align-items:center; justify-content:center; gap:18px; flex-wrap:wrap; margin:6px 0 4px}
+    .heart{font-size:2.4rem; line-height:1; transform-origin:center}
+    .heart.beat{animation:beat .8s ease-in-out}
+    @keyframes beat{0%{transform:scale(1)}20%{transform:scale(1.25)}40%{transform:scale(1)}60%{transform:scale(1.15)}100%{transform:scale(1)}}
+    .bpm-num{font-size:clamp(2.6rem,12vw,4rem); font-weight:800; font-variant-numeric:tabular-nums; letter-spacing:.01em;
+      background:linear-gradient(135deg,var(--cyan),var(--purple)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+    .bpm-unit{color:var(--muted); font-weight:600; font-size:1rem; align-self:flex-end; margin-bottom:.6em}
+
+    .meta-row{display:flex; justify-content:center; gap:18px; flex-wrap:wrap; color:var(--muted); font-size:.82rem; margin-top:4px}
+    .meta-row .q b{color:var(--cyan)}
+
+    #wave{width:100%; height:120px; display:block; border-radius:12px; background:rgba(255,255,255,0.02); border:1px solid var(--border); margin-top:14px}
+
+    .preview{position:relative; width:96px; height:96px; margin:14px auto 0; border-radius:14px; overflow:hidden; background:#000; border:1px solid var(--border)}
+    #frame{width:100%; height:100%; object-fit:cover; display:block}
+    #video{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none}
+    .cover-hint{text-align:center; font-size:.82rem; color:var(--muted); margin-top:10px; min-height:1.3em}
+    .cover-hint.warn{color:var(--pink)}
+    .cover-hint.ok{color:var(--cyan)}
+
+    .prog{height:8px; border-radius:6px; background:rgba(255,255,255,0.06); overflow:hidden; margin:14px 0 4px; display:none}
+    .prog.show{display:block}
+    #prog-fill{height:100%; width:0%; border-radius:6px; background:linear-gradient(90deg,var(--cyan),var(--purple)); transition:width .2s}
+
+    .btn{appearance:none; border:0; cursor:pointer; font:inherit; font-weight:600; border-radius:12px;
+      padding:11px 18px; color:#04121a; background:linear-gradient(135deg,var(--cyan) 0%,#38bdf8 100%);
+      box-shadow:0 4px 16px rgba(34,211,238,0.22); transition:transform .15s,box-shadow .15s,opacity .15s}
+    .btn:hover{transform:translateY(-2px); box-shadow:0 8px 22px rgba(34,211,238,0.3)}
+    .btn:disabled{opacity:.4; cursor:not-allowed; transform:none; box-shadow:none}
+    .btn.purple{background:linear-gradient(135deg,var(--purple) 0%,#8b5cf6 100%); color:#fff; box-shadow:0 4px 16px rgba(167,139,250,0.22)}
+    .btn.ghost{background:transparent; color:var(--cyan); border:1px solid var(--border); box-shadow:none}
+    .btn.ghost:hover{background:rgba(34,211,238,0.08)}
+    .btn-row{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center; margin-top:16px}
+
+    .steps{margin:8px 0 0; padding-left:1.2em; color:var(--muted); font-size:.82rem}
+    .steps li{margin:3px 0}
+    .toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
+      background:rgba(11,16,32,0.95); color:var(--text); border:1px solid var(--border);
+      padding:11px 18px; border-radius:12px; font-size:.86rem; opacity:0; pointer-events:none;
+      transition:opacity .25s,transform .25s; z-index:50; max-width:90vw; text-align:center}
+    .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+    @media (prefers-reduced-motion: reduce){ *{transition:none !important} .heart.beat{animation:none} }
+  </style>
+</head>
+<body>
+  <canvas id="bg-canvas" aria-hidden="true"></canvas>
+  <main class="wrap">
+    <div class="topbar"><a class="home" href="index.html">← ホーム / Home</a></div>
+
+    <header class="hero">
+      <h1>❤️ <span class="grad">心拍数メーター</span></h1>
+      <p class="sub">Heart Rate — カメラで脈拍を推定（rPPG）</p>
+      <p class="note">スマホのカメラとライトに指先をあてて測ります。完全ブラウザ内処理・映像は外部送信なし。<br>
+        Cover the rear camera &amp; flashlight with a fingertip — everything runs on your device.</p>
+    </header>
+
+    <section class="card">
+      <div class="disclaimer">
+        <strong>⚠ 医療機器ではありません。</strong> この測定は娯楽・体験目的の推定値で、診断や健康管理には使用できません。/
+        <strong>Not a medical device.</strong> Estimates are for fun/experimentation only — not for diagnosis.
+      </div>
+
+      <div class="bpm-box">
+        <span class="heart" id="heart">❤️</span>
+        <span class="bpm-num" id="bpm">--</span>
+        <span class="bpm-unit">BPM</span>
+      </div>
+      <div class="meta-row">
+        <span class="q">信号品質 / Quality: <b id="quality">—</b></span>
+        <span id="phase">待機中 / Idle</span>
+      </div>
+
+      <canvas id="wave" width="760" height="120" aria-label="脈波グラフ / Pulse waveform"></canvas>
+
+      <div class="prog" id="prog"><div id="prog-fill"></div></div>
+
+      <div class="preview">
+        <video id="video" playsinline muted></video>
+        <canvas id="frame" width="96" height="96"></canvas>
+      </div>
+      <p class="cover-hint" id="cover-hint" role="status" aria-live="polite"></p>
+
+      <div class="btn-row">
+        <button class="btn" id="start-btn" type="button">カメラ起動 / Start</button>
+        <button class="btn purple" id="measure-btn" type="button" disabled>❤️ 計測（15秒）/ Measure</button>
+        <button class="btn ghost" id="torch-btn" type="button" disabled hidden>🔦 ライト / Torch</button>
+        <button class="btn ghost" id="stop-btn" type="button" disabled>停止 / Stop</button>
+      </div>
+
+      <ol class="steps">
+        <li>「カメラ起動」→ 背面カメラのレンズとライトを指先で軽く覆う。/ Cover the rear lens &amp; light with a fingertip.</li>
+        <li>ライトが点いたら「計測」。15秒じっとして待つ。/ Tap Measure and hold still for 15s.</li>
+        <li>明るい場所・指を動かさないほど精度が上がります。/ Good light and a steady finger improve accuracy.</li>
+      </ol>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="alert"></div>
+
+  <script>
+  (function () {
+    'use strict';
+    var video = document.getElementById('video');
+    var frame = document.getElementById('frame');
+    var fctx = frame.getContext('2d', { willReadFrequently: true });
+    var wave = document.getElementById('wave');
+    var wctx = wave.getContext('2d');
+    var bpmEl = document.getElementById('bpm'), qualityEl = document.getElementById('quality'), phaseEl = document.getElementById('phase');
+    var heartEl = document.getElementById('heart');
+    var coverHint = document.getElementById('cover-hint');
+    var prog = document.getElementById('prog'), progFill = document.getElementById('prog-fill');
+    var startBtn = document.getElementById('start-btn'), measureBtn = document.getElementById('measure-btn');
+    var torchBtn = document.getElementById('torch-btn'), stopBtn = document.getElementById('stop-btn');
+    var toastEl = document.getElementById('toast');
+
+    var stream = null, track = null, rafId = 0, running = false;
+    var torchOn = false;
+    var measuring = false, measureStart = 0, MEASURE_MS = 15000;
+    var samples = [];           // {t, v} v=平均赤チャンネル
+    var MAX_SAMPLES = 900;      // 約30秒分
+    var lastBeatAt = 0;
+
+    var toastTimer = 0;
+    function toast(m) { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 2600); }
+
+    function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('このブラウザはカメラ非対応です / Camera not supported'); return; }
+      phaseEl.textContent = '起動中… / Starting…';
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
+        .then(function (s) { stream = s; track = s.getVideoTracks()[0]; video.srcObject = s; return video.play(); })
+        .then(function () {
+          running = true;
+          measureBtn.disabled = false; stopBtn.disabled = false; startBtn.disabled = true;
+          phaseEl.textContent = '準備OK / Ready';
+          coverHint.textContent = '指先でレンズを覆ってください / Cover the lens with a fingertip';
+          setupTorch(); tryTorch(true);
+          loop();
+        })
+        .catch(function (err) { phaseEl.textContent = '待機中 / Idle'; toast('カメラを起動できませんでした（' + ((err && err.name) || 'error') + '）/ Camera unavailable'); });
+    }
+    function stopCamera() {
+      running = false; measuring = false;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+      track = null; torchOn = false; video.srcObject = null;
+      measureBtn.disabled = true; stopBtn.disabled = true; startBtn.disabled = false;
+      torchBtn.hidden = true; torchBtn.disabled = true; prog.classList.remove('show');
+      phaseEl.textContent = '待機中 / Idle'; coverHint.textContent = ''; coverHint.className = 'cover-hint';
+      samples = [];
+    }
+
+    function setupTorch() {
+      try { var caps = track && track.getCapabilities ? track.getCapabilities() : {}; if (caps && 'torch' in caps) { torchBtn.hidden = false; torchBtn.disabled = false; } } catch (e) {}
+    }
+    function tryTorch(on) {
+      if (!track || !track.applyConstraints) return;
+      track.applyConstraints({ advanced: [{ torch: on }] }).then(function () { torchOn = on; torchBtn.textContent = on ? '🔦 ライト OFF / Torch' : '🔦 ライト / Torch'; }).catch(function () {});
+    }
+    torchBtn.addEventListener('click', function () { tryTorch(!torchOn); });
+
+    measureBtn.addEventListener('click', function () {
+      if (!running) return;
+      measuring = true; measureStart = performance.now(); samples = [];
+      prog.classList.add('show'); progFill.style.width = '0%';
+      phaseEl.textContent = '計測中… / Measuring…'; bpmEl.textContent = '--'; qualityEl.textContent = '—';
+      measureBtn.disabled = true;
+    });
+
+    function loop() {
+      if (!running) return;
+      if (video.readyState >= 2 && video.videoWidth) {
+        // 中央ROIを小さなキャンバスへ縮小描画し平均色を取る
+        var vw = video.videoWidth, vh = video.videoHeight, side = Math.min(vw, vh);
+        var sx = (vw - side) / 2 + side * 0.25, sy = (vh - side) / 2 + side * 0.25, sSide = side * 0.5;
+        fctx.drawImage(video, sx, sy, sSide, sSide, 0, 0, frame.width, frame.height);
+        var d = fctx.getImageData(0, 0, frame.width, frame.height).data;
+        var r = 0, g = 0, b = 0, n = 0;
+        for (var i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+        r /= n; g /= n; b /= n;
+        var t = performance.now();
+        var covered = (r > 100 && (r - g) > 20);   // 指先が覆えている目安
+        updateCoverHint(covered, r);
+
+        samples.push({ t: t, v: r });
+        if (samples.length > MAX_SAMPLES) samples.shift();
+
+        analyze();
+        drawWave();
+
+        if (measuring) {
+          var elapsed = t - measureStart;
+          progFill.style.width = Math.min(100, elapsed / MEASURE_MS * 100) + '%';
+          if (elapsed >= MEASURE_MS) finishMeasure();
+        }
+      }
+      rafId = requestAnimationFrame(loop);
+    }
+
+    function updateCoverHint(covered, r) {
+      if (measuring) {
+        coverHint.className = 'cover-hint ' + (covered ? 'ok' : 'warn');
+        coverHint.textContent = covered ? 'よい信号です。動かさないで / Good signal — hold still' : '指をレンズにしっかり当てて / Press your finger on the lens';
+      } else {
+        coverHint.className = 'cover-hint ' + (covered ? 'ok' : '');
+        coverHint.textContent = covered ? '準備OK。「計測」を押してください / Ready — tap Measure' : '指先でレンズを覆ってください / Cover the lens with a fingertip';
+      }
+    }
+
+    /* ---------- 信号解析（デトレンド→ピーク検出） ---------- */
+    var lastResult = null;
+    function analyze() {
+      // 直近 ~8秒のサンプルで推定
+      var now = samples.length ? samples[samples.length - 1].t : 0;
+      var buf = [];
+      for (var i = samples.length - 1; i >= 0; i--) { if (now - samples[i].t > 8000) break; buf.unshift(samples[i]); }
+      if (buf.length < 40) { lastResult = null; return; }
+
+      var dur = (buf[buf.length - 1].t - buf[0].t) / 1000;
+      var fps = buf.length / Math.max(0.001, dur);
+
+      // 移動平均でデトレンド
+      var half = Math.max(2, Math.round(fps * 0.5));
+      var det = new Array(buf.length);
+      for (var k = 0; k < buf.length; k++) {
+        var a = Math.max(0, k - half), z = Math.min(buf.length - 1, k + half), sum = 0, c = 0;
+        for (var j = a; j <= z; j++) { sum += buf[j].v; c++; }
+        det[k] = buf[k].v - sum / c;
+      }
+      // 標準偏差
+      var mean = 0; for (var m = 0; m < det.length; m++) mean += det[m]; mean /= det.length;
+      var vari = 0; for (var s2 = 0; s2 < det.length; s2++) { var dd = det[s2] - mean; vari += dd * dd; } vari /= det.length;
+      var std = Math.sqrt(vari);
+      if (std < 0.05) { lastResult = { bpm: null, quality: 0 }; return; }
+
+      // ピーク検出（最小間隔0.33s＝最大180bpm、閾値0.4*std）
+      var peaks = [], thr = mean + std * 0.4, minGap = 0.33;
+      for (var p = 1; p < det.length - 1; p++) {
+        if (det[p] > thr && det[p] >= det[p - 1] && det[p] > det[p + 1]) {
+          var tp = buf[p].t / 1000;
+          if (!peaks.length || tp - peaks[peaks.length - 1] > minGap) peaks.push(tp);
+        }
+      }
+      if (peaks.length < 4) { lastResult = { bpm: null, quality: Math.min(0.4, peaks.length / 10) }; return; }
+
+      var iv = [];
+      for (var q = 1; q < peaks.length; q++) iv.push(peaks[q] - peaks[q - 1]);
+      iv.sort(function (x, y) { return x - y; });
+      var med = iv[iv.length >> 1];
+      var bpm = 60 / med;
+      // 間隔のばらつきから品質
+      var im = 0; for (var w = 0; w < iv.length; w++) im += iv[w]; im /= iv.length;
+      var iv2 = 0; for (var w2 = 0; w2 < iv.length; w2++) { var e = iv[w2] - im; iv2 += e * e; } iv2 /= iv.length;
+      var cv = Math.sqrt(iv2) / im;               // 変動係数（小さいほど良い）
+      var quality = Math.max(0, Math.min(1, 1 - cv * 2.2));
+
+      if (bpm >= 40 && bpm <= 200) lastResult = { bpm: Math.round(bpm), quality: quality, lastPeak: peaks[peaks.length - 1] };
+      else lastResult = { bpm: null, quality: quality };
+
+      // ライブ表示（計測中でなくてもプレビュー表示）
+      if (lastResult && lastResult.bpm) {
+        bpmEl.textContent = lastResult.bpm;
+        qualityEl.textContent = qualLabel(lastResult.quality);
+        // ビートアニメ（最後のピーク付近で鼓動）
+        var lp = lastResult.lastPeak * 1000;
+        if (lp - lastBeatAt > 300) { lastBeatAt = lp; pulseHeart(); }
+      }
+    }
+    function qualLabel(q) { return q > 0.7 ? '良 / Good' : q > 0.4 ? '可 / Fair' : '弱 / Weak'; }
+    function pulseHeart() { heartEl.classList.remove('beat'); void heartEl.offsetWidth; heartEl.classList.add('beat'); }
+
+    function finishMeasure() {
+      measuring = false; prog.classList.remove('show'); measureBtn.disabled = false;
+      if (lastResult && lastResult.bpm && lastResult.quality > 0.35) {
+        bpmEl.textContent = lastResult.bpm;
+        qualityEl.textContent = qualLabel(lastResult.quality);
+        phaseEl.textContent = '計測完了 / Done';
+        toast('心拍数：約 ' + lastResult.bpm + ' BPM / Estimated ' + lastResult.bpm + ' BPM');
+      } else {
+        bpmEl.textContent = '--'; phaseEl.textContent = '計測失敗 / Try again';
+        toast('うまく測れませんでした。指をしっかり当ててもう一度 / Couldn’t read — press finger and retry');
+      }
+    }
+
+    /* ---------- 波形描画 ---------- */
+    function drawWave() {
+      var W = wave.width, H = wave.height;
+      wctx.clearRect(0, 0, W, H);
+      // 直近6秒
+      var now = samples.length ? samples[samples.length - 1].t : 0;
+      var buf = [];
+      for (var i = samples.length - 1; i >= 0; i--) { if (now - samples[i].t > 6000) break; buf.unshift(samples[i]); }
+      if (buf.length < 3) return;
+      var min = Infinity, max = -Infinity;
+      for (var k = 0; k < buf.length; k++) { if (buf[k].v < min) min = buf[k].v; if (buf[k].v > max) max = buf[k].v; }
+      var range = Math.max(1, max - min);
+      var t0 = buf[0].t, span = Math.max(1, now - t0);
+      var grad = wctx.createLinearGradient(0, 0, W, 0);
+      grad.addColorStop(0, '#22d3ee'); grad.addColorStop(1, '#a78bfa');
+      wctx.strokeStyle = grad; wctx.lineWidth = 2; wctx.lineJoin = 'round'; wctx.beginPath();
+      for (var j = 0; j < buf.length; j++) {
+        var x = (buf[j].t - t0) / span * W;
+        var y = H - 8 - ((buf[j].v - min) / range) * (H - 16);
+        if (j === 0) wctx.moveTo(x, y); else wctx.lineTo(x, y);
+      }
+      wctx.stroke();
+    }
+
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+    window.addEventListener('beforeunload', stopCamera);
+
+    /* ---------- 背景アンビエントパーティクル ---------- */
+    (function ambient() {
+      var c = document.getElementById('bg-canvas'), x = c.getContext('2d');
+      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var pts = [], W, H;
+      function resize() { W = c.width = innerWidth; H = c.height = innerHeight; }
+      resize(); addEventListener('resize', resize);
+      var N = reduce ? 0 : Math.min(60, Math.floor(innerWidth / 22));
+      for (var i = 0; i < N; i++) pts.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.8 + 0.4, vx: (Math.random() - 0.5) * 0.25, vy: (Math.random() - 0.5) * 0.25, c: Math.random() > 0.5 ? '34,211,238' : '167,139,250' });
+      function tick() {
+        x.clearRect(0, 0, W, H);
+        for (var i = 0; i < pts.length; i++) { var p = pts[i]; p.x += p.vx; p.y += p.vy; if (p.x < 0) p.x = W; if (p.x > W) p.x = 0; if (p.y < 0) p.y = H; if (p.y > H) p.y = 0; x.beginPath(); x.arc(p.x, p.y, p.r, 0, 6.283); x.fillStyle = 'rgba(' + p.c + ',0.5)'; x.fill(); }
+        if (!reduce) requestAnimationFrame(tick);
+      }
+      tick();
+    })();
+  })();
+  </script>
+</body>
+</html>
