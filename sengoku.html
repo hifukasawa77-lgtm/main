@@ -694,7 +694,7 @@ window.addEventListener('touchmove', moveMapPan, {passive:false});
 window.addEventListener('touchend', endMapPan);
 const game = new GameKit.Engine(canvas, { width: W, height: H });
 const save = new GameKit.Save('sengoku');
-const SAVE_VERSION = 1;
+const SAVE_VERSION = 2;
 
 /* ---- 静的データ登録（JSONロード後に格納） ---- */
 const DATA = { provinces:null, provById:{}, generals:null, genById:{}, scenarios:null };
@@ -1802,8 +1802,10 @@ function buildGameState(scenarioId, playerDaimyo){
     turn:1, season:0, playerDaimyo,
     daimyo:{}, provinces:{}, generals:{},
     rng: (Date.now() & 0xffffff) ^ scenarioId,
-    log:[], pendingBattle:null, pendingResult:null,
+    diplomacy:{},
+    log:[], pendingBattle:null, pendingResult:null, pendingDefenses:[],
   };
+  state.rngSeq = (state.rng >>> 0) || 1;
   // count provinces per daimyo for starting gold
   const owncnt = {};
   for (const pid in scn.own){ const d=scn.own[pid]; owncnt[d]=(owncnt[d]||0)+1; }
@@ -1871,6 +1873,28 @@ function ownedProvinces(state, did){
 }
 function neighborsOf(pid){ return (DATA.provById[pid].neighbors)||[]; }
 
+/* ---- 決定論PRNG（mulberry32・セーブ往復で再現可能） ---- */
+function srand(st){
+  st.rngSeq = (st.rngSeq + 0x6D2B79F5) >>> 0;
+  let t = st.rngSeq;
+  t = Math.imul(t ^ (t>>>15), t | 1);
+  t ^= t + Math.imul(t ^ (t>>>7), t | 61);
+  return ((t ^ (t>>>14)) >>> 0) / 4294967296;
+}
+
+/* ---- 外交（diplomacy）ヘルパ ---- */
+function relKey(a,b){ return a<b ? a+'|'+b : b+'|'+a; }
+function getDip(st, a, b){
+  if (!st.diplomacy) st.diplomacy = {};
+  const k = relKey(a,b);
+  if (!st.diplomacy[k]) st.diplomacy[k] = { relation:0, truceUntil:0, ally:false };
+  return st.diplomacy[k];
+}
+function getRel(st, a, b){ return getDip(st,a,b).relation; }
+function addRel(st, a, b, delta){ const d=getDip(st,a,b); d.relation = clamp(d.relation+delta, -100, 100); return d.relation; }
+function areAllied(st, a, b){ return a!==b && getDip(st,a,b).ally; }
+function inTruce(st, a, b){ return a!==b && getDip(st,a,b).truceUntil >= st.turn; }
+
 /* ===================================================================
  * 戦闘モデル（手動・自動共通の評価関数）
  * =================================================================== */
@@ -1915,14 +1939,15 @@ function autoResolveBattle(opts){
   return { attackerWins, atkSurvivors:an, defSurvivors:dn };
 }
 /* 武将の戦死判定 */
-function rollGeneralDeaths(state, generals, lossFrac, isLord){
+function rollGeneralDeaths(state, generals, lossFrac, isLord, rngFn){
+  const rnd = rngFn || Math.random;
   const dead=[];
   generals.forEach(gid=>{
     const g = state.generals[gid];
     if (!g || !g.alive) return;
     let chance = 0.10 + lossFrac*0.4;
     if (isLord && isLord(gid)) chance *= 0.5;
-    if (Math.random() < chance){ g.alive=false; dead.push(gid); }
+    if (rnd() < chance){ g.alive=false; dead.push(gid); }
   });
   return dead;
 }
@@ -2712,7 +2737,7 @@ class MapScene extends GameKit.Scene {
     const res = autoResolveBattle({
       atkSoldiers:ctx.attacker.soldiers, atkGenerals:ctx.attacker.generals, atkFamily:ctx.attacker.family,
       defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
-      year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain,
+      year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
     });
     applyBattleResult(st, ctx, res);
     game.audio.jingle(res.attackerWins?[{f:523,d:0.1},{f:784,d:0.16}]:[{f:392,d:0.12},{f:262,d:0.2}]);
@@ -3262,7 +3287,7 @@ function runStrategicAI(st, d, log){
       const res=autoResolveBattle({
         atkSoldiers:send, atkGenerals:gens, atkFamily:d.id,
         defSoldiers:tp.soldiers, defGenerals:ctx.defender.generals, defFamily:tp.owner||'',
-        year:st.year, castleLevel:tp.castleLevel, terrain:ctx.terrain,
+        year:st.year, castleLevel:tp.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
       });
       const defenderName = tp.owner?daimyoDef(st,tp.owner).nameJP:'空白';
       applyBattleResult(st, ctx, res, gens);
@@ -3278,7 +3303,8 @@ function runStrategicAI(st, d, log){
 function applyBattleResult(st, ctx, res, attackerGenerals){
   const src=st.provinces[ctx.srcId], dst=st.provinces[ctx.dstId];
   const atkGens = attackerGenerals || ctx.attacker.generals;
-  const playerInvolved = ctx.attacker.daimyo===st.playerDaimyo;
+  const playerInvolved = ctx.attacker.daimyo===st.playerDaimyo || ctx.defender.daimyo===st.playerDaimyo;
+  const R = ()=>srand(st);
   const generalsLost=[];
   const lord = daimyoDef(st, ctx.attacker.daimyo);
   const isLord = (gid)=> lord && lord.lord===gid;
@@ -3286,7 +3312,7 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
     // 攻撃側生存兵が占領
     const defLossFrac = 1 - res.defSurvivors/Math.max(1,ctx.defender.soldiers);
     // 守備側武将の討死/捕縛
-    const deadDef = rollGeneralDeaths(st, ctx.defender.generals, defLossFrac, (gid)=>{ const dl=ctx.defender.daimyo&&daimyoDef(st,ctx.defender.daimyo); return dl&&dl.lord===gid; });
+    const deadDef = rollGeneralDeaths(st, ctx.defender.generals, defLossFrac, (gid)=>{ const dl=ctx.defender.daimyo&&daimyoDef(st,ctx.defender.daimyo); return dl&&dl.lord===gid; }, R);
     // 守備側の生存武将は領地を失い退去（locationクリア）
     dst.generals.filter(g=>st.generals[g].alive).forEach(g=>{ st.generals[g].location=null; st.generals[g].daimyo=null; });
     dst.generals = [];
@@ -3297,13 +3323,13 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
     atkGens.forEach(g=>{ if (st.generals[g].alive){ st.generals[g].location=ctx.dstId; st.generals[g].daimyo=ctx.attacker.daimyo; dst.generals.push(g); } });
     // 攻撃側のわずかな討死
     const atkLossFrac = 1 - res.atkSurvivors/Math.max(1,ctx.attacker.soldiers);
-    rollGeneralDeaths(st, atkGens, atkLossFrac*0.5, isLord).forEach(g=>generalsLost.push(g));
+    rollGeneralDeaths(st, atkGens, atkLossFrac*0.5, isLord, R).forEach(g=>generalsLost.push(g));
     deadDef.forEach(g=>generalsLost.push(g));
   } else {
     // 攻撃側敗北：生存兵は出陣元へ帰還、武将も戻る
     src.soldiers += res.atkSurvivors;
     const atkLossFrac = 1 - res.atkSurvivors/Math.max(1,ctx.attacker.soldiers);
-    const deadAtk = rollGeneralDeaths(st, atkGens, atkLossFrac, isLord);
+    const deadAtk = rollGeneralDeaths(st, atkGens, atkLossFrac, isLord, R);
     atkGens.forEach(g=>{ if (st.generals[g].alive){ st.generals[g].location=ctx.srcId; src.generals.push(g); } });
     deadAtk.forEach(g=>generalsLost.push(g));
     // 守備側兵を更新
