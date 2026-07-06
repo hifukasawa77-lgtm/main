@@ -984,17 +984,18 @@ function loadSengokuJSON(key, url){
     return cloneFallbackData(key);
   });
 }
-function loadOneImage(name, url){
+function loadOneImage(name, url, onLoad){
   return new Promise(resolve=>{
     const img = new Image();
-    img.onload = () => resolve([name, img]);
-    img.onerror = err => { console.warn('Optional image failed:', url, err); resolve([name, null]); };
+    img.onload = () => { if(onLoad) onLoad(); resolve([name, img]); };
+    img.onerror = err => { console.warn('Optional image failed:', url, err); if(onLoad) onLoad(); resolve([name, null]); };
     img.src = url;
   });
 }
-async function loadOptionalImages(map){
-  const pairs = [];
-  for (const [name, url] of Object.entries(map)) pairs.push(await loadOneImage(name, url));
+async function loadOptionalImages(map, onLoad){
+  const pairs = await Promise.all(
+    Object.entries(map).map(([name, url]) => loadOneImage(name, url, onLoad))
+  );
   return Object.fromEntries(pairs.filter(([,img])=>!!img));
 }
 
@@ -1799,12 +1800,16 @@ function rollGeneralDeaths(state, generals, lossFrac, isLord){
 class BootScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
-    this.t=0; this.progress=0; this.error=null; this.done=false;
+    this.t=0; this.progress=0; this.targetProgress=0; this.error=null; this.done=false;
+    const imgKeys = Object.keys(GPT_ASSETS);
+    const totalItems = 3 + imgKeys.length;
+    let loaded = 0;
+    const onItemLoaded = () => { loaded++; this.targetProgress = loaded / totalItems; };
     Promise.all([
-      loadSengokuJSON('provinces', 'assets/sengoku/provinces.json'),
-      loadSengokuJSON('generals', 'assets/sengoku/generals.json'),
-      loadSengokuJSON('scenarios', 'assets/sengoku/scenarios.json'),
-      loadOptionalImages(GPT_ASSETS),
+      loadSengokuJSON('provinces', 'assets/sengoku/provinces.json').then(r=>{onItemLoaded();return r;}),
+      loadSengokuJSON('generals', 'assets/sengoku/generals.json').then(r=>{onItemLoaded();return r;}),
+      loadSengokuJSON('scenarios', 'assets/sengoku/scenarios.json').then(r=>{onItemLoaded();return r;}),
+      loadOptionalImages(GPT_ASSETS, onItemLoaded),
     ]).then(([prov, gen, scn, imgs])=>{
       DATA.provinces = prov.provinces;
       DATA.provinces.forEach(p=>DATA.provById[p.id]=p);
@@ -1824,11 +1829,14 @@ class BootScene extends GameKit.Scene {
       return loadCastlePositionsFromCsv().catch(()=>0);
     }).then(()=>{
       buildPortraitSlots();
-      this.done=true;
+      this.targetProgress=1; this.done=true;
       game.changeScene(new TitleScene());
     }).catch(e=>{ this.error = e.message || String(e); console.error(e); });
   }
-  update(dt){ this.t+=dt; if(!this.done && !this.error) this.progress = Math.min(0.95, this.progress + dt*0.6); }
+  update(dt){
+    this.t+=dt;
+    if(!this.error) this.progress += (this.targetProgress - this.progress) * Math.min(1, dt * 10);
+  }
   draw(ctx){
     ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
     T(ctx,'戦国の野望', W/2, H/2-60, {size:34, weight:'bold', color:'#e8c07a', align:'center'});
@@ -2762,15 +2770,15 @@ class MapScene extends GameKit.Scene {
     for (const e of entries){
       const p=e.p, dd=e.dd;
       const [cx, cy]=provinceScreenPoint(p);
-      const iconSize=30;
+      const iconSize=22;
       drawCastleIcon(ctx, cx-6, cy+11, iconSize, dd.color);
       const name=castleNameForProvince(p);
       const force=e.hot;
-      const labelSize=13;
-      const gap=13;
-      const labelH=Math.max(30, Array.from(name).length*gap+10);
-      const labelW=labelSize+12;
-      const crestSize=33;
+      const labelSize=11;
+      const gap=11;
+      const labelH=Math.max(26, Array.from(name).length*gap+8);
+      const labelW=labelSize+10;
+      const crestSize=25;
       const icx=cx-6, icy=cy+11;              // 城アイコンの中心
       const crestX=icx-crestSize/2, crestY=icy-crestSize/2;   // アイコン中心に重ねる
       occupied.push({x:crestX, y:crestY, w:crestSize, h:crestSize});  // 家紋の占有（他の城名が重ならないように）
@@ -2778,16 +2786,16 @@ class MapScene extends GameKit.Scene {
       const seaFracRect=(r)=>{ let s=0,n=0; const stepX=Math.max(6,r.w/3);
         for (let sx=r.x+4; sx<=r.x+r.w-2; sx+=stepX) for (let sy=r.y+4; sy<=r.y+r.h-2; sy+=12){ n++; if (!isLandWorld(sx,sy)) s++; }
         return n? s/n : 0; };
-      // 城名は家紋の「すぐ上」に。基本は真上中央、重なる時だけ僅かに横ずらし／少し上へ
-      const nameRect=(dx,dy)=>clampRect({x:icx+dx-labelW/2, y:crestY-3-labelH+dy, w:labelW, h:labelH});
-      const cand=[ [0,0],[30,0],[-30,0],[0,-25],[55,0],[-55,0],[30,-25],[-30,-25] ];
+      // 城名は家紋の直上に。横ずれは最小限（衝突回避のみ）
+      const nameRect=(dx,dy)=>clampRect({x:icx+dx-labelW/2, y:crestY-2-labelH+dy, w:labelW, h:labelH});
+      const cand=[ [0,0],[0,-18],[10,0],[-10,0],[0,-32],[10,-18],[-10,-18],[20,0],[-20,0] ];
       let pick=null, best=null;
       for (const [dx,dy] of cand){
         const r=nameRect(dx,dy);
         const collide=occupied.some(o=>overlaps(r,o));
         const sea=seaFracRect(r);
-        if (!collide && sea<=0.12){ pick=r; break; }   // 真上中央が空き＆陸地：即採用
-        const score=(collide?1:0)+sea+(Math.abs(dx)+Math.abs(dy))*0.004;  // 小さいほど良い（中央・すぐ上を優先）
+        if (!collide && sea<=0.4){ pick=r; break; }   // 衝突なし＆海が40%以下：採用
+        const score=(collide?2:0)+sea+(Math.abs(dx)*0.02+Math.abs(dy)*0.004);  // 横ずれを強くペナルティ
         if (!best || score<best.score) best={r,score};
       }
       const nrect = pick || (best?best.r:nameRect(0,0));
