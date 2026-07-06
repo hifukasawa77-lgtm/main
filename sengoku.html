@@ -984,17 +984,18 @@ function loadSengokuJSON(key, url){
     return cloneFallbackData(key);
   });
 }
-function loadOneImage(name, url){
+function loadOneImage(name, url, onLoad){
   return new Promise(resolve=>{
     const img = new Image();
-    img.onload = () => resolve([name, img]);
-    img.onerror = err => { console.warn('Optional image failed:', url, err); resolve([name, null]); };
+    img.onload = () => { if(onLoad) onLoad(); resolve([name, img]); };
+    img.onerror = err => { console.warn('Optional image failed:', url, err); if(onLoad) onLoad(); resolve([name, null]); };
     img.src = url;
   });
 }
-async function loadOptionalImages(map){
-  const pairs = [];
-  for (const [name, url] of Object.entries(map)) pairs.push(await loadOneImage(name, url));
+async function loadOptionalImages(map, onLoad){
+  const pairs = await Promise.all(
+    Object.entries(map).map(([name, url]) => loadOneImage(name, url, onLoad))
+  );
   return Object.fromEntries(pairs.filter(([,img])=>!!img));
 }
 
@@ -1799,12 +1800,16 @@ function rollGeneralDeaths(state, generals, lossFrac, isLord){
 class BootScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
-    this.t=0; this.progress=0; this.error=null; this.done=false;
+    this.t=0; this.progress=0; this.targetProgress=0; this.error=null; this.done=false;
+    const imgKeys = Object.keys(GPT_ASSETS);
+    const totalItems = 3 + imgKeys.length;
+    let loaded = 0;
+    const onItemLoaded = () => { loaded++; this.targetProgress = loaded / totalItems; };
     Promise.all([
-      loadSengokuJSON('provinces', 'assets/sengoku/provinces.json'),
-      loadSengokuJSON('generals', 'assets/sengoku/generals.json'),
-      loadSengokuJSON('scenarios', 'assets/sengoku/scenarios.json'),
-      loadOptionalImages(GPT_ASSETS),
+      loadSengokuJSON('provinces', 'assets/sengoku/provinces.json').then(r=>{onItemLoaded();return r;}),
+      loadSengokuJSON('generals', 'assets/sengoku/generals.json').then(r=>{onItemLoaded();return r;}),
+      loadSengokuJSON('scenarios', 'assets/sengoku/scenarios.json').then(r=>{onItemLoaded();return r;}),
+      loadOptionalImages(GPT_ASSETS, onItemLoaded),
     ]).then(([prov, gen, scn, imgs])=>{
       DATA.provinces = prov.provinces;
       DATA.provinces.forEach(p=>DATA.provById[p.id]=p);
@@ -1824,11 +1829,14 @@ class BootScene extends GameKit.Scene {
       return loadCastlePositionsFromCsv().catch(()=>0);
     }).then(()=>{
       buildPortraitSlots();
-      this.done=true;
+      this.targetProgress=1; this.done=true;
       game.changeScene(new TitleScene());
     }).catch(e=>{ this.error = e.message || String(e); console.error(e); });
   }
-  update(dt){ this.t+=dt; if(!this.done && !this.error) this.progress = Math.min(0.95, this.progress + dt*0.6); }
+  update(dt){
+    this.t+=dt;
+    if(!this.error) this.progress += (this.targetProgress - this.progress) * Math.min(1, dt * 10);
+  }
   draw(ctx){
     ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
     T(ctx,'戦国の野望', W/2, H/2-60, {size:34, weight:'bold', color:'#e8c07a', align:'center'});
