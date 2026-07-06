@@ -5,18 +5,19 @@
   <!--
     CSP: 完全クライアントサイド。外部ライブラリ・外部通信は一切なし。
     映像は getUserMedia でカメラから取得し、Canvas 内で処理・保存するのみ（外部送信なし）。
+    消しゴムマジックは Blob 生成の Web Worker 上で計算する（worker-src blob: を許可。データは端末内で完結し外部送信は発生しない）。
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src blob:; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta name="description" content="カメラ映像にリアルタイムでフィルターをかけて撮影できるフォトブース。グレースケール・セピア・エッジ・ハーフトーン・ドット絵・ASCIIなど。完全ブラウザ内処理・映像は外部送信なし。Real-time camera filter photo booth, all on-device.">
-  <title>フォトブース | Photo Booth</title>
+  <meta name="description" content="カメラや手持ちの写真をブラウザ内で編集できるフォトブース。消しゴムマジック（写り込んだ不要物をブラシで消すコンテンツ認識塗りつぶし）・明るさ/色調整・落書き/テキスト/スタンプ・セルフタイマー/連写ストリップ・リアルタイムフィルター。完全ブラウザ内処理・画像は外部送信なし。On-device magic eraser & photo editor.">
+  <title>フォトブース | Photo Booth — 消しゴムマジック & 画像編集</title>
   <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/photo-booth.html">
   <link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
   <!-- OGP / Twitter -->
   <meta property="og:type" content="website">
-  <meta property="og:title" content="フォトブース | Photo Booth">
-  <meta property="og:description" content="カメラ映像にリアルタイムでフィルターをかけて撮影。完全ブラウザ内処理・映像は外部送信なし。">
+  <meta property="og:title" content="フォトブース | Photo Booth — 消しゴムマジック & 画像編集">
+  <meta property="og:description" content="消しゴムマジックで不要物を消去、明るさ/色調整・落書き・連写ストリップまで。完全ブラウザ内処理・画像は外部送信なし。">
   <meta property="og:url" content="https://hifukasawa77-lgtm.github.io/main/photo-booth.html">
   <meta property="og:image" content="https://hifukasawa77-lgtm.github.io/main/assets/logo/favicon.svg">
   <meta name="twitter:card" content="summary">
@@ -54,6 +55,7 @@
       backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
       box-shadow:0 8px 30px rgba(0,0,0,0.35); padding:20px; margin:18px 0;
     }
+    .card.hidden{display:none}
 
     .stage{position:relative; width:100%; max-width:560px; margin:0 auto; aspect-ratio:3/4;
       border-radius:16px; overflow:hidden; background:#000; display:flex; align-items:center; justify-content:center}
@@ -61,6 +63,14 @@
     .stage .placeholder{position:absolute; color:var(--muted); text-align:center; padding:20px; font-size:.9rem}
     .stage .placeholder .big{font-size:2.6rem; display:block; margin-bottom:8px}
     #video{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none}
+
+    /* 大きなカウントダウン表示 */
+    .count-overlay{position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+      background:rgba(5,7,13,0.35); z-index:6; pointer-events:none}
+    .count-overlay.show{display:flex}
+    .count-overlay span{font-size:clamp(3.5rem,18vw,7rem); font-weight:800; color:#fff;
+      text-shadow:0 4px 24px rgba(34,211,238,0.5); animation:pop .9s ease}
+    @keyframes pop{0%{transform:scale(.6);opacity:.2}30%{transform:scale(1.05);opacity:1}100%{transform:scale(.9);opacity:.85}}
 
     .btn{
       appearance:none; border:0; cursor:pointer; font:inherit; font-weight:600;
@@ -73,6 +83,7 @@
     .btn.purple{background:linear-gradient(135deg,var(--purple) 0%,#8b5cf6 100%); color:#fff; box-shadow:0 4px 16px rgba(167,139,250,0.22)}
     .btn.ghost{background:transparent; color:var(--cyan); border:1px solid var(--border); box-shadow:none}
     .btn.ghost:hover{background:rgba(34,211,238,0.08)}
+    .btn.sm{padding:8px 13px; font-size:.85rem}
     .btn-row{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center; margin-top:16px}
 
     .filters{display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:16px}
@@ -88,12 +99,65 @@
     .chip[aria-pressed="true"] .en{color:rgba(255,255,255,0.7)}
 
     .toggles{display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:14px}
+    .ctl-label{width:100%; text-align:center; color:var(--muted); font-size:.76rem; margin:12px 0 -4px; letter-spacing:.04em}
 
     #status{color:var(--muted); font-size:.84rem; min-height:1.3em; text-align:center; margin-top:12px}
-    .shot-wrap{text-align:center; margin-top:16px; display:none}
-    .shot-wrap.show{display:block}
-    #shot{max-width:100%; max-height:300px; border-radius:14px; box-shadow:0 6px 24px rgba(0,0,0,0.4)}
-    .shot-wrap .save-row{margin-top:12px}
+
+    /* ---------- エディタ ---------- */
+    .edit-stage{position:relative; width:100%; max-width:560px; margin:0 auto; border-radius:16px;
+      overflow:hidden; background:#000; display:flex; align-items:center; justify-content:center; touch-action:none}
+    #edit-canvas{display:block; max-width:100%; max-height:70vh; width:auto; height:auto}
+    #overlay-canvas{position:absolute; top:0; left:0; width:100%; height:100%; touch-action:none; cursor:crosshair}
+
+    .seg{display:flex; gap:6px; justify-content:center; margin:16px auto 0; flex-wrap:wrap}
+    .seg button{
+      appearance:none; cursor:pointer; font:inherit; font-size:.85rem; font-weight:600;
+      border:1px solid var(--border); border-radius:12px; padding:9px 15px; color:var(--muted);
+      background:rgba(255,255,255,0.03); transition:all .15s;
+    }
+    .seg button:hover{color:var(--cyan)}
+    .seg button[aria-selected="true"]{color:#fff; border-color:var(--cyan);
+      background:linear-gradient(135deg,rgba(34,211,238,0.16),rgba(167,139,250,0.16))}
+    .seg button .en{color:var(--muted); font-weight:500; font-size:.7rem; margin-left:4px}
+    .seg button[aria-selected="true"] .en{color:rgba(255,255,255,0.7)}
+
+    .panel{display:none; margin-top:16px}
+    .panel.active{display:block}
+    .panel .hint{color:var(--muted); font-size:.8rem; text-align:center; margin:0 0 12px}
+
+    .slider-row{display:grid; grid-template-columns:104px 1fr 44px; align-items:center; gap:10px; margin:10px 0; max-width:460px; margin-left:auto; margin-right:auto}
+    .slider-row label{font-size:.84rem; color:var(--text)}
+    .slider-row output{font-size:.8rem; color:var(--muted); text-align:right; font-variant-numeric:tabular-nums}
+    input[type="range"]{width:100%; accent-color:var(--cyan)}
+
+    .progress{display:none; max-width:460px; margin:12px auto 0; height:8px; border-radius:999px;
+      background:rgba(255,255,255,0.08); overflow:hidden}
+    .progress.show{display:block}
+    .progress .bar{height:100%; width:0%; border-radius:999px;
+      background:linear-gradient(90deg,var(--cyan),var(--purple)); transition:width .15s}
+    .proc-note{display:none; text-align:center; color:var(--muted); font-size:.8rem; margin-top:8px}
+    .proc-note.show{display:block}
+
+    .swatches{display:flex; flex-wrap:wrap; gap:8px; justify-content:center; align-items:center; margin-top:8px}
+    .swatch{width:26px; height:26px; border-radius:50%; border:2px solid rgba(255,255,255,0.25); cursor:pointer; padding:0}
+    .swatch[aria-pressed="true"]{border-color:#fff; box-shadow:0 0 0 2px rgba(34,211,238,0.6)}
+    .swatch.custom{position:relative; overflow:hidden; background:conic-gradient(from 0deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)}
+    .swatch.custom input{position:absolute; inset:-6px; opacity:0; cursor:pointer; width:200%; height:200%}
+
+    .emoji-palette{display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-top:10px}
+    .emoji-palette button{appearance:none; cursor:pointer; border:1px solid var(--border); border-radius:10px;
+      background:rgba(255,255,255,0.03); font-size:1.2rem; line-height:1; padding:6px 8px; transition:all .15s}
+    .emoji-palette button:hover{border-color:var(--cyan)}
+    .emoji-palette button[aria-pressed="true"]{border-color:var(--cyan); background:rgba(34,211,238,0.14)}
+
+    .text-input-row{display:flex; gap:8px; justify-content:center; align-items:center; margin-top:10px; flex-wrap:wrap}
+    .text-input-row input[type="text"]{
+      font:inherit; color:var(--text); background:rgba(255,255,255,0.04);
+      border:1px solid var(--border); border-radius:10px; padding:9px 12px; width:min(280px,80vw);
+    }
+    .text-input-row input[type="text"]:focus{outline:none; border-color:var(--cyan)}
+
+    .sub-tools{display:flex; gap:6px; justify-content:center; flex-wrap:wrap; margin-top:6px}
 
     .toast{
       position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
@@ -104,7 +168,7 @@
     .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
 
     @media (prefers-reduced-motion: reduce){
-      *{transition:none !important}
+      *{transition:none !important; animation:none !important}
     }
   </style>
 </head>
@@ -117,19 +181,21 @@
 
     <header class="hero">
       <h1>📷 <span class="grad">フォトブース</span></h1>
-      <p class="sub">Photo Booth — リアルタイム映像フィルター</p>
-      <p class="note">カメラ映像にフィルターをかけて撮影。完全ブラウザ内処理・映像は外部送信なし。<br>
-        Apply live filters and snap a photo — everything runs on your device.</p>
+      <p class="sub">Photo Booth — 消しゴムマジック & 画像編集</p>
+      <p class="note">撮影 or 写真を読み込んで、不要物を消す・色を整える・落書きする。完全ブラウザ内処理・画像は外部送信なし。<br>
+        Snap or upload a photo, then erase objects, adjust colors and doodle — everything runs on your device.</p>
     </header>
 
-    <section class="card">
+    <!-- ============ ライブ撮影カード ============ -->
+    <section class="card" id="live-card">
       <div class="stage">
         <video id="video" playsinline muted></video>
         <canvas id="canvas" width="480" height="640"></canvas>
+        <div class="count-overlay" id="count-overlay" aria-hidden="true"><span id="count-num"></span></div>
         <div class="placeholder" id="placeholder">
           <span class="big">📷</span>
-          カメラを起動して撮影しよう<br>
-          <span style="font-size:.8rem;color:var(--muted)">Start the camera to begin</span>
+          カメラを起動するか、写真を読み込もう<br>
+          <span style="font-size:.8rem;color:var(--muted)">Start the camera, or upload a photo</span>
         </div>
       </div>
 
@@ -138,22 +204,108 @@
       <div class="toggles">
         <button class="chip" id="mirror-btn" type="button" aria-pressed="true">🪞 ミラー<span class="en">Mirror</span></button>
         <button class="chip" id="flip-btn" type="button">🔄 カメラ切替<span class="en">Flip cam</span></button>
+        <button class="chip" id="strip-btn" type="button" aria-pressed="false">🎞 連写ストリップ<span class="en">Strip</span></button>
       </div>
+
+      <div class="ctl-label">セルフタイマー / Self-timer</div>
+      <div class="toggles" id="timer-group" role="group" aria-label="セルフタイマー / Self-timer"></div>
 
       <div class="btn-row">
         <button class="btn" id="start-btn" type="button">カメラ起動 / Start</button>
         <button class="btn purple" id="shot-btn" type="button" disabled>📸 撮影 / Snap</button>
         <button class="btn ghost" id="stop-btn" type="button" disabled>停止 / Stop</button>
       </div>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn ghost" id="upload-btn" type="button">🖼 写真を選ぶ / Upload</button>
+        <input type="file" id="file-input" accept="image/*" style="display:none">
+      </div>
 
       <p id="status" role="status" aria-live="polite"></p>
+    </section>
 
-      <div class="shot-wrap" id="shot-wrap">
-        <img id="shot" alt="撮影した写真 / Captured photo">
-        <div class="save-row btn-row">
-          <a class="btn" id="save-btn" download="photo-booth.png">⬇ 保存 / Download</a>
-          <button class="btn ghost" id="retake-btn" type="button">撮り直す / Retake</button>
+    <!-- ============ 画像エディタカード ============ -->
+    <section class="card hidden" id="editor-card" aria-label="画像エディタ / Photo editor">
+      <div class="edit-stage" id="edit-stage">
+        <canvas id="edit-canvas"></canvas>
+        <canvas id="overlay-canvas"></canvas>
+      </div>
+
+      <div class="seg" id="editor-tabs" role="tablist" aria-label="編集ツール / Editing tools">
+        <button type="button" role="tab" data-tab="adjust" aria-selected="true">🎛 調整<span class="en">Adjust</span></button>
+        <button type="button" role="tab" data-tab="eraser" aria-selected="false">🪄 消しゴムマジック<span class="en">Erase</span></button>
+        <button type="button" role="tab" data-tab="draw" aria-selected="false">✏️ 落書き<span class="en">Draw</span></button>
+      </div>
+
+      <!-- 調整パネル -->
+      <div class="panel active" id="panel-adjust" role="tabpanel">
+        <p class="hint">スライダーで明るさ・色味を整えて「適用」/ Tune brightness & color, then Apply.</p>
+        <div class="slider-row">
+          <label for="adj-bri">明るさ<span style="color:var(--muted);font-size:.7rem"> Bright</span></label>
+          <input type="range" id="adj-bri" min="-100" max="100" value="0"><output id="out-bri">0</output>
         </div>
+        <div class="slider-row">
+          <label for="adj-con">コントラスト<span style="color:var(--muted);font-size:.7rem"> Contr</span></label>
+          <input type="range" id="adj-con" min="-100" max="100" value="0"><output id="out-con">0</output>
+        </div>
+        <div class="slider-row">
+          <label for="adj-sat">彩度<span style="color:var(--muted);font-size:.7rem"> Sat</span></label>
+          <input type="range" id="adj-sat" min="-100" max="100" value="0"><output id="out-sat">0</output>
+        </div>
+        <div class="slider-row">
+          <label for="adj-tmp">色温度<span style="color:var(--muted);font-size:.7rem"> Warm</span></label>
+          <input type="range" id="adj-tmp" min="-100" max="100" value="0"><output id="out-tmp">0</output>
+        </div>
+        <div class="btn-row">
+          <button class="btn sm" id="adj-apply" type="button">適用 / Apply</button>
+          <button class="btn ghost sm" id="adj-reset" type="button">リセット / Reset</button>
+        </div>
+      </div>
+
+      <!-- 消しゴムマジックパネル -->
+      <div class="panel" id="panel-eraser" role="tabpanel">
+        <p class="hint">消したいものをブラシでなぞって「消す」/ Brush over what to remove, then Erase.<br>
+          <span style="font-size:.74rem">周囲の背景から合成して埋めます（コンテンツ認識塗りつぶし・端末内処理）。</span></p>
+        <div class="slider-row">
+          <label for="brush-size">ブラシ<span style="color:var(--muted);font-size:.7rem"> Brush</span></label>
+          <input type="range" id="brush-size" min="8" max="90" value="30"><output id="out-brush">30</output>
+        </div>
+        <div class="btn-row">
+          <button class="btn sm" id="erase-run" type="button">🪄 消す / Erase</button>
+          <button class="btn ghost sm" id="erase-clear" type="button">マスク解除 / Clear</button>
+        </div>
+        <div class="progress" id="erase-progress"><div class="bar" id="erase-bar"></div></div>
+        <p class="proc-note" id="erase-note">処理中… / Processing…</p>
+      </div>
+
+      <!-- 落書きパネル -->
+      <div class="panel" id="panel-draw" role="tabpanel">
+        <div class="sub-tools" id="draw-tools" role="group" aria-label="描画ツール / Draw tools">
+          <button class="chip" type="button" data-tool="pen" aria-pressed="true">✏️ ペン<span class="en">Pen</span></button>
+          <button class="chip" type="button" data-tool="text" aria-pressed="false">🔤 テキスト<span class="en">Text</span></button>
+          <button class="chip" type="button" data-tool="stamp" aria-pressed="false">😎 スタンプ<span class="en">Stamp</span></button>
+        </div>
+
+        <div class="slider-row">
+          <label for="draw-size">サイズ<span style="color:var(--muted);font-size:.7rem"> Size</span></label>
+          <input type="range" id="draw-size" min="2" max="48" value="10"><output id="out-draw">10</output>
+        </div>
+
+        <div class="swatches" id="draw-swatches" role="group" aria-label="色 / Color"></div>
+
+        <div class="text-input-row" id="text-row" style="display:none">
+          <input type="text" id="text-value" maxlength="60" placeholder="テキストを入力 → 写真をタップ / Type, then tap the photo" value="Hello!">
+        </div>
+
+        <div class="emoji-palette" id="emoji-palette" style="display:none" role="group" aria-label="スタンプ / Stamps"></div>
+
+        <p class="hint" id="draw-hint" style="margin-top:12px">写真の上をドラッグして描く / Drag on the photo to draw.</p>
+      </div>
+
+      <!-- エディタ共通操作 -->
+      <div class="btn-row" style="margin-top:18px; border-top:1px solid var(--border); padding-top:18px">
+        <button class="btn ghost sm" id="undo-btn" type="button" disabled>⟲ 元に戻す / Undo</button>
+        <a class="btn" id="download-btn" download="photo-booth.png">⬇ 保存 / Download</a>
+        <button class="btn ghost sm" id="close-editor" type="button">↩ 撮り直す / Retake</button>
       </div>
     </section>
   </main>
@@ -161,31 +313,183 @@
   <div class="toast" id="toast" role="alert"></div>
 
   <script>
+  /* =========================================================================
+     消しゴムマジックの中核: PatchMatch によるコンテンツ認識塗りつぶし。
+     ※ この関数は「純粋関数」として書くこと（外部変数を参照しない）。
+        toString() で Web Worker のソースにも流用し、Worker 非対応時は
+        メインスレッドから直接呼び出すフォールバックにも使うため。
+     srcRGBA: Uint8ClampedArray (w*h*4) 作業解像度の画像
+     hole   : Uint8Array (w*h)  1=埋める領域
+     ========================================================================= */
+  function runInpaint(srcRGBA, hole, w, h, params, onProgress) {
+    var P = (params && params.patch) || 5;
+    var half = P >> 1;
+    var emIters = (params && params.em) || 4;
+    var pmIters = (params && params.pm) || 3;
+    var N = w * h;
+
+    // RGB 浮動小数バッファ（現在の推定画像）
+    var img = new Float32Array(N * 3);
+    for (var i = 0, j = 0; i < N; i++, j += 4) {
+      img[i * 3] = srcRGBA[j]; img[i * 3 + 1] = srcRGBA[j + 1]; img[i * 3 + 2] = srcRGBA[j + 2];
+    }
+
+    // 有効なソース中心（パッチが境界内かつ穴を含まない）
+    var valid = new Uint8Array(N), sources = [];
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var ok = 1;
+        if (x < half || y < half || x >= w - half || y >= h - half) ok = 0;
+        else {
+          for (var dy = -half; dy <= half && ok; dy++)
+            for (var dx = -half; dx <= half; dx++) { if (hole[(y + dy) * w + (x + dx)]) { ok = 0; break; } }
+        }
+        var oo = y * w + x; valid[oo] = ok; if (ok) sources.push(oo);
+      }
+    }
+    if (sources.length === 0) return srcRGBA; // 全面マスク: 何もしない
+
+    // 初期化: 既知画素から内側へ拡散平均で穴を埋める（NNF の初期推定を安定させる）
+    (function initFill() {
+      var cur = new Uint8Array(N);
+      for (var k = 0; k < N; k++) cur[k] = hole[k] ? 0 : 1;
+      var changed = true, guard = 0;
+      while (changed && guard++ < 4000) {
+        changed = false;
+        for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+          var o = y * w + x; if (cur[o]) continue;
+          var r = 0, g = 0, b = 0, c = 0;
+          if (x > 0 && cur[o - 1]) { r += img[(o - 1) * 3]; g += img[(o - 1) * 3 + 1]; b += img[(o - 1) * 3 + 2]; c++; }
+          if (x < w - 1 && cur[o + 1]) { r += img[(o + 1) * 3]; g += img[(o + 1) * 3 + 1]; b += img[(o + 1) * 3 + 2]; c++; }
+          if (y > 0 && cur[o - w]) { r += img[(o - w) * 3]; g += img[(o - w) * 3 + 1]; b += img[(o - w) * 3 + 2]; c++; }
+          if (y < h - 1 && cur[o + w]) { r += img[(o + w) * 3]; g += img[(o + w) * 3 + 1]; b += img[(o + w) * 3 + 2]; c++; }
+          if (c > 0) { img[o * 3] = r / c; img[o * 3 + 1] = g / c; img[o * 3 + 2] = b / c; cur[o] = 1; changed = true; }
+        }
+      }
+    })();
+
+    // 対象パッチ中心（穴に重なり、境界内）
+    var isT = new Uint8Array(N), targets = [];
+    for (var y2 = half; y2 < h - half; y2++) {
+      for (var x2 = half; x2 < w - half; x2++) {
+        var ov = 0;
+        for (var dy2 = -half; dy2 <= half && !ov; dy2++)
+          for (var dx2 = -half; dx2 <= half; dx2++) { if (hole[(y2 + dy2) * w + (x2 + dx2)]) { ov = 1; break; } }
+        if (ov) { var to = y2 * w + x2; isT[to] = 1; targets.push(to); }
+      }
+    }
+
+    var nnx = new Int32Array(N), nny = new Int32Array(N), nnd = new Float32Array(N);
+
+    function pdist(ax, ay, bx, by, cut) {
+      var sum = 0;
+      for (var dy = -half; dy <= half; dy++) {
+        var arow = (ay + dy) * w, brow = (by + dy) * w;
+        for (var dx = -half; dx <= half; dx++) {
+          var ai = (arow + ax + dx) * 3, bi = (brow + bx + dx) * 3;
+          var dr = img[ai] - img[bi], dg = img[ai + 1] - img[bi + 1], db = img[ai + 2] - img[bi + 2];
+          sum += dr * dr + dg * dg + db * db;
+        }
+        if (sum > cut) return sum;
+      }
+      return sum;
+    }
+
+    // NNF 初期化（ランダムなソース中心）
+    for (var ti = 0; ti < targets.length; ti++) {
+      var o3 = targets[ti], s = sources[(Math.random() * sources.length) | 0];
+      nnx[o3] = s % w; nny[o3] = (s / w) | 0; nnd[o3] = pdist(o3 % w, (o3 / w) | 0, nnx[o3], nny[o3], 1e20);
+    }
+
+    var maxSearch = Math.max(w, h);
+
+    function improve(o, tx, ty, cx, cy) {
+      if (cx < half || cy < half || cx >= w - half || cy >= h - half) return;
+      if (!valid[cy * w + cx]) return;
+      var d = pdist(tx, ty, cx, cy, nnd[o]);
+      if (d < nnd[o]) { nnd[o] = d; nnx[o] = cx; nny[o] = cy; }
+    }
+
+    for (var em = 0; em < emIters; em++) {
+      // --- E: PatchMatch で NNF を改善 ---
+      for (var it = 0; it < pmIters; it++) {
+        var rev = it & 1;
+        for (var idx = 0; idx < targets.length; idx++) {
+          var oi = rev ? targets[targets.length - 1 - idx] : targets[idx];
+          var tx = oi % w, ty = (oi / w) | 0;
+          // 伝播
+          var lo = rev ? oi + 1 : oi - 1;
+          if (tx > half && tx < w - half - 1 && isT[lo]) improve(oi, tx, ty, nnx[lo] + (rev ? -1 : 1), nny[lo]);
+          var vo = rev ? oi + w : oi - w;
+          if (ty > half && ty < h - half - 1 && isT[vo]) improve(oi, tx, ty, nnx[vo], nny[vo] + (rev ? -1 : 1));
+          // ランダム探索
+          var bx = nnx[oi], by = nny[oi], rad = maxSearch;
+          while (rad >= 1) {
+            var rx = bx + ((Math.random() * 2 - 1) * rad) | 0;
+            var ry = by + ((Math.random() * 2 - 1) * rad) | 0;
+            improve(oi, tx, ty, rx, ry);
+            rad = rad >> 1;
+          }
+        }
+      }
+      // --- M: NNF から穴画素を投票再構成 ---
+      var accR = new Float32Array(N), accG = new Float32Array(N), accB = new Float32Array(N), accW = new Float32Array(N);
+      for (var m = 0; m < targets.length; m++) {
+        var oc = targets[m], cx = oc % w, cy = (oc / w) | 0, sbx = nnx[oc], sby = nny[oc];
+        var wgt = 1 / (1 + nnd[oc] * 0.0008);
+        for (var dy3 = -half; dy3 <= half; dy3++) {
+          for (var dx3 = -half; dx3 <= half; dx3++) {
+            var ty3 = cy + dy3, tx3 = cx + dx3, to3 = ty3 * w + tx3;
+            if (!hole[to3]) continue;
+            var so3 = ((sby + dy3) * w + (sbx + dx3)) * 3;
+            accR[to3] += img[so3] * wgt; accG[to3] += img[so3 + 1] * wgt; accB[to3] += img[so3 + 2] * wgt; accW[to3] += wgt;
+          }
+        }
+      }
+      for (var q = 0; q < N; q++) {
+        if (hole[q] && accW[q] > 0) { img[q * 3] = accR[q] / accW[q]; img[q * 3 + 1] = accG[q] / accW[q]; img[q * 3 + 2] = accB[q] / accW[q]; }
+      }
+      if (onProgress) onProgress((em + 1) / emIters);
+    }
+
+    // 出力（既知画素は原画像のまま、穴のみ差し替え）
+    var out = new Uint8ClampedArray(srcRGBA);
+    for (var p = 0; p < N; p++) {
+      if (hole[p]) { out[p * 4] = img[p * 3]; out[p * 4 + 1] = img[p * 3 + 1]; out[p * 4 + 2] = img[p * 3 + 2]; out[p * 4 + 3] = 255; }
+    }
+    return out;
+  }
+
   (function () {
     'use strict';
-    var video = document.getElementById('video');
-    var canvas = document.getElementById('canvas');
-    var ctx = canvas.getContext('2d', { willReadFrequently: true });
-    var placeholder = document.getElementById('placeholder');
-    var startBtn = document.getElementById('start-btn');
-    var shotBtn = document.getElementById('shot-btn');
-    var stopBtn = document.getElementById('stop-btn');
-    var mirrorBtn = document.getElementById('mirror-btn');
-    var flipBtn = document.getElementById('flip-btn');
-    var filtersEl = document.getElementById('filters');
-    var statusEl = document.getElementById('status');
-    var shotWrap = document.getElementById('shot-wrap');
-    var shotImg = document.getElementById('shot');
-    var saveBtn = document.getElementById('save-btn');
-    var retakeBtn = document.getElementById('retake-btn');
-    var toastEl = document.getElementById('toast');
+    var $ = function (id) { return document.getElementById(id); };
+    // --- ライブ要素 ---
+    var video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
+    var placeholder = $('placeholder'), liveCard = $('live-card');
+    var startBtn = $('start-btn'), shotBtn = $('shot-btn'), stopBtn = $('stop-btn');
+    var mirrorBtn = $('mirror-btn'), flipBtn = $('flip-btn'), stripBtn = $('strip-btn');
+    var uploadBtn = $('upload-btn'), fileInput = $('file-input');
+    var filtersEl = $('filters'), timerGroup = $('timer-group'), statusEl = $('status');
+    var countOverlay = $('count-overlay'), countNum = $('count-num'), toastEl = $('toast');
+    // --- エディタ要素 ---
+    var editorCard = $('editor-card'), editStage = $('edit-stage');
+    var editCanvas = $('edit-canvas'), ectx = editCanvas.getContext('2d', { willReadFrequently: true });
+    var overlay = $('overlay-canvas'), octx = overlay.getContext('2d', { willReadFrequently: true });
+    var undoBtn = $('undo-btn'), downloadBtn = $('download-btn'), closeEditorBtn = $('close-editor');
 
-    var stream = null, rafId = 0, running = false;
-    var facing = 'user';       // 'user' | 'environment'
-    var mirror = true;
-    var current = 'none';
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    var MAXW = 640;            // 処理解像度の上限（性能確保）
+    var state = {
+      stream: null, rafId: 0, running: false,
+      facing: 'user', mirror: true, current: 'none',
+      timer: 0, stripMode: false, busy: false,
+      editTab: 'adjust', drawTool: 'pen', drawColor: '#22d3ee', stampChar: '😎'
+    };
+    var MAXW = 640;          // ライブ処理解像度の上限
+    var EDIT_MAX = 1280;     // 編集画像の長辺上限
+    var WORK_MAX = 360;      // 消しゴム計算の作業解像度（長辺）
+    var editW = 0, editH = 0, undoStack = [], adjustBase = null;
+
     var toastTimer = 0;
     function toast(msg) {
       toastEl.textContent = msg; toastEl.classList.add('show');
@@ -193,50 +497,55 @@
     }
     function setStatus(msg) { statusEl.textContent = msg || ''; }
 
-    /* ---------- フィルター定義 ---------- */
+    /* ================= フィルター ================= */
     var FILTERS = [
-      { id: 'none',      ja: 'オリジナル', en: 'None' },
-      { id: 'grayscale', ja: 'モノクロ',   en: 'Gray' },
-      { id: 'sepia',     ja: 'セピア',     en: 'Sepia' },
-      { id: 'invert',    ja: '反転',       en: 'Invert' },
-      { id: 'edge',      ja: 'エッジ',     en: 'Edge' },
-      { id: 'halftone',  ja: 'ハーフトーン', en: 'Halftone' },
-      { id: 'pixel',     ja: 'ドット絵',   en: 'Pixel' },
-      { id: 'ascii',     ja: 'アスキー',   en: 'ASCII' }
+      { id: 'none', ja: 'オリジナル', en: 'None' }, { id: 'grayscale', ja: 'モノクロ', en: 'Gray' },
+      { id: 'sepia', ja: 'セピア', en: 'Sepia' }, { id: 'invert', ja: '反転', en: 'Invert' },
+      { id: 'edge', ja: 'エッジ', en: 'Edge' }, { id: 'halftone', ja: 'ハーフトーン', en: 'Halftone' },
+      { id: 'pixel', ja: 'ドット絵', en: 'Pixel' }, { id: 'ascii', ja: 'アスキー', en: 'ASCII' }
     ];
     FILTERS.forEach(function (f) {
       var b = document.createElement('button');
       b.className = 'chip'; b.type = 'button'; b.dataset.id = f.id;
-      b.setAttribute('aria-pressed', f.id === current ? 'true' : 'false');
+      b.setAttribute('aria-pressed', f.id === state.current ? 'true' : 'false');
       b.innerHTML = f.ja + '<span class="en">' + f.en + '</span>';
       b.addEventListener('click', function () {
-        current = f.id;
+        state.current = f.id;
         Array.prototype.forEach.call(filtersEl.children, function (c) {
-          c.setAttribute('aria-pressed', c.dataset.id === current ? 'true' : 'false');
+          c.setAttribute('aria-pressed', c.dataset.id === state.current ? 'true' : 'false');
         });
       });
       filtersEl.appendChild(b);
     });
 
-    /* ---------- カメラ起動 / 停止 ---------- */
+    /* ================= セルフタイマー chips ================= */
+    [{ v: 0, ja: 'なし', en: 'Off' }, { v: 3, ja: '3秒', en: '3s' }, { v: 5, ja: '5秒', en: '5s' }, { v: 10, ja: '10秒', en: '10s' }].forEach(function (t) {
+      var b = document.createElement('button');
+      b.className = 'chip'; b.type = 'button'; b.dataset.v = t.v;
+      b.setAttribute('aria-pressed', t.v === state.timer ? 'true' : 'false');
+      b.innerHTML = t.ja + '<span class="en">' + t.en + '</span>';
+      b.addEventListener('click', function () {
+        state.timer = t.v;
+        Array.prototype.forEach.call(timerGroup.children, function (c) {
+          c.setAttribute('aria-pressed', (+c.dataset.v) === state.timer ? 'true' : 'false');
+        });
+      });
+      timerGroup.appendChild(b);
+    });
+
+    /* ================= カメラ起動 / 停止 ================= */
     function startCamera() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         toast('このブラウザはカメラ非対応です / Camera not supported'); return;
       }
       setStatus('カメラを起動中… / Starting camera…');
-      var constraints = { video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+      var constraints = { video: { facingMode: { ideal: state.facing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
       navigator.mediaDevices.getUserMedia(constraints)
-        .then(function (s) {
-          stream = s; video.srcObject = s;
-          return video.play();
-        })
+        .then(function (s) { state.stream = s; video.srcObject = s; return video.play(); })
         .then(function () {
-          running = true;
-          placeholder.style.display = 'none';
-          shotBtn.disabled = false; stopBtn.disabled = false;
-          startBtn.disabled = true;
-          setStatus('');
-          loop();
+          state.running = true; placeholder.style.display = 'none';
+          shotBtn.disabled = false; stopBtn.disabled = false; startBtn.disabled = true;
+          setStatus(''); loop();
         })
         .catch(function (err) {
           setStatus('');
@@ -244,140 +553,97 @@
         });
     }
     function stopCamera() {
-      running = false;
-      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-      if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+      state.running = false;
+      if (state.rafId) { cancelAnimationFrame(state.rafId); state.rafId = 0; }
+      if (state.stream) { state.stream.getTracks().forEach(function (t) { t.stop(); }); state.stream = null; }
       video.srcObject = null;
       shotBtn.disabled = true; stopBtn.disabled = true; startBtn.disabled = false;
       placeholder.style.display = '';
     }
 
-    /* ---------- 描画ループ ---------- */
+    /* ================= 描画ループ ================= */
     function loop() {
-      if (!running) return;
+      if (!state.running) return;
       if (video.readyState >= 2 && video.videoWidth) {
         var vw = video.videoWidth, vh = video.videoHeight;
         var w = Math.min(vw, MAXW), h = Math.round(w * vh / vw);
         if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
         drawFrame(w, h);
       }
-      rafId = requestAnimationFrame(loop);
+      state.rafId = requestAnimationFrame(loop);
     }
-
     function drawBase(w, h) {
       ctx.save();
-      if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
-      ctx.drawImage(video, 0, 0, w, h);
-      ctx.restore();
+      if (state.mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+      ctx.drawImage(video, 0, 0, w, h); ctx.restore();
     }
-
     function drawFrame(w, h) {
-      if (current === 'pixel') return drawPixel(w, h);
-      if (current === 'ascii') return drawAscii(w, h);
-      if (current === 'halftone') return drawHalftone(w, h);
+      var cur = state.current;
+      if (cur === 'pixel') return drawPixel(w, h);
+      if (cur === 'ascii') return drawAscii(w, h);
+      if (cur === 'halftone') return drawHalftone(w, h);
       drawBase(w, h);
-      if (current === 'none') return;
-      var img = ctx.getImageData(0, 0, w, h);
-      var d = img.data;
-      if (current === 'grayscale') {
-        for (var i = 0; i < d.length; i += 4) {
-          var g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
-          d[i] = d[i + 1] = d[i + 2] = g;
-        }
-      } else if (current === 'invert') {
+      if (cur === 'none') return;
+      var imgd = ctx.getImageData(0, 0, w, h), d = imgd.data;
+      if (cur === 'grayscale') {
+        for (var i = 0; i < d.length; i += 4) { var g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0; d[i] = d[i + 1] = d[i + 2] = g; }
+      } else if (cur === 'invert') {
         for (var j = 0; j < d.length; j += 4) { d[j] = 255 - d[j]; d[j + 1] = 255 - d[j + 1]; d[j + 2] = 255 - d[j + 2]; }
-      } else if (current === 'sepia') {
+      } else if (cur === 'sepia') {
         for (var k = 0; k < d.length; k += 4) {
           var r = d[k], gg = d[k + 1], b = d[k + 2];
-          d[k]     = Math.min(255, r * 0.393 + gg * 0.769 + b * 0.189);
+          d[k] = Math.min(255, r * 0.393 + gg * 0.769 + b * 0.189);
           d[k + 1] = Math.min(255, r * 0.349 + gg * 0.686 + b * 0.168);
           d[k + 2] = Math.min(255, r * 0.272 + gg * 0.534 + b * 0.131);
         }
-      } else if (current === 'edge') {
-        edgeSobel(img, w, h);
-      }
-      ctx.putImageData(img, 0, 0);
+      } else if (cur === 'edge') { edgeSobel(imgd, w, h); }
+      ctx.putImageData(imgd, 0, 0);
     }
-
-    // Sobel エッジ検出（シアン発光・控えめ）
     function edgeSobel(img, w, h) {
-      var s = img.data, out = new Uint8ClampedArray(s.length);
-      var lum = new Float32Array(w * h);
+      var s = img.data, out = new Uint8ClampedArray(s.length), lum = new Float32Array(w * h);
       for (var p = 0, q = 0; p < s.length; p += 4, q++) lum[q] = s[p] * 0.299 + s[p + 1] * 0.587 + s[p + 2] * 0.114;
-      for (var y = 1; y < h - 1; y++) {
-        for (var x = 1; x < w - 1; x++) {
-          var o = y * w + x;
-          var gx = -lum[o - w - 1] - 2 * lum[o - 1] - lum[o + w - 1] + lum[o - w + 1] + 2 * lum[o + 1] + lum[o + w + 1];
-          var gy = -lum[o - w - 1] - 2 * lum[o - w] - lum[o - w + 1] + lum[o + w - 1] + 2 * lum[o + w] + lum[o + w + 1];
-          var mag = Math.sqrt(gx * gx + gy * gy);
-          var v = mag > 255 ? 255 : mag;
-          var i4 = o * 4;
-          // 暗背景に控えめなシアン寄りのエッジ（ネオン過多を避ける）
-          out[i4] = v * 0.30; out[i4 + 1] = v * 0.92; out[i4 + 2] = v; out[i4 + 3] = 255;
-        }
+      for (var y = 1; y < h - 1; y++) for (var x = 1; x < w - 1; x++) {
+        var o = y * w + x;
+        var gx = -lum[o - w - 1] - 2 * lum[o - 1] - lum[o + w - 1] + lum[o - w + 1] + 2 * lum[o + 1] + lum[o + w + 1];
+        var gy = -lum[o - w - 1] - 2 * lum[o - w] - lum[o - w + 1] + lum[o + w - 1] + 2 * lum[o + w] + lum[o + w + 1];
+        var mag = Math.sqrt(gx * gx + gy * gy), v = mag > 255 ? 255 : mag, i4 = o * 4;
+        out[i4] = v * 0.30; out[i4 + 1] = v * 0.92; out[i4 + 2] = v; out[i4 + 3] = 255;
       }
       img.data.set(out);
     }
-
     function drawHalftone(w, h) {
-      // 元フレームをオフスクリーンで取得
-      var off = getOffscreen(w, h);
-      var octx = off.getContext('2d');
-      octx.save();
-      if (mirror) { octx.translate(w, 0); octx.scale(-1, 1); }
-      octx.drawImage(video, 0, 0, w, h); octx.restore();
-      var d = octx.getImageData(0, 0, w, h).data;
+      var off = getOffscreen(w, h), octx2 = off.getContext('2d');
+      octx2.save(); if (state.mirror) { octx2.translate(w, 0); octx2.scale(-1, 1); }
+      octx2.drawImage(video, 0, 0, w, h); octx2.restore();
+      var d = octx2.getImageData(0, 0, w, h).data;
       ctx.fillStyle = '#05070d'; ctx.fillRect(0, 0, w, h);
-      var step = 6;
-      ctx.fillStyle = '#e6edf6';
-      for (var y = 0; y < h; y += step) {
-        for (var x = 0; x < w; x += step) {
-          var o = (y * w + x) * 4;
-          var lumv = (d[o] * 0.299 + d[o + 1] * 0.587 + d[o + 2] * 0.114) / 255;
-          var rad = (1 - lumv) * (step / 2);
-          if (rad > 0.4) { ctx.beginPath(); ctx.arc(x + step / 2, y + step / 2, rad, 0, 6.283); ctx.fill(); }
-        }
+      var step = 6; ctx.fillStyle = '#e6edf6';
+      for (var y = 0; y < h; y += step) for (var x = 0; x < w; x += step) {
+        var o = (y * w + x) * 4, lumv = (d[o] * 0.299 + d[o + 1] * 0.587 + d[o + 2] * 0.114) / 255, rad = (1 - lumv) * (step / 2);
+        if (rad > 0.4) { ctx.beginPath(); ctx.arc(x + step / 2, y + step / 2, rad, 0, 6.283); ctx.fill(); }
       }
     }
-
     function drawPixel(w, h) {
-      var cols = 72, rows = Math.round(cols * h / w);
-      var off = getOffscreen(cols, rows);
-      var octx = off.getContext('2d');
-      octx.imageSmoothingEnabled = true;
-      octx.save();
-      if (mirror) { octx.translate(cols, 0); octx.scale(-1, 1); }
-      octx.drawImage(video, 0, 0, cols, rows); octx.restore();
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(off, 0, 0, cols, rows, 0, 0, w, h);
+      var cols = 72, rows = Math.round(cols * h / w), off = getOffscreen(cols, rows), octx2 = off.getContext('2d');
+      octx2.imageSmoothingEnabled = true; octx2.save();
+      if (state.mirror) { octx2.translate(cols, 0); octx2.scale(-1, 1); }
+      octx2.drawImage(video, 0, 0, cols, rows); octx2.restore();
+      ctx.imageSmoothingEnabled = false; ctx.drawImage(off, 0, 0, cols, rows, 0, 0, w, h);
     }
-
     var RAMP = '@%#*+=-:. ';
     function drawAscii(w, h) {
-      var cell = 6, cols = Math.floor(w / cell), rows = Math.floor(h / cell);
-      var off = getOffscreen(cols, rows);
-      var octx = off.getContext('2d');
-      octx.save();
-      if (mirror) { octx.translate(cols, 0); octx.scale(-1, 1); }
-      octx.drawImage(video, 0, 0, cols, rows); octx.restore();
-      var d = octx.getImageData(0, 0, cols, rows).data;
+      var cell = 6, cols = Math.floor(w / cell), rows = Math.floor(h / cell), off = getOffscreen(cols, rows), octx2 = off.getContext('2d');
+      octx2.save(); if (state.mirror) { octx2.translate(cols, 0); octx2.scale(-1, 1); }
+      octx2.drawImage(video, 0, 0, cols, rows); octx2.restore();
+      var d = octx2.getImageData(0, 0, cols, rows).data;
       ctx.fillStyle = '#05070d'; ctx.fillRect(0, 0, w, h);
       ctx.font = cell + 'px monospace'; ctx.textBaseline = 'top';
-      for (var y = 0; y < rows; y++) {
-        for (var x = 0; x < cols; x++) {
-          var o = (y * cols + x) * 4;
-          var lumv = (d[o] * 0.299 + d[o + 1] * 0.587 + d[o + 2] * 0.114) / 255;
-          var ci = Math.min(RAMP.length - 1, Math.floor(lumv * RAMP.length));
-          var ch = RAMP.charAt(ci);
-          if (ch !== ' ') {
-            // 明度でシアン〜パープルにわずかに色付け（控えめ）
-            ctx.fillStyle = lumv > 0.5 ? '#22d3ee' : '#a78bfa';
-            ctx.fillText(ch, x * cell, y * cell);
-          }
-        }
+      for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+        var o = (y * cols + x) * 4, lumv = (d[o] * 0.299 + d[o + 1] * 0.587 + d[o + 2] * 0.114) / 255;
+        var ch = RAMP.charAt(Math.min(RAMP.length - 1, Math.floor(lumv * RAMP.length)));
+        if (ch !== ' ') { ctx.fillStyle = lumv > 0.5 ? '#22d3ee' : '#a78bfa'; ctx.fillText(ch, x * cell, y * cell); }
       }
     }
-
     var _off = null;
     function getOffscreen(w, h) {
       if (!_off) _off = document.createElement('canvas');
@@ -385,53 +651,458 @@
       return _off;
     }
 
-    /* ---------- 撮影 ---------- */
-    function snap() {
-      if (!running) return;
-      try {
-        var url = canvas.toDataURL('image/png');
-        shotImg.src = url; saveBtn.href = url;
-        shotWrap.classList.add('show');
-        shotWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        toast('撮影しました / Snapped!');
-      } catch (e) {
-        toast('撮影に失敗しました / Capture failed');
-      }
+    /* ================= カウントダウン ================= */
+    function countdown(sec) {
+      return new Promise(function (resolve) {
+        if (!sec || sec <= 0) return resolve();
+        countOverlay.classList.add('show');
+        var n = sec;
+        countNum.textContent = n;
+        // 再アニメーションのため要素を差し替え
+        var tick = function () {
+          n--;
+          if (n <= 0) { countOverlay.classList.remove('show'); return resolve(); }
+          countNum.textContent = n;
+          if (!reduceMotion) { countNum.style.animation = 'none'; void countNum.offsetWidth; countNum.style.animation = ''; }
+          setTimeout(tick, 1000);
+        };
+        setTimeout(tick, 1000);
+      });
     }
 
-    /* ---------- イベント ---------- */
+    /* ================= 撮影（単発 / ストリップ） ================= */
+    function grabFrame() {
+      var c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height;
+      c.getContext('2d').drawImage(canvas, 0, 0); return c;
+    }
+    function doSnap() {
+      if (!state.running || state.busy) return;
+      state.busy = true; shotBtn.disabled = true;
+      var run = state.stripMode ? snapStrip() : snapSingle();
+      run.then(function () { state.busy = false; if (state.running) shotBtn.disabled = false; })
+        .catch(function () { state.busy = false; if (state.running) shotBtn.disabled = false; });
+    }
+    function snapSingle() {
+      return countdown(state.timer).then(function () {
+        var frame = grabFrame(); stopCamera();
+        loadIntoEditor(frame, frame.width, frame.height); toast('撮影しました / Snapped!');
+      });
+    }
+    function snapStrip() {
+      var shots = [], perShot = state.timer > 0 ? state.timer : 3, i = 0;
+      function next() {
+        if (i >= 4) {
+          var strip = buildStrip(shots); stopCamera();
+          loadIntoEditor(strip, strip.width, strip.height); toast('ストリップ完成 / Strip ready!');
+          return Promise.resolve();
+        }
+        return countdown(perShot).then(function () {
+          shots.push(grabFrame()); i++;
+          // 撮影フラッシュ的な合図
+          if (!reduceMotion) { countOverlay.classList.add('show'); countNum.textContent = '📸'; setTimeout(function () { countOverlay.classList.remove('show'); }, 260); }
+          return new Promise(function (r) { setTimeout(r, 420); }).then(next);
+        });
+      }
+      return next();
+    }
+    function buildStrip(shots) {
+      var sw = shots[0].width, sh = shots[0].height, pad = Math.round(sw * 0.05), cap = Math.round(sw * 0.11);
+      var c = document.createElement('canvas');
+      c.width = sw + pad * 2; c.height = sh * shots.length + pad * (shots.length + 1) + cap;
+      var g = c.getContext('2d');
+      g.fillStyle = '#0b1020'; g.fillRect(0, 0, c.width, c.height);
+      // 枠の淡いグラデーション
+      var grd = g.createLinearGradient(0, 0, c.width, c.height);
+      grd.addColorStop(0, 'rgba(34,211,238,0.10)'); grd.addColorStop(1, 'rgba(167,139,250,0.10)');
+      g.fillStyle = grd; g.fillRect(0, 0, c.width, c.height);
+      for (var k = 0; k < shots.length; k++) g.drawImage(shots[k], pad, pad + k * (sh + pad), sw, sh);
+      var d = new Date(), ds = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+      g.fillStyle = '#8b97a8'; g.textAlign = 'center';
+      g.font = '600 ' + Math.round(cap * 0.34) + 'px "Aptos","Segoe UI",sans-serif';
+      g.fillText('Photo Booth ・ ' + ds, c.width / 2, c.height - cap * 0.42);
+      return c;
+    }
+
+    /* ================= エディタ: 読み込み ================= */
+    function loadIntoEditor(source, sw, sh) {
+      var scale = Math.min(1, EDIT_MAX / Math.max(sw, sh));
+      editW = Math.max(1, Math.round(sw * scale)); editH = Math.max(1, Math.round(sh * scale));
+      editCanvas.width = editW; editCanvas.height = editH;
+      overlay.width = editW; overlay.height = editH;
+      ectx.clearRect(0, 0, editW, editH);
+      ectx.drawImage(source, 0, 0, editW, editH);
+      octx.clearRect(0, 0, editW, editH);
+      undoStack = []; refreshUndo(); adjustBase = null;
+      resetAdjustSliders();
+      setTab('adjust');
+      editorCard.classList.remove('hidden');
+      updateDownload();
+      editorCard.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    }
+    function closeEditor() {
+      editorCard.classList.add('hidden'); octx.clearRect(0, 0, overlay.width, overlay.height);
+      undoStack = []; refreshUndo();
+      liveCard.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    }
+
+    /* ================= Undo ================= */
+    function pushUndo() {
+      try { undoStack.push(ectx.getImageData(0, 0, editW, editH)); } catch (e) { }
+      if (undoStack.length > 12) undoStack.shift();
+      refreshUndo();
+    }
+    function refreshUndo() { undoBtn.disabled = undoStack.length === 0; }
+    function undo() {
+      if (!undoStack.length) return;
+      var img = undoStack.pop(); ectx.putImageData(img, 0, 0);
+      adjustBase = null; resetAdjustSliders();
+      if (state.editTab === 'adjust') captureAdjustBase();
+      refreshUndo(); updateDownload();
+    }
+    function updateDownload() { try { downloadBtn.href = editCanvas.toDataURL('image/png'); } catch (e) { } }
+
+    /* ================= タブ切替 ================= */
+    var tabs = $('editor-tabs');
+    function setTab(name) {
+      state.editTab = name;
+      Array.prototype.forEach.call(tabs.children, function (b) { b.setAttribute('aria-selected', b.dataset.tab === name ? 'true' : 'false'); });
+      ['adjust', 'eraser', 'draw'].forEach(function (n) { $('panel-' + n).classList.toggle('active', n === name); });
+      // オーバーレイ操作可否
+      overlay.style.pointerEvents = (name === 'adjust') ? 'none' : 'auto';
+      overlay.style.cursor = name === 'eraser' ? 'crosshair' : (name === 'draw' ? 'crosshair' : 'default');
+      // マスクはタブを離れたら消す
+      if (name !== 'eraser') octx.clearRect(0, 0, overlay.width, overlay.height);
+      if (name === 'adjust') captureAdjustBase(); else revertAdjustPreview();
+    }
+    Array.prototype.forEach.call(tabs.children, function (b) { b.addEventListener('click', function () { setTab(b.dataset.tab); }); });
+
+    /* ================= 座標変換 ================= */
+    function evtPos(e, cnv) {
+      var r = cnv.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (cnv.width / r.width), y: (e.clientY - r.top) * (cnv.height / r.height) };
+    }
+
+    /* ================= 調整スライダー ================= */
+    var briEl = $('adj-bri'), conEl = $('adj-con'), satEl = $('adj-sat'), tmpEl = $('adj-tmp');
+    var adjRaf = 0;
+    function resetAdjustSliders() {
+      briEl.value = conEl.value = satEl.value = tmpEl.value = 0;
+      $('out-bri').textContent = $('out-con').textContent = $('out-sat').textContent = $('out-tmp').textContent = '0';
+    }
+    function captureAdjustBase() {
+      if (editW && editH) { try { adjustBase = ectx.getImageData(0, 0, editW, editH); } catch (e) { adjustBase = null; } }
+    }
+    function revertAdjustPreview() {
+      if (adjustBase) { ectx.putImageData(adjustBase, 0, 0); }
+      resetAdjustSliders();
+    }
+    function applyAdjustPreview() {
+      if (!adjustBase) return;
+      var bri = +briEl.value, con = +conEl.value, sat = +satEl.value, tmp = +tmpEl.value;
+      $('out-bri').textContent = bri; $('out-con').textContent = con; $('out-sat').textContent = sat; $('out-tmp').textContent = tmp;
+      var src = adjustBase.data, out = ectx.createImageData(editW, editH), d = out.data;
+      var cf = (259 * (con + 255)) / (255 * (259 - con)); // コントラスト係数
+      var satF = 1 + sat / 100, warm = tmp / 100;
+      for (var i = 0; i < src.length; i += 4) {
+        var r = src[i], g = src[i + 1], b = src[i + 2];
+        // 明るさ
+        r += bri; g += bri; b += bri;
+        // コントラスト
+        r = cf * (r - 128) + 128; g = cf * (g - 128) + 128; b = cf * (b - 128) + 128;
+        // 色温度（暖=R↑B↓ / 寒=R↓B↑）
+        r += warm * 30; b -= warm * 30;
+        // 彩度（輝度からの距離をスケール）
+        var lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = lum + (r - lum) * satF; g = lum + (g - lum) * satF; b = lum + (b - lum) * satF;
+        d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = src[i + 3];
+      }
+      ectx.putImageData(out, 0, 0);
+    }
+    function scheduleAdjust() {
+      if (adjRaf) return; adjRaf = requestAnimationFrame(function () { adjRaf = 0; applyAdjustPreview(); });
+    }
+    [briEl, conEl, satEl, tmpEl].forEach(function (el) { el.addEventListener('input', scheduleAdjust); });
+    $('adj-apply').addEventListener('click', function () {
+      if (!adjustBase) return;
+      applyAdjustPreview();
+      undoStack.push(adjustBase); if (undoStack.length > 12) undoStack.shift(); refreshUndo();
+      captureAdjustBase(); resetAdjustSliders(); updateDownload();
+      toast('適用しました / Applied');
+    });
+    $('adj-reset').addEventListener('click', function () { revertAdjustPreview(); });
+
+    /* ================= 消しゴムマジック ================= */
+    var brushSize = $('brush-size'), eraseRun = $('erase-run'), eraseClear = $('erase-clear');
+    var eraseProg = $('erase-progress'), eraseBar = $('erase-bar'), eraseNote = $('erase-note');
+    brushSize.addEventListener('input', function () { $('out-brush').textContent = brushSize.value; });
+
+    var painting = false, lastPt = null;
+    function paintMask(a, b) {
+      octx.strokeStyle = 'rgba(34,211,238,0.55)'; octx.fillStyle = 'rgba(34,211,238,0.55)';
+      octx.lineWidth = +brushSize.value; octx.lineCap = 'round'; octx.lineJoin = 'round';
+      octx.beginPath();
+      if (b) { octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y); octx.stroke(); }
+      octx.beginPath(); octx.arc((b || a).x, (b || a).y, (+brushSize.value) / 2, 0, 6.283); octx.fill();
+    }
+    eraseClear.addEventListener('click', function () { octx.clearRect(0, 0, overlay.width, overlay.height); });
+
+    function hasMask() {
+      var d = octx.getImageData(0, 0, overlay.width, overlay.height).data;
+      for (var i = 3; i < d.length; i += 4) if (d[i] > 30) return true;
+      return false;
+    }
+
+    function runErase() {
+      if (state.busy) return;
+      if (!hasMask()) { toast('消したい所をブラシでなぞってください / Brush the area first'); return; }
+      state.busy = true; eraseRun.disabled = true;
+      eraseProg.classList.add('show'); eraseNote.classList.add('show'); eraseBar.style.width = '5%';
+
+      // 作業解像度
+      var scale = Math.min(1, WORK_MAX / Math.max(editW, editH));
+      var ww = Math.max(1, Math.round(editW * scale)), wh = Math.max(1, Math.round(editH * scale));
+
+      // 画像を作業解像度で取得
+      var wc = document.createElement('canvas'); wc.width = ww; wc.height = wh;
+      var wg = wc.getContext('2d'); wg.imageSmoothingEnabled = true; wg.drawImage(editCanvas, 0, 0, ww, wh);
+      var srcArr = wg.getImageData(0, 0, ww, wh).data; // Uint8ClampedArray
+
+      // マスクを作業解像度で取得 → hole
+      var mc = document.createElement('canvas'); mc.width = ww; mc.height = wh;
+      var mg = mc.getContext('2d'); mg.drawImage(overlay, 0, 0, ww, wh);
+      var mdata = mg.getImageData(0, 0, ww, wh).data;
+      var hole = new Uint8Array(ww * wh);
+      for (var p = 0, q = 3; p < hole.length; p++, q += 4) hole[p] = mdata[q] > 30 ? 1 : 0;
+      dilate(hole, ww, wh);
+
+      pushUndo();
+      var params = { patch: 5, em: 5, pm: 3 };
+
+      var onDone = function (outArr) { compositeErase(outArr, ww, wh); };
+      var onProg = function (v) { eraseBar.style.width = Math.round(8 + v * 88) + '%'; };
+
+      // Web Worker（Blob）で計算 → 失敗時はメインスレッド
+      var usedWorker = false;
+      try {
+        var code = runInpaint.toString() +
+          ';self.onmessage=function(e){var d=e.data;try{var out=runInpaint(d.src,d.hole,d.w,d.h,d.params,function(p){self.postMessage({t:"p",v:p});});self.postMessage({t:"d",buf:out.buffer},[out.buffer]);}catch(err){self.postMessage({t:"e",m:String(err&&err.message||err)});}};';
+        var blob = new Blob([code], { type: 'application/javascript' });
+        var url = URL.createObjectURL(blob);
+        var worker = new Worker(url);
+        usedWorker = true;
+        worker.onmessage = function (ev) {
+          var m = ev.data;
+          if (m.t === 'p') { onProg(m.v); }
+          else if (m.t === 'd') { worker.terminate(); URL.revokeObjectURL(url); onDone(new Uint8ClampedArray(m.buf)); }
+          else if (m.t === 'e') { worker.terminate(); URL.revokeObjectURL(url); eraseFail(); }
+        };
+        worker.onerror = function () { try { worker.terminate(); } catch (e) { } URL.revokeObjectURL(url); if (state.busy) mainThreadErase(); };
+        // src / hole の buffer を転送
+        var srcCopy = new Uint8ClampedArray(srcArr); // getImageData の内部参照を避けて転送
+        worker.postMessage({ src: srcCopy, hole: hole, w: ww, h: wh, params: params }, [srcCopy.buffer, hole.buffer]);
+      } catch (e) { usedWorker = false; }
+
+      function mainThreadErase() {
+        // フォールバック（UI 描画を挟んでから実行）
+        setTimeout(function () {
+          try {
+            var out = runInpaint(new Uint8ClampedArray(srcArr), hole, ww, wh, params, function (v) { onProg(v); });
+            onDone(out);
+          } catch (e2) { eraseFail(); }
+        }, 30);
+      }
+      if (!usedWorker) mainThreadErase();
+    }
+
+    function compositeErase(outArr, ww, wh) {
+      eraseBar.style.width = '96%';
+      // 埋めた作業画像
+      var fc = document.createElement('canvas'); fc.width = ww; fc.height = wh;
+      fc.getContext('2d').putImageData(new ImageData(outArr, ww, wh), 0, 0);
+
+      // フルサイズへ拡大し、マスク（フェザー）でクリップして合成
+      var tmp = document.createElement('canvas'); tmp.width = editW; tmp.height = editH;
+      var tg = tmp.getContext('2d'); tg.imageSmoothingEnabled = true;
+      tg.drawImage(fc, 0, 0, editW, editH);
+
+      var mf = document.createElement('canvas'); mf.width = editW; mf.height = editH;
+      var mfg = mf.getContext('2d');
+      try { mfg.filter = 'blur(' + Math.max(1, Math.round(editW / 220)) + 'px)'; } catch (e) { }
+      mfg.drawImage(overlay, 0, 0, editW, editH);
+
+      tg.globalCompositeOperation = 'destination-in';
+      tg.drawImage(mf, 0, 0);
+      tg.globalCompositeOperation = 'source-over';
+
+      ectx.drawImage(tmp, 0, 0);
+      octx.clearRect(0, 0, overlay.width, overlay.height);
+      updateDownload();
+      eraseBar.style.width = '100%';
+      setTimeout(function () { eraseProg.classList.remove('show'); eraseNote.classList.remove('show'); eraseBar.style.width = '0%'; }, 400);
+      state.busy = false; eraseRun.disabled = false;
+      toast('消しました / Erased!');
+    }
+    function eraseFail() {
+      eraseProg.classList.remove('show'); eraseNote.classList.remove('show'); eraseBar.style.width = '0%';
+      state.busy = false; eraseRun.disabled = false;
+      if (undoStack.length) undo(); // 直前の pushUndo を戻す
+      toast('処理に失敗しました / Processing failed');
+    }
+    function dilate(hole, w, h) {
+      var cp = new Uint8Array(hole);
+      for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+        var o = y * w + x; if (cp[o]) continue;
+        if ((x > 0 && cp[o - 1]) || (x < w - 1 && cp[o + 1]) || (y > 0 && cp[o - w]) || (y < h - 1 && cp[o + w])) hole[o] = 1;
+      }
+    }
+    eraseRun.addEventListener('click', runErase);
+
+    /* ================= 落書き / テキスト / スタンプ ================= */
+    var drawSize = $('draw-size'), textRow = $('text-row'), textValue = $('text-value');
+    var emojiPalette = $('emoji-palette'), drawHint = $('draw-hint'), drawSwatches = $('draw-swatches');
+    drawSize.addEventListener('input', function () { $('out-draw').textContent = drawSize.value; });
+
+    var COLORS = ['#22d3ee', '#a78bfa', '#ffffff', '#05070d', '#ff5d5d', '#ffd93b', '#51e08a'];
+    COLORS.forEach(function (col, i) {
+      var b = document.createElement('button'); b.className = 'swatch'; b.type = 'button';
+      b.style.background = col; b.dataset.color = col; b.setAttribute('aria-label', '色 ' + col);
+      b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+      b.addEventListener('click', function () { setColor(col); });
+      drawSwatches.appendChild(b);
+    });
+    // カスタムカラー
+    var custom = document.createElement('button'); custom.className = 'swatch custom'; custom.type = 'button';
+    custom.setAttribute('aria-label', 'カスタム色 / Custom color');
+    var colorInput = document.createElement('input'); colorInput.type = 'color'; colorInput.value = '#22d3ee';
+    colorInput.addEventListener('input', function () { setColor(colorInput.value, true); });
+    custom.appendChild(colorInput); drawSwatches.appendChild(custom);
+    function setColor(col, fromCustom) {
+      state.drawColor = col;
+      Array.prototype.forEach.call(drawSwatches.querySelectorAll('.swatch'), function (s) {
+        if (!s.classList.contains('custom')) s.setAttribute('aria-pressed', s.dataset.color === col ? 'true' : 'false');
+      });
+      if (!fromCustom) colorInput.value = /^#([0-9a-f]{6})$/i.test(col) ? col : colorInput.value;
+    }
+
+    var EMOJIS = ['😎', '🎉', '❤️', '⭐', '😂', '🐱', '🌸', '🔥', '👍', '✨', '🐶', '🌈', '💯', '🍀', '👑'];
+    EMOJIS.forEach(function (em, i) {
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = em;
+      b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        state.stampChar = em;
+        Array.prototype.forEach.call(emojiPalette.children, function (c) { c.setAttribute('aria-pressed', c === b ? 'true' : 'false'); });
+      });
+      emojiPalette.appendChild(b);
+    });
+
+    var drawTools = $('draw-tools');
+    Array.prototype.forEach.call(drawTools.children, function (b) {
+      b.addEventListener('click', function () {
+        state.drawTool = b.dataset.tool;
+        Array.prototype.forEach.call(drawTools.children, function (c) { c.setAttribute('aria-pressed', c === b ? 'true' : 'false'); });
+        textRow.style.display = state.drawTool === 'text' ? 'flex' : 'none';
+        emojiPalette.style.display = state.drawTool === 'stamp' ? 'flex' : 'none';
+        drawHint.textContent = state.drawTool === 'pen' ? '写真の上をドラッグして描く / Drag to draw.'
+          : state.drawTool === 'text' ? 'テキストを入力 → 写真をタップで配置 / Type, then tap to place.'
+            : 'スタンプを選ぶ → 写真をタップで配置 / Pick a stamp, then tap to place.';
+      });
+    });
+
+    var penning = false, penLast = null;
+    function penStart(pos) { pushUndo(); penning = true; penLast = pos; ectx.strokeStyle = state.drawColor; ectx.lineWidth = +drawSize.value; ectx.lineCap = 'round'; ectx.lineJoin = 'round'; }
+    function penMove(pos) {
+      if (!penning) return;
+      ectx.beginPath(); ectx.moveTo(penLast.x, penLast.y); ectx.lineTo(pos.x, pos.y); ectx.stroke(); penLast = pos;
+    }
+    function penEnd() { if (penning) { penning = false; updateDownload(); } }
+    function placeText(pos) {
+      var txt = (textValue.value || '').trim(); if (!txt) { toast('テキストを入力してください / Enter text'); return; }
+      pushUndo();
+      var fs = (+drawSize.value) * 3.2;
+      ectx.font = '700 ' + fs + 'px "Aptos","Segoe UI",sans-serif'; ectx.textAlign = 'center'; ectx.textBaseline = 'middle';
+      ectx.lineWidth = Math.max(2, fs * 0.12); ectx.strokeStyle = 'rgba(5,7,13,0.65)'; ectx.lineJoin = 'round';
+      ectx.strokeText(txt, pos.x, pos.y); ectx.fillStyle = state.drawColor; ectx.fillText(txt, pos.x, pos.y);
+      updateDownload();
+    }
+    function placeStamp(pos) {
+      pushUndo();
+      var fs = (+drawSize.value) * 3.6;
+      ectx.font = fs + 'px "Aptos","Segoe UI Emoji","Noto Color Emoji",sans-serif'; ectx.textAlign = 'center'; ectx.textBaseline = 'middle';
+      ectx.fillText(state.stampChar, pos.x, pos.y); updateDownload();
+    }
+
+    /* ================= オーバーレイのポインタ処理 ================= */
+    overlay.addEventListener('pointerdown', function (e) {
+      if (state.editTab === 'adjust') return;
+      e.preventDefault(); try { overlay.setPointerCapture(e.pointerId); } catch (er) { }
+      var pos = evtPos(e, overlay);
+      if (state.editTab === 'eraser') { painting = true; lastPt = pos; paintMask(pos, null); }
+      else if (state.editTab === 'draw') {
+        if (state.drawTool === 'pen') penStart(pos);
+        else if (state.drawTool === 'text') placeText(pos);
+        else placeStamp(pos);
+      }
+    });
+    overlay.addEventListener('pointermove', function (e) {
+      if (state.editTab === 'eraser' && painting) { var p = evtPos(e, overlay); paintMask(lastPt, p); lastPt = p; }
+      else if (state.editTab === 'draw' && penning) { penMove(evtPos(e, overlay)); }
+    });
+    function endPointer() { painting = false; lastPt = null; penEnd(); }
+    overlay.addEventListener('pointerup', endPointer);
+    overlay.addEventListener('pointercancel', endPointer);
+    overlay.addEventListener('pointerleave', function () { if (!painting && !penning) return; /* capture 済みなら継続 */ });
+
+    /* ================= アップロード ================= */
+    uploadBtn.addEventListener('click', function () { fileInput.click(); });
+    fileInput.addEventListener('change', function () {
+      var file = fileInput.files && fileInput.files[0]; if (!file) return;
+      if (!/^image\//.test(file.type)) { toast('画像ファイルを選んでください / Please choose an image'); return; }
+      // File は Blob なので createImageBitmap に直接渡せる（fetch/FileReader 不要＝CSP準拠）
+      if ('createImageBitmap' in window) {
+        createImageBitmap(file, { imageOrientation: 'from-image' })
+          .then(function (bmp) { stopCamera(); loadIntoEditor(bmp, bmp.width, bmp.height); })
+          .catch(function () { loadViaImg(file); });
+      } else { loadViaImg(file); }
+      fileInput.value = '';
+    });
+    function loadViaImg(file) {
+      // 画像は blob: URL 経由で読み込む（img-src blob: 許可済み）
+      var url = URL.createObjectURL(file), im = new Image();
+      im.onload = function () { URL.revokeObjectURL(url); stopCamera(); loadIntoEditor(im, im.naturalWidth, im.naturalHeight); };
+      im.onerror = function () { URL.revokeObjectURL(url); toast('読み込みに失敗しました / Load failed'); };
+      im.src = url;
+    }
+
+    /* ================= イベント配線 ================= */
     startBtn.addEventListener('click', startCamera);
     stopBtn.addEventListener('click', stopCamera);
-    shotBtn.addEventListener('click', snap);
-    retakeBtn.addEventListener('click', function () { shotWrap.classList.remove('show'); });
-    mirrorBtn.addEventListener('click', function () {
-      mirror = !mirror; mirrorBtn.setAttribute('aria-pressed', mirror ? 'true' : 'false');
-    });
+    shotBtn.addEventListener('click', doSnap);
+    mirrorBtn.addEventListener('click', function () { state.mirror = !state.mirror; mirrorBtn.setAttribute('aria-pressed', state.mirror ? 'true' : 'false'); });
     flipBtn.addEventListener('click', function () {
-      facing = (facing === 'user') ? 'environment' : 'user';
-      // 背面カメラは通常ミラー不要
-      mirror = (facing === 'user');
-      mirrorBtn.setAttribute('aria-pressed', mirror ? 'true' : 'false');
-      if (running) { stopCamera(); startCamera(); }
+      state.facing = (state.facing === 'user') ? 'environment' : 'user';
+      state.mirror = (state.facing === 'user'); mirrorBtn.setAttribute('aria-pressed', state.mirror ? 'true' : 'false');
+      if (state.running) { stopCamera(); startCamera(); }
     });
+    stripBtn.addEventListener('click', function () { state.stripMode = !state.stripMode; stripBtn.setAttribute('aria-pressed', state.stripMode ? 'true' : 'false'); });
+    undoBtn.addEventListener('click', undo);
+    closeEditorBtn.addEventListener('click', closeEditor);
+    downloadBtn.addEventListener('click', function () { updateDownload(); });
     window.addEventListener('beforeunload', stopCamera);
 
-    /* ---------- 背景アンビエントパーティクル ---------- */
+    /* ================= 背景アンビエントパーティクル ================= */
     (function ambient() {
-      var c = document.getElementById('bg-canvas'), x = c.getContext('2d');
-      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      var pts = [], W, H;
+      var c = $('bg-canvas'), x = c.getContext('2d');
+      var reduce = reduceMotion, pts = [], W, H;
       function resize() { W = c.width = innerWidth; H = c.height = innerHeight; }
       resize(); addEventListener('resize', resize);
-      var N = reduce ? 0 : Math.min(60, Math.floor(innerWidth / 22));
-      for (var i = 0; i < N; i++) pts.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.8 + 0.4, vx: (Math.random() - 0.5) * 0.25, vy: (Math.random() - 0.5) * 0.25, c: Math.random() > 0.5 ? '34,211,238' : '167,139,250' });
+      var Ncount = reduce ? 0 : Math.min(60, Math.floor(innerWidth / 22));
+      for (var i = 0; i < Ncount; i++) pts.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.8 + 0.4, vx: (Math.random() - 0.5) * 0.25, vy: (Math.random() - 0.5) * 0.25, c: Math.random() > 0.5 ? '34,211,238' : '167,139,250' });
       function tick() {
         x.clearRect(0, 0, W, H);
         for (var i = 0; i < pts.length; i++) {
           var p = pts[i]; p.x += p.vx; p.y += p.vy;
           if (p.x < 0) p.x = W; if (p.x > W) p.x = 0; if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
-          x.beginPath(); x.arc(p.x, p.y, p.r, 0, 6.283);
-          x.fillStyle = 'rgba(' + p.c + ',0.5)'; x.fill();
+          x.beginPath(); x.arc(p.x, p.y, p.r, 0, 6.283); x.fillStyle = 'rgba(' + p.c + ',0.5)'; x.fill();
         }
         if (!reduce) requestAnimationFrame(tick);
       }
