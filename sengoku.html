@@ -2256,7 +2256,7 @@ class MapScene extends GameKit.Scene {
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
-    this.showClans=false; this.castleEdit=false; this.castleMetaEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
+    this.showClans=false; this.selClan=null; this.ploy=null; this.castleEdit=false; this.castleMetaEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
     this.particles = new GameKit.Particles(W, H, {count:24, colors:['#1e3a5f','#2a2150']});
     // カメラ（ズーム/パン）。3倍化したワールドを自国領中心で表示。
     let cx=this._clipCx, cy=this._clipCy;
@@ -2927,9 +2927,21 @@ class MapScene extends GameKit.Scene {
     bs.push({x:W-(IS_TOUCH?378:296), y:IS_TOUCH?14:18, w:IS_TOUCH?200:150, h:IS_TOUCH?70:52, skin:'topBar', label:'ターン終了', sz:IS_TOUCH?27:21, action:g=>this._endTurn(g)});
     bs.push({x:W-(IS_TOUCH?162:132), y:IS_TOUCH?14:18, w:IS_TOUCH?138:104, h:IS_TOUCH?70:52, skin:'topBar', label:'タイトル', sz:IS_TOUCH?26:20, action:()=>game.changeScene(new TitleScene())});
     if (this.showClans){
-      const cpw=Math.min(1720,W-220), cph=Math.min(1560,H-200);
-      const cpx=(W-cpw)/2, cpy=(H-cph)/2;
-      bs.push({x:cpx+cpw-148, y:cpy+14, w:128, h:64, skin:'topBar', label:'✕ 閉じる', sz:24, action:()=>{ this.showClans=false; }});
+      const L=this._diploLayout(); const clans=this._diploClans(); const me=st.playerDaimyo;
+      const maxRows=Math.max(1, Math.floor((L.ph-210)/(L.rowH+10)));
+      clans.slice(0,maxRows).forEach((d,i)=>{
+        bs.push({x:L.listX, y:L.listY+i*(L.rowH+10), w:L.rowW, h:L.rowH, _diploClan:d.id, action:()=>{ this.selClan=d.id; }});
+      });
+      const rid=this.selClan;
+      if (rid && st.daimyo[rid] && st.daimyo[rid].alive && rid!==me){
+        const dip=getDip(st,me,rid); const acted=dip.actedTurn===st.turn; const gold=st.daimyo[me].gold;
+        const bx=L.rightX, bw=L.rightW; let by=L.py+360;
+        bs.push({x:bx, y:by, w:bw, h:92, jp:'贈物（100貫）', en:'Gift (relation +)', sz:24, ensz:15, accent:'rgba(52,211,153,0.6)', on: gold>=100 && !acted, action:g=>this._diploPropose(g,'gift')}); by+=106;
+        bs.push({x:bx, y:by, w:bw, h:92, jp:'停戦を提案（80貫）', en:'Propose truce', sz:24, ensz:15, accent:'rgba(234,179,8,0.6)', on: gold>=80 && !acted && !dip.ally && !inTruce(st,me,rid), action:g=>this._diploPropose(g,'truce')}); by+=106;
+        bs.push({x:bx, y:by, w:bw, h:92, jp:'同盟を提案（150貫）', en:'Propose alliance', sz:24, ensz:15, accent:'rgba(167,139,250,0.62)', on: gold>=150 && !acted && !dip.ally, action:g=>this._diploPropose(g,'ally')}); by+=106;
+        if (dip.ally) bs.push({x:bx, y:by, w:bw, h:82, jp:'同盟を破棄', en:'Break alliance', sz:22, ensz:14, accent:'rgba(248,113,113,0.6)', on:!acted, action:g=>this._diploPropose(g,'break')});
+      }
+      bs.push({x:L.px+L.pw-152, y:L.py+22, w:128, h:60, skin:'topBar', label:'✕ 閉じる', sz:24, action:()=>{ this.showClans=false; this.selClan=null; }});
     }
     bs.push({x:34, y:H-310, w:84, h:72, skin:'topBar', label:'＋', sz:36, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }});
     bs.push({x:132, y:H-310, w:84, h:72, skin:'topBar', label:'－', sz:36, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }});
@@ -3018,7 +3030,7 @@ class MapScene extends GameKit.Scene {
     if (this.castleEdit) this._drawCastleEditOverlay(ctx);
     if (this.castleMetaEdit) this._drawCastleMetaEditOverlay(ctx);
     // ボタン（一覧オーバーレイより前面に出して操作可能に）
-    if (!this.overlay){ const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t); }
+    if (!this.overlay){ const btns=this._buttons(); for (const b of btns){ if (b._diploClan){ this._drawDiploRow(ctx,b); } else drawButton(ctx,b,this.t); } }
     // メッセージトースト
     if (this.messageT>0){
       const a=Math.min(1,this.messageT);
@@ -3205,29 +3217,103 @@ class MapScene extends GameKit.Scene {
       T(ctx, String(r[1]), rx+valOff, ry, {size:big?(i===0?29:31):(i===0?23:25), weight:'bold', color:'#e2e8f0'});
     });
   }
-  _drawClansOverlay(ctx){
-    const st=this.state;
-    const clans = daimyoOf(st).filter(d=>st.daimyo[d.id].alive)
-      .map(d=>({d, n:ownedProvinces(st,d.id).length})).sort((a,b)=>b.n-a.n);
-    ctx.save();
-    ctx.fillStyle='rgba(3,6,14,0.62)'; ctx.fillRect(0,0,W,H);
-    const pw=Math.min(1720, W-220), ph=Math.min(1560, H-200);
+  _diploLayout(){
+    const pw=Math.min(1860, W-140), ph=Math.min(1560, H-160);
     const px=(W-pw)/2, py=(H-ph)/2;
-    GameKit.UI.glassPanel(ctx, px,py,pw,ph,{radius:26, fill:'rgba(8,12,22,0.94)', stroke:'rgba(232,192,122,0.5)'});
-    T(ctx,'勢力一覧 / Clans', px+pw/2, py+34, {size:48, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
-    T(ctx,'（'+clans.length+'家）', px+pw/2, py+104, {size:24, color:'#9fb2c6', align:'center'});
-    const cols=2, colW=(pw-140)/cols, startY=py+170, rowH=78;
-    const maxRows=Math.floor((ph-200)/rowH);
-    clans.forEach((c,i)=>{
-      const col=i%cols, row=Math.floor(i/cols);
-      if (row>=maxRows) return;
-      const cx=px+70+col*colW, cy=startY+row*rowH;
-      ctx.fillStyle=c.d.color; ctx.beginPath(); ctx.roundRect(cx, cy, 46, 46, 8); ctx.fill();
-      ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=2; ctx.stroke();
-      const mine=c.d.id===st.playerDaimyo;
-      T(ctx, c.d.nameJP+'家'+(mine?' ◀自国':''), cx+64, cy+4, {size:34, weight:mine?'bold':'', color: mine?'#e8c07a':'#dbe4ee'});
-      T(ctx, c.n+' 洲', cx+colW-80, cy+8, {size:30, color:'#9fb2c6', align:'right'});
-    });
+    const rowW=740, rowH=94;
+    return { px,py,pw,ph, listX:px+48, listY:py+180, rowW, rowH, rightX:px+840, rightW:pw-880 };
+  }
+  _diploClans(){
+    // プレイヤーに隣接、または既に外交関係(同盟/停戦/関係値≠0)のある存命大名のみを表示
+    const st=this.state, me=st.playerDaimyo, set=new Set();
+    ownedProvinces(st,me).forEach(pid=> neighborsOf(pid).forEach(nb=>{ const o=st.provinces[nb].owner; if(o&&o!==me) set.add(o); }));
+    daimyoOf(st).forEach(d=>{ if(d.id!==me && st.daimyo[d.id] && st.daimyo[d.id].alive){ const dip=getDip(st,me,d.id); if(dip.ally||dip.truceUntil>=st.turn||dip.relation!==0) set.add(d.id); } });
+    return [...set].filter(id=>st.daimyo[id]&&st.daimyo[id].alive&&id!==me)
+      .map(id=>daimyoDef(st,id)).filter(Boolean)
+      .sort((a,b)=>ownedProvinces(st,b.id).length-ownedProvinces(st,a.id).length);
+  }
+  _diploStatus(rid){
+    const st=this.state, me=st.playerDaimyo, dip=getDip(st,me,rid);
+    if (dip.ally) return {jp:'同盟', en:'Ally', color:'#a78bfa'};
+    if (dip.truceUntil>=st.turn) return {jp:'停戦中', en:'Truce', color:'#eab308'};
+    if (dip.relation<=-40) return {jp:'敵対', en:'Hostile', color:'#f87171'};
+    return {jp:'中立', en:'Neutral', color:'#94a3b8'};
+  }
+  _diploPropose(game, kind){
+    const st=this.state, me=st.playerDaimyo, rid=this.selClan;
+    if (!rid || !st.daimyo[rid] || !st.daimyo[rid].alive) return;
+    const dip=getDip(st,me,rid);
+    if (kind!=='break' && dip.actedTurn===st.turn){ this._flash('この勢力へは今季もう交渉できません', 'Already negotiated this turn'); return; }
+    const myPow=ownedProvinces(st,me).length, thPow=ownedProvinces(st,rid).length;
+    const pay=(n)=>{ st.daimyo[me].gold-=n; };
+    if (kind==='gift'){
+      if (st.daimyo[me].gold<100){ this._flash('金が足りません','Not enough gold'); return; }
+      pay(100); addRel(st,me,rid,8); dip.actedTurn=st.turn;
+      game.audio.beep(600,0.1,'sine'); this._flash(daimyoDef(st,rid).nameJP+'家へ贈物（関係+8）', 'Gift sent (relation +8)');
+    } else if (kind==='truce'){
+      if (st.daimyo[me].gold<80){ this._flash('金が足りません','Not enough gold'); return; }
+      pay(80); dip.actedTurn=st.turn;
+      const chance=clamp(0.4 + dip.relation/110 - Math.max(0,(myPow-thPow))/40, 0.08, 0.94);
+      if (srand(st)<chance){ dip.truceUntil=st.turn+8; addRel(st,me,rid,6); game.audio.jingle([{f:523,d:0.09},{f:698,d:0.13}]); this._flash(daimyoDef(st,rid).nameJP+'家と停戦が成立（8ターン）', 'Truce agreed (8 turns)'); }
+      else { addRel(st,me,rid,-3); game.audio.beep(240,0.14,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は停戦を拒否した', 'Truce refused'); }
+    } else if (kind==='ally'){
+      if (st.daimyo[me].gold<150){ this._flash('金が足りません','Not enough gold'); return; }
+      pay(150); dip.actedTurn=st.turn;
+      if (dip.relation<35){ addRel(st,me,rid,4); game.audio.beep(240,0.14,'sawtooth'); this._flash('関係が浅く同盟を断られた（関係+4）', 'Alliance refused: relation too low'); }
+      else {
+        const chance=clamp(0.2 + (dip.relation-35)/110, 0.05, 0.9);
+        if (srand(st)<chance){ dip.ally=true; dip.truceUntil=st.turn+999; addRel(st,me,rid,10); game.audio.jingle([{f:523,d:0.1},{f:659,d:0.1},{f:784,d:0.16}]); this._flash(daimyoDef(st,rid).nameJP+'家と同盟が成立！', 'Alliance formed!'); }
+        else { addRel(st,me,rid,-4); game.audio.beep(240,0.14,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は同盟を見送った', 'Alliance declined'); }
+      }
+    } else if (kind==='break'){
+      dip.ally=false; dip.truceUntil=0; addRel(st,me,rid,-30); dip.actedTurn=st.turn;
+      game.audio.beep(200,0.18,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家との同盟を破棄（関係-30）', 'Alliance broken (relation -30)');
+    }
+    this._save();
+  }
+  _drawDiploRow(ctx, b){
+    const st=this.state, rid=b._diploClan, d=daimyoDef(st,rid);
+    const sel=this.selClan===rid; const dip=getDip(st,st.playerDaimyo,rid); const stat=this._diploStatus(rid);
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 12);
+    ctx.fillStyle = sel?'rgba(232,192,122,0.20)':(b._hot?'rgba(255,255,255,0.09)':'rgba(255,255,255,0.045)'); ctx.fill();
+    ctx.lineWidth=sel?2.6:1.3; ctx.strokeStyle=sel?'rgba(246,213,138,0.9)':'rgba(148,163,184,0.28)'; ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle=d.color; ctx.beginPath(); ctx.roundRect(b.x+16, b.y+b.h/2-22, 44, 44, 8); ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.3)'; ctx.lineWidth=1.6; ctx.stroke();
+    T(ctx, d.nameJP+'家', b.x+78, b.y+16, {size:32, weight:'bold', color:'#eef2f7'});
+    T(ctx, ownedProvinces(st,rid).length+' 洲', b.x+78, b.y+58, {size:20, color:'#9fb2c6'});
+    // 関係バー
+    const barX=b.x+300, barW=280, barY=b.y+b.h/2-6, rel=dip.relation;
+    ctx.fillStyle='rgba(255,255,255,0.10)'; ctx.beginPath(); ctx.roundRect(barX, barY, barW, 12, 6); ctx.fill();
+    const cxc=barX+barW/2; const frac=clamp(rel/100,-1,1);
+    ctx.fillStyle= rel>=0?'rgba(52,211,153,0.85)':'rgba(248,113,113,0.85)';
+    ctx.beginPath(); ctx.roundRect(Math.min(cxc,cxc+frac*(barW/2)), barY, Math.abs(frac)*(barW/2), 12, 6); ctx.fill();
+    T(ctx, '関係 '+rel, barX+barW/2, b.y+b.h/2-40, {size:18, color:'#cbd5e1', align:'center'});
+    T(ctx, stat.jp+' / '+stat.en, b.x+b.w-20, b.y+b.h/2-13, {size:24, weight:'bold', color:stat.color, align:'right'});
+  }
+  _drawClansOverlay(ctx){
+    const st=this.state, me=st.playerDaimyo, L=this._diploLayout();
+    ctx.save();
+    ctx.fillStyle='rgba(3,6,14,0.66)'; ctx.fillRect(0,0,W,H);
+    GameKit.UI.glassPanel(ctx, L.px,L.py,L.pw,L.ph,{radius:26, fill:'rgba(8,12,22,0.95)', stroke:'rgba(232,192,122,0.5)'});
+    T(ctx,'外交 / Diplomacy', L.px+L.pw/2, L.py+30, {size:46, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    T(ctx,'所持金 '+st.daimyo[me].gold+' 貫 ・ 隣接／関係のある勢力のみ表示', L.px+L.pw/2, L.py+100, {size:22, color:'#9fb2c6', align:'center'});
+    T(ctx,'― 勢力 / Clans ―', L.listX+L.rowW/2, L.py+146, {size:22, color:'#a78bfa', align:'center'});
+    const clans=this._diploClans();
+    if (!clans.length) T(ctx,'現在、外交対象の勢力はありません', L.listX+L.rowW/2, L.listY+80, {size:24, color:'#7d93ab', align:'center'});
+    // 右ペイン: 選択勢力の詳細
+    const rid=this.selClan;
+    T(ctx,'― 交渉 / Negotiate ―', L.rightX+L.rightW/2, L.py+146, {size:22, color:'#e8c07a', align:'center'});
+    if (rid && st.daimyo[rid] && st.daimyo[rid].alive && rid!==me){
+      const d=daimyoDef(st,rid), dip=getDip(st,me,rid), stat=this._diploStatus(rid);
+      T(ctx, d.nameJP+'家 / '+(d.nameEN||''), L.rightX+L.rightW/2, L.py+210, {size:32, weight:'bold', color:'#f1e6cf', align:'center'});
+      T(ctx, '状態 '+stat.jp+'（'+stat.en+'） ・ 関係 '+dip.relation+' ・ '+ownedProvinces(st,rid).length+'洲', L.rightX+L.rightW/2, L.py+256, {size:20, color:stat.color, align:'center'});
+      if (dip.actedTurn===st.turn) T(ctx, '※今季は交渉済み', L.rightX+L.rightW/2, L.py+300, {size:18, color:'#7d93ab', align:'center'});
+    } else {
+      T(ctx, '左の勢力を選んでください', L.rightX+L.rightW/2, L.py+240, {size:24, color:'#8ea3ba', align:'center'});
+      T(ctx, 'Select a clan on the left', L.rightX+L.rightW/2, L.py+276, {size:17, color:'#6b7d92', align:'center'});
+    }
     ctx.restore();
   }
 
@@ -3396,7 +3482,7 @@ function runStrategicAI(st, d, log){
     const prov=st.provinces[pid];
     if (prov.hasActed || prov.soldiers<800) continue;
     // 敵隣接洲
-    const targets = neighborsOf(pid).filter(nb=>{ const o=st.provinces[nb].owner; return o!==d.id; });
+    const targets = neighborsOf(pid).filter(nb=>{ const o=st.provinces[nb].owner; return o!==d.id && !areAllied(st,d.id,o) && !inTruce(st,d.id,o); });
     if (!targets.length) continue;
     // 最も弱い/価値ある標的
     let best=null, bestScore=-1;
