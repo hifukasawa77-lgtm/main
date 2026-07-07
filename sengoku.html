@@ -2266,8 +2266,14 @@ class MapScene extends GameKit.Scene {
     this.cam = { zoom:1.65, cx, cy, min:0.45, max:24 };
     this._clampCam();
     this._bindInput();
-    // 戦闘から戻った結果の適用
-    if (this.state.pendingResult){ this.overlay = {type:'battleResult', data:this.state.pendingResult}; this.state.pendingResult=null; }
+    // 戦闘から戻った結果の適用／ターン解決の継続
+    if (this.state.awaitingFinalize){
+      // 防衛戦（手動）から復帰：まず結果を見せ、OKで残りの防衛→ターン確定を継続
+      if (this.state.pendingResult){ this.overlay={type:'battleResult', data:this.state.pendingResult, _afterDefense:true}; this.state.pendingResult=null; }
+      else { this._processTurnResolution(game); }
+    } else if (this.state.pendingResult){
+      this.overlay = {type:'battleResult', data:this.state.pendingResult}; this.state.pendingResult=null;
+    }
     this._checkEnd(game);
     this._save();
   }
@@ -2868,10 +2874,51 @@ class MapScene extends GameKit.Scene {
     });
     // AI 各大名
     const aiLog=[];
+    st.pendingDefenses=[];
     daimyoOf(st).forEach(d=>{
       if (d.id===st.playerDaimyo || !st.daimyo[d.id].alive) return;
       runStrategicAI(st, d, aiLog);
     });
+    st.pendingTurnLog=aiLog;
+    st.awaitingFinalize=true;
+    this._save();
+    this._processTurnResolution(game);
+  }
+  // 防衛戦キューがあれば1件ずつ処理、無ければターンを確定
+  _processTurnResolution(game){
+    const st=this.state;
+    if (st.pendingDefenses && st.pendingDefenses.length){
+      this.overlay={type:'defense', data:st.pendingDefenses[0]};
+      game.audio.beep(300,0.16,'sawtooth');
+    } else {
+      this._finalizeTurn(game);
+    }
+  }
+  // 防衛戦を解決（手動=ヘックス戦 / 自動=集約解決）
+  _resolveDefense(game, manual){
+    const st=this.state;
+    const ctx=(st.pendingDefenses||[]).shift();
+    if (!ctx){ this._processTurnResolution(game); return; }
+    ctx.playerSide='def';
+    if (manual){
+      st.pendingBattle=ctx; this.overlay=null;
+      game.changeScene(new BattleScene(st)); // 決着後は新MapScene.enterが解決を継続
+      return;
+    }
+    const res=autoResolveBattle({
+      atkSoldiers:ctx.attacker.soldiers, atkGenerals:ctx.attacker.generals, atkFamily:ctx.attacker.family,
+      defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
+      year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
+    });
+    applyBattleResult(st, ctx, res);
+    game.audio.jingle(res.attackerWins?[{f:392,d:0.12},{f:262,d:0.2}]:[{f:523,d:0.1},{f:784,d:0.16}]);
+    this.overlay={type:'battleResult', data:st.pendingResult, _afterDefense:true};
+    st.pendingResult=null;
+    this._save();
+  }
+  _finalizeTurn(game){
+    const st=this.state;
+    st.awaitingFinalize=false;
     // 行動フラグ・季節・ターン更新
     for (const pid in st.provinces) st.provinces[pid].hasActed=false;
     st.season=(st.season+1)%4;
@@ -2879,6 +2926,7 @@ class MapScene extends GameKit.Scene {
     st.turn++;
     this.selected=null; this.mode='select';
     this._updateDaimyoAlive();
+    const aiLog=st.pendingTurnLog||[]; st.pendingTurnLog=null;
     this.overlay={type:'turnSummary', data:aiLog};
     game.audio.beep(500,0.12,'triangle');
     this._save();
@@ -2908,7 +2956,7 @@ class MapScene extends GameKit.Scene {
   }
 
   _buttons(){
-    const bs=[];
+    const bs=[]; const st=this.state;
     // スマホ（タッチ端末）では左メニューを一回り大きく表示して視認性を確保
     const menuX=26, menuY=IS_TOUCH?150:126;
     const menuW=IS_TOUCH?364:198, menuH=IS_TOUCH?126:72, gap=IS_TOUCH?22:14;
@@ -2994,7 +3042,12 @@ class MapScene extends GameKit.Scene {
       const px=W/2-820, py=H/2-610, pw=1640, ph=1220;
       bs.push({x:px+pw-286, y:py+42, w:240, h:78, jp:'閉じる', en:'Close', sz:30, ensz:17, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='battleResult' || ov.type==='turnSummary'){
-      bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:()=>{ this.overlay=null; }});
+      const after=ov._afterDefense;
+      bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:g=>{ this.overlay=null; if(after) this._processTurnResolution(g); }});
+    } else if (ov.type==='defense'){
+      const c=ov.data; const px=W/2-440, py=H/2-320, pw=880, ph=620; const by=py+ph-116;
+      bs.push({x:px+60, y:by, w:340, h:84, jp:'手動で防衛', en:'Defend (Hex Battle)', sz:26, ensz:16, accent:'rgba(52,211,153,0.7)', action:g=>this._resolveDefense(g,true)});
+      bs.push({x:px+pw-400, y:by, w:340, h:84, jp:'自動で防衛', en:'Auto Defend', sz:26, ensz:16, accent:'rgba(251,191,36,0.7)', action:g=>this._resolveDefense(g,false)});
     } else if (ov.type==='gameover'){
       bs.push({x:W/2-260, y:H/2+170, w:240, h:64, jp:'タイトルへ', en:'Title', sz:24, action:()=>{ save.set('autosave',null); game.changeScene(new TitleScene()); }});
       bs.push({x:W/2+20, y:H/2+170, w:240, h:64, jp:'続ける', en:'Keep', sz:24, action:()=>{ this.overlay=null; }});
@@ -3326,6 +3379,7 @@ class MapScene extends GameKit.Scene {
     else if (ov.type==='turnSummary') this._drawTurnSummary(ctx, ov.data);
     else if (ov.type==='gameover') this._drawGameOver(ctx, ov.win);
     else if (ov.type==='ploy') this._drawPloy(ctx);
+    else if (ov.type==='defense') this._drawDefense(ctx, ov.data);
     const btns=this._overlayButtons(); for (const b of btns){
       if (b._gen){ drawGenToggle(ctx, b, this.march, st); }
       else if (b._ployTarget){ this._drawPloyTargetRow(ctx, b); }
@@ -3351,6 +3405,24 @@ class MapScene extends GameKit.Scene {
       const minLoy=eg.length?Math.min(...eg.map(g=>st.generals[g].loyalty)):'-';
       T(ctx, '敵兵 '+tp.soldiers+' ・ 武将'+eg.length+'名 ・ 最低忠誠 '+minLoy, px+pw-235, py+190, {size:19, color:'#9fb2c6', align:'center'});
     }
+  }
+  _drawDefense(ctx, c){
+    const st=this.state; const px=W/2-440, py=H/2-320, pw=880, ph=620;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(26,14,14,0.97)', stroke:'rgba(248,113,113,0.55)'});
+    T(ctx, '敵襲！ / Under Attack', px+pw/2, py+34, {size:40, weight:'bold', color:'#f87171', align:'center'});
+    const atk=c.attacker.daimyo?daimyoDef(st,c.attacker.daimyo):null;
+    T(ctx, (c.attackerNameJP||(atk?atk.nameJP:'敵'))+'家が '+DATA.provById[c.dstId].nameJP+' へ侵攻', px+pw/2, py+104, {size:26, weight:'bold', color:'#f1e6cf', align:'center'});
+    T(ctx, (c.attackerNameEN||(atk?atk.nameEN:'Enemy'))+' invades '+DATA.provById[c.dstId].nameEN, px+pw/2, py+146, {size:19, color:'#cbb6b6', align:'center'});
+    // 兵力比較
+    const dGen=c.defender.generals.length, aGen=c.attacker.generals.length;
+    T(ctx, '― 攻 / Attacker ―', px+pw*0.28, py+210, {size:22, color:'#f87171', align:'center'});
+    T(ctx, c.attacker.soldiers+' 人', px+pw*0.28, py+252, {size:38, weight:'bold', color:'#f1e6cf', align:'center'});
+    T(ctx, '武将 '+aGen+' 名', px+pw*0.28, py+306, {size:20, color:'#cbd5e1', align:'center'});
+    T(ctx, '― 守 / Defender ―', px+pw*0.72, py+210, {size:22, color:'#34d399', align:'center'});
+    T(ctx, c.defender.soldiers+' 人', px+pw*0.72, py+252, {size:38, weight:'bold', color:'#d7f5e8', align:'center'});
+    T(ctx, '武将 '+dGen+' 名 ・ 城Lv'+(c.defender.castleLevel||1)+' ・ '+terrainJP(c.terrain), px+pw*0.72, py+306, {size:20, color:'#cbd5e1', align:'center'});
+    T(ctx, '手動で采配するか、自動解決に委ねるか選べます', px+pw/2, py+372, {size:20, color:'#9fb2c6', align:'center'});
+    T(ctx, 'Take command yourself, or let it auto-resolve.', px+pw/2, py+404, {size:16, color:'#7d93ab', align:'center'});
   }
   _drawPloyTargetRow(ctx, b){
     const st=this.state, pl=this.ploy, nb=b._ployTarget;
@@ -3414,11 +3486,15 @@ class MapScene extends GameKit.Scene {
   }
   _drawBattleResult(ctx, d){
     const px=W/2-360, py=H/2-280, pw=720, ph=580;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.96)', stroke: d.win?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
-    T(ctx, d.win?'勝利 / Victory':'敗北 / Defeat', px+pw/2, py+44, {size:44, weight:'bold', color: d.win?'#34d399':'#f87171', align:'center'});
+    const won = d.playerWon!==undefined? d.playerWon : d.win;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.96)', stroke: won?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
+    T(ctx, won?'勝利 / Victory':'敗北 / Defeat', px+pw/2, py+44, {size:44, weight:'bold', color: won?'#34d399':'#f87171', align:'center'});
     T(ctx, DATA.provById[d.dstId].nameJP+' の戦い', px+pw/2, py+114, {size:24, color:'#cbd5e1', align:'center'});
-    T(ctx, (d.win?'を攻略した！':'攻略に失敗…'), px+pw/2, py+154, {size:22, color:'#9fb2c6', align:'center'});
-    T(ctx, '自軍生存 '+d.atkSurvivors+' 人 / 敵残存 '+d.defSurvivors+' 人', px+pw/2, py+214, {size:22, color:'#e2e8f0', align:'center'});
+    const sub = d.defense ? (won?'を守り抜いた！ Defended!':'を奪われた… Lost the province') : (won?'を攻略した！ Captured!':'攻略に失敗… Failed');
+    T(ctx, sub, px+pw/2, py+154, {size:22, color:'#9fb2c6', align:'center'});
+    const mine = d.defense? d.defSurvivors : d.atkSurvivors;
+    const theirs = d.defense? d.atkSurvivors : d.defSurvivors;
+    T(ctx, '自軍生存 '+mine+' 人 / 敵残存 '+theirs+' 人', px+pw/2, py+214, {size:22, color:'#e2e8f0', align:'center'});
     if (d.generalsLost && d.generalsLost.length){
       T(ctx, '討死: '+d.generalsLost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), px+pw/2, py+264, {size:20, color:'#f87171', align:'center'});
     } else {
@@ -3508,6 +3584,14 @@ function runStrategicAI(st, d, log){
       };
       prov.soldiers-=send; prov.hasActed=true;
       gens.forEach(g=>{ const i=prov.generals.indexOf(g); if(i>=0) prov.generals.splice(i,1); });
+      attacks++;
+      // 標的がプレイヤーの洲なら即時解決せず、防衛戦キューへ退避（プレイヤーが手動/自動を選ぶ）
+      if (tp.owner===st.playerDaimyo){
+        ctx.attackerNameJP=d.nameJP; ctx.attackerNameEN=d.nameEN;
+        (st.pendingDefenses=st.pendingDefenses||[]).push(ctx);
+        log.push(d.nameJP+'家が'+DATA.provById[best].nameJP+'へ侵攻！  /  '+d.nameEN+' invades '+DATA.provById[best].nameEN+'!');
+        continue;
+      }
       const res=autoResolveBattle({
         atkSoldiers:send, atkGenerals:gens, atkFamily:d.id,
         defSoldiers:tp.soldiers, defGenerals:ctx.defender.generals, defFamily:tp.owner||'',
@@ -3517,7 +3601,6 @@ function runStrategicAI(st, d, log){
       const defenderName = defDef?defDef.nameJP:'空白';
       const defenderNameEN = defDef?defDef.nameEN:'a neutral';
       applyBattleResult(st, ctx, res, gens);
-      attacks++;
       if (res.attackerWins){
         log.push(d.nameJP+'家が'+defenderName+'家の'+DATA.provById[best].nameJP+'を攻略  /  '+d.nameEN+' captured '+DATA.provById[best].nameEN+' from '+defenderNameEN);
       }
@@ -3562,7 +3645,9 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
     dst.soldiers = res.defSurvivors;
   }
   if (playerInvolved){
-    st.pendingResult = { win:res.attackerWins, dstId:ctx.dstId, atkSurvivors:res.atkSurvivors, defSurvivors:res.defSurvivors, generalsLost };
+    const defense = ctx.defender.daimyo===st.playerDaimyo && ctx.attacker.daimyo!==st.playerDaimyo;
+    const playerWon = defense ? !res.attackerWins : res.attackerWins;
+    st.pendingResult = { win:res.attackerWins, playerWon, defense, dstId:ctx.dstId, atkSurvivors:res.atkSurvivors, defSurvivors:res.defSurvivors, generalsLost };
   }
 }
 
@@ -3597,6 +3682,9 @@ class BattleScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
     const c=this.ctx; this.state.pendingBattle=null;
+    // プレイヤーが操作する側（攻撃時='atk'、防衛時='def'）
+    this.playerSide = c.playerSide || 'atk';
+    this.aiSide = this.playerSide==='atk' ? 'def' : 'atk';
     this.t=0; this.round=1; this.maxRounds=12; this.phase='player'; this.selected=null;
     this.reach={}; this.targets={}; this.message=null; this.messageT=0;
     this.terrainMap = this._genTerrain(c.terrain);
@@ -3604,7 +3692,7 @@ class BattleScene extends GameKit.Scene {
     this._buildStacks('atk', c.attacker, c.year, c.attacker.family, false);
     this._buildStacks('def', c.defender, c.year, c.defender.family, true);
     this.particles = new GameKit.Particles(W, H, {count:18, colors:['#2a1c10','#1a2233']});
-    this._enemyHQ = this.stacks.filter(s=>s.side==='def').sort((a,b)=>b.count-a.count)[0];
+    this._enemyHQ = this.stacks.filter(s=>s.side===this.aiSide).sort((a,b)=>b.count-a.count)[0];
     this.over=false; this.result=null;
   }
   _genTerrain(baseTerrain){
@@ -3678,8 +3766,8 @@ class BattleScene extends GameKit.Scene {
     const [c,r]=hx; const s=this.stackAt(c,r);
     if (this.selected){
       const sel=this.selected;
-      // 攻撃対象か
-      if (s && s.side==='def' && this.targets[c+','+r]){ this._attack(game, sel, s); return; }
+      // 攻撃対象か（敵側スタック）
+      if (s && s.side===this.aiSide && this.targets[c+','+r]){ this._attack(game, sel, s); return; }
       // 移動先か
       if (!s && this.reach[c+','+r]!==undefined && !sel.hasMoved){
         sel.col=c; sel.row=r; sel.hasMoved=true;
@@ -3688,9 +3776,9 @@ class BattleScene extends GameKit.Scene {
         return;
       }
       // 別の自軍選択
-      if (s && s.side==='atk'){ this._select(s); return; }
+      if (s && s.side===this.playerSide){ this._select(s); return; }
       this.selected=null; this.reach={}; this.targets={};
-    } else if (s && s.side==='atk'){
+    } else if (s && s.side===this.playerSide){
       this._select(s);
     }
   }
@@ -3700,7 +3788,7 @@ class BattleScene extends GameKit.Scene {
     // 攻撃対象（射程内の敵）
     if (!s.hasAttacked){
       const range=UNITS[s.type].range;
-      this.stacks.filter(e=>e.side==='def').forEach(e=>{
+      this.stacks.filter(e=>e.side!==s.side).forEach(e=>{
         if (hexDist(s.col,s.row,e.col,e.row)<=range) this.targets[e.col+','+e.row]=true;
       });
     }
@@ -3709,7 +3797,7 @@ class BattleScene extends GameKit.Scene {
     const mp=UNITS[s.type].move;
     const dist={}; dist[s.col+','+s.row]=0;
     const pq=[[0,s.col,s.row]];
-    const enemyAdj=(c,r)=> hexNeighbors(c,r).some(([nc,nr])=>{ const o=this.stackAt(nc,nr); return o&&o.side==='def'; });
+    const enemyAdj=(c,r)=> hexNeighbors(c,r).some(([nc,nr])=>{ const o=this.stackAt(nc,nr); return o&&o.side!==s.side; });
     while (pq.length){
       pq.sort((a,b)=>a[0]-b[0]);
       const [cd,cc,cr]=pq.shift();
@@ -3769,26 +3857,28 @@ class BattleScene extends GameKit.Scene {
     this._runEnemyPhase(game);
   }
   _runEnemyPhase(game){
-    // 守備側AI（greedy）
-    const enemies=this.stacks.filter(s=>s.side==='def');
+    // AI側（プレイヤーが攻撃なら守備AI、プレイヤーが防衛なら攻撃AI）greedy
+    const enemies=this.stacks.filter(s=>s.side===this.aiSide);
     enemies.forEach(e=>{
       if (e.dead) return;
       // 射程内の敵を探す
       let target=null, bestEval=-1;
-      this.stacks.filter(s=>s.side==='atk').forEach(a=>{
+      this.stacks.filter(s=>s.side===this.playerSide).forEach(a=>{
         if (hexDist(e.col,e.row,a.col,a.row)<=UNITS[e.type].range){
           const ev=advantage(e.type,a.type)*a.count;
           if (ev>bestEval){ bestEval=ev; target=a; }
         }
       });
       if (target){ this._resolveMelee(e, target); game.audio.noise(0.12,0.12); this._cleanupStacks(); return; }
-      // 地の利のある拠点（山地・森林・河川）に居る守備隊は固守して攻撃側を待つ
-      const here=this.terrainMap[e.col+','+e.row];
-      if (here==='mountain'||here==='forest'||here==='river') return;
-      // 鉄砲・弓は射程を活かすためむやみに突出しない（半数の確率で待機）
-      if (UNITS[e.type].range>=2 && Math.random()<0.5) return;
-      // 近づく：最寄りの自軍へ1歩
-      const foes=this.stacks.filter(s=>s.side==='atk'); if (!foes.length) return;
+      // AIが守備側のときのみ地の利で固守（攻撃側AIは前進し続ける）
+      if (this.aiSide==='def'){
+        const here=this.terrainMap[e.col+','+e.row];
+        if (here==='mountain'||here==='forest'||here==='river') return;
+        // 鉄砲・弓は射程を活かすためむやみに突出しない（半数の確率で待機）
+        if (UNITS[e.type].range>=2 && Math.random()<0.5) return;
+      }
+      // 近づく：最寄りの敵（プレイヤー側）へ1歩
+      const foes=this.stacks.filter(s=>s.side===this.playerSide); if (!foes.length) return;
       let nearest=null, nd=1e9;
       foes.forEach(a=>{ const d=hexDist(e.col,e.row,a.col,a.row); if(d<nd){nd=d;nearest=a;} });
       if (nearest){
@@ -3812,7 +3902,7 @@ class BattleScene extends GameKit.Scene {
     if (this._checkBattleEnd(game)) return;
     // 次ラウンドへ
     this.round++;
-    if (this.round>this.maxRounds){ this._finish(game, false, '時間切れ（守勢勝ち）'); return; }
+    if (this.round>this.maxRounds){ this._finish(game, false, '時間切れ・守勢勝ち / Time up: defender holds'); return; }
     this.stacks.forEach(s=>{ s.hasMoved=false; s.hasAttacked=false; });
     this.phase='player';
   }
@@ -3824,7 +3914,9 @@ class BattleScene extends GameKit.Scene {
     return false;
   }
   _retreat(game){
-    this._finish(game, false, '撤退した');
+    // プレイヤーが攻撃側なら撤退＝敗北。防衛側なら城放棄＝攻撃側勝利。
+    if (this.playerSide==='def') this._finish(game, true, '城を放棄した / Abandoned castle');
+    else this._finish(game, false, '撤退した / Retreated');
   }
   _autoFinish(game){
     // 残存兵力で自動解決
@@ -3833,9 +3925,9 @@ class BattleScene extends GameKit.Scene {
     const res=autoResolveBattle({
       atkSoldiers:aS, atkGenerals:atk.map(s=>s.gen).filter(Boolean), atkFamily:this.ctx.attacker.family,
       defSoldiers:dS, defGenerals:def.map(s=>s.gen).filter(Boolean), defFamily:this.ctx.defender.family,
-      year:this.ctx.year, castleLevel:this.ctx.defender.castleLevel, terrain:this.ctx.terrain,
+      year:this.ctx.year, castleLevel:this.ctx.defender.castleLevel, terrain:this.ctx.terrain, rngFn:()=>srand(this.state),
     });
-    this._finishWithCounts(game, res.attackerWins, res.atkSurvivors, res.defSurvivors, '自動解決');
+    this._finishWithCounts(game, res.attackerWins, res.atkSurvivors, res.defSurvivors, '自動解決 / Auto');
   }
   _finish(game, win, reason){
     const aS=this.stacks.filter(s=>s.side==='atk').reduce((s,x)=>s+x.count,0);
@@ -3844,10 +3936,11 @@ class BattleScene extends GameKit.Scene {
   }
   _finishWithCounts(game, win, atkSurv, defSurv, reason){
     if (this.over) return; this.over=true;
-    this.result={win, atkSurv, defSurv, reason};
+    const playerWon = this.playerSide==='atk' ? win : !win;
+    this.result={win, playerWon, atkSurv, defSurv, reason};
     const res={attackerWins:win, atkSurvivors:Math.max(0,Math.round(atkSurv)), defSurvivors:Math.max(0,Math.round(defSurv))};
     applyBattleResult(this.state, this.ctx, res);
-    game.audio.jingle(win?[{f:523,d:0.12},{f:659,d:0.12},{f:784,d:0.2}]:[{f:392,d:0.14},{f:294,d:0.22}]);
+    game.audio.jingle(playerWon?[{f:523,d:0.12},{f:659,d:0.12},{f:784,d:0.2}]:[{f:392,d:0.14},{f:294,d:0.22}]);
   }
 
   _buttons(){
@@ -3947,10 +4040,14 @@ class BattleScene extends GameKit.Scene {
   _drawResult(ctx){
     ctx.save(); ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,0,W,H); ctx.restore();
     const px=W/2-420, py=H/2-260, pw=840, ph=480;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.97)', stroke:this.result.win?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
-    T(ctx, this.result.win?'勝 利':'敗 北', W/2, py+56, {size:64, weight:'bold', color:this.result.win?'#34d399':'#f87171', align:'center'});
+    const won = this.result.playerWon!==undefined? this.result.playerWon : this.result.win;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.97)', stroke:won?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
+    T(ctx, won?'勝 利 / Victory':'敗 北 / Defeat', W/2, py+56, {size:60, weight:'bold', color:won?'#34d399':'#f87171', align:'center'});
     T(ctx, this.result.reason, W/2, py+160, {size:28, color:'#cbd5e1', align:'center'});
-    T(ctx, '自軍残存 約'+Math.round(this.result.atkSurv)+' / 敵残存 約'+Math.round(this.result.defSurv), W/2, py+228, {size:26, color:'#e2e8f0', align:'center'});
+    // プレイヤーの残存を「自軍」として表示（攻撃時=atk、防衛時=def）
+    const mine = this.playerSide==='def'? this.result.defSurv : this.result.atkSurv;
+    const theirs = this.playerSide==='def'? this.result.atkSurv : this.result.defSurv;
+    T(ctx, '自軍残存 約'+Math.round(mine)+' / 敵残存 約'+Math.round(theirs), W/2, py+228, {size:26, color:'#e2e8f0', align:'center'});
     const lost=this.state.pendingResult&&this.state.pendingResult.generalsLost;
     if (lost&&lost.length) T(ctx,'討死: '+lost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), W/2, py+288, {size:24, color:'#f87171', align:'center'});
   }
