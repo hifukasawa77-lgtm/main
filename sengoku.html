@@ -146,6 +146,16 @@
   .castle-list-scroll select:focus, .castle-list-scroll input[type="text"]:focus { border-color:#38bdf8; box-shadow:0 0 0 2px rgba(56,189,248,0.15); }
   .castle-list-scroll input[type="checkbox"] { width:18px; height:18px; accent-color:#f87171; cursor:pointer; display:block; margin:auto; }
   .castle-list-del-cell { text-align:center; }
+  .castle-list-scroll th { cursor:pointer; user-select:none; }
+  .castle-list-scroll th:hover { color:#facc15; }
+  .castle-list-sort-ind { font-size:10px; margin-left:3px; }
+  .cl-coord-wrap { display:flex; gap:4px; align-items:center; }
+  .cl-coord-wrap span { font-size:11px; color:#9fb2c6; flex-shrink:0; }
+  .cl-coord-wrap input[type="number"] {
+    width:62px; min-height:30px; border-radius:6px; border:1px solid rgba(148,163,184,0.3);
+    background:rgba(15,23,42,0.88); color:#f8fafc; padding:3px 5px; font-size:12px; outline:none; box-sizing:border-box;
+  }
+  .cl-coord-wrap input[type="number"]:focus { border-color:#38bdf8; box-shadow:0 0 0 2px rgba(56,189,248,0.15); }
   .castle-list-actions { display:flex; gap:12px; margin-top:14px; flex-shrink:0; }
   .castle-list-actions button {
     flex:1; min-height:42px; border-radius:8px; border:1px solid rgba(148,163,184,0.4);
@@ -189,11 +199,12 @@
       <table>
         <thead>
           <tr>
-            <th style="width:22%">城名称</th>
-            <th style="width:20%">所属大名</th>
-            <th style="width:20%">国名</th>
-            <th style="width:12%">城Lv</th>
-            <th style="width:8%">削除</th>
+            <th data-sort="name" style="width:18%">城名称<span class="castle-list-sort-ind"></span></th>
+            <th data-sort="daimyo" style="width:16%">所属大名<span class="castle-list-sort-ind"></span></th>
+            <th data-sort="prov" style="width:16%">国名<span class="castle-list-sort-ind"></span></th>
+            <th data-sort="lv" style="width:9%">城Lv<span class="castle-list-sort-ind"></span></th>
+            <th style="width:26%">城配置座標</th>
+            <th style="width:7%">削除</th>
           </tr>
         </thead>
         <tbody id="castleListBody"></tbody>
@@ -201,6 +212,7 @@
     </div>
     <div class="castle-list-actions">
       <button id="castleListCancel" type="button">閉じる</button>
+      <button id="castleListAdd" type="button">城追加</button>
       <button id="castleListConfirm" class="primary" type="button">確定</button>
     </div>
   </div>
@@ -2785,41 +2797,73 @@ class MapScene extends GameKit.Scene {
     ui.daimyo.value=selectedId || this.state.playerDaimyo;
   }
   /* ---- 城編集一覧パネル ---- */
-  _openCastleListPanel(){
+  _openCastleListPanel(game){
     if (!castleListPanel) return;
+    if (game) this._listGame=game;
     const st=this.state;
     const body=document.getElementById('castleListBody');
     const countEl=document.getElementById('castleListCount');
     if (!body) return;
+    if (!this.castleListSort) this.castleListSort={col:null,dir:1};
+    const sc=this.castleListSort;
     // Gather daimyos for dropdown
     const daimyos=daimyoOf(st).filter(d=>st.daimyo[d.id]);
     // Gather unique province names for dropdown
     const provNamesSet=new Set();
     DATA.provinces.forEach(p=>{ if (!isCastleDeleted(p.id) && p.nameJP) provNamesSet.add(p.nameJP); });
     const provNames=[...provNamesSet].sort((a,b)=>a.localeCompare(b,'ja'));
-    // Build rows
-    body.innerHTML='';
-    let count=0;
+    // Build sortable row data
+    const rows=[];
     DATA.provinces.forEach(p=>{
       if (isCastleDeleted(p.id)) return;
       const prov=st.provinces[p.id]; if (!prov) return;
-      count++;
       const castleName=castleNameForProvince(p);
       const owner=prov.owner||'';
       const provName=p.nameJP||'';
       const castleLv=Math.max(1,Math.min(10,prov.castleLevel||1));
+      const ownerDef=owner?daimyos.find(d=>d.id===owner):null;
+      const ownerName=ownerDef?ownerDef.nameJP:'';
+      const pos=CASTLE_POS_OVERRIDES[p.id];
+      const posX=pos&&Number.isFinite(pos.x)?pos.x:'';
+      const posY=pos&&Number.isFinite(pos.y)?pos.y:'';
+      rows.push({p,prov,castleName,owner,ownerName,provName,castleLv,posX,posY});
+    });
+    // Apply sort
+    if (sc.col){
+      rows.sort((a,b)=>{
+        if (sc.col==='name') return a.castleName.localeCompare(b.castleName,'ja')*sc.dir;
+        if (sc.col==='daimyo') return a.ownerName.localeCompare(b.ownerName,'ja')*sc.dir;
+        if (sc.col==='prov') return a.provName.localeCompare(b.provName,'ja')*sc.dir;
+        if (sc.col==='lv') return (a.castleLv-b.castleLv)*sc.dir;
+        return 0;
+      });
+    }
+    // Build rows
+    body.innerHTML='';
+    rows.forEach(({p,prov,castleName,owner,provName,castleLv,posX,posY})=>{
       const daimyoOpts='<option value="">(なし)</option>'+daimyos.map(d=>`<option value="${d.id}"${d.id===owner?' selected':''}>${d.nameJP}家</option>`).join('');
       const allProvs=provNames.includes(provName)?provNames:[provName,...provNames];
       const provOpts=allProvs.map(n=>`<option value="${n}"${n===provName?' selected':''}>${n}</option>`).join('');
       const lvOpts=Array.from({length:10},(_,i)=>i+1).map(lv=>`<option value="${lv}"${lv===castleLv?' selected':''}>${lv}</option>`).join('');
       const tr=document.createElement('tr');
       tr.dataset.id=p.id;
-      tr.innerHTML=`<td><input type="text" class="cl-name" value="${castleName.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}" maxlength="30"></td><td><select class="cl-daimyo">${daimyoOpts}</select></td><td><select class="cl-prov">${provOpts}</select></td><td><select class="cl-lv">${lvOpts}</select></td><td class="castle-list-del-cell"><input type="checkbox" class="cl-del"></td>`;
+      tr.innerHTML=`<td><input type="text" class="cl-name" value="${castleName.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}" maxlength="30"></td><td><select class="cl-daimyo">${daimyoOpts}</select></td><td><select class="cl-prov">${provOpts}</select></td><td><select class="cl-lv">${lvOpts}</select></td><td><div class="cl-coord-wrap"><span>X</span><input type="number" class="cl-cx" value="${posX}" step="1"><span>Y</span><input type="number" class="cl-cy" value="${posY}" step="1"></div></td><td class="castle-list-del-cell"><input type="checkbox" class="cl-del"></td>`;
       body.appendChild(tr);
     });
-    if (countEl) countEl.textContent='全'+count+'城';
+    if (countEl) countEl.textContent='全'+rows.length+'城';
+    // Sort indicators and click handlers
+    document.querySelectorAll('.castle-list-scroll th[data-sort]').forEach(th=>{
+      const col=th.dataset.sort;
+      const ind=th.querySelector('.castle-list-sort-ind');
+      if (ind) ind.textContent=sc.col===col?(sc.dir===1?' ▲':' ▼'):'';
+      th.onclick=()=>{
+        if (sc.col===col) sc.dir*=-1; else { sc.col=col; sc.dir=1; }
+        this._openCastleListPanel();
+      };
+    });
     document.getElementById('castleListConfirm').onclick=()=>this._confirmCastleListPanel();
     document.getElementById('castleListCancel').onclick=()=>this._closeCastleListPanel();
+    document.getElementById('castleListAdd').onclick=()=>{ this._closeCastleListPanel(); this._startCastleAdd(this._listGame); };
     this.castleMetaEdit=false; this.castleEdit=false; this._hideCastleAddPanel();
     document.body.classList.add('castle-list-open');
   }
@@ -2830,6 +2874,8 @@ class MapScene extends GameKit.Scene {
     const body=document.getElementById('castleListBody'); if (!body) return;
     const st=this.state;
     const toDelete=[];
+    const img=ASSETS&&ASSETS.img&&ASSETS.img.map;
+    const iw=img&&(img.naturalWidth||img.width), ih=img&&(img.naturalHeight||img.height);
     body.querySelectorAll('tr[data-id]').forEach(row=>{
       const id=row.dataset.id; if (!id) return;
       if (row.querySelector('.cl-del').checked){ toDelete.push(id); return; }
@@ -2837,12 +2883,19 @@ class MapScene extends GameKit.Scene {
       const daimyoId=row.querySelector('.cl-daimyo').value;
       const provinceName=(row.querySelector('.cl-prov').value||'').trim();
       const castleLevel=parseInt(row.querySelector('.cl-lv').value,10);
+      const cxVal=(row.querySelector('.cl-cx').value||'').trim();
+      const cyVal=(row.querySelector('.cl-cy').value||'').trim();
       if (!castleName) return;
       const p=DATA.provById[id]; const prov=st.provinces[id];
       if (p){ if (castleName) CASTLE_NAMES[id]=castleName; if (provinceName) p.nameJP=provinceName; }
       if (prov){ if (daimyoId) prov.owner=daimyoId; if (Number.isFinite(castleLevel)&&castleLevel>=1&&castleLevel<=10) prov.castleLevel=castleLevel; }
       setCastleMetaOverride(id,{castleName,provinceName,daimyoId:daimyoId||null,deleted:false});
       updateCustomCastleRecord(id,{castleName,provinceName,daimyoId});
+      if (cxVal!==''&&cyVal!=='') {
+        const cx=parseInt(cxVal,10), cy=parseInt(cyVal,10);
+        if (Number.isFinite(cx)&&Number.isFinite(cy)&&iw&&ih)
+          CASTLE_POS_OVERRIDES[id]={x:Math.round(cx),y:Math.round(cy),mx:round6(clamp01(cx/iw)),my:round6(clamp01(cy/ih))};
+      }
     });
     toDelete.forEach(id=>{
       setCastleMetaOverride(id,{deleted:true});
@@ -3393,7 +3446,39 @@ class MapScene extends GameKit.Scene {
     if (!pid || !prov || prov.owner!==this.state.playerDaimyo){ this._flash('自国の城を選択してください', 'Select one of your provinces'); return; }
     fn.call(this, game);
   }
+  _getAllGensSorted(){
+    const st=this.state;
+    if (!this.allGenSort) this.allGenSort={col:null,dir:1};
+    const sc=this.allGenSort;
+    let gens=DATA.generals.filter(g=>{ const gs=st.generals[g.id]; return gs&&gs.alive; });
+    if (sc.col){
+      gens=[...gens].sort((a,b)=>{
+        const ga=st.generals[a.id], gb=st.generals[b.id];
+        switch(sc.col){
+          case 'name': return a.nameJP.localeCompare(b.nameJP,'ja')*sc.dir;
+          case 'daimyo': {
+            const dna=ga.daimyo?(daimyoDef(st,ga.daimyo)||{}).nameJP||'':'無所属';
+            const dnb=gb.daimyo?(daimyoDef(st,gb.daimyo)||{}).nameJP||'':'無所属';
+            return dna.localeCompare(dnb,'ja')*sc.dir;
+          }
+          case 'loc': {
+            const ha=ga.location?castleNameForProvince(DATA.provById[ga.location]||{}):'−';
+            const hb=gb.location?castleNameForProvince(DATA.provById[gb.location]||{}):'−';
+            return (ha||'−').localeCompare(hb||'−','ja')*sc.dir;
+          }
+          case 'tou': return (a.stats.tou-b.stats.tou)*sc.dir;
+          case 'bu': return (a.stats.bu-b.stats.bu)*sc.dir;
+          case 'chi': return (a.stats.chi-b.stats.chi)*sc.dir;
+          case 'sei': return (a.stats.sei-b.stats.sei)*sc.dir;
+          case 'loy': return (ga.loyalty-gb.loyalty)*sc.dir;
+          default: return 0;
+        }
+      });
+    }
+    return gens;
+  }
   _openGeneralsList(){
+    if (!this.allGenSort) this.allGenSort={col:null,dir:1};
     this.allGenPage=0; this.allGenSelected=null;
     this.overlay={type:'allGenerals'};
   }
@@ -3441,8 +3526,7 @@ class MapScene extends GameKit.Scene {
     const rowDev1=IS_TOUCH?H-234:H-218, rowDev2=IS_TOUCH?H-118:H-118, rowZoom=IS_TOUCH?H-350:H-310;
     bs.push({x:colX0, y:rowZoom, w:zW, h:zH, skin:'topBar', label:'＋', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }});
     bs.push({x:colX0+zW+(IS_TOUCH?18:48), y:rowZoom, w:zW, h:zH, skin:'topBar', label:'－', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }});
-    bs.push({x:colX0, y:rowDev1, w:dW, h:dH, skin:'topBar', label:'城追加', sz:dSz1, action:g=>this._startCastleAdd(g)});
-    bs.push({x:colX1, y:rowDev1, w:dW, h:dH, skin:'topBar', label:'城編集', sz:dSz2, action:()=>this._openCastleListPanel()});
+    bs.push({x:colX0, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'城編集一覧', sz:dSz2, action:g=>this._openCastleListPanel(g)});
     bs.push({x:colX0, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:dSz2, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }});
     bs.push({x:colX1, y:rowDev2, w:dW, h:dH, skin:'topBar', label:'CSV読込', sz:dSz2, action:g=>this._importSiroIchiCsv(g)});
     if (this.lastMapCoord){
@@ -3521,7 +3605,7 @@ class MapScene extends GameKit.Scene {
       }
       bs.push({x:px+pw-200, y:py+ph-86, w:160, h:62, jp:'閉じる', en:'Close', sz:24, action:()=>{ this.overlay=null; this.ploy=null; }});
     } else if (ov.type==='allGenerals'){
-      const allGens=DATA.generals.filter(g=>{ const gs=st.generals[g.id]; return gs&&gs.alive; });
+      const allGens=this._getAllGensSorted();
       const PER_PAGE=15, page=this.allGenPage, pageCount=Math.max(1,Math.ceil(allGens.length/PER_PAGE));
       const px=W/2-910, py=60, pw=1820, ph=H-140;
       const ROW_H=74, listStartY=py+212;
@@ -3530,6 +3614,26 @@ class MapScene extends GameKit.Scene {
       pageGens.forEach((g,i)=>{
         const gy=listStartY+i*ROW_H;
         bs.push({x:px+8, y:gy-2, w:pw-16, h:ROW_H-4, _noRender:true, on:true, action:()=>{ this.allGenSelected=(this.allGenSelected===g.id)?null:g.id; }});
+      });
+      // Column header sort hit areas (transparent)
+      const hY=py+142;
+      const sortCols=[
+        {key:'name',  x:px+4,    w:286},
+        {key:'daimyo',x:px+310,  w:230},
+        {key:'loc',   x:px+540,  w:220},
+        {key:'tou',   x:px+760,  w:90},
+        {key:'bu',    x:px+860,  w:90},
+        {key:'chi',   x:px+960,  w:90},
+        {key:'sei',   x:px+1060, w:90},
+        {key:'loy',   x:px+1160, w:pw-1164},
+      ];
+      sortCols.forEach(c=>{
+        bs.push({x:c.x, y:hY-2, w:c.w, h:52, _noRender:true, on:true, action:()=>{
+          if (!this.allGenSort) this.allGenSort={col:null,dir:1};
+          const sc=this.allGenSort;
+          if (sc.col===c.key) sc.dir*=-1; else { sc.col=c.key; sc.dir=1; }
+          this.allGenPage=0; this.allGenSelected=null;
+        }});
       });
       // Pagination
       const navY=py+ph-78;
@@ -3846,23 +3950,26 @@ class MapScene extends GameKit.Scene {
   }
   _drawAllGenerals(ctx){
     const st=this.state;
-    const allGens=DATA.generals.filter(g=>{ const gs=st.generals[g.id]; return gs&&gs.alive; });
+    const allGens=this._getAllGensSorted();
+    if (!this.allGenSort) this.allGenSort={col:null,dir:1};
+    const sc=this.allGenSort;
     const PER_PAGE=15, page=this.allGenPage, pageCount=Math.max(1,Math.ceil(allGens.length/PER_PAGE));
     const pageGens=allGens.slice(page*PER_PAGE,(page+1)*PER_PAGE);
     const px=W/2-910, py=60, pw=1820, ph=H-140;
     GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(8,12,22,0.97)', stroke:'rgba(232,192,122,0.5)'});
     T(ctx, '全国武将一覧', px+pw/2, py+32, {size:42, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
     T(ctx, allGens.length+'名  ページ '+(page+1)+'/'+pageCount, px+pw/2, py+92, {size:22, color:'#9fb2c6', align:'center'});
-    // Column headers
+    // Column headers with sort indicators
+    const si=(k)=>sc.col===k?(sc.dir===1?' ▲':' ▼'):'';
     const hY=py+142, cols=[
-      {label:'武将名', x:px+24},
-      {label:'所属大名', x:px+310},
-      {label:'居城', x:px+540},
-      {label:'統率', x:px+760, center:true, w:90},
-      {label:'武勇', x:px+860, center:true, w:90},
-      {label:'知略', x:px+960, center:true, w:90},
-      {label:'政治', x:px+1060, center:true, w:90},
-      {label:'忠誠', x:px+1160, center:true, w:90},
+      {label:'武将名'+si('name'), x:px+24},
+      {label:'所属大名'+si('daimyo'), x:px+310},
+      {label:'居城'+si('loc'), x:px+540},
+      {label:'統率'+si('tou'), x:px+760, center:true, w:90},
+      {label:'武勇'+si('bu'), x:px+860, center:true, w:90},
+      {label:'知略'+si('chi'), x:px+960, center:true, w:90},
+      {label:'政治'+si('sei'), x:px+1060, center:true, w:90},
+      {label:'忠誠'+si('loy'), x:px+1160, center:true, w:90},
     ];
     ctx.save(); ctx.fillStyle='rgba(30,25,17,0.88)'; ctx.fillRect(px+4, hY-2, pw-8, 52); ctx.restore();
     cols.forEach(c=>T(ctx, c.label, c.center?(c.x+c.w/2):c.x, hY+8, {size:20, weight:'bold', color:'#b7a06a', align:c.center?'center':'left'}));
