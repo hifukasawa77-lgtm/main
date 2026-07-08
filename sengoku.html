@@ -832,7 +832,7 @@ function ensureCustomCastlesInState(state){
   if (!state || !state.provinces) return;
   CUSTOM_CASTLES.forEach(c=>{
     if (!DATA.provById[c.id]) addCustomCastleToData(c);
-    if (!state.provinces[c.id]) state.provinces[c.id]={owner:c.daimyoId, soldiers:800, development:35, castleLevel:1, generals:[], hasActed:false};
+    if (!state.provinces[c.id]) state.provinces[c.id]={owner:c.daimyoId, soldiers:800, development:35, castleLevel:1, generals:[], hasActed:false, minchu:60};
     else state.provinces[c.id].owner=c.daimyoId;
   });
 }
@@ -2395,7 +2395,7 @@ function deriveProvinceStats(kok, isCapital){
   const development = Math.round(clamp(28 + kok/16, 20, 95));
   const castleLevel = isCapital ? 3 : (kok>=350 ? 2 : 1);
   const soldiers = Math.round(clamp(kok * 2.0 * (isCapital?1.35:1.0), 200, 6500));
-  return { development, castleLevel, soldiers };
+  return { development, castleLevel, soldiers, minchu: 60 };
 }
 function buildGameState(scenarioId, playerDaimyo){
   const scn = DATA.scenarios.find(s=>s.id===scenarioId);
@@ -2408,13 +2408,14 @@ function buildGameState(scenarioId, playerDaimyo){
     rng: (Date.now() & 0xffffff) ^ scenarioId,
     diplomacy:{},
     log:[], pendingBattle:null, pendingResult:null, pendingDefenses:[],
+    ricePrice: 100,
   };
   state.rngSeq = (state.rng >>> 0) || 1;
   // count provinces per daimyo for starting gold
   const owncnt = {};
   for (const pid in scn.own){ const d=scn.own[pid]; owncnt[d]=(owncnt[d]||0)+1; }
   scn.daimyo.forEach(d=>{
-    state.daimyo[d.id] = { id:d.id, gold: 1000 + (owncnt[d.id]||1)*280, alive:true };
+    state.daimyo[d.id] = { id:d.id, gold: 1000 + (owncnt[d.id]||1)*280, alive:true, rice:0, horse:0, gun:0 };
   });
   // generals runtime — filter by birth/death year for scenario
   const lordIds = new Set(scn.daimyo.map(d=>d.lord).filter(Boolean));
@@ -2432,12 +2433,12 @@ function buildGameState(scenarioId, playerDaimyo){
   // provinces
   DATA.provinces.forEach(p=>{
     const owner = scn.own[p.id] || null;
-    const prov = { owner, soldiers:0, development:0, castleLevel:1, generals:[], hasActed:false };
+    const prov = { owner, soldiers:0, development:0, castleLevel:1, generals:[], hasActed:false, minchu:60 };
     if (owner){
       const dd = dById[owner];
       const isCap = dd && dd.capital===p.id;
       const st = deriveProvinceStats(p.kokudaka, isCap);
-      prov.soldiers = st.soldiers; prov.development = st.development; prov.castleLevel = st.castleLevel;
+      prov.soldiers = st.soldiers; prov.development = st.development; prov.castleLevel = st.castleLevel; prov.minchu = st.minchu;
     }
     state.provinces[p.id] = prov;
   });
@@ -2481,7 +2482,10 @@ function provinceStrength(state, pid){
   const prov = state.provinces[pid];
   const bg = bestGeneralIn(state, pid);
   const tou = bg ? DATA.genById[bg].stats.tou : 45;
-  return prov.soldiers * (1 + tou/200) * (1 + prov.castleLevel*0.08);
+  const dmyo = prov.owner ? state.daimyo[prov.owner] : null;
+  const horseBonus = Math.min(Math.sqrt(dmyo?.horse||0)*0.025, 0.25);
+  const gunBonus   = Math.min(Math.sqrt(dmyo?.gun  ||0)*0.025, 0.25);
+  return prov.soldiers * (1 + tou/200) * (1 + prov.castleLevel*0.08) * (1 + horseBonus + gunBonus);
 }
 function ownedProvinces(state, did){
   return DATA.provinces.filter(p=>state.provinces[p.id].owner===did).map(p=>p.id);
@@ -3529,6 +3533,47 @@ class MapScene extends GameKit.Scene {
     prov.soldiers=Math.min(cap, prov.soldiers+add);
     game.audio.beep(440,0.1,'square'); this._flash('兵+'+add+'（費用 '+cost+'貫）', 'Troops +'+add+' ('+cost+' mon)'); this._save();
   }
+  _openNaisei(game){
+    this.overlay={type:'naisei'};
+  }
+  _alms(game){
+    const st=this.state, pid=this.selected, prov=st.provinces[pid];
+    const cost=80;
+    if (st.daimyo[st.playerDaimyo].gold<cost){ this._flash('金が足りません', 'Not enough gold'); return; }
+    const mc=prov.minchu??60;
+    if (mc>=100){ this._flash('民忠は最大です', 'People loyalty maxed'); return; }
+    st.daimyo[st.playerDaimyo].gold-=cost;
+    prov.minchu=Math.min(100, mc+15);
+    game.audio.beep(650,0.08,'sine'); this._flash('施しを行った。民忠+15 → '+(prov.minchu)+'%', 'Alms given. Loyalty +15'); this._save();
+  }
+  _buyRice(game){
+    const st=this.state, d=st.daimyo[st.playerDaimyo];
+    const price=st.ricePrice??100, qty=10, cost=price*qty;
+    if (d.gold<cost){ this._flash('金が足りません（'+cost+'貫必要）', 'Not enough gold'); return; }
+    d.gold-=cost; d.rice=(d.rice||0)+qty;
+    game.audio.beep(600,0.07,'sine'); this._flash('米+'+qty+'千石（'+cost+'貫支払）', 'Rice +'+qty); this._save();
+  }
+  _sellRice(game){
+    const st=this.state, d=st.daimyo[st.playerDaimyo];
+    const price=st.ricePrice??100, qty=10, income=price*qty;
+    if ((d.rice||0)<qty){ this._flash('米の在庫が足りません', 'Not enough rice'); return; }
+    d.rice-=qty; d.gold+=income;
+    game.audio.beep(600,0.07,'sine'); this._flash('米-'+qty+'千石、金+'+income+'貫', 'Rice sold +'+income); this._save();
+  }
+  _buyHorse(game){
+    const st=this.state, d=st.daimyo[st.playerDaimyo];
+    const cost=150, qty=50;
+    if (d.gold<cost){ this._flash('金が足りません（'+cost+'貫必要）', 'Not enough gold'); return; }
+    d.gold-=cost; d.horse=(d.horse||0)+qty;
+    game.audio.beep(560,0.08,'triangle'); this._flash('馬+'+qty+'頭（'+cost+'貫）', 'Horses +'+qty); this._save();
+  }
+  _buyGun(game){
+    const st=this.state, d=st.daimyo[st.playerDaimyo];
+    const cost=200, qty=50;
+    if (d.gold<cost){ this._flash('金が足りません（'+cost+'貫必要）', 'Not enough gold'); return; }
+    d.gold-=cost; d.gun=(d.gun||0)+qty;
+    game.audio.beep(480,0.1,'square'); this._flash('鉄砲+'+qty+'丁（'+cost+'貫）', 'Guns +'+qty); this._save();
+  }
 
   /* ---- コマンド: 調略（謀略） ---- */
   _ployAgent(pid){
@@ -3664,7 +3709,28 @@ class MapScene extends GameKit.Scene {
     st.turn++;
     this.selected=null; this.mode='select';
     this._updateDaimyoAlive();
-    const aiLog=st.pendingTurnLog||[]; st.pendingTurnLog=null;
+    // 民忠低下 & 一揆チェック
+    const ikkiLog=[];
+    Object.keys(st.provinces).forEach(pid=>{
+      const prov=st.provinces[pid]; if (!prov.owner) return;
+      const mc=prov.minchu??60;
+      // 毎ターン民忠-1（課税の歪み）
+      prov.minchu=Math.max(0, mc-1);
+      // 一揆: 民忠30未満で確率的に発生
+      if (mc<30){
+        const chance=(30-mc)/60;
+        if (srand(st)<chance){
+          const devLoss=Math.min(8, Math.floor((30-mc)/3)+2);
+          prov.development=Math.max(0, prov.development-devLoss);
+          if (mc<15 && prov.castleLevel>1 && srand(st)<0.3) prov.castleLevel--;
+          const pname=DATA.provById[pid]?.nameJP||pid;
+          ikkiLog.push(pname+'で一揆発生！（城下開発-'+devLoss+'）');
+        }
+      }
+    });
+    // 米相場更新（毎月変動）
+    st.ricePrice=Math.round(50+srand(st)*150);
+    const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog); st.pendingTurnLog=null;
     this.overlay={type:'turnSummary', data:aiLog};
     game.audio.beep(500,0.12,'triangle');
     this._save();
@@ -3822,7 +3888,7 @@ class MapScene extends GameKit.Scene {
     const menuSz=IS_TOUCH?50:25, menuIconSz=IS_TOUCH?60:30;
     const menuIconX=IS_TOUCH?58:32, menuLabelX=IS_TOUCH?118:64;
     const menu=[
-      {jp:'内政', en:'Develop', icon:'♜', action:g=>this._runProvinceCommand(g, this._develop)},
+      {jp:'内政', en:'Domestic', icon:'♜', action:g=>this._runProvinceCommand(g, this._openNaisei)},
       {jp:'城強化', en:'Castle', icon:'♛', action:g=>this._runProvinceCommand(g, this._castle)},
       {jp:'徴兵', en:'Recruit', icon:'⚔', action:g=>this._runProvinceCommand(g, this._recruit)},
       {jp:'調略', en:'Intrigue', icon:'✦', action:g=>this._runProvinceCommand(g, this._openPloy)},
@@ -3935,6 +4001,36 @@ class MapScene extends GameKit.Scene {
         bs.push({x:px+pw-430, y:py+360, w:388, h:104, jp:'流言・扇動（'+ca+'貫）', en:'Sow discord', sz:24, ensz:15, accent:'rgba(34,211,238,0.6)', on: gold>=ca && !already, action:g=>this._execPloy(g,'agitate')});
       }
       bs.push({x:px+pw-200, y:py+ph-86, w:160, h:62, jp:'閉じる', en:'Close', sz:24, action:()=>{ this.overlay=null; this.ploy=null; }});
+    } else if (ov.type==='naisei'){
+      const pid=this.selected, prov=pid&&st.provinces[pid], gold=st.daimyo[st.playerDaimyo].gold;
+      const px=W/2-400, py=H/2-380, pw=800, ph=760;
+      const bw=pw-120, bx=px+60;
+      bs.push({x:bx, y:py+160, w:bw, h:100, jp:'城下開発（220貫）　開発+6', en:'Develop Castle Town', sz:26, ensz:16,
+        accent:'rgba(52,211,153,0.55)', on:prov&&gold>=220&&prov.development<95,
+        action:g=>{ this._develop(g); }});
+      bs.push({x:bx, y:py+280, w:bw, h:100, jp:'施し（80貫）　民忠+15', en:'Alms: Loyalty +15', sz:26, ensz:16,
+        accent:'rgba(251,191,36,0.55)', on:prov&&gold>=80&&(prov.minchu??60)<100,
+        action:g=>{ this._alms(g); }});
+      bs.push({x:bx, y:py+400, w:bw, h:100, jp:'商人　▶　米 / 馬 / 鉄砲 / 家宝', en:'Merchant: Trade', sz:26, ensz:16,
+        accent:'rgba(167,139,250,0.55)',
+        action:()=>{ this.overlay={type:'shonin'}; }});
+      bs.push({x:px+pw/2-75, y:py+ph-80, w:150, h:64, jp:'閉じる', en:'Close', sz:24, action:()=>{ this.overlay=null; }});
+    } else if (ov.type==='shonin'){
+      const d=st.daimyo[st.playerDaimyo], price=st.ricePrice??100, gold=d.gold;
+      const px=W/2-460, py=H/2-420, pw=920, ph=840;
+      const bw=(pw-180)/2, bx1=px+60, bx2=px+60+bw+60;
+      bs.push({x:bx1, y:py+260, w:bw, h:100, jp:'米購入 10千石（'+(price*10)+'貫）', en:'Buy Rice', sz:22, ensz:14,
+        accent:'rgba(251,191,36,0.55)', on:gold>=price*10, action:g=>this._buyRice(g)});
+      bs.push({x:bx2, y:py+260, w:bw, h:100, jp:'米売却 10千石（'+(price*10)+'貫）', en:'Sell Rice', sz:22, ensz:14,
+        accent:'rgba(52,211,153,0.55)', on:(d.rice||0)>=10, action:g=>this._sellRice(g)});
+      bs.push({x:bx1, y:py+380, w:bw, h:100, jp:'馬購入 50頭（150貫）', en:'Buy Horses', sz:22, ensz:14,
+        accent:'rgba(132,204,172,0.55)', on:gold>=150, action:g=>this._buyHorse(g)});
+      bs.push({x:bx2, y:py+380, w:bw, h:100, jp:'鉄砲購入 50丁（200貫）', en:'Buy Guns', sz:22, ensz:14,
+        accent:'rgba(248,113,113,0.55)', on:gold>=200, action:g=>this._buyGun(g)});
+      bs.push({x:bx1, y:py+500, w:pw-120, h:100, jp:'家宝購入（準備中）', en:'Buy Treasure (Coming Soon)', sz:22, ensz:14,
+        accent:'rgba(148,163,184,0.30)', on:false, action:()=>this._flash('家宝購入は準備中です')});
+      bs.push({x:px+60, y:py+ph-80, w:180, h:64, jp:'戻る', en:'Back', sz:24, action:()=>{ this.overlay={type:'naisei'}; }});
+      bs.push({x:px+pw-240, y:py+ph-80, w:180, h:64, jp:'閉じる', en:'Close', sz:24, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='allGenerals'){
       const allGens=this._getAllGensSorted();
       const PER_PAGE=15, page=this.allGenPage, pageCount=Math.max(1,Math.ceil(allGens.length/PER_PAGE));
@@ -4166,18 +4262,21 @@ class MapScene extends GameKit.Scene {
     ctx.restore();
     T(ctx, castleName, x+(big?34:26), y+(big?30:22), {size:big?44:31, weight:'bold', color:'#f8f0dc', shadow:true});
     T(ctx, dd?dd.nameJP+'家':'空白地', x+w-(big?34:28), y+(big?32:24), {size:big?36:26, weight:'bold', color:dd?dd.color:'#94a3b8', align:'right'});
+    const mc=prov.minchu??60;
+    const mcColor=mc<30?'#f87171':mc<60?'#fbbf24':'#4ade80';
     const rows=[
-      ['国名', countryName],
-      ['国総石高', p.kokudaka+'千石'],
-      ['常駐兵士', prov.soldiers+'人'],
-      ['城下開発', prov.development],
-      ['城LV', 'Lv '+prov.castleLevel]
+      ['国名', countryName, '#e2e8f0'],
+      ['国総石高', p.kokudaka+'千石', '#e2e8f0'],
+      ['常駐兵士', prov.soldiers+'人', '#e2e8f0'],
+      ['城下開発', String(prov.development), '#e2e8f0'],
+      ['城LV', 'Lv '+prov.castleLevel, '#e2e8f0'],
+      ['民忠', mc+'%', mcColor],
     ];
     const colGap=big?438:316, rowGap=big?80:58, rowX=big?36:28, rowY0=big?118:82, valOff=big?162:116;
     rows.forEach((r,i)=>{
       const rx=x+rowX+(i%2)*colGap, ry=y+rowY0+Math.floor(i/2)*rowGap;
       T(ctx, r[0], rx, ry, {size:big?30:21, color:'#b7a06a'});
-      T(ctx, String(r[1]), rx+valOff, ry, {size:big?(i===0?33:35):(i===0?23:25), weight:'bold', color:'#e2e8f0'});
+      T(ctx, r[1], rx+valOff, ry, {size:big?(i===0?33:35):(i===0?23:25), weight:'bold', color:r[2]||'#e2e8f0'});
     });
   }
   _diploLayout(){
@@ -4397,6 +4496,8 @@ class MapScene extends GameKit.Scene {
     else if (ov.type==='defense') this._drawDefense(ctx, ov.data);
     else if (ov.type==='allGenerals') this._drawAllGenerals(ctx);
     else if (ov.type==='generalDetail') this._drawGeneralDetail(ctx, ov.gid);
+    else if (ov.type==='naisei') this._drawNaisei(ctx);
+    else if (ov.type==='shonin') this._drawShonin(ctx);
     const btns=this._overlayButtons(); for (const b of btns){
       if (b._noRender) continue;
       if (b._gen){ drawGenToggle(ctx, b, this.march, st); }
@@ -4501,6 +4602,51 @@ class MapScene extends GameKit.Scene {
       T(ctx, '忠誠 '+st.generals[gid].loyalty, gx+colW-70, gy+22, {size:24, color:'#e8c07a', align:'right'});
     });
     if (gens.length>12) T(ctx, 'ほか '+(gens.length-12)+' 名', px+pw/2, py+ph-116, {size:28, color:'#9fb2c6', align:'center'});
+  }
+  _drawNaisei(ctx){
+    const st=this.state, pid=this.selected, prov=pid&&st.provinces[pid];
+    const px=W/2-400, py=H/2-380, pw=800, ph=760;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(8,14,26,0.97)', stroke:'rgba(52,211,153,0.46)'});
+    T(ctx, '内政 / Domestic Affairs', px+pw/2, py+36, {size:38, weight:'bold', color:'#4ade80', align:'center'});
+    if (prov){
+      const mc=prov.minchu??60;
+      const mcColor=mc<30?'#f87171':mc<60?'#fbbf24':'#4ade80';
+      const p=DATA.provById[pid];
+      T(ctx, (p?.nameJP||pid)+'　城下開発: '+prov.development+'　民忠: ', px+pw/2, py+90, {size:24, color:'#94a3b8', align:'center'});
+      T(ctx, mc+'%', px+pw/2+160, py+90, {size:24, weight:'bold', color:mcColor, align:'left'});
+    }
+    T(ctx, '城下開発 — 城下を整備して収入・徴兵力を高める', px+80, py+148, {size:20, color:'#94a3b8'});
+    T(ctx, '施し　　 — 民に財を施し民の忠心（民忠）を高める', px+80, py+288, {size:20, color:'#94a3b8'});
+    if (prov){
+      const mc=prov.minchu??60;
+      if (mc<30) T(ctx, '⚠ 民忠が低下中！一揆が発生するおそれがあります', px+pw/2, py+354, {size:22, weight:'bold', color:'#f87171', align:'center'});
+    }
+    T(ctx, '商人　　 — 米・馬・鉄砲・家宝の売買（月替わり相場）', px+80, py+408, {size:20, color:'#94a3b8'});
+  }
+  _drawShonin(ctx){
+    const st=this.state, d=st.daimyo[st.playerDaimyo];
+    const price=st.ricePrice??100;
+    const px=W/2-460, py=H/2-420, pw=920, ph=840;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(8,14,26,0.97)', stroke:'rgba(167,139,250,0.46)'});
+    T(ctx, '商人 / Merchant', px+pw/2, py+36, {size:38, weight:'bold', color:'#c4b5fd', align:'center'});
+    // 米相場
+    T(ctx, '現在の米相場', px+pw/2, py+90, {size:22, color:'#b7a06a', align:'center'});
+    T(ctx, price+'貫 / 千石', px+pw/2, py+124, {size:34, weight:'bold', color:'#fbbf24', align:'center'});
+    // 在庫表示
+    const invY=py+172;
+    [['米在庫',(d.rice||0)+'千石','#86efac'],['馬',(d.horse||0)+'頭','#fde68a'],['鉄砲',(d.gun||0)+'丁','#fca5a5']].forEach((r,i)=>{
+      const ix=px+80+i*280;
+      T(ctx, r[0], ix, invY, {size:22, color:'#94a3b8'});
+      T(ctx, r[1], ix, invY+36, {size:30, weight:'bold', color:r[2]});
+    });
+    // 戦闘ボーナス表示
+    const hb=Math.round(Math.min(Math.sqrt(d.horse||0)*0.025,0.25)*100);
+    const gb=Math.round(Math.min(Math.sqrt(d.gun  ||0)*0.025,0.25)*100);
+    T(ctx, '騎馬ボーナス +'+hb+'%　　鉄砲ボーナス +'+gb+'%', px+pw/2, invY+82, {size:20, color:'#cbd5e1', align:'center'});
+    // ボタン説明
+    T(ctx, '米売買（10千石単位）', px+60, py+242, {size:20, color:'#94a3b8'});
+    T(ctx, '軍備（50単位）', px+60+pw/2, py+242, {size:20, color:'#94a3b8'});
+    T(ctx, '家宝購入（今後実装予定）', px+60, py+480, {size:20, color:'#64748b'});
   }
   _drawBattleResult(ctx, d){
     const px=W/2-360, py=H/2-280, pw=720, ph=580;
