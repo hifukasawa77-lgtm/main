@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PrismFall | プリズムフォール</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --accent-cyan: #22d3ee;
+    --accent-purple: #a78bfa;
+    --text: #e2e8f0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100vh; gap: 12px; padding: 12px;
+  }
+  canvas {
+    max-width: 96vw; border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: var(--bg); box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  }
+  .hint { font-size: 13px; color: #94a3b8; text-align: center; }
+
+  /* タッチコントロール / Touch controls */
+  #touch-controls {
+    display: none; /* CSSメディアクエリでタッチデバイス時のみ flex に */
+    width: 100%; max-width: 960px;
+    justify-content: space-between; align-items: center;
+    gap: 8px; flex-wrap: wrap;
+  }
+  .touch-group { display: flex; gap: 8px; }
+  .touch-btn {
+    min-width: 56px; min-height: 56px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.18);
+    backdrop-filter: blur(6px);
+    color: var(--text); font-size: 20px;
+    user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  .touch-btn:active { background: rgba(34,211,238,0.25); }
+
+  @media (hover: none) and (pointer: coarse) {
+    #touch-controls { display: flex; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<p class="hint">移動: ←→ ・ 回転: ↑/Z ・ ソフトドロップ: ↓ ・ ハードドロップ: Space ・ ホールド: C ・ ポーズ: P<br>
+Move: ←→ ・ Rotate: ↑/Z ・ Soft Drop: ↓ ・ Hard Drop: Space ・ Hold: C ・ Pause: P</p>
+
+<div id="touch-controls">
+  <div class="touch-group">
+    <div class="touch-btn" id="btn-left">←</div>
+    <div class="touch-btn" id="btn-rotate">↻</div>
+    <div class="touch-btn" id="btn-right">→</div>
+  </div>
+  <div class="touch-group">
+    <div class="touch-btn" id="btn-down">↓</div>
+    <div class="touch-btn" id="btn-hold">HOLD</div>
+    <div class="touch-btn" id="btn-drop">DROP</div>
+  </div>
+</div>
+
+<script src="gamekit/gamekit.js"></script>
+<script>
+'use strict';
+
+/* =========================================================================
+ * PrismFall / プリズムフォール — テトリス風パズルゲーム
+ * GameKit（自作Canvasマイクロエンジン）ベース。外部アセット一切なし。
+ * ========================================================================= */
+
+const W = 960, H = 540;
+const game = new GameKit.Engine(document.getElementById('game'), { width: W, height: H });
+const save = new GameKit.Save('prismfall');
+
+/* ---------- フィールド・セルサイズ / Field & cell size ---------- */
+const COLS = 10, ROWS = 20;
+const CELL = 24; // 1セル24px → フィールド描画サイズ 240x480
+const FIELD_X = 360, FIELD_Y = 30; // フィールド左上のCanvas座標
+
+/* ---------- PIECES — テトリミノ定義 ---------- */
+// 1=ブロックあり, 0=なし。各配列は4行×4列をフラット化した16要素
+const PIECES = {
+  I: {
+    color: { base: '#22d3ee', light: '#a5f3fc', dark: '#0e7490' },
+    rotations: [
+      [0,0,0,0, 1,1,1,1, 0,0,0,0, 0,0,0,0],
+      [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
+      [0,0,0,0, 0,0,0,0, 1,1,1,1, 0,0,0,0],
+      [0,1,0,0, 0,1,0,0, 0,1,0,0, 0,1,0,0],
+    ],
+  },
+  O: {
+    color: { base: '#a78bfa', light: '#ddd6fe', dark: '#6d28d9' },
+    rotations: [
+      [0,1,1,0, 0,1,1,0, 0,0,0,0, 0,0,0,0],
+      [0,1,1,0, 0,1,1,0, 0,0,0,0, 0,0,0,0],
+      [0,1,1,0, 0,1,1,0, 0,0,0,0, 0,0,0,0],
+      [0,1,1,0, 0,1,1,0, 0,0,0,0, 0,0,0,0],
+    ],
+  },
+  T: {
+    color: { base: '#67e8f9', light: '#cffafe', dark: '#0891b2' },
+    rotations: [
+      [0,1,0,0, 1,1,1,0, 0,0,0,0, 0,0,0,0],
+      [0,1,0,0, 0,1,1,0, 0,1,0,0, 0,0,0,0],
+      [0,0,0,0, 1,1,1,0, 0,1,0,0, 0,0,0,0],
+      [0,1,0,0, 1,1,0,0, 0,1,0,0, 0,0,0,0],
+    ],
+  },
+  S: {
+    color: { base: '#c4b5fd', light: '#ede9fe', dark: '#7c3aed' },
+    rotations: [
+      [0,1,1,0, 1,1,0,0, 0,0,0,0, 0,0,0,0],
+      [0,1,0,0, 0,1,1,0, 0,0,1,0, 0,0,0,0],
+      [0,0,0,0, 0,1,1,0, 1,1,0,0, 0,0,0,0],
+      [1,0,0,0, 1,1,0,0, 0,1,0,0, 0,0,0,0],
+    ],
+  },
+  Z: {
+    color: { base: '#22d3ee', light: '#cffafe', dark: '#155e75' },
+    rotations: [
+      [1,1,0,0, 0,1,1,0, 0,0,0,0, 0,0,0,0],
+      [0,0,1,0, 0,1,1,0, 0,1,0,0, 0,0,0,0],
+      [0,0,0,0, 1,1,0,0, 0,1,1,0, 0,0,0,0],
+      [0,1,0,0, 1,1,0,0, 1,0,0,0, 0,0,0,0],
+    ],
+  },
+  J: {
+    color: { base: '#818cf8', light: '#e0e7ff', dark: '#4338ca' },
+    rotations: [
+      [1,0,0,0, 1,1,1,0, 0,0,0,0, 0,0,0,0],
+      [0,1,1,0, 0,1,0,0, 0,1,0,0, 0,0,0,0],
+      [0,0,0,0, 1,1,1,0, 0,0,1,0, 0,0,0,0],
+      [0,1,0,0, 0,1,0,0, 1,1,0,0, 0,0,0,0],
+    ],
+  },
+  L: {
+    color: { base: '#f0abfc', light: '#fae8ff', dark: '#a21caf' },
+    rotations: [
+      [0,0,1,0, 1,1,1,0, 0,0,0,0, 0,0,0,0],
+      [0,1,0,0, 0,1,0,0, 0,1,1,0, 0,0,0,0],
+      [0,0,0,0, 1,1,1,0, 1,0,0,0, 0,0,0,0],
+      [1,1,0,0, 0,1,0,0, 0,1,0,0, 0,0,0,0],
+    ],
+  },
+};
+const PIECE_TYPES = ['I','O','T','S','Z','J','L'];
+
+/* ---------- SCORE_TABLE — スコア・落下速度 ---------- */
+const SCORE_TABLE = {
+  lineScore: { 1: 100, 2: 300, 3: 500, 4: 800 }, // 4=Tetris
+  softDropPoint: 1,   // ソフトドロップ1セルごとに+1
+  hardDropPoint: 2,   // ハードドロップ1セルごとに+2
+  linesPerLevel: 10,  // 10ライン消去ごとにレベルアップ
+  dropInterval(level) {
+    const lv = Math.min(level, 29);
+    return Math.pow(0.8 - (lv * 0.007), lv); // 標準テトリスの近似式
+  },
+};
+const LOCK_DELAY = 0.5; // ロック遅延（秒）
+const SOFT_DROP_FACTOR = 12; // ソフトドロップ時の落下速度倍率の目安
+
+/* ---------- BagRandomizer — 7-bag ---------- */
+class BagRandomizer {
+  constructor() { this.bag = []; }
+  next() {
+    if (this.bag.length === 0) {
+      this.bag = [...PIECE_TYPES];
+      for (let i = this.bag.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]];
+      }
+    }
+    return this.bag.pop();
+  }
+}
+
+/* ---------- getPieceCells ---------- */
+// PIECES.rotations[rotation] (16要素) から座標リスト [[x,y], ...] を生成
+function getPieceCells(type, rotation) {
+  const shape = PIECES[type].rotations[rotation];
+  const cells = [];
+  for (let i = 0; i < 16; i++) {
+    if (shape[i]) cells.push([i % 4, Math.floor(i / 4)]);
+  }
+  return cells;
+}
+
+/* ---------- Field — フィールド状態 ---------- */
+class Field {
+  constructor() {
+    this.grid = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+    // セルの値: null=空、それ以外は { type: 'I'|'O'|... }（色参照用）
+  }
+
+  // ピースが指定位置・回転で配置可能か判定
+  canPlace(piece, dx = 0, dy = 0, rotation = piece.rotation) {
+    const cells = getPieceCells(piece.type, rotation);
+    for (const [cx, cy] of cells) {
+      const x = piece.x + cx + dx;
+      const y = piece.y + cy + dy;
+      if (x < 0 || x >= COLS || y >= ROWS) return false;
+      if (y >= 0 && this.grid[y][x]) return false;
+    }
+    return true;
+  }
+
+  // ピースをグリッドに固定する
+  lockPiece(piece) {
+    const cells = getPieceCells(piece.type, piece.rotation);
+    for (const [cx, cy] of cells) {
+      const x = piece.x + cx, y = piece.y + cy;
+      if (y >= 0) this.grid[y][x] = { type: piece.type };
+    }
+  }
+
+  // 揃った行を検出して削除し、削除した行インデックス配列を返す
+  clearLines() {
+    const clearedRows = [];
+    for (let y = 0; y < ROWS; y++) {
+      if (this.grid[y].every(cell => cell !== null)) clearedRows.push(y);
+    }
+    for (const y of clearedRows) {
+      this.grid.splice(y, 1);
+      this.grid.unshift(Array(COLS).fill(null));
+    }
+    return clearedRows;
+  }
+
+  // 最上段（y=0,1）にブロックが残っている＝ゲームオーバー
+  isGameOver() {
+    return this.grid[0].some(c => c !== null) || this.grid[1].some(c => c !== null);
+  }
+}
+
+/* ---------- Piece — 操作中ピース ---------- */
+class Piece {
+  constructor(type) {
+    this.type = type;
+    this.rotation = 0;
+    this.x = 3; // 4x4バウンディングボックスの左上x（COLS=10の中央寄せ）
+    this.y = type === 'I' ? -1 : 0; // Iミノは見た目調整で-1スタート
+    this.lockTimer = 0;
+  }
+
+  // SRS簡易壁蹴りテーブル（JLSTZ用）。I・Oは別途簡易対応
+  static get WALL_KICKS() {
+    return {
+      JLSTZ: [
+        [[0,0],[-1,0],[-1,1],[0,-2],[-1,-2]], // 0->R
+        [[0,0],[1,0],[1,-1],[0,2],[1,2]],     // R->2
+        [[0,0],[1,0],[1,1],[0,-2],[1,-2]],    // 2->L
+        [[0,0],[-1,0],[-1,-1],[0,2],[-1,2]],  // L->0
+      ],
+      I: [
+        [[0,0],[-2,0],[1,0],[-2,-1],[1,2]],
+        [[0,0],[-1,0],[2,0],[-1,2],[2,-1]],
+        [[0,0],[2,0],[-1,0],[2,1],[-1,-2]],
+        [[0,0],[1,0],[-2,0],[1,-2],[-2,1]],
+      ],
+    };
+  }
+
+  // 回転試行。dir: +1=CW, -1=CCW。WALL_KICKSを順に試し、canPlaceがtrueになったら適用
+  tryRotate(field, dir) {
+    if (this.type === 'O') return true; // Oミノは回転しても形状不変
+
+    const oldRotation = this.rotation;
+    const newRotation = (this.rotation + dir + 4) % 4;
+
+    // O以外: I型 or JLSTZ型のテーブルを使う
+    const table = this.type === 'I' ? Piece.WALL_KICKS.I : Piece.WALL_KICKS.JLSTZ;
+    // テーブルのインデックスは「回転前の状態(0->R, R->2, 2->L, L->0)」に対応
+    // CCWの場合は逆方向のキックセットを反転して使用する
+    let kicks;
+    if (dir === 1) {
+      kicks = table[oldRotation];
+    } else {
+      // CCW: newRotation->oldRotation の遷移に対応するテーブルを反転して使う
+      kicks = table[newRotation].map(([dx, dy]) => [-dx, -dy]);
+    }
+
+    for (const [dx, dy] of kicks) {
+      if (field.canPlace(this, dx, dy, newRotation)) {
+        this.x += dx;
+        this.y += dy;
+        this.rotation = newRotation;
+        return true;
+      }
+    }
+    return false; // 全て失敗 → 回転キャンセル
+  }
+
+  moveLeft(field)  { if (field.canPlace(this, -1, 0)) this.x -= 1; }
+  moveRight(field) { if (field.canPlace(this, 1, 0)) this.x += 1; }
+
+  // 1段下に落下できるか試し、できればtrue、できなければfalse
+  moveDown(field) {
+    if (field.canPlace(this, 0, 1)) { this.y += 1; return true; }
+    return false;
+  }
+
+  // ハードドロップ: 落下可能な最大Y座標を返す
+  getGhostY(field) {
+    let gy = this.y;
+    while (field.canPlace(this, 0, gy - this.y + 1)) gy++;
+    return gy;
+  }
+}
+
+/* ---------- EffectManager — エフェクト管理 ---------- */
+class EffectManager {
+  constructor() {
+    this.lineFlashes = [];   // { row, t, duration } ライン消去フラッシュ
+    this.particles = [];     // { x, y, vx, vy, life, age, color, r } きらめき粒子
+    this.comboText = null;   // { text, t, duration }
+    this.levelUpRing = null; // { t, duration }
+    this.tspinText = null;   // { text, t, duration }
+    this.b2bText = null;     // { t, duration }
+  }
+
+  triggerTSpin(type) {
+    this.tspinText = {
+      text: type === 'full' ? 'T-SPIN!' : 'T-SPIN MINI',
+      t: 0, duration: 1.2,
+    };
+  }
+
+  triggerBackToBack() {
+    this.b2bText = { t: 0, duration: 1.2 };
+  }
+
+  // ライン消去時に呼ぶ。clearedRows: 行インデックス配列
+  triggerLineClear(clearedRows) {
+    for (const row of clearedRows) {
+      this.lineFlashes.push({ row, t: 0, duration: 0.25 });
+      for (let i = 0; i < 16; i++) {
+        this.particles.push({
+          x: FIELD_X + Math.random() * (COLS * CELL),
+          y: FIELD_Y + row * CELL + CELL / 2,
+          vx: (Math.random() - 0.5) * 120,
+          vy: (Math.random() - 0.5) * 120 - 40,
+          life: 0.6, age: 0,
+          color: Math.random() < 0.5 ? '#22d3ee' : '#a78bfa',
+          r: 1.5 + Math.random() * 2,
+        });
+      }
+    }
+  }
+
+  triggerCombo(count) {
+    this.comboText = { text: `COMBO x${count}`, t: 0, duration: 1.0 };
+  }
+
+  triggerLevelUp() {
+    this.levelUpRing = { t: 0, duration: 0.8 };
+  }
+
+  update(dt) {
+    this.lineFlashes = this.lineFlashes.filter(f => (f.t += dt) < f.duration);
+    this.particles = this.particles.filter(p => {
+      p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 200 * dt;
+      return p.age < p.life;
+    });
+    if (this.comboText && (this.comboText.t += dt) > this.comboText.duration) this.comboText = null;
+    if (this.levelUpRing && (this.levelUpRing.t += dt) > this.levelUpRing.duration) this.levelUpRing = null;
+    if (this.tspinText && (this.tspinText.t += dt) > this.tspinText.duration) this.tspinText = null;
+    if (this.b2bText && (this.b2bText.t += dt) > this.b2bText.duration) this.b2bText = null;
+  }
+
+  draw(ctx) {
+    // ライン消去フラッシュ: 白〜シアンの半透明矩形をフェードアウト
+    for (const f of this.lineFlashes) {
+      const alpha = 1 - f.t / f.duration;
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.8;
+      const grad = ctx.createLinearGradient(FIELD_X, 0, FIELD_X + COLS * CELL, 0);
+      grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+      grad.addColorStop(1, 'rgba(34,211,238,0.9)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(FIELD_X, FIELD_Y + f.row * CELL, COLS * CELL, CELL);
+      ctx.restore();
+    }
+
+    // ライン消去パーティクル
+    for (const p of this.particles) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - p.age / p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // コンボ表示
+    if (this.comboText) {
+      const progress = this.comboText.t / this.comboText.duration;
+      const alpha = Math.sin(Math.min(progress, 1) * Math.PI);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      GameKit.UI.text(ctx, this.comboText.text, FIELD_X + COLS * CELL / 2, FIELD_Y + 40, {
+        font: 'bold 22px "Segoe UI", sans-serif', color: '#22d3ee',
+      });
+      ctx.restore();
+    }
+
+    // T-Spin 表示
+    if (this.tspinText) {
+      const prog = this.tspinText.t / this.tspinText.duration;
+      ctx.save();
+      ctx.globalAlpha = Math.sin(Math.min(prog, 1) * Math.PI);
+      GameKit.UI.text(ctx, this.tspinText.text, FIELD_X + COLS * CELL / 2, FIELD_Y + 76 - prog * 18, {
+        font: 'bold 20px "Segoe UI", sans-serif', color: '#a78bfa',
+      });
+      ctx.restore();
+    }
+
+    // Back-to-Back 表示
+    if (this.b2bText) {
+      const prog = this.b2bText.t / this.b2bText.duration;
+      ctx.save();
+      ctx.globalAlpha = Math.sin(Math.min(prog, 1) * Math.PI);
+      GameKit.UI.text(ctx, 'BACK TO BACK!', FIELD_X + COLS * CELL / 2, FIELD_Y + 105 - prog * 14, {
+        font: 'bold 14px "Segoe UI", sans-serif', color: '#f9a8d4',
+      });
+      ctx.restore();
+    }
+
+    // レベルアップ演出: 同心円リング + パネル
+    if (this.levelUpRing) {
+      const t = this.levelUpRing.t / this.levelUpRing.duration;
+      const cx = FIELD_X + COLS * CELL / 2;
+      const cy = FIELD_Y + ROWS * CELL / 2;
+      ctx.save();
+      for (let i = 0; i < 3; i++) {
+        const ringT = Math.min(1, t + i * 0.15);
+        const radius = ringT * 1.5 * 100;
+        const alpha = Math.max(0, 1 - ringT);
+        ctx.globalAlpha = alpha * 0.6;
+        ctx.strokeStyle = i % 2 === 0 ? '#a78bfa' : '#22d3ee';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      const panelW = 200, panelH = 60;
+      GameKit.UI.glassPanel(ctx, cx - panelW / 2, cy - panelH / 2, panelW, panelH);
+      GameKit.UI.text(ctx, 'LEVEL UP!', cx, cy - 14, { font: 'bold 18px sans-serif', color: '#22d3ee' });
+      GameKit.UI.text(ctx, 'レベルアップ！', cx, cy + 8, { font: '13px sans-serif', color: '#a78bfa' });
+    }
+  }
+}
+
+/* ---------- SoundFx — GameKit.Sfxラッパー ---------- */
+class SoundFx {
+  constructor(game, save) {
+    this.audio = game.audio; // GameKit.Sfx インスタンス
+    this.muted = save.get('mute', false);
+  }
+  toggleMute(save, bgm) {
+    this.muted = !this.muted;
+    save.set('mute', this.muted);
+    if (bgm) bgm.setMute(this.muted);
+  }
+
+  move()    { if (!this.muted) this.audio.beep(220, 0.04, 'square', 0.08); }
+  rotate()  { if (!this.muted) this.audio.beep(330, 0.05, 'triangle', 0.1); }
+  lock()    { if (!this.muted) this.audio.beep(165, 0.06, 'square', 0.1); }
+  hold()    { if (!this.muted) this.audio.beep(440, 0.08, 'sine', 0.1); }
+  tspin()   { if (!this.muted) this.audio.jingle([{f:660,d:0.08},{f:880,d:0.14}], 'triangle', 0.16); }
+  backToBack() { if (!this.muted) this.audio.jingle([{f:880,d:0.06},{f:1047,d:0.06},{f:1319,d:0.12}], 'triangle', 0.14); }
+
+  // 1〜4ライン消去で音階・音数を変える
+  lineClear(count) {
+    if (this.muted) return;
+    const notes = {
+      1: [{ f: 523, d: 0.08 }],
+      2: [{ f: 523, d: 0.07 }, { f: 659, d: 0.08 }],
+      3: [{ f: 523, d: 0.06 }, { f: 659, d: 0.06 }, { f: 784, d: 0.08 }],
+      4: [{ f: 523, d: 0.06 }, { f: 659, d: 0.06 }, { f: 784, d: 0.06 }, { f: 1047, d: 0.14 }],
+    };
+    this.audio.jingle(notes[count] || notes[1], 'triangle', 0.15);
+  }
+
+  levelUp() {
+    if (this.muted) return;
+    this.audio.jingle([{ f: 659, d: 0.1 }, { f: 784, d: 0.1 }, { f: 988, d: 0.2 }], 'triangle', 0.18);
+  }
+
+  gameOver() {
+    if (this.muted) return;
+    this.audio.jingle([{ f: 392, d: 0.15 }, { f: 330, d: 0.15 }, { f: 220, d: 0.3 }], 'sawtooth', 0.15);
+  }
+}
+
+/* ---------- BgmPlayer — プロシージャルBGM (Web Audio API) ---------- */
+class BgmPlayer {
+  constructor(sfx) {
+    this._sfx = sfx;
+    this._running = false;
+    this._muted = false;
+    this._timerId = null;
+    this._nextNoteTime = 0;
+    this._noteIndex = 0;
+    this._bpm = 140;
+    // PrismFall Theme — A minor pentatonic original loop (~12s)
+    // [freq_hz, beats]  (0 = rest)
+    this._seq = [
+      [659,0.5],[523,0.5],[587,0.5],[659,0.5],
+      [659,0.5],[587,0.5],[523,0.5],[440,0.5],
+      [523,0.5],[440,0.5],[392,0.5],[440,0.5],
+      [659,1.0],[0,1.0],
+      [440,0.5],[440,0.5],[523,0.5],[659,0.5],
+      [587,0.5],[523,0.5],[440,1.0],
+      [392,0.5],[392,0.5],[440,0.5],[523,0.5],
+      [440,2.0],
+    ];
+  }
+
+  play() {
+    if (this._running) return;
+    this._running = true;
+    const ac = this._sfx._ac();
+    this._nextNoteTime = ac.currentTime + 0.05;
+    this._noteIndex = 0;
+    this._tick();
+  }
+
+  stop() {
+    this._running = false;
+    if (this._timerId) { clearTimeout(this._timerId); this._timerId = null; }
+  }
+
+  setMute(muted) { this._muted = muted; }
+
+  _tick() {
+    if (!this._running) return;
+    const ac = this._sfx._ac();
+    const beatDur = 60 / this._bpm;
+    while (this._nextNoteTime < ac.currentTime + 0.3) {
+      const [freq, beats] = this._seq[this._noteIndex];
+      if (!this._muted && freq > 0) this._playNote(freq, this._nextNoteTime, beats * beatDur);
+      this._nextNoteTime += beats * beatDur;
+      this._noteIndex = (this._noteIndex + 1) % this._seq.length;
+    }
+    this._timerId = setTimeout(() => this._tick(), 100);
+  }
+
+  _playNote(freq, time, dur) {
+    const ac = this._sfx._ac();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.04, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + dur * 0.85);
+    osc.connect(gain).connect(ac.destination);
+    osc.start(time);
+    osc.stop(time + dur);
+  }
+}
+
+/* ---------- TouchControls — タッチ操作UI ---------- */
+const TouchControls = {
+  _pressed: {},  // { left: true, ... } 1フレームのみ消費
+  _down: {},     // { down: true } 押し続け状態
+  _handlers: [],
+
+  bind(scene) {
+    const map = {
+      'btn-left': 'left', 'btn-right': 'right', 'btn-down': 'down',
+      'btn-rotate': 'rotate', 'btn-hold': 'hold', 'btn-drop': 'drop',
+    };
+    for (const [id, action] of Object.entries(map)) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      const onDown = (e) => { e.preventDefault(); this._pressed[action] = true; this._down[action] = true; };
+      const onUp = (e) => { e.preventDefault(); this._down[action] = false; };
+      el.addEventListener('touchstart', onDown, { passive: false });
+      el.addEventListener('touchend', onUp);
+      el.addEventListener('mousedown', onDown);
+      el.addEventListener('mouseup', onUp);
+      this._handlers.push([el, onDown, onUp]);
+    }
+  },
+
+  unbind() {
+    for (const [el, onDown, onUp] of this._handlers) {
+      el.removeEventListener('touchstart', onDown);
+      el.removeEventListener('touchend', onUp);
+      el.removeEventListener('mousedown', onDown);
+      el.removeEventListener('mouseup', onUp);
+    }
+    this._handlers = [];
+    this._pressed = {}; this._down = {};
+  },
+
+  // 1回限りのトリガー消費（justPressed相当）
+  consume(action) {
+    if (this._pressed[action]) { this._pressed[action] = false; return true; }
+    return false;
+  },
+  isDown(action) { return !!this._down[action]; },
+};
+
+/* ---------- SwipeControls — Canvas スワイプ操作 ---------- */
+// タップ→回転、スワイプ左右→移動、スワイプ下→ハードドロップ
+const SwipeControls = {
+  _startX: 0, _startY: 0, _startTime: 0,
+  _actions: {},
+  _canvas: null, _onStart: null, _onEnd: null,
+
+  bind(canvas) {
+    this._canvas = canvas;
+    this._onStart = (e) => {
+      const t = e.touches ? e.touches[0] : e;
+      this._startX = t.clientX;
+      this._startY = t.clientY;
+      this._startTime = Date.now();
+    };
+    this._onEnd = (e) => {
+      const t = e.changedTouches ? e.changedTouches[0] : e;
+      const dx = t.clientX - this._startX;
+      const dy = t.clientY - this._startY;
+      const dist = Math.hypot(dx, dy);
+      const elapsed = Date.now() - this._startTime;
+      if (dist < 14 && elapsed < 260) {
+        this._actions.rotate = true;
+      } else if (Math.abs(dx) > Math.abs(dy) * 1.2 && dist > 24) {
+        this._actions[dx < 0 ? 'left' : 'right'] = true;
+      } else if (dy > 40 && dist > 40) {
+        this._actions.hardDrop = true;
+      }
+    };
+    canvas.addEventListener('touchstart', this._onStart, { passive: true });
+    canvas.addEventListener('touchend', this._onEnd, { passive: true });
+  },
+
+  unbind() {
+    if (this._canvas) {
+      this._canvas.removeEventListener('touchstart', this._onStart);
+      this._canvas.removeEventListener('touchend', this._onEnd);
+      this._canvas = null;
+    }
+    this._actions = {};
+  },
+
+  consume(action) {
+    if (this._actions[action]) { delete this._actions[action]; return true; }
+    return false;
+  },
+};
+
+/* ---------- 描画ヘルパー: drawBlock / drawGhostBlock ---------- */
+// テトリミノブロック1マスを「ガラス・宝石風」に描く
+function drawBlock(ctx, px, py, colorSet, opts = {}) {
+  const size = CELL;
+  const pad = 1;
+  ctx.save();
+  // 外周グロー（控えめ）
+  ctx.shadowColor = colorSet.base;
+  ctx.shadowBlur = opts.glow !== undefined ? opts.glow : 6;
+
+  // ベースグラデーション（左上=light、右下=dark）
+  const grad = ctx.createLinearGradient(px, py, px + size, py + size);
+  grad.addColorStop(0, colorSet.light);
+  grad.addColorStop(0.5, colorSet.base);
+  grad.addColorStop(1, colorSet.dark);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.roundRect(px + pad, py + pad, size - pad * 2, size - pad * 2, 4);
+  ctx.fill();
+
+  // 上部ハイライト（ガラスの反射）
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.beginPath();
+  ctx.roundRect(px + pad + 2, py + pad + 2, size - pad * 2 - 4, (size - pad * 2) * 0.35, 3);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ゴーストピース用の軽量版（枠線のみ）
+function drawGhostBlock(ctx, px, py, colorSet) {
+  const size = CELL;
+  const pad = 1;
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.strokeStyle = colorSet.base;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(px + pad, py + pad, size - pad * 2, size - pad * 2, 4);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ミニブロック描画（HOLD/NEXTパネル用。サイズ可変）
+function drawMiniBlock(ctx, px, py, size, colorSet) {
+  ctx.save();
+  const grad = ctx.createLinearGradient(px, py, px + size, py + size);
+  grad.addColorStop(0, colorSet.light);
+  grad.addColorStop(0.5, colorSet.base);
+  grad.addColorStop(1, colorSet.dark);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.roundRect(px + 1, py + 1, size - 2, size - 2, 3);
+  ctx.fill();
+  ctx.restore();
+}
+
+// 4x4ピース形状をミニサイズで中央寄せ描画（HOLD/NEXTパネル共通）
+function drawMiniPiece(ctx, type, cx, cy, size) {
+  const shape = PIECES[type].rotations[0];
+  // 形状の実バウンディングボックスを求めて中央寄せ
+  let minX = 4, maxX = -1, minY = 4, maxY = -1;
+  for (let i = 0; i < 16; i++) {
+    if (shape[i]) {
+      const x = i % 4, y = Math.floor(i / 4);
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+  }
+  const wCells = maxX - minX + 1;
+  const hCells = maxY - minY + 1;
+  const offsetX = cx - (wCells * size) / 2;
+  const offsetY = cy - (hCells * size) / 2;
+  for (let i = 0; i < 16; i++) {
+    if (shape[i]) {
+      const x = i % 4 - minX, y = Math.floor(i / 4) - minY;
+      drawMiniBlock(ctx, offsetX + x * size, offsetY + y * size, size, PIECES[type].color);
+    }
+  }
+}
+
+/* ---------- checkTSpin — T-Spin 判定（3コーナールール） ---------- */
+// 'none' | 'mini' | 'full' を返す。piece は T-ミノ、lastActionWasRotation が true の時のみ呼ぶ。
+function checkTSpin(piece, field) {
+  if (piece.type !== 'T') return 'none';
+  const cx = piece.x + 1, cy = piece.y + 1; // T ピースのピボット（フィールド座標）
+  const blocked = (x, y) => x < 0 || x >= COLS || y >= ROWS || (y >= 0 && field.grid[y][x] !== null);
+  // TL=0, TR=1, BL=2, BR=3
+  const c = [blocked(cx-1,cy-1), blocked(cx+1,cy-1), blocked(cx-1,cy+1), blocked(cx+1,cy+1)];
+  const filled = c.reduce((n, v) => n + (v ? 1 : 0), 0);
+  if (filled < 3) return 'none';
+  // 「前面コーナー」ペア (回転別): rot0=TL+TR, rot1=TR+BR, rot2=BL+BR, rot3=TL+BL
+  const front = [[0,1],[1,3],[2,3],[0,2]][piece.rotation];
+  return front.every(i => c[i]) ? 'full' : 'mini';
+}
+
+/* ---------- TitleScene ---------- */
+class TitleScene extends GameKit.Scene {
+  enter() {
+    this.particles = new GameKit.Particles(W, H, { count: 80 });
+    this.t = 0;
+  }
+  update(dt, game) {
+    this.t += dt;
+    this.particles.update(dt);
+    if (game.input.justPressed('Space') || game.input.pointer.justPressed) {
+      game.audio.jingle([{ f: 523, d: 0.1 }, { f: 659, d: 0.1 }, { f: 784, d: 0.18 }]);
+      game.changeScene(new PlayScene());
+    }
+  }
+  draw(ctx, game) {
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(0, 0, W, H);
+    this.particles.draw(ctx);
+
+    GameKit.UI.glassPanel(ctx, W/2 - 260, H/2 - 170, 520, 340);
+    GameKit.UI.text(ctx, 'PRISMFALL', W/2, H/2 - 140, { font: 'bold 48px "Segoe UI", sans-serif', color: '#22d3ee' });
+    GameKit.UI.text(ctx, 'プリズムフォール', W/2, H/2 - 90, { color: '#a78bfa', font: '20px sans-serif' });
+    GameKit.UI.text(ctx, 'HIGH SCORE / ハイスコア: ' + save.get('hiscore', 0), W/2, H/2 - 50, { color: '#e2e8f0', font: '16px sans-serif' });
+
+    const blink = Math.sin(this.t * 4) > -0.3;
+    if (blink) {
+      GameKit.UI.text(ctx, 'Click / Space to Start', W/2, H/2, { color: '#22d3ee', font: 'bold 18px sans-serif' });
+      GameKit.UI.text(ctx, 'クリック / Space で開始', W/2, H/2 + 26, { color: '#22d3ee', font: '16px sans-serif' });
+    }
+
+    // 操作説明（複数行）
+    const lines = [
+      '←→: 移動 / Move    ↑ or Z: 回転 / Rotate',
+      '↓: ソフトドロップ / Soft Drop    Space: ハードドロップ / Hard Drop',
+      'C: ホールド / Hold    P: ポーズ / Pause',
+    ];
+    lines.forEach((l, i) => {
+      GameKit.UI.text(ctx, l, W/2, H/2 + 70 + i * 24, { color: '#94a3b8', font: '13px sans-serif' });
+    });
+  }
+}
+
+/* ---------- PlayScene ---------- */
+// MUTEパネル座標（基本設計書 3.2 参照）
+const MUTE_PANEL = { x: 630, y: 320, w: 110, h: 50 };
+const HOLD_PANEL = { x: 220, y: 30, w: 110, h: 90 };
+const SCORE_PANEL = { x: 220, y: 130, w: 110, h: 130 };
+const NEXT_PANEL = { x: 630, y: 30, w: 110, h: 280 };
+
+class PlayScene extends GameKit.Scene {
+  enter() {
+    this.particles = new GameKit.Particles(W, H, { count: 40 });
+    this.field = new Field();
+    this.bag = new BagRandomizer();
+    this.nextQueue = [this.bag.next(), this.bag.next(), this.bag.next()];
+    this.current = new Piece(this.nextQueue.shift());
+    this.refillQueue();
+    this.holdType = null;
+    this.canHold = true;
+    this.score = 0;
+    this.level = 0;
+    this.lines = 0;
+    this.combo = -1; // -1=直前消去なし
+    this.dropTimer = 0;
+    this.state = 'playing'; // 'playing' | 'paused' | 'gameover'
+    this.fx = new EffectManager();
+    this.sfx = new SoundFx(game, save);
+    this.hiscoreUpdated = false;
+    this.lastActionWasRotation = false;
+    this.backToBack = false;
+    this.bgm = new BgmPlayer(this.sfx.audio);
+    this.bgm.setMute(this.sfx.muted);
+    this.bgm.play();
+    TouchControls.bind(this);
+    SwipeControls.bind(document.getElementById('game'));
+  }
+
+  exit() {
+    this.bgm.stop();
+    TouchControls.unbind();
+    SwipeControls.unbind();
+  }
+
+  refillQueue() {
+    while (this.nextQueue.length < 3) this.nextQueue.push(this.bag.next());
+  }
+
+  spawnNext() {
+    this.current = new Piece(this.nextQueue.shift());
+    this.refillQueue();
+    this.canHold = true;
+    if (!this.field.canPlace(this.current)) {
+      this.state = 'gameover';
+      this.sfx.gameOver();
+      this.bgm.stop();
+      const hi = save.get('hiscore', 0);
+      if (this.score > hi) { save.set('hiscore', this.score); this.hiscoreUpdated = true; }
+    }
+  }
+
+  update(dt, game) {
+    this.particles.update(dt);
+    this.fx.update(dt);
+
+    // ポーズ切り替え（playing/paused間のみ）
+    if (game.input.justPressed('KeyP') || game.input.justPressed('Escape')) {
+      if (this.state === 'playing') this.state = 'paused';
+      else if (this.state === 'paused') this.state = 'playing';
+    }
+
+    // MUTEボタンのクリック判定（state問わず操作可能）
+    if (game.input.pointer.justPressed) {
+      const p = game.input.pointer;
+      if (p.x >= MUTE_PANEL.x && p.x <= MUTE_PANEL.x + MUTE_PANEL.w &&
+          p.y >= MUTE_PANEL.y && p.y <= MUTE_PANEL.y + MUTE_PANEL.h) {
+        this.sfx.toggleMute(save, this.bgm);
+      }
+    }
+
+    if (this.state === 'gameover') {
+      if (game.input.justPressed('Space') || game.input.pointer.justPressed) {
+        game.changeScene(new TitleScene());
+      }
+      return;
+    }
+    if (this.state === 'paused') return;
+
+    // --- 入力処理（移動・回転・ホールド・ハードドロップ） ---
+    if (game.input.justPressed('ArrowLeft') || game.input.justPressed('KeyA') || TouchControls.consume('left') || SwipeControls.consume('left')) {
+      this.current.moveLeft(this.field); this.sfx.move(); this.lastActionWasRotation = false;
+    }
+    if (game.input.justPressed('ArrowRight') || game.input.justPressed('KeyD') || TouchControls.consume('right') || SwipeControls.consume('right')) {
+      this.current.moveRight(this.field); this.sfx.move(); this.lastActionWasRotation = false;
+    }
+    if (game.input.justPressed('ArrowUp') || game.input.justPressed('KeyW') || game.input.justPressed('KeyX') || TouchControls.consume('rotate') || SwipeControls.consume('rotate')) {
+      if (this.current.tryRotate(this.field, +1)) { this.sfx.rotate(); this.lastActionWasRotation = true; }
+    }
+    if (game.input.justPressed('KeyZ')) {
+      if (this.current.tryRotate(this.field, -1)) { this.sfx.rotate(); this.lastActionWasRotation = true; }
+    }
+    if ((game.input.justPressed('KeyC') || game.input.justPressed('ShiftLeft') || TouchControls.consume('hold')) && this.canHold) {
+      this.doHold(); this.lastActionWasRotation = false;
+    }
+    if (game.input.justPressed('Space') || TouchControls.consume('drop') || SwipeControls.consume('hardDrop')) {
+      this.doHardDrop(); this.lastActionWasRotation = false;
+    }
+
+    // --- 落下処理 ---
+    const softDrop = game.input.isDown('ArrowDown') || game.input.isDown('KeyS') || TouchControls.isDown('down');
+    const interval = SCORE_TABLE.dropInterval(this.level) / (softDrop ? SOFT_DROP_FACTOR : 1);
+    this.dropTimer += dt;
+    if (this.dropTimer >= interval) {
+      this.dropTimer = 0;
+      if (this.current.moveDown(this.field)) {
+        if (softDrop) this.score += SCORE_TABLE.softDropPoint;
+      } else {
+        this.current.lockTimer += interval;
+        if (this.current.lockTimer >= LOCK_DELAY) this.lockCurrent();
+      }
+    }
+  }
+
+  doHold() {
+    this.sfx.hold();
+    if (this.holdType === null) {
+      this.holdType = this.current.type;
+      this.spawnNext();
+    } else {
+      const tmp = this.holdType;
+      this.holdType = this.current.type;
+      this.current = new Piece(tmp);
+    }
+    this.canHold = false;
+  }
+
+  doHardDrop() {
+    const ghostY = this.current.getGhostY(this.field);
+    this.score += (ghostY - this.current.y) * SCORE_TABLE.hardDropPoint;
+    this.current.y = ghostY;
+    this.lockCurrent();
+  }
+
+  lockCurrent() {
+    // T-Spin 判定（ロック前に実施）
+    const tspinType = this.lastActionWasRotation ? checkTSpin(this.current, this.field) : 'none';
+    this.lastActionWasRotation = false;
+
+    this.field.lockPiece(this.current);
+    this.sfx.lock();
+    const cleared = this.field.clearLines();
+    const isTspin = tspinType !== 'none';
+
+    if (cleared.length > 0 || isTspin) {
+      // スコア計算
+      let baseScore;
+      if (isTspin) {
+        const tbl = { mini: [100,200,400], full: [400,800,1200,1600] }[tspinType];
+        baseScore = tbl[Math.min(cleared.length, tbl.length - 1)] * (this.level + 1);
+      } else {
+        baseScore = (SCORE_TABLE.lineScore[cleared.length] || 0) * (this.level + 1);
+      }
+
+      // Back-to-Back ボーナス (特殊クリア = Tetris or T-Spin)
+      const isSpecial = cleared.length === 4 || isTspin;
+      if (isSpecial && this.backToBack) {
+        baseScore = Math.floor(baseScore * 1.5);
+        this.fx.triggerBackToBack();
+        this.sfx.backToBack();
+      }
+      this.backToBack = isSpecial;
+      this.score += baseScore;
+
+      // T-Spin 演出
+      if (isTspin) { this.fx.triggerTSpin(tspinType); this.sfx.tspin(); }
+
+      // ライン消去演出
+      if (cleared.length > 0) {
+        this.fx.triggerLineClear(cleared);
+        this.sfx.lineClear(cleared.length);
+        this.lines += cleared.length;
+        this.combo += 1;
+        if (this.combo > 0) this.fx.triggerCombo(this.combo);
+        const newLevel = Math.floor(this.lines / SCORE_TABLE.linesPerLevel);
+        if (newLevel > this.level) {
+          this.level = newLevel;
+          this.fx.triggerLevelUp();
+          this.sfx.levelUp();
+        }
+      }
+    } else {
+      this.combo = -1;
+      this.backToBack = false;
+    }
+
+    if (this.field.isGameOver()) {
+      this.state = 'gameover';
+      this.sfx.gameOver();
+      this.bgm.stop();
+      const hi = save.get('hiscore', 0);
+      if (this.score > hi) { save.set('hiscore', this.score); this.hiscoreUpdated = true; }
+      return;
+    }
+    this.spawnNext();
+  }
+
+  draw(ctx, game) {
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(0, 0, W, H);
+    this.particles.draw(ctx);
+
+    this.drawField(ctx);
+    this.drawGhost(ctx);
+    this.drawCurrentPiece(ctx);
+    this.fx.draw(ctx);
+    this.drawSidePanels(ctx);
+
+    if (this.state === 'paused') this.drawPauseOverlay(ctx);
+    if (this.state === 'gameover') this.drawGameOverOverlay(ctx);
+  }
+
+  // --- 描画ヘルパー ---
+  drawField(ctx) {
+    // フィールド全体の枠（Glassmorphism）
+    GameKit.UI.glassPanel(ctx, FIELD_X - 4, FIELD_Y - 4, COLS * CELL + 8, ROWS * CELL + 8);
+
+    // グリッド線（うっすら）
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= COLS; x++) {
+      ctx.beginPath();
+      ctx.moveTo(FIELD_X + x * CELL, FIELD_Y);
+      ctx.lineTo(FIELD_X + x * CELL, FIELD_Y + ROWS * CELL);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= ROWS; y++) {
+      ctx.beginPath();
+      ctx.moveTo(FIELD_X, FIELD_Y + y * CELL);
+      ctx.lineTo(FIELD_X + COLS * CELL, FIELD_Y + y * CELL);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 固定済みブロック
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const cell = this.field.grid[y][x];
+        if (cell) {
+          drawBlock(ctx, FIELD_X + x * CELL, FIELD_Y + y * CELL, PIECES[cell.type].color);
+        }
+      }
+    }
+  }
+
+  drawGhost(ctx) {
+    if (this.state === 'gameover') return;
+    const ghostY = this.current.getGhostY(this.field);
+    const cells = getPieceCells(this.current.type, this.current.rotation);
+    const colorSet = PIECES[this.current.type].color;
+    for (const [cx, cy] of cells) {
+      const x = this.current.x + cx;
+      const y = ghostY + cy;
+      if (y >= 0) drawGhostBlock(ctx, FIELD_X + x * CELL, FIELD_Y + y * CELL, colorSet);
+    }
+  }
+
+  drawCurrentPiece(ctx) {
+    if (this.state === 'gameover') return;
+    const cells = getPieceCells(this.current.type, this.current.rotation);
+    const colorSet = PIECES[this.current.type].color;
+    // ロックタイマーが進むにつれグローを強める（着地直前の強調）
+    const glow = 8 + (this.current.lockTimer / LOCK_DELAY) * 6;
+    for (const [cx, cy] of cells) {
+      const x = this.current.x + cx;
+      const y = this.current.y + cy;
+      if (y >= 0) drawBlock(ctx, FIELD_X + x * CELL, FIELD_Y + y * CELL, colorSet, { glow });
+    }
+  }
+
+  drawSidePanels(ctx) {
+    // HOLDパネル
+    GameKit.UI.glassPanel(ctx, HOLD_PANEL.x, HOLD_PANEL.y, HOLD_PANEL.w, HOLD_PANEL.h);
+    GameKit.UI.text(ctx, 'HOLD / ホールド', HOLD_PANEL.x + HOLD_PANEL.w / 2, HOLD_PANEL.y + 8, { font: '12px sans-serif', color: '#a78bfa' });
+    if (this.holdType) {
+      drawMiniPiece(ctx, this.holdType, HOLD_PANEL.x + HOLD_PANEL.w / 2, HOLD_PANEL.y + 55, 16);
+    }
+
+    // SCORE/LEVEL/LINESパネル
+    GameKit.UI.glassPanel(ctx, SCORE_PANEL.x, SCORE_PANEL.y, SCORE_PANEL.w, SCORE_PANEL.h);
+    GameKit.UI.text(ctx, 'SCORE / スコア', SCORE_PANEL.x + SCORE_PANEL.w / 2, SCORE_PANEL.y + 10, { font: '12px sans-serif', color: '#a78bfa' });
+    GameKit.UI.text(ctx, String(this.score), SCORE_PANEL.x + SCORE_PANEL.w / 2, SCORE_PANEL.y + 28, { font: 'bold 16px sans-serif', color: '#22d3ee' });
+    GameKit.UI.text(ctx, 'LEVEL / レベル', SCORE_PANEL.x + SCORE_PANEL.w / 2, SCORE_PANEL.y + 56, { font: '12px sans-serif', color: '#a78bfa' });
+    GameKit.UI.text(ctx, String(this.level), SCORE_PANEL.x + SCORE_PANEL.w / 2, SCORE_PANEL.y + 74, { font: 'bold 16px sans-serif', color: '#22d3ee' });
+    GameKit.UI.text(ctx, 'LINES / ライン', SCORE_PANEL.x + SCORE_PANEL.w / 2, SCORE_PANEL.y + 102, { font: '12px sans-serif', color: '#a78bfa' });
+    GameKit.UI.text(ctx, String(this.lines), SCORE_PANEL.x + SCORE_PANEL.w / 2, SCORE_PANEL.y + 120, { font: 'bold 16px sans-serif', color: '#22d3ee' });
+
+    // NEXTパネル
+    GameKit.UI.glassPanel(ctx, NEXT_PANEL.x, NEXT_PANEL.y, NEXT_PANEL.w, NEXT_PANEL.h);
+    GameKit.UI.text(ctx, 'NEXT / ネクスト', NEXT_PANEL.x + NEXT_PANEL.w / 2, NEXT_PANEL.y + 8, { font: '12px sans-serif', color: '#a78bfa' });
+    this.nextQueue.forEach((type, i) => {
+      drawMiniPiece(ctx, type, NEXT_PANEL.x + NEXT_PANEL.w / 2, NEXT_PANEL.y + 50 + i * 80, 16);
+    });
+
+    // MUTEボタン
+    GameKit.UI.glassPanel(ctx, MUTE_PANEL.x, MUTE_PANEL.y, MUTE_PANEL.w, MUTE_PANEL.h);
+    GameKit.UI.text(ctx, this.sfx.muted ? 'MUTE / ミュート中' : 'SOUND / オン', MUTE_PANEL.x + MUTE_PANEL.w / 2, MUTE_PANEL.y + MUTE_PANEL.h / 2 - 8, { font: '12px sans-serif', color: this.sfx.muted ? '#94a3b8' : '#22d3ee' });
+  }
+
+  drawPauseOverlay(ctx) {
+    ctx.fillStyle = 'rgba(5,7,13,0.7)';
+    ctx.fillRect(FIELD_X, FIELD_Y, COLS * CELL, ROWS * CELL);
+    GameKit.UI.glassPanel(ctx, FIELD_X + 20, FIELD_Y + 200, COLS * CELL - 40, 80);
+    GameKit.UI.text(ctx, 'PAUSED', FIELD_X + COLS * CELL / 2, FIELD_Y + 220, { color: '#22d3ee', font: 'bold 22px sans-serif' });
+    GameKit.UI.text(ctx, '一時停止 (P で再開)', FIELD_X + COLS * CELL / 2, FIELD_Y + 250, { color: '#a78bfa', font: '14px sans-serif' });
+  }
+
+  drawGameOverOverlay(ctx) {
+    ctx.fillStyle = 'rgba(5,7,13,0.75)';
+    ctx.fillRect(FIELD_X, FIELD_Y, COLS * CELL, ROWS * CELL);
+    GameKit.UI.glassPanel(ctx, FIELD_X + 10, FIELD_Y + 120, COLS * CELL - 20, 240);
+    GameKit.UI.text(ctx, 'GAME OVER', FIELD_X + COLS * CELL / 2, FIELD_Y + 145, { color: '#22d3ee', font: 'bold 22px sans-serif' });
+    GameKit.UI.text(ctx, 'ゲームオーバー', FIELD_X + COLS * CELL / 2, FIELD_Y + 170, { color: '#a78bfa', font: '14px sans-serif' });
+    GameKit.UI.text(ctx, 'SCORE / スコア: ' + this.score, FIELD_X + COLS * CELL / 2, FIELD_Y + 205, { font: '14px sans-serif' });
+    GameKit.UI.text(ctx, 'LEVEL / レベル: ' + this.level, FIELD_X + COLS * CELL / 2, FIELD_Y + 228, { font: '14px sans-serif' });
+    GameKit.UI.text(ctx, 'LINES / ライン: ' + this.lines, FIELD_X + COLS * CELL / 2, FIELD_Y + 251, { font: '14px sans-serif' });
+    if (this.hiscoreUpdated) {
+      GameKit.UI.text(ctx, 'NEW HIGH SCORE! / ハイスコア更新！', FIELD_X + COLS * CELL / 2, FIELD_Y + 280, { color: '#22d3ee', font: 'bold 13px sans-serif' });
+    }
+    GameKit.UI.text(ctx, 'Click / Space でタイトルへ', FIELD_X + COLS * CELL / 2, FIELD_Y + 320, { color: '#94a3b8', font: '12px sans-serif' });
+  }
+}
+
+/* ---------- シーン起動 ---------- */
+game.changeScene(new TitleScene());
+game.start();
+</script>
+</body>
+</html>

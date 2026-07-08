@@ -1,0 +1,58 @@
+name: Auto Social Post
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'  # 毎週月曜 9:00 JST (= UTC 00:00)
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Post to which platform?'
+        required: false
+        default: 'bluesky'
+        type: choice
+        options:
+          - bluesky
+          - reddit
+          - both
+
+jobs:
+  social-post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Post to Bluesky
+        if: |
+          github.event_name == 'schedule' ||
+          github.event.inputs.platform == 'bluesky' ||
+          github.event.inputs.platform == 'both'
+        env:
+          BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+        run: node scripts/post-social.js bluesky
+
+      - name: Check first Monday of month
+        id: date-check
+        run: |
+          DAY=$(date +%d)
+          if [ "$DAY" -le 7 ]; then
+            echo "IS_FIRST_WEEK=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "IS_FIRST_WEEK=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post to Reddit (first Monday of month)
+        if: |
+          github.event.inputs.platform == 'reddit' ||
+          github.event.inputs.platform == 'both' ||
+          (github.event_name == 'schedule' && steps.date-check.outputs.IS_FIRST_WEEK == 'true')
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
+          REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
+        run: node scripts/post-social.js reddit
