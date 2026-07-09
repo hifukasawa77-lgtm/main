@@ -26,6 +26,12 @@ bash .claude/skills/deploy-verify/deploy-verify.sh --smoke zelda_like.html shogi
 - `sw.js`（Service Worker, network-first）がキャッシュを持つため、SW配下のページはSW更新（`sw.js` のバージョン文字列変更）も必要になることがある
 - それでも旧内容の場合: GitHub リポジトリの Actions/Pages のビルド状況を確認する
 
+## CCRリモート環境での代替確認（github.io遮断時）
+
+- CCRリモート環境のネットワークポリシーは実質allowlistで、**github.io への直接アクセスが遮断されることがある**（curl/WebFetchとも403等）。この場合 `deploy-verify.sh` は使えない
+- 代替: GitHub Actions の **「pages build and deployment」ワークフローの成否**で反映を確認する（MCPの `actions_list` / `actions_get`）。success ならデプロイ完了とみなす（2026-07-05のkotonoha公開で実績あり）
+- 外部到達性が要件のタスク全般で、着手前に到達可能性を確認し代替経路を先に洗うこと
+
 ## 運用
 - push後の定型フロー: 2〜3分待つ → `deploy-verify.sh --smoke <変更ページ>` → OKなら深澤へ報告
 - 新規ページはURLエンコード注意（日本語ディレクトリ名は `%E6%B5%AE...` のようにエンコードされる。index.html内の既存リンクの書式に合わせる）

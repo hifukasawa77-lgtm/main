@@ -46,3 +46,5 @@ bash .claude/skills/dynamic-test/run.sh --changed
 ## 注意
 - `file://` で開くため、`fetch()` 依存の外部API部分はエラーになり得る（本番のみ動く箇所は jsErrors の内容で判断する）
 - スクリーンショットは `test-screenshots/` に溜まる。コミットに含めない
+- ヘッドレスでは `confirm()`/`alert()` が**自動キャンセル**される。確認ダイアログを通る正常系（保存/削除等）を検証するときは `page.on('dialog', d => d.accept())` を入れないと正常系がFAILに見える（誤検知の実例あり）
+- スクリーンショットは直前のタブ操作の**スクロール位置を引き継ぐ**。撮影前に `window.scrollTo(0,0)` を挟むこと

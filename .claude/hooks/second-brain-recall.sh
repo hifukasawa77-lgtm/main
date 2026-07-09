@@ -26,7 +26,9 @@ if compgen -G "$VAULT/04-Knowledge/*.md" > /dev/null; then
   echo
 fi
 
-LATEST_DAILY=$(ls -t "$VAULT/01-Daily"/*.md 2>/dev/null | head -1 || true)
+# mtime順(ls -t)は使わない: CCRリモート環境はフレッシュクローンで全ファイルのmtimeが
+# ほぼ同一になり最新判定が壊れる。ファイル名が YYYY-MM-DD.md なので名前順が正。
+LATEST_DAILY=$(ls "$VAULT/01-Daily"/*.md 2>/dev/null | sort | tail -1 || true)
 if [ -n "${LATEST_DAILY:-}" ]; then
   echo "### 直近のDaily Note ($(basename "$LATEST_DAILY"))"
   cat "$LATEST_DAILY"

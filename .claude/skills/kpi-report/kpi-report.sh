@@ -33,7 +33,14 @@ for f in obsidian-vault/03-Decisions/*.md; do
   D=$(grep -oE '^date: [0-9]{4}-[0-9]{2}-[0-9]{2}' "$f" | grep -oE '[0-9-]+' || true)
   if [ -n "$D" ] && [ "$D" \> "$FROM" ]; then N_ADR=$((N_ADR+1)); fi
 done
-N_DAILY=$(find obsidian-vault/01-Daily -name '*.md' -newermt "$FROM" 2>/dev/null | grep -c "" || true)
+# mtime基準(find -newermt)は使わない: フレッシュクローン環境では全ファイルが「新しい」
+# 扱いになり全件カウントになる。ファイル名が YYYY-MM-DD.md なので名前を日付として比較する。
+N_DAILY=0
+for f in obsidian-vault/01-Daily/*.md; do
+  [ -f "$f" ] || continue
+  D=$(basename "$f" .md)
+  if [ "$D" \> "$FROM" ]; then N_DAILY=$((N_DAILY+1)); fi
+done
 echo "- 期間内ADR（意思決定）: ${N_ADR}"
 echo "- 期間内Daily Note: ${N_DAILY}"
 echo ""
