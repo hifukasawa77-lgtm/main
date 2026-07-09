@@ -50,11 +50,14 @@ if (!filePath) { console.error('Usage: node dynamic-test.cjs <path-to-html>'); p
   page.on('response', res => {
     if (res.status() === 404) notFound.push(res.url());
   });
+  // ヘッドレスでは confirm()/alert() が自動キャンセルされ正常系がFAILに見えるため受理する
+  page.on('dialog', d => d.accept());
 
   await page.goto(`file://${path.resolve(filePath)}`);
   await page.waitForTimeout(2000);
 
-  // スクリーンショット保存
+  // スクリーンショット保存（直前の操作のスクロール位置を引き継ぐため先頭へ戻す）
+  await page.evaluate(() => window.scrollTo(0, 0));
   const screenshotDir = path.join(path.dirname(filePath), 'test-screenshots');
   if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
   const timestamp = Date.now();

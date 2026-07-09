@@ -101,6 +101,23 @@ for p in \
   [ -e "$p" ] && ok "$p" || note_fail "参照先なし: $p"
 done
 
+echo "== 7. mtime依存ソート（ls -t 等）が .claude スクリプトにないか =="
+# CCRリモート環境はフレッシュクローンで全ファイルのmtimeがほぼ同一になるため、
+# hooks/skills のスクリプトで mtime順ソートに依存すると選択結果が不定になる
+# （recall hook が「直近のDaily」を誤選択した実例: 2026-07-09）。
+# このスクリプト自身は検出パターン文字列を含むため除外する。
+MT=$(grep -rnE 'ls[[:space:]]+-[a-zA-Z]*t|find[[:space:]].*-newer|sort[[:space:]].*-k.*%Y' \
+  .claude/hooks .claude/skills --include='*.sh' --include='*.cjs' 2>/dev/null \
+  | grep -v 'harness-lint.sh' \
+  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)
+if [ -z "$MT" ]; then
+  ok "mtime依存ソートなし"
+else
+  while IFS= read -r l; do
+    [ -n "$l" ] && note_fail "mtime依存ソート疑い（フレッシュクローンで不定）: $l"
+  done <<< "$MT"
+fi
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   echo "==> harness-lint: 問題なし ✅"

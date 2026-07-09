@@ -2,7 +2,8 @@
 // Garmin Connect からヘルスデータを取得して garmin-data.json に書き出す
 // 使用ライブラリ: garmin-connect (非公式API)
 // 必要環境変数: GARMIN_EMAIL, GARMIN_PASSWORD
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+// 注意: NODE_TLS_REJECT_UNAUTHORIZED='0'（TLS検証無効化）は認証情報を扱うため禁止。
+// ローカルのプロキシ環境でTLSエラーが出る場合は NODE_EXTRA_CA_CERTS でCA証明書を指定する。
 
 const { GarminConnect } = require('garmin-connect');
 const fs = require('fs');

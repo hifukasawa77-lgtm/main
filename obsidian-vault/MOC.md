@@ -32,6 +32,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0008-value-drift-lint]] — 色以外の具体値（予算/閾値/ブランチ）ドリフトをharness-lint検査#5で機械検査
 - [[0009-daily-hygiene-rule]] — Daily圧縮（recallコンテキスト節約）をsecond-brainスキルの書式ルールへ昇格
 - [[0010-skills-expansion]] — スキル一括拡充（8本→23本、監査スクリプト同梱型）
+- [[0011-mtime-free-file-selection]] — mtime依存のファイル選択を廃止（recall hook誤想起の修正）＋lint検査#7
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
