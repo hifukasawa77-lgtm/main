@@ -28,6 +28,20 @@ async function main() {
     process.exit(1);
   }
 
+  // GARMIN_TOKENS シークレット（scripts/garmin-login-local.js の出力）からの初期展開。
+  // Actions IPからのパスワードログインが429で通らない場合のブートストラップ経路。
+  if (!fs.existsSync(TOKEN_DIR) && process.env.GARMIN_TOKENS) {
+    try {
+      const t = JSON.parse(Buffer.from(process.env.GARMIN_TOKENS, 'base64').toString('utf8'));
+      fs.mkdirSync(TOKEN_DIR, { recursive: true });
+      if (t.oauth1) fs.writeFileSync(path.join(TOKEN_DIR, 'oauth1_token.json'), JSON.stringify(t.oauth1));
+      if (t.oauth2) fs.writeFileSync(path.join(TOKEN_DIR, 'oauth2_token.json'), JSON.stringify(t.oauth2));
+      console.log('GARMIN_TOKENS シークレットからトークンを展開しました');
+    } catch (e) {
+      console.log(`GARMIN_TOKENS の展開に失敗（${e.message}）→ 通常フローで続行`);
+    }
+  }
+
   let client = new GarminConnect({ username: email, password });
   let usedToken = false;
   try {
