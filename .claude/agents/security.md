@@ -35,6 +35,8 @@ description: ソースコードのセキュリティ脆弱性を検査し、修�
 - SRI未設定: CDNから読み込むスクリプト・スタイルに `integrity` 属性がない
 - 開発用ビルド: React/Vue等の `.development.js` を本番で使用
 - バージョン未固定: `@18` のような曖昧なバージョン指定（`@18.3.1` のように固定すべき）
+- TLS検証の無効化: `NODE_TLS_REJECT_UNAUTHORIZED='0'` / `rejectUnauthorized: false` 等。認証情報を扱う通信ではCRITICAL扱い（実例: `scripts/fetch-garmin.js`、2026-07-09に除去。release-check 検査#7で機械検査済み）
+- 認証情報を渡すサードパーティパッケージのバージョン未固定: `^`/`~` レンジ指定はサプライチェーン攻撃で更新版に悪性コードが混入し得る。非公式パッケージにID/パスワード/トークンを渡す場合は正確なバージョンに固定する（実例: `garmin-connect` → `1.6.2` 固定）
 
 ### MEDIUM
 - localStorage/sessionStorage に機密データを保存していないか

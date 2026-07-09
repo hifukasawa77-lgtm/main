@@ -31,6 +31,7 @@ bash .claude/skills/deploy-verify/deploy-verify.sh --smoke zelda_like.html shogi
 - CCRリモート環境のネットワークポリシーは実質allowlistで、**github.io への直接アクセスが遮断されることがある**（curl/WebFetchとも403等）。この場合 `deploy-verify.sh` は使えない
 - 代替: GitHub Actions の **「pages build and deployment」ワークフローの成否**で反映を確認する（MCPの `actions_list` / `actions_get`）。success ならデプロイ完了とみなす（2026-07-05のkotonoha公開で実績あり）
 - 外部到達性が要件のタスク全般で、着手前に到達可能性を確認し代替経路を先に洗うこと
+- **`workflow_dispatch` の手動トリガーは不可**: GitHub App（MCP `actions_run_trigger`）経由は403になる（GitHub UIからのみ可能）。定期cronのワークフローは次回実行を待ち、`send_later` の自動チェックインで結果を確認する運用に切り替える（2026-07-09 Garmin Syncで実績）
 
 ## 運用
 - push後の定型フロー: 2〜3分待つ → `deploy-verify.sh --smoke <変更ページ>` → OKなら深澤へ報告

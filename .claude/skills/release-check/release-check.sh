@@ -17,8 +17,10 @@ if [ -z "$PROFILES" ]; then ok "混入なし"; else
   while IFS= read -r p; do [ -n "$p" ] && note_fail "プロファイル混入: $p（削除または .gitignore へ）"; done <<< "$PROFILES"
 fi
 
-echo "== 2. console.log の追加行（git diff HEAD） =="
-LOGS=$(git diff HEAD --unified=0 -- '*.html' '*.js' 2>/dev/null | grep -E '^\+[^+].*console\.log' | head -10 || true)
+echo "== 2. console.log の追加行（git diff HEAD、scripts/ のCLIは対象外） =="
+# 2段grep（^\+[^+].*パターン の1段方式は行頭開始のパターンを [^+] が食って見逃す）
+LOGS=$(git diff HEAD --unified=0 -- '*.html' '*.js' ':(exclude)scripts' 2>/dev/null \
+  | grep -E '^\+[^+]' | grep -a 'console\.log' | head -10 || true)
 if [ -z "$LOGS" ]; then ok "追加なし"; else
   while IFS= read -r l; do [ -n "$l" ] && note_fail "console.log残り: ${l:0:100}"; done <<< "$LOGS"
 fi
@@ -57,6 +59,17 @@ fi
 echo "== 6. test-screenshots/ の混入（ステージ済み） =="
 SHOTS=$(git diff --cached --name-only 2>/dev/null | grep -c 'test-screenshots/' || true)
 if [ "${SHOTS:-0}" = 0 ]; then ok "混入なし"; else note_fail "test-screenshots/ が ${SHOTS} 件ステージされている（unstageする）"; fi
+
+echo "== 7. TLS検証の無効化（追加行） =="
+# コードファイルのみ対象（.md等のドキュメントはパターンを説明として含むため誤検出する）
+# 自スキルも検出パターン文字列を含むため除外（自己誤検出防止）
+TLS=$(git diff HEAD --unified=0 -- '*.js' '*.cjs' '*.mjs' '*.html' '*.sh' '*.yml' '*.yaml' ':(exclude).claude/skills/release-check' 2>/dev/null \
+  | grep -E '^\+[^+]' \
+  | grep -aE 'NODE_TLS_REJECT_UNAUTHORIZED|rejectUnauthorized[[:space:]]*:[[:space:]]*false|verify[[:space:]]*=[[:space:]]*False|--insecure' \
+  | head -5 || true)
+if [ -z "$TLS" ]; then ok "検出なし"; else
+  while IFS= read -r l; do [ -n "$l" ] && note_fail "TLS検証無効化の疑い: ${l:0:80}（認証情報を扱う通信では禁止）"; done <<< "$TLS"
+fi
 
 echo ""
 echo "-- git diff --stat（参考） --"

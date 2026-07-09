@@ -18,14 +18,16 @@ bash .claude/skills/release-check/release-check.sh
 | # | 検査 | 対象 |
 |---|---|---|
 | 1 | ブラウザプロファイル混入（`.edge-test-profile/` `tmp-edge-profile-*` 等） | 追跡ファイル＋ステージ済み |
-| 2 | `console.log` の追加行（デバッグ残り） | `git diff HEAD` の追加行 |
+| 2 | `console.log` の追加行（デバッグ残り）※`scripts/` のCLIは意図的な実行ログのため対象外 | `git diff HEAD` の追加行 |
 | 3 | CDN `<script src="https://...">` の `integrity`（SRI）欠落 | 変更されたHTML |
 | 4 | 1MB超の新規/変更ファイル | `git diff HEAD` |
 | 5 | APIキー・シークレットらしき文字列の混入 | `git diff HEAD` の追加行 |
 | 6 | `test-screenshots/` の混入 | ステージ済み |
+| 7 | TLS検証の無効化（`NODE_TLS_REJECT_UNAUTHORIZED` / `rejectUnauthorized: false` 等） | `git diff HEAD` の追加行 |
 
 ## 運用
 - コミット直前に必ず実行する。✗が出たら是正してから再実行 → コミット
 - #2 は意図的な `console.log`（ユーザー向けコンソール演出等）なら該当行を確認のうえ無視してよい（その旨をコミットメッセージに書く）
 - #5 が出た場合はコミット絶対禁止。CLAUDE.md「APIキーに関する禁止事項」に従い、書いた設定ごと即時削除する
+- #7 は認証情報を扱う通信で特に重大（実例: `fetch-garmin.js` の `NODE_TLS_REJECT_UNAUTHORIZED='0'`、2026-07-09に是正）。デバッグ目的でも残さない
 - チェック通過後の流れ: /dynamic-test（変更HTML）→ コミット → push → /deploy-verify
