@@ -10,6 +10,10 @@ const fs = require('fs');
 const path = require('path');
 
 const OUT_PATH = path.join(__dirname, '..', 'garmin-data.json');
+// OAuthトークンの保存先。GitHub Actionsでは actions/cache で毎時引き継ぐ。
+// 毎時パスワードログインするとGarmin側のレート制限(429)に当たるため、
+// 一度ログインに成功したらトークンを再利用してログイン自体を回避する。
+const TOKEN_DIR = process.env.GARMIN_TOKEN_DIR || path.join(__dirname, '..', '.garmin-token');
 
 function toDateStr(date) {
   return date.toISOString().slice(0, 10);
@@ -24,9 +28,19 @@ async function main() {
     process.exit(1);
   }
 
-  const client = new GarminConnect({ username: email, password });
-  await client.login();
-  console.log('Garmin Connect ログイン成功');
+  let client = new GarminConnect({ username: email, password });
+  let usedToken = false;
+  try {
+    client.loadTokenByFile(TOKEN_DIR);
+    await client.getUserProfile(); // トークンが生きているか検証（期限切れは内部で自動リフレッシュ）
+    usedToken = true;
+    console.log('保存済みトークンで再開（パスワードログインをスキップ）');
+  } catch (e) {
+    console.log(`トークン再利用不可（${e.message}）→ パスワードログインします`);
+    client = new GarminConnect({ username: email, password });
+    await client.login();
+    console.log('Garmin Connect ログイン成功');
+  }
 
   const today = toDateStr(new Date());
 
@@ -70,6 +84,17 @@ async function main() {
 
   // ストレス現在値
   const currentStress = stressData?.overallStressLevel ?? stressData?.avgStressLevel ?? null;
+
+  // 全カテゴリがnull＝APIが実質失敗している（無効トークン等）。
+  // null塗りのJSONをコミットしないよう失敗扱いにする（トークンキャッシュも保存されない）。
+  if (!stats && !stressData && !weeklyStats) {
+    console.error('全データの取得に失敗しました（認証切れ・レート制限の可能性）');
+    process.exit(1);
+  }
+
+  // 取得成功時はトークンを保存（リフレッシュ済みトークンの永続化を含む）
+  client.exportTokenToFile(TOKEN_DIR);
+  if (!usedToken) console.log('トークンを保存しました:', TOKEN_DIR);
 
   const output = {
     updated: new Date().toISOString(),
