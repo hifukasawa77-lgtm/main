@@ -30,9 +30,25 @@ fi
 # ほぼ同一になり最新判定が壊れる。ファイル名が YYYY-MM-DD.md なので名前順が正。
 LATEST_DAILY=$(ls "$VAULT/01-Daily"/*.md 2>/dev/null | sort | tail -1 || true)
 if [ -n "${LATEST_DAILY:-}" ]; then
-  echo "### 直近のDaily Note ($(basename "$LATEST_DAILY"))"
-  cat "$LATEST_DAILY"
+  # コンテキスト節約のため全文は投入しない（[[0012-session-context-diet]]）:
+  # 見出し一覧＋「次回への引き継ぎ」系セクション（最後の一致）のみ。
+  # 全文が必要な場合は該当セクションを grep + offset/limit で読む。
+  echo "### 直近のDaily Note ($(basename "$LATEST_DAILY")) — 抜粋（全文: $LATEST_DAILY）"
+  echo "セクション見出し:"
+  grep -E '^## ' "$LATEST_DAILY" | sed 's/^## /- /'
   echo
+  CARRY=$(awk '
+    /^## /{insec = ($0 ~ /引き継ぎ|持ち越し/); if(insec){buf=""}}
+    insec{buf = buf $0 ORS}
+    END{printf "%s", buf}
+  ' "$LATEST_DAILY" | head -c 3000)
+  if [ -n "$CARRY" ]; then
+    printf '%s\n' "$CARRY"
+  else
+    # 引き継ぎセクションがない場合のフォールバック: 末尾のみ
+    tail -c 1200 "$LATEST_DAILY"
+    echo
+  fi
 fi
 
 echo "_(新しい学び・決定事項は obsidian-vault/ に追記する。詳細は .claude/skills/second-brain/SKILL.md を参照)_"
