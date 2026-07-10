@@ -1491,6 +1491,15 @@ function riceConsumptionOf(state, did){
   return Math.round(totalSoldiersOf(state, did)/1000 * RICE_CONSUME_PER_1000);
 }
 
+/* ---- 難易度 ----
+ * AIの収入・攻勢・徴兵規模・プレイヤー狙いをまとめて調整する。 */
+const DIFFICULTIES = {
+  easy:   {jp:'易しい', en:'Easy',   descJP:'AIは控えめ。戦国をじっくり学べる', aiIncome:0.80, aiAggro:0.85, aiMaxAttacks:1, aiRecruitFrac:0.60, targetPlayerBias:1.0, color:'#4ade80'},
+  normal: {jp:'普通',   en:'Normal', descJP:'標準的な戦国の緊張感',             aiIncome:1.00, aiAggro:1.00, aiMaxAttacks:2, aiRecruitFrac:0.70, targetPlayerBias:1.0, color:'#e8c07a'},
+  hard:   {jp:'難しい', en:'Hard',   descJP:'AIは富み攻勢的。包囲を狙う。歴戦向け', aiIncome:1.35, aiAggro:1.20, aiMaxAttacks:3, aiRecruitFrac:0.90, targetPlayerBias:1.6, color:'#f87171'},
+};
+function difficultyOf(state){ return DIFFICULTIES[state && state.difficulty] || DIFFICULTIES.normal; }
+
 /* ---- 兵科 ---- */
 const UNITS = {
   spear:    {jp:'足軽', en:'Ashigaru', move:3, range:1, atk:1.0, def:1.15, color:'#cbd5e1'},
@@ -2413,12 +2422,13 @@ function deriveProvinceStats(kok, isCapital){
   const soldiers = Math.round(clamp(kok * 2.0 * (isCapital?1.35:1.0), 200, 6500));
   return { development, castleLevel, soldiers, minchu: 60 };
 }
-function buildGameState(scenarioId, playerDaimyo){
+function buildGameState(scenarioId, playerDaimyo, difficulty){
   const scn = DATA.scenarios.find(s=>s.id===scenarioId);
   const dById = {}; scn.daimyo.forEach(d=>dById[d.id]=d);
   const state = {
     version: SAVE_VERSION,
     scenarioId, year: scn.year, scenarioNameJP: scn.nameJP,
+    difficulty: DIFFICULTIES[difficulty] ? difficulty : 'normal',
     turn:1, season:0, month:1, playerDaimyo,
     daimyo:{}, provinces:{}, generals:{},
     rng: (Date.now() & 0xffffff) ^ scenarioId,
@@ -2772,7 +2782,7 @@ class ScenarioSelectScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
     this.particles = new GameKit.Particles(W, H, {count:56, colors:['#e8c07a','#a78bfa','#22d3ee']});
-    this.t=0; this.step='scenario'; this.scn=null; this.scrollDaimyo=0;
+    this.t=0; this.step='scenario'; this.scn=null; this.scrollDaimyo=0; this.difficulty='normal';
     this.buttons=[]; this._daimyoMaxScroll=0; this._daimyoViewport=null;
     this._onWheel=(e)=>{
       if (this.step!=='daimyo' || !this._daimyoViewport) return;
@@ -2800,9 +2810,16 @@ class ScenarioSelectScene extends GameKit.Scene {
     if (this.step==='scenario'){
       const cardW=1760, cardH=220, gap=54, startY=440;
       DATA.scenarios.forEach((s,i)=>{
-        this.buttons.push({x:cx-cardW/2, y:startY+i*(cardH+gap), w:cardW, h:cardH, scn:s, action:()=>{ this.scn=s; this.step='daimyo'; this.scrollDaimyo=0; this._rebuild(); }});
+        this.buttons.push({x:cx-cardW/2, y:startY+i*(cardH+gap), w:cardW, h:cardH, scn:s, action:()=>{ this.scn=s; this.step='difficulty'; this._rebuild(); }});
       });
       this.buttons.push({x:cx-220, y:H-185, w:440, h:92, label:'← 戻る Back', sz:31, action:()=>game.changeScene(new TitleScene())});
+    } else if (this.step==='difficulty'){
+      const keys=['easy','normal','hard'];
+      const cardW=1440, cardH=210, gap=54, startY=470;
+      keys.forEach((k,i)=>{
+        this.buttons.push({x:cx-cardW/2, y:startY+i*(cardH+gap), w:cardW, h:cardH, diff:k, action:()=>{ this.difficulty=k; this.step='daimyo'; this.scrollDaimyo=0; this._rebuild(); }});
+      });
+      this.buttons.push({x:cx-220, y:H-185, w:440, h:92, label:'← シナリオ選択', sz:31, action:()=>{ this.step='scenario'; this._rebuild(); }});
     } else {
       const list = this.scn.daimyo.filter(d=>this.scn.own[d.capital]===d.id);
       this._daimyoList = list;
@@ -2816,10 +2833,10 @@ class ScenarioSelectScene extends GameKit.Scene {
         if (y+layout.ch < layout.viewport.y || y > layout.viewport.y+layout.viewport.h) return;
         this.buttons.push({x:layout.gx+c*(layout.cw+layout.gapX), y, w:layout.cw, h:layout.ch, daimyo:d, accent:'rgba(255,255,255,0.3)', action:()=>{
           game.audio.jingle([{f:392,d:0.1},{f:523,d:0.1},{f:659,d:0.18}]);
-          game.changeScene(new MapScene(buildGameState(this.scn.id, d.id)));
+          game.changeScene(new MapScene(buildGameState(this.scn.id, d.id, this.difficulty)));
         }});
       });
-      this.buttons.push({x:80, y:H-112, w:420, h:74, label:'← シナリオ選択', sz:27, action:()=>{ this.step='scenario'; this.scrollDaimyo=0; this._rebuild(); }});
+      this.buttons.push({x:80, y:H-112, w:420, h:74, label:'← 難易度選択', sz:27, action:()=>{ this.step='difficulty'; this.scrollDaimyo=0; this._rebuild(); }});
     }
   }
   update(dt, game){
@@ -2847,6 +2864,21 @@ class ScenarioSelectScene extends GameKit.Scene {
           T(ctx, b.scn.year+'年  '+b.scn.nameJP, b.x+46, b.y+34, {size:46, weight:'bold', color:'#f1e6cf'});
           T(ctx, b.scn.nameEN, b.x+48, b.y+96, {size:25, color:'#a78bfa'});
           T(ctx, b.scn.descJP, b.x+48, b.y+142, {size:26, color:'#cbd5e1'});
+        } else { drawButton(ctx, b, this.t); }
+      }
+    } else if (this.step==='difficulty'){
+      T(ctx,'難易度を選択 / Choose Difficulty', W/2, 220, {size:60, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+      T(ctx, this.scn.year+'年 '+this.scn.nameJP+'　AIの強さと攻勢を決めます', W/2, 320, {size:28, color:'#9fb2c6', align:'center'});
+      for (const b of this.buttons){
+        if (b.diff){
+          const D=DIFFICULTIES[b.diff];
+          ctx.save();
+          ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,22);
+          ctx.fillStyle = b._hot?'rgba(232,192,122,0.18)':'rgba(255,255,255,0.06)'; ctx.fill();
+          ctx.strokeStyle=D.color; ctx.lineWidth=3; ctx.stroke(); ctx.restore();
+          T(ctx, D.jp+' / '+D.en, b.x+56, b.y+50, {size:52, weight:'bold', color:D.color});
+          T(ctx, D.descJP, b.x+58, b.y+126, {size:28, color:'#cbd5e1'});
+          T(ctx, 'AI収入 ×'+D.aiIncome.toFixed(2)+'　攻勢 '+D.aiMaxAttacks+'回/月', b.x+b.w-56, b.y+56, {size:26, color:'#9fb2c6', align:'right'});
         } else { drawButton(ctx, b, this.t); }
       }
     } else {
@@ -3754,6 +3786,7 @@ class MapScene extends GameKit.Scene {
     const st=this.state;
     const aiLog=[];
     const season=this._stateSeason();
+    const diff=difficultyOf(st);
     // 収入・兵糧（収穫／消費／兵站破綻）
     daimyoOf(st).forEach(d=>{
       if (!st.daimyo[d.id].alive) return;
@@ -3766,6 +3799,8 @@ class MapScene extends GameKit.Scene {
         sol += prov.soldiers;
         if (season===2) harvest += Math.round(kd*(prov.development/100)*RICE_HARVEST_RATE);
       });
+      // 難易度によるAI収入補正（プレイヤーは等倍）
+      if (d.id!==st.playerDaimyo && diff.aiIncome!==1) inc=Math.round(inc*diff.aiIncome);
       treas.gold += inc;
       // 兵糧：収穫を加え、兵の消費を差し引く
       const consume=Math.round(sol/1000*RICE_CONSUME_PER_1000);
@@ -4956,6 +4991,8 @@ class MapScene extends GameKit.Scene {
     const st=this.state;
     T(ctx, st.year+'年 '+this._stateMonth()+'月 — 評定 / Council', px+pw/2, py+30, {size:30, weight:'bold', color:'#e8c07a', align:'center'});
     T(ctx, '諸国の動向 / News of the realm', px+pw/2, py+74, {size:18, color:'#9fb2c6', align:'center'});
+    const D=difficultyOf(st);
+    T(ctx, '難易度 '+D.jp, px+pw-34, py+34, {size:20, weight:'bold', color:D.color, align:'right'});
     if (!log || !log.length){ T(ctx,'目立った動きはなかった。', px+pw/2, py+150, {size:22, color:'#9fb2c6', align:'center'}); }
     else {
       log.slice(0,9).forEach((line,i)=>{ T(ctx, '・'+line, px+50, py+130+i*42, {size:20, color:'#cbd5e1'}); });
@@ -4987,7 +5024,8 @@ function drawGenToggle(ctx, b, march, st){
  * 戦略AI
  * =================================================================== */
 function runStrategicAI(st, d, log){
-  const aggro = {aggressive:1.15, opportunist:1.0, defensive:0.82}[d.ai] || 1.0;
+  const diff=difficultyOf(st);
+  const aggro = ({aggressive:1.15, opportunist:1.0, defensive:0.82}[d.ai] || 1.0) * diff.aiAggro;
   const treasury = st.daimyo[d.id];
   let myProvs = ownedProvinces(st, d.id);
   // 内政・徴兵（国力に余裕があれば）
@@ -4996,7 +5034,7 @@ function runStrategicAI(st, d, log){
     if (treasury.gold>900 && prov.development<80 && Math.random()<0.5){ treasury.gold-=220; prov.development=clamp(prov.development+6,0,95); }
     if (treasury.gold>600){
       const cap=DATA.provById[pid].kokudaka*4+prov.castleLevel*600;
-      if (prov.soldiers<cap*0.7 && Math.random()<0.6){ const cost=300; if(treasury.gold>=cost){ treasury.gold-=cost; prov.soldiers=Math.min(cap, prov.soldiers+500);} }
+      if (prov.soldiers<cap*diff.aiRecruitFrac && Math.random()<0.6){ const cost=300; if(treasury.gold>=cost){ treasury.gold-=cost; prov.soldiers=Math.min(cap, prov.soldiers+500);} }
     }
   });
   // 兵糧の備蓄が乏しければ商人から購入して兵站を維持する
@@ -5007,21 +5045,22 @@ function runStrategicAI(st, d, log){
     buy=Math.max(0, Math.min(buy, Math.floor((treasury.gold-400)/Math.max(1,price))));
     if (buy>0){ treasury.gold-=buy*price; treasury.rice=(treasury.rice||0)+buy; }
   }
-  // 攻撃判断（最大2回/ターン）
+  // 攻撃判断（難易度で最大回数が変わる）
   let attacks=0;
   const order = myProvs.slice().sort(()=> Math.random()-0.5);
   for (const pid of order){
-    if (attacks>=2) break;
+    if (attacks>=diff.aiMaxAttacks) break;
     const prov=st.provinces[pid];
     if (prov.hasActed || prov.soldiers<800) continue;
     // 敵隣接洲
     const targets = neighborsOf(pid).filter(nb=>{ const o=st.provinces[nb].owner; return o!==d.id && !areAllied(st,d.id,o) && !inTruce(st,d.id,o); });
     if (!targets.length) continue;
-    // 最も弱い/価値ある標的
+    // 最も弱い/価値ある標的（難易度が高いほどプレイヤー領を優先的に狙う）
     let best=null, bestScore=-1;
     targets.forEach(nb=>{
       const tp=st.provinces[nb];
-      const val = DATA.provById[nb].kokudaka/Math.max(1,provinceStrength(st,nb));
+      let val = DATA.provById[nb].kokudaka/Math.max(1,provinceStrength(st,nb));
+      if (tp.owner===st.playerDaimyo) val*=diff.targetPlayerBias;
       if (val>bestScore){ bestScore=val; best=nb; }
     });
     if (!best) continue;
