@@ -3880,9 +3880,9 @@ class MapScene extends GameKit.Scene {
     const ikkiLog=[];
     Object.keys(st.provinces).forEach(pid=>{
       const prov=st.provinces[pid]; if (!prov.owner) return;
-      const mc=prov.minchu??60;
-      // 毎ターン民忠-1（課税の歪み）
-      prov.minchu=Math.max(0, mc-1);
+      // 毎ターン民忠-1（課税の歪み）。一揆判定は減算後の民忠で行う
+      const mc=Math.max(0, (prov.minchu??60)-1);
+      prov.minchu=mc;
       // 一揆: 民忠30未満で確率的に発生
       if (mc<30){
         const chance=(30-mc)/60;
@@ -5216,6 +5216,33 @@ class BattleScene extends GameKit.Scene {
     this.particles = new GameKit.Particles(W, H, {count:18, colors:['#2a1c10','#1a2233']});
     this._enemyHQ = this.stacks.filter(s=>s.side===this.aiSide).sort((a,b)=>b.count-a.count)[0];
     this.over=false; this.result=null;
+    this.floaters=[]; this.sparks=[]; // 戦闘演出（ダメージ数値・被弾火花）
+  }
+  // 被弾演出: 対象スタックの位置にダメージ数値と火花を発生させ、被弾フラッシュを点ける
+  _spawnHitFx(stack, dmg, ranged){
+    if (!stack) return;
+    const [x,y]=hexCenter(stack.col, stack.row);
+    stack._hitT=0.32;
+    const big=dmg>=stack.count0*0.18;
+    this.floaters.push({x, y:y-HEX.size*0.3, vy:-58, life:1.0, text:'-'+dmg, color: big?'#fca5a5':'#fde68a', size: big?38:30});
+    const n= ranged? 8 : Math.min(20, 8+Math.round(dmg/Math.max(1,stack.count0)*40));
+    for (let i=0;i<n;i++){
+      const a=Math.random()*Math.PI*2, sp=90+Math.random()*220;
+      this.sparks.push({x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-40, life:0.35+Math.random()*0.3, color: Math.random()<0.5?'#f8b73e':'#ff6b4a', r:2+Math.random()*3});
+    }
+  }
+  _updateFx(dt){
+    const G=520;
+    for (let i=this.floaters.length-1;i>=0;i--){ const f=this.floaters[i]; f.y+=f.vy*dt; f.vy*=0.92; f.life-=dt*1.4; if (f.life<=0) this.floaters.splice(i,1); }
+    for (let i=this.sparks.length-1;i>=0;i--){ const s=this.sparks[i]; s.x+=s.vx*dt; s.y+=s.vy*dt; s.vy+=G*dt; s.life-=dt; if (s.life<=0) this.sparks.splice(i,1); }
+    this.stacks.forEach(s=>{ if (s._hitT>0) s._hitT-=dt; });
+  }
+  _drawFx(ctx){
+    ctx.save();
+    this.sparks.forEach(s=>{ ctx.globalAlpha=Math.max(0,Math.min(1,s.life*2.4)); ctx.fillStyle=s.color; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill(); });
+    ctx.globalAlpha=1;
+    this.floaters.forEach(f=>{ ctx.globalAlpha=Math.max(0,Math.min(1,f.life)); T(ctx, f.text, f.x, f.y, {size:f.size, weight:'bold', color:f.color, align:'center', baseline:'middle', shadow:true}); });
+    ctx.restore();
   }
   _genTerrain(baseTerrain){
     const rng = GameKit.Gen.rng((this.state.rng||1) ^ (this.ctx.dstId?this.ctx.dstId.length*97:7));
@@ -5261,7 +5288,7 @@ class BattleScene extends GameKit.Scene {
 
   /* ---- 入力 ---- */
   update(dt, game){
-    this.t+=dt; this.particles.update(dt);
+    this.t+=dt; this.particles.update(dt); this._updateFx(dt);
     if (this.messageT>0) this.messageT-=dt;
     const p=game.input.pointer;
     const btns=this._buttons();
@@ -5364,6 +5391,9 @@ class BattleScene extends GameKit.Scene {
     const defLoss=Math.min(def.count, Math.round(def.count*defLossFrac));
     const atkLoss=Math.min(atk.count, Math.round(atk.count*atkLossFrac));
     def.count-=defLoss; atk.count-=atkLoss;
+    // 演出: 被弾したスタックにダメージ数値・火花
+    if (defLoss>0) this._spawnHitFx(def, defLoss, ranged);
+    if (atkLoss>0) this._spawnHitFx(atk, atkLoss, false);
     return {defLoss, atkLoss};
   }
   _cleanupStacks(){
@@ -5431,8 +5461,8 @@ class BattleScene extends GameKit.Scene {
   _checkBattleEnd(game){
     const atkAlive=this.stacks.some(s=>s.side==='atk');
     const defAlive=this.stacks.some(s=>s.side==='def');
-    if (!defAlive){ this._finish(game, true, '敵軍を殲滅'); return true; }
-    if (!atkAlive){ this._finish(game, false, '自軍壊滅'); return true; }
+    if (!defAlive){ this._finish(game, true, '守備軍を殲滅 / Defenders routed'); return true; }
+    if (!atkAlive){ this._finish(game, false, '攻撃軍を殲滅 / Attackers routed'); return true; }
     return false;
   }
   _retreat(game){
@@ -5486,6 +5516,7 @@ class BattleScene extends GameKit.Scene {
     this.particles.draw(ctx);
     this._drawGrid(ctx);
     this._drawStacks(ctx);
+    this._drawFx(ctx);
     this._drawHUD(ctx);
     const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t);
     if (this.messageT>0){
@@ -5529,7 +5560,10 @@ class BattleScene extends GameKit.Scene {
       ctx.fillStyle = s.side==='atk'? 'rgba(34,90,170,0.92)':'rgba(170,50,50,0.92)';
       ctx.fill();
       ctx.lineWidth= sel?5:2.5; ctx.strokeStyle= sel?'#22d3ee': (s.hasMoved&&s.hasAttacked?'rgba(255,255,255,0.25)':UNITS[s.type].color);
-      ctx.stroke(); ctx.restore();
+      ctx.stroke();
+      // 被弾フラッシュ
+      if (s._hitT>0){ ctx.globalAlpha=Math.min(0.6, s._hitT*1.8); ctx.fillStyle='#ff5a4a'; ctx.beginPath(); ctx.arc(x,y,HEX.size*0.62,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1; }
+      ctx.restore();
       T(ctx, UNITS[s.type].jp, x, y-HEX.size*0.18, {size:26, weight:'bold', color:'#f8fafc', align:'center', baseline:'middle'});
       T(ctx, s.count+'', x, y+HEX.size*0.20, {size:24, color:'#e8eef6', align:'center', baseline:'middle'});
       // 武将名
