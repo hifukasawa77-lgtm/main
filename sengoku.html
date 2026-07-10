@@ -2632,6 +2632,9 @@ function getRel(st, a, b){ return getDip(st,a,b).relation; }
 function addRel(st, a, b, delta){ const d=getDip(st,a,b); d.relation = clamp(d.relation+delta, -100, 100); return d.relation; }
 function areAllied(st, a, b){ return a!==b && getDip(st,a,b).ally; }
 function inTruce(st, a, b){ return a!==b && getDip(st,a,b).truceUntil >= st.turn; }
+/* 従属関係: st.daimyo[id].vassalOf に主家IDを保持 */
+function suzerainOf(st, id){ return (st.daimyo[id] && st.daimyo[id].vassalOf) || null; }
+function isVassalBond(st, a, b){ return a!==b && (suzerainOf(st,a)===b || suzerainOf(st,b)===a); }
 
 /* ===================================================================
  * 戦闘モデル（手動・自動共通の評価関数）
@@ -3894,6 +3897,11 @@ class MapScene extends GameKit.Scene {
       // 難易度によるAI収入補正（プレイヤーは等倍）
       if (d.id!==st.playerDaimyo && diff.aiIncome!==1) inc=Math.round(inc*diff.aiIncome);
       treas.gold += inc;
+      // 従属国は主家へ収入の3割を貢納する
+      const suz=st.daimyo[d.id].vassalOf;
+      if (suz && suz!==d.id && st.daimyo[suz] && st.daimyo[suz].alive && inc>0){
+        const trib=Math.round(inc*0.3); treas.gold=Math.max(0,treas.gold-trib); st.daimyo[suz].gold+=trib;
+      }
       // 兵糧：収穫を加え、兵の消費を差し引く
       const consume=Math.round(sol/1000*RICE_CONSUME_PER_1000);
       treas.rice=(treas.rice||0)+harvest-consume;
@@ -4056,6 +4064,8 @@ class MapScene extends GameKit.Scene {
   _updateDaimyoAlive(){
     const st=this.state;
     daimyoOf(st).forEach(d=>{ if (ownedProvinces(st,d.id).length===0) st.daimyo[d.id].alive=false; });
+    // 主家が滅んだ従属国は独立に戻す
+    daimyoOf(st).forEach(d=>{ const suz=st.daimyo[d.id].vassalOf; if (suz && (!st.daimyo[suz] || !st.daimyo[suz].alive)) st.daimyo[d.id].vassalOf=null; });
   }
   _checkEnd(game){
     const st=this.state;
@@ -4232,8 +4242,12 @@ class MapScene extends GameKit.Scene {
         if (dip.ally) bs.push({x:bx, y:by, w:bw, h:82, jp:'同盟を破棄', en:'Break alliance', sz:22, ensz:14, accent:'rgba(248,113,113,0.6)', on:!acted, action:g=>this._diploPropose(g,'break')});
         const byD = dip.ally ? by+98 : by;
         const daughters = st.daimyo[me].daughters ?? 1;
-        bs.push({x:bx, y:byD, w:bw, h:92, jp:'従属の提案（200貫）', en:'Propose vassalage', sz:21, ensz:13, accent:'rgba(251,191,36,0.55)', on: gold>=200 && !acted && !dip.ally && !inTruce(st,me,rid) && !dip.vassal, action:g=>this._diploPropose(g,'vassal')});
-        bs.push({x:bx, y:byD+106, w:bw, h:92, jp:'臣従を要求', en:'Demand submission', sz:22, ensz:14, accent:'rgba(248,113,113,0.55)', on: !acted && !dip.ally && !dip.vassal, action:g=>this._diploPropose(g,'demand')});
+        bs.push({x:bx, y:byD, w:bw, h:92, jp:'従属の提案（200貫）', en:'Propose vassalage', sz:21, ensz:13, accent:'rgba(251,191,36,0.55)', on: gold>=200 && !acted && !dip.ally && !inTruce(st,me,rid) && !dip.vassal && st.daimyo[rid].vassalOf!==me, action:g=>this._diploPropose(g,'vassal')});
+        if (st.daimyo[rid].vassalOf===me){
+          bs.push({x:bx, y:byD+106, w:bw, h:92, jp:'併合する（従属国を吸収）', en:'Annex vassal', sz:21, ensz:13, accent:'rgba(52,211,153,0.7)', on:!acted, action:g=>this._diploPropose(g,'annex')});
+        } else {
+          bs.push({x:bx, y:byD+106, w:bw, h:92, jp:'臣従を要求', en:'Demand submission', sz:22, ensz:14, accent:'rgba(248,113,113,0.55)', on: !acted && !dip.ally && !dip.vassal, action:g=>this._diploPropose(g,'demand')});
+        }
         bs.push({x:bx, y:byD+212, w:bw, h:92, jp:'婚姻の提案', en:'Propose marriage', sz:22, ensz:14, accent:'rgba(244,114,182,0.6)', on: daughters>=1 && dip.relation>=80 && !acted && !dip.ally && !dip.married, action:g=>this._diploPropose(g,'marriage')});
       }
       bs.push({x:L.px+L.pw-152, y:L.py+22, w:128, h:60, skin:'topBar', label:'✕ 閉じる', sz:24, action:()=>{ this.showClans=false; this.selClan=null; }});
@@ -4650,6 +4664,8 @@ class MapScene extends GameKit.Scene {
   }
   _diploStatus(rid){
     const st=this.state, me=st.playerDaimyo, dip=getDip(st,me,rid);
+    if (st.daimyo[rid] && st.daimyo[rid].vassalOf===me) return {jp:'従属国', en:'Your vassal', color:'#fbbf24'};
+    if (st.daimyo[me] && st.daimyo[me].vassalOf===rid) return {jp:'主家', en:'Suzerain', color:'#fb923c'};
     if (dip.married) return {jp:'婚姻同盟', en:'Married', color:'#f472b6'};
     if (dip.ally) return {jp:'同盟', en:'Ally', color:'#a78bfa'};
     if (dip.vassal) return {jp:'従属中', en:'Vassal', color:'#fbbf24'};
@@ -4697,9 +4713,20 @@ class MapScene extends GameKit.Scene {
       if (myPow<thPow*1.2){ addRel(st,me,rid,-12); game.audio.beep(200,0.16,'sawtooth'); this._flash('国力差が足りず臣従を断られた（関係-12）','Too weak to demand submission'); }
       else {
         const chance=clamp(0.1+(myPow-thPow)*0.06+dip.relation/200, 0.05, 0.85);
-        if (srand(st)<chance){ dip.truceUntil=st.turn+15; addRel(st,me,rid,10); game.audio.jingle([{f:523,d:0.09},{f:698,d:0.15},{f:880,d:0.18}]); this._flash(daimyoDef(st,rid).nameJP+'家が臣従を認めた！（停戦15ターン）','Submission accepted!'); }
+        if (srand(st)<chance){ st.daimyo[rid].vassalOf=me; dip.truceUntil=st.turn+999; addRel(st,me,rid,12); game.audio.jingle([{f:523,d:0.09},{f:698,d:0.15},{f:880,d:0.18}]); this._flash(daimyoDef(st,rid).nameJP+'家が臣従（従属国となり毎季貢納する）','Now your vassal (pays tribute)'); }
         else { addRel(st,me,rid,-8); game.audio.beep(200,0.16,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は臣従を拒否した（関係-8）','Submission refused'); }
       }
+    } else if (kind==='annex'){
+      if (st.daimyo[rid].vassalOf!==me){ this._flash('従属国ではありません','Not your vassal'); return; }
+      dip.actedTurn=st.turn;
+      ownedProvinces(st,rid).slice().forEach(pid=>{
+        const prov=st.provinces[pid]; prov.owner=me;
+        prov.generals.filter(g=>st.generals[g].alive).forEach(g=>{ st.generals[g].daimyo=me; st.generals[g].loyalty=Math.min(st.generals[g].loyalty||50, 55); });
+      });
+      st.daimyo[rid].alive=false; st.daimyo[rid].vassalOf=null;
+      game.audio.jingle([{f:523,d:0.1},{f:659,d:0.1},{f:784,d:0.16},{f:1047,d:0.2}]);
+      this._flash(daimyoDef(st,rid).nameJP+'家を併合した（従属国を吸収）','Annexed your vassal');
+      this.selClan=null; this._checkEnd(game);
     } else if (kind==='marriage'){
       const dmyo=st.daimyo[me];
       if ((dmyo.daughters??1)<1){ this._flash('未婚の姫がいません','No unmarried daughters'); return; }
@@ -4750,6 +4777,7 @@ class MapScene extends GameKit.Scene {
       T(ctx, d.nameJP+'家 / '+(d.nameEN||''), L.rightX+L.rightW/2, L.py+210, {size:32, weight:'bold', color:'#f1e6cf', align:'center'});
       T(ctx, '状態：'+stat.jp+'（'+stat.en+'）  関係：'+dip.relation+'  領国：'+ownedProvinces(st,rid).length+'洲', L.rightX+L.rightW/2, L.py+256, {size:20, color:stat.color, align:'center'});
       const extraInfo=[];
+      if (st.daimyo[rid].vassalOf===me) extraInfo.push('従属国（毎季貢納・併合可能）👑');
       if (dip.married) extraInfo.push('婚姻同盟成立済み 💐');
       if (dip.vassal) extraInfo.push('従属中（停戦'+Math.max(0,dip.truceUntil-st.turn)+'ターン残）');
       if (dip.actedTurn===st.turn) extraInfo.push('※今季は交渉済み');
@@ -5249,7 +5277,7 @@ function runStrategicAI(st, d, log){
     const prov=st.provinces[pid];
     if (prov.hasActed || prov.soldiers<800) continue;
     // 敵隣接洲
-    const targets = neighborsOf(pid).filter(nb=>{ const o=st.provinces[nb].owner; return o!==d.id && !areAllied(st,d.id,o) && !inTruce(st,d.id,o); });
+    const targets = neighborsOf(pid).filter(nb=>{ const o=st.provinces[nb].owner; return o!==d.id && !areAllied(st,d.id,o) && !inTruce(st,d.id,o) && !isVassalBond(st,d.id,o); });
     if (!targets.length) continue;
     // 最も弱い/価値ある標的（難易度が高いほどプレイヤー領を優先的に狙う）
     let best=null, bestScore=-1;
