@@ -3732,6 +3732,23 @@ class MapScene extends GameKit.Scene {
     this._save();
   }
 
+  /* ---- 捕縛武将の登用 ---- */
+  _recruitCaptive(game, gid){
+    const st=this.state, ov=this.overlay; if (!ov || !ov.data || !ov.data.captives) return;
+    const dstId=ov.data.dstId, prov=st.provinces[dstId];
+    const g=st.generals[gid]; if (!g) return;
+    g.alive=true; g.daimyo=st.playerDaimyo; g.location=dstId; g.loyalty=60;
+    if (prov && prov.owner===st.playerDaimyo && !prov.generals.includes(gid)) prov.generals.push(gid);
+    const i=ov.data.captives.indexOf(gid); if (i>=0) ov.data.captives.splice(i,1);
+    game.audio.jingle([{f:523,d:0.08},{f:784,d:0.12}]);
+    this._flash((DATA.genById[gid]?DATA.genById[gid].nameJP:'武将')+'を登用した！', 'Recruited to your service!');
+    this._save();
+  }
+  _recruitAllCaptives(game){
+    const ov=this.overlay; if (!ov || !ov.data || !ov.data.captives) return;
+    ov.data.captives.slice().forEach(g=>this._recruitCaptive(game, g));
+  }
+
   /* ---- ターン終了 → AI処理 ---- */
   _endTurn(game){
     const st=this.state;
@@ -4097,7 +4114,20 @@ class MapScene extends GameKit.Scene {
       bs.push({x:px+pw-286, y:py+42, w:240, h:78, jp:'閉じる', en:'Close', sz:30, ensz:17, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='battleResult' || ov.type==='turnSummary'){
       const after=ov._afterDefense;
-      bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:g=>{ this.overlay=null; if(after) this._processTurnResolution(g); }});
+      const caps=(ov.data && ov.data.captives)?ov.data.captives.slice(0,5):[];
+      if (caps.length){
+        // 捕縛武将ごとの登用ボタン（パネル座標に合わせる）
+        const px=W/2-360, py=H/2-280, pw=720;
+        caps.forEach((gid,i)=>{
+          const ry=py+352+i*76;
+          bs.push({x:px+pw-200, y:ry+6, w:150, h:54, jp:'登用', en:'Recruit', sz:24, ensz:14, accent:'rgba(52,211,153,0.65)', action:g=>this._recruitCaptive(g, gid)});
+        });
+        const by=py+352+caps.length*76+18;
+        bs.push({x:px+60, y:by, w:300, h:66, jp:'全員を登用', en:'Recruit all', sz:24, accent:'rgba(52,211,153,0.55)', action:g=>this._recruitAllCaptives(g)});
+        bs.push({x:px+pw-360, y:by, w:300, h:66, jp:'残りは解放して終了', en:'Release & continue', sz:22, accent:'rgba(232,192,122,0.6)', action:g=>{ this.overlay=null; if(after) this._processTurnResolution(g); }});
+      } else {
+        bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:g=>{ this.overlay=null; if(after) this._processTurnResolution(g); }});
+      }
     } else if (ov.type==='defense'){
       const c=ov.data; const px=W/2-440, py=H/2-320, pw=880, ph=620; const by=py+ph-116;
       bs.push({x:px+60, y:by, w:340, h:84, jp:'手動で防衛', en:'Defend (Hex Battle)', sz:26, ensz:16, accent:'rgba(52,211,153,0.7)', action:g=>this._resolveDefense(g,true)});
@@ -4890,7 +4920,9 @@ class MapScene extends GameKit.Scene {
     T(ctx, '※一括／委任は自国領のみ。金の続く範囲で実行されます', px+pw/2, py+600, {size:17, color:'#7d93ab', align:'center'});
   }
   _drawBattleResult(ctx, d){
-    const px=W/2-360, py=H/2-280, pw=720, ph=580;
+    const st=this.state;
+    const caps=(d.captives||[]).slice(0,5);
+    const px=W/2-360, py=H/2-280, pw=720, ph=580 + (caps.length?60+caps.length*76+20:0);
     const won = d.playerWon!==undefined? d.playerWon : d.win;
     GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:20, fill:'rgba(14,22,38,0.96)', stroke: won?'rgba(52,211,153,0.5)':'rgba(248,113,113,0.5)'});
     T(ctx, won?'勝利 / Victory':'敗北 / Defeat', px+pw/2, py+44, {size:44, weight:'bold', color: won?'#34d399':'#f87171', align:'center'});
@@ -4904,6 +4936,18 @@ class MapScene extends GameKit.Scene {
       T(ctx, '討死: '+d.generalsLost.map(g=>DATA.genById[g]?DATA.genById[g].nameJP:g).join('、'), px+pw/2, py+264, {size:20, color:'#f87171', align:'center'});
     } else {
       T(ctx, '武将の損失なし', px+pw/2, py+264, {size:20, color:'#7d93ab', align:'center'});
+    }
+    // 捕らえた武将（登用/解放）
+    if (caps.length){
+      T(ctx, '⚑ 敵将を捕らえた！ 登用しますか？ / Captured generals', px+pw/2, py+320, {size:23, weight:'bold', color:'#e8c07a', align:'center'});
+      caps.forEach((gid,i)=>{
+        const g=DATA.genById[gid]; if(!g) return;
+        const ry=py+352+i*76;
+        ctx.save(); ctx.beginPath(); ctx.roundRect(px+40, ry, pw-260, 66, 12); ctx.fillStyle='rgba(255,255,255,0.05)'; ctx.fill(); ctx.strokeStyle='rgba(232,192,122,0.3)'; ctx.lineWidth=1.4; ctx.stroke(); ctx.restore();
+        drawGeneralPortrait(ctx, gid, px+52, ry+8, 50, {stroke:'rgba(232,192,122,0.5)', lineWidth:2});
+        T(ctx, g.nameJP, px+118, ry+12, {size:26, weight:'bold', color:'#f1f5f9'});
+        T(ctx, '統'+g.stats.tou+' 武'+g.stats.bu+' 智'+g.stats.chi+' 政'+g.stats.sei, px+118, ry+44, {size:17, color:'#9fb2c6'});
+      });
     }
   }
   _drawTurnSummary(ctx, log){
@@ -5028,25 +5072,51 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
   const playerInvolved = ctx.attacker.daimyo===st.playerDaimyo || ctx.defender.daimyo===st.playerDaimyo;
   const R = ()=>srand(st);
   const generalsLost=[];
+  let playerCaptives=[];
   const lord = daimyoDef(st, ctx.attacker.daimyo);
   const isLord = (gid)=> lord && lord.lord===gid;
   if (res.attackerWins){
+    const winner = ctx.attacker.daimyo;
     // 攻撃側生存兵が占領
     const defLossFrac = 1 - res.defSurvivors/Math.max(1,ctx.defender.soldiers);
-    // 守備側武将の討死/捕縛
-    const deadDef = rollGeneralDeaths(st, ctx.defender.generals, defLossFrac, (gid)=>{ const dl=ctx.defender.daimyo&&daimyoDef(st,ctx.defender.daimyo); return dl&&dl.lord===gid; }, R);
-    // 守備側の生存武将は領地を失い退去（locationクリア）
-    dst.generals.filter(g=>st.generals[g].alive).forEach(g=>{ st.generals[g].location=null; st.generals[g].daimyo=null; });
+    const defLord = ctx.defender.daimyo && daimyoDef(st, ctx.defender.daimyo);
+    // 守備側武将を「討死／捕縛／逃亡」に振り分け（討死→残存で捕縛判定。決定的勝利ほど捕縛が増える）
+    const deadDef=[], captured=[];
+    ctx.defender.generals.forEach(gid=>{
+      const g=st.generals[gid]; if (!g || !g.alive) return;
+      const isDefLord = defLord && defLord.lord===gid;
+      let deathChance = 0.08 + defLossFrac*0.24; if (isDefLord) deathChance*=0.5;
+      if (R() < deathChance){ g.alive=false; g.location=null; g.daimyo=null; deadDef.push(gid); return; }
+      // 生存 → 領地喪失で離脱、捕縛判定（忠誠が低いほど・損害が大きいほど捕らえやすい）
+      g.location=null; g.daimyo=null;
+      const loy=g.loyalty||50;
+      const capChance=clamp(0.5 + defLossFrac*0.3 - loy/300, 0.12, 0.9);
+      if (R() < capChance) captured.push(gid);
+    });
     dst.generals = [];
     // 占領
-    dst.owner = ctx.attacker.daimyo;
+    dst.owner = winner;
     dst.soldiers = res.atkSurvivors;
     // 攻撃側武将を移動
-    atkGens.forEach(g=>{ if (st.generals[g].alive){ st.generals[g].location=ctx.dstId; st.generals[g].daimyo=ctx.attacker.daimyo; dst.generals.push(g); } });
+    atkGens.forEach(g=>{ if (st.generals[g].alive){ st.generals[g].location=ctx.dstId; st.generals[g].daimyo=winner; dst.generals.push(g); } });
     // 攻撃側のわずかな討死
     const atkLossFrac = 1 - res.atkSurvivors/Math.max(1,ctx.attacker.soldiers);
     rollGeneralDeaths(st, atkGens, atkLossFrac*0.5, isLord, R).forEach(g=>generalsLost.push(g));
     deadDef.forEach(g=>generalsLost.push(g));
+    // 捕縛武将の処理
+    if (captured.length){
+      if (winner===st.playerDaimyo){
+        playerCaptives=captured.slice(); // 戦評定で登用/解放を選ぶ（現状は浪人として保留）
+      } else {
+        // AIは有力な武将を確率で登用、他は解放
+        captured.forEach(g=>{
+          const gd=DATA.genById[g]; const worth=gd?(gd.stats.tou+gd.stats.bu+gd.stats.chi):120;
+          if (R()<clamp((worth-140)/160+0.25, 0.08, 0.8)){
+            st.generals[g].daimyo=winner; st.generals[g].location=ctx.dstId; st.generals[g].loyalty=52; dst.generals.push(g);
+          }
+        });
+      }
+    }
   } else {
     // 攻撃側敗北：生存兵は出陣元へ帰還、武将も戻る
     src.soldiers += res.atkSurvivors;
@@ -5060,7 +5130,7 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
   if (playerInvolved){
     const defense = ctx.defender.daimyo===st.playerDaimyo && ctx.attacker.daimyo!==st.playerDaimyo;
     const playerWon = defense ? !res.attackerWins : res.attackerWins;
-    st.pendingResult = { win:res.attackerWins, playerWon, defense, dstId:ctx.dstId, atkSurvivors:res.atkSurvivors, defSurvivors:res.defSurvivors, generalsLost };
+    st.pendingResult = { win:res.attackerWins, playerWon, defense, dstId:ctx.dstId, atkSurvivors:res.atkSurvivors, defSurvivors:res.defSurvivors, generalsLost, captives:playerCaptives };
   }
 }
 
