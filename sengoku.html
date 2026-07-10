@@ -3897,11 +3897,47 @@ class MapScene extends GameKit.Scene {
     });
     // 米相場更新（毎月変動）
     st.ricePrice=Math.round(50+srand(st)*150);
-    const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog); st.pendingTurnLog=null;
+    // 年明けに寿命・下剋上イベント（武将の死去・出奔）
+    const lifeLog = (st.month===1) ? this._yearlyLifeEvents(st) : [];
+    const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog).concat(lifeLog); st.pendingTurnLog=null;
     this.overlay={type:'turnSummary', data:aiLog};
     game.audio.beep(500,0.12,'triangle');
     this._save();
     this._checkEnd(game);
+  }
+  // 年次の寿命・下剋上イベント（年明けに1回）。死去・出奔を処理しログを返す
+  _yearlyLifeEvents(st){
+    const log=[]; const year=st.year;
+    const lordSet=new Set(daimyoOf(st).map(d=>d.lord).filter(Boolean));
+    const removeFromProv=(gid, g)=>{ const loc=g.location; if (loc && st.provinces[loc]){ const i=st.provinces[loc].generals.indexOf(gid); if (i>=0) st.provinces[loc].generals.splice(i,1); } };
+    Object.keys(st.generals).forEach(gid=>{
+      const g=st.generals[gid]; if (!g || !g.alive) return;
+      const owner=g.daimyo; const gd=DATA.genById[gid];
+      const notable = gd && (gd.stats.tou+gd.stats.bu+gd.stats.chi >= 210);
+      // 寿命（史実没年 / 高齢）
+      const bd=GENERAL_BIRTH_DEATH[gid]; let dc=0;
+      if (bd){
+        if (bd.died && year>=bd.died) dc=Math.max(dc, clamp(0.5+(year-bd.died)*0.15, 0, 0.95));
+        if (bd.born){ const age=year-bd.born; if (age>=62) dc=Math.max(dc, (age-62)*0.03); }
+      }
+      if (dc>0 && srand(st)<dc){
+        removeFromProv(gid, g); g.alive=false; g.location=null; g.daimyo=null;
+        if (owner===st.playerDaimyo || lordSet.has(gid) || notable){
+          const age=(bd&&bd.born)?('・享年'+(year-bd.born)):'';
+          log.push('【訃報】'+(gd?gd.nameJP:gid)+' 死去'+age+(owner===st.playerDaimyo?'（自家）':''));
+        }
+        return;
+      }
+      // 下剋上（当主以外・極端な低忠誠で出奔）
+      if (owner && !lordSet.has(gid)){
+        const loy=g.loyalty||60;
+        if (loy<25 && srand(st) < (25-loy)*0.02){
+          removeFromProv(gid, g); g.location=null; g.daimyo=null; // 出奔して浪人化
+          if (owner===st.playerDaimyo || notable) log.push('【下剋上】'+(gd?gd.nameJP:gid)+' 出奔（忠誠低下）'+(owner===st.playerDaimyo?'（自家）':''));
+        }
+      }
+    });
+    return log;
   }
   _updateDaimyoAlive(){
     const st=this.state;
