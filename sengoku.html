@@ -5060,8 +5060,54 @@ function drawGenToggle(ctx, b, march, st){
 /* ===================================================================
  * 戦略AI
  * =================================================================== */
+// AI外交: 盟主（突出勢力）への対抗同盟・弱者の停戦を結ぶ（反・盟主包囲網）
+function runAIDiplomacy(st, d, log){
+  const alive = daimyoOf(st).filter(x=>st.daimyo[x.id] && st.daimyo[x.id].alive);
+  if (alive.length < 3) return;
+  const diff = difficultyOf(st);
+  const provN = id => ownedProvinces(st, id).length;
+  const total = DATA.provinces.length;
+  const myN = provN(d.id);
+  const allyCount = id => alive.reduce((n,x)=> n + ((x.id!==id && areAllied(st,id,x.id))?1:0), 0);
+  // 盟主（最大勢力）
+  let leader=null, leaderN=0; alive.forEach(x=>{ const n=provN(x.id); if (n>leaderN){ leaderN=n; leader=x.id; } });
+  const dominant = leader && leaderN >= Math.max(8, Math.round(total*0.14));
+
+  // 1) 反・盟主包囲網: 盟主でない大名は、盟主以外の非盟主と同盟する
+  if (dominant && d.id!==leader && allyCount(d.id) < 2){
+    const cands = alive.filter(x=>x.id!==d.id && x.id!==leader && provN(x.id)<leaderN && !areAllied(st,d.id,x.id) && getRel(st,d.id,x.id)>-45 && allyCount(x.id)<3);
+    if (cands.length){
+      cands.sort((a,b)=> provN(b.id)-provN(a.id));
+      const partner=cands[0];
+      const willing = 0.3 + (leaderN/total)*1.3;
+      if (Math.random() < Math.min(0.78, willing)){
+        const dip=getDip(st,d.id,partner.id);
+        if (!dip.ally){ dip.ally=true; addRel(st,d.id,partner.id,25);
+          if (leader===st.playerDaimyo && log){ log.push(d.nameJP+'家と'+daimyoDef(st,partner.id).nameJP+'家が同盟（反'+daimyoDef(st,leader).nameJP+'包囲網）'); }
+          return;
+        }
+      }
+    }
+  }
+
+  // 2) 弱者の停戦: 隣接する遥かに強大な敵に停戦を請う（時限）
+  const borderIds=new Set(); ownedProvinces(st,d.id).forEach(pid=>neighborsOf(pid).forEach(nb=>{ const o=st.provinces[nb].owner; if (o && o!==d.id) borderIds.add(o); }));
+  const borders=[...borderIds].filter(id=>st.daimyo[id]&&st.daimyo[id].alive);
+  let threat=null, tN=myN*1.6; borders.forEach(id=>{ const n=provN(id); if (n>tN){ tN=n; threat=id; } });
+  if (threat && !areAllied(st,d.id,threat) && !inTruce(st,d.id,threat) && Math.random()<0.5){
+    const dip=getDip(st,d.id,threat); dip.truceUntil=st.turn+(6+Math.floor(Math.random()*6)); addRel(st,d.id,threat,6);
+    return;
+  }
+
+  // 3) 硬直防止: 盟主が没落したら同盟を解消する余地
+  if (!dominant && Math.random()<0.12){
+    const ally = alive.find(x=>x.id!==d.id && areAllied(st,d.id,x.id));
+    if (ally){ getDip(st,d.id,ally.id).ally=false; }
+  }
+}
 function runStrategicAI(st, d, log){
   const diff=difficultyOf(st);
+  runAIDiplomacy(st, d, log);
   const aggro = ({aggressive:1.15, opportunist:1.0, defensive:0.82}[d.ai] || 1.0) * diff.aiAggro;
   const treasury = st.daimyo[d.id];
   let myProvs = ownedProvinces(st, d.id);
