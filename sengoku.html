@@ -3898,9 +3898,10 @@ class MapScene extends GameKit.Scene {
     });
     // 米相場更新（毎月変動）
     st.ricePrice=Math.round(50+srand(st)*150);
-    // 年明けに寿命・下剋上イベント（武将の死去・出奔）
+    // 年明けに寿命・下剋上／天災・ランダムイベント
     const lifeLog = (st.month===1) ? this._yearlyLifeEvents(st) : [];
-    const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog).concat(lifeLog); st.pendingTurnLog=null;
+    const eventLog = (st.month===1) ? this._yearlyEvents(st) : [];
+    const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
     this.overlay={type:'turnSummary', data:aiLog};
     game.audio.beep(500,0.12,'triangle');
     this._save();
@@ -3937,6 +3938,27 @@ class MapScene extends GameKit.Scene {
           if (owner===st.playerDaimyo || notable) log.push('【下剋上】'+(gd?gd.nameJP:gid)+' 出奔（忠誠低下）'+(owner===st.playerDaimyo?'（自家）':''));
         }
       }
+    });
+    return log;
+  }
+  // 年次の天災・慶事（好悪のランダムイベント）。全大名に公平に適用し、自家の分は評定に表示
+  _yearlyEvents(st){
+    const log=[]; const R=()=>srand(st);
+    daimyoOf(st).forEach(d=>{
+      if (!st.daimyo[d.id] || !st.daimyo[d.id].alive) return;
+      if (R() > 0.35) return; // 年に約35%で1イベント
+      const provs=ownedProvinces(st, d.id); if (!provs.length) return;
+      const isP = d.id===st.playerDaimyo;
+      const treas=st.daimyo[d.id];
+      const pid=provs[Math.floor(R()*provs.length)]; const prov=st.provinces[pid];
+      const pname=DATA.provById[pid]?.nameJP||pid;
+      const roll=R();
+      if (roll<0.18){ const g=200+Math.round(R()*300); treas.gold+=g; if (isP) log.push('【豊作】'+pname+'で収穫豊か。金+'+g); }
+      else if (roll<0.34){ const g=400+Math.round(R()*600); treas.gold+=g; if (isP) log.push('【金山発見】'+pname+'で金脈を発見！金+'+g); }
+      else if (roll<0.50){ if (R()<0.5){ treas.horse=(treas.horse||0)+50; if (isP) log.push('【名馬】'+pname+'に良馬が集まる。馬+50'); } else { treas.gun=(treas.gun||0)+40; if (isP) log.push('【鉄砲伝来】'+pname+'に鉄砲がもたらされる。鉄砲+40'); } }
+      else if (roll<0.68){ const r=Math.round(20+R()*30); treas.rice=Math.max(0,(treas.rice||0)-r); prov.minchu=Math.max(0,(prov.minchu??60)-8); if (isP) log.push('【凶作】'+pname+'で不作。兵糧-'+r+'・民忠低下'); }
+      else if (roll<0.84){ const dv=Math.round(6+R()*8); prov.development=Math.max(0,prov.development-dv); prov.minchu=Math.max(0,(prov.minchu??60)-6); if (isP) log.push('【洪水】'+pname+'で水害。城下開発-'+dv+'・民忠低下'); }
+      else { const loss=Math.round(prov.soldiers*(0.08+R()*0.08)); prov.soldiers=Math.max(0,prov.soldiers-loss); prov.minchu=Math.max(0,(prov.minchu??60)-6); if (isP) log.push('【疫病】'+pname+'で疫病が流行。兵'+loss+'を失う'); }
     });
     return log;
   }
