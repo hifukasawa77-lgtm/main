@@ -3557,6 +3557,76 @@ class MapScene extends GameKit.Scene {
   _openNaisei(game){
     this.overlay={type:'naisei'};
   }
+  /* ---- 統治（一括コマンド・委任） ---- */
+  _openBulkGov(game){ this.overlay={type:'bulkGov'}; }
+  // 全国一括開発（開発余地のある自国城すべてに +6、予算の許す限り）
+  _bulkDevelop(game){
+    const st=this.state, d=st.daimyo[st.playerDaimyo], cost=220; let n=0;
+    ownedProvinces(st, st.playerDaimyo).forEach(pid=>{
+      const prov=st.provinces[pid];
+      if (prov.development<95 && d.gold>=cost){ d.gold-=cost; prov.development=clamp(prov.development+6,0,95); n++; }
+    });
+    if (n){ game.audio.beep(680,0.08,'sine'); this._flash('一括開発：'+n+'城で開発+6（-'+(n*cost)+'貫）', 'Developed '+n+' provinces'); }
+    else this._flash('開発できる城がありません（上限or金不足）', 'Nothing to develop');
+    this._save();
+  }
+  // 全国一括徴兵（徴兵余地のある自国城すべてに +500、予算の許す限り）
+  _bulkRecruit(game){
+    const st=this.state, d=st.daimyo[st.playerDaimyo], add=500; let n=0, spent=0;
+    ownedProvinces(st, st.playerDaimyo).forEach(pid=>{
+      const prov=st.provinces[pid];
+      const cap=DATA.provById[pid].kokudaka*4 + prov.castleLevel*600;
+      if (prov.soldiers>=cap) return;
+      const bg=bestGeneralIn(st,pid); const sei=bg?DATA.genById[bg].stats.sei:45;
+      const cost=Math.round(add*(0.6 - sei/400));
+      if (d.gold>=cost){ d.gold-=cost; prov.soldiers=Math.min(cap, prov.soldiers+add); n++; spent+=cost; }
+    });
+    if (n){ game.audio.beep(440,0.1,'square'); this._flash('一括徴兵：'+n+'城で兵+'+add+'（-'+spent+'貫）', 'Recruited in '+n+' provinces'); }
+    else this._flash('徴兵できる城がありません（上限or金不足）', 'Nothing to recruit');
+    this._save();
+  }
+  // 兵糧補給（全国6ヶ月分まで買い足す）
+  _bulkBuyRice(game){
+    const st=this.state, d=st.daimyo[st.playerDaimyo], price=st.ricePrice??100;
+    const consume=riceConsumptionOf(st, st.playerDaimyo);
+    if (consume<=0){ this._flash('兵がいないため兵糧は不要です', 'No troops to feed'); return; }
+    const target=consume*6;
+    if ((d.rice||0)>=target){ this._flash('兵糧は十分にあります（6ヶ月分以上）', 'Rice already sufficient'); return; }
+    let buy=Math.min(target-(d.rice||0), Math.floor(d.gold/Math.max(1,price)));
+    if (buy<=0){ this._flash('金が足りません', 'Not enough gold'); return; }
+    d.gold-=buy*price; d.rice=(d.rice||0)+buy;
+    game.audio.beep(600,0.07,'sine');
+    this._flash('兵糧+'+buy+'千石（-'+(buy*price)+'貫）備蓄 約'+Math.floor(d.rice/consume)+'ヶ月', 'Rice +'+buy);
+    this._save();
+  }
+  _toggleDelegate(game){
+    const st=this.state; st.delegateInternal=!st.delegateInternal;
+    game.audio.beep(st.delegateInternal?720:360,0.08,'triangle');
+    this._flash(st.delegateInternal?'内政を家臣に委任（毎ターン自動で開発・徴兵・兵糧補給）':'委任を解除しました', st.delegateInternal?'Internal affairs delegated':'Delegation off');
+    this._save();
+  }
+  // 委任時に毎ターン自動実行される内政（予備金を残して開発・徴兵・施し・兵糧補給）
+  _autoManagePlayer(st){
+    const d=st.daimyo[st.playerDaimyo]; if (!d || !d.alive) return;
+    const reserve=500;
+    ownedProvinces(st, st.playerDaimyo).forEach(pid=>{
+      const prov=st.provinces[pid];
+      if (d.gold>reserve+220 && prov.development<80){ d.gold-=220; prov.development=clamp(prov.development+6,0,95); }
+      const cap=DATA.provById[pid].kokudaka*4 + prov.castleLevel*600;
+      if (prov.soldiers<cap*0.7){
+        const bg=bestGeneralIn(st,pid); const sei=bg?DATA.genById[bg].stats.sei:45;
+        const cost=Math.round(500*(0.6 - sei/400));
+        if (d.gold>reserve+cost){ d.gold-=cost; prov.soldiers=Math.min(cap, prov.soldiers+500); }
+      }
+      if ((prov.minchu??60)<40 && d.gold>reserve+80){ d.gold-=80; prov.minchu=Math.min(100,(prov.minchu??60)+15); }
+    });
+    // 兵糧を6ヶ月分まで補給
+    const consume=riceConsumptionOf(st, st.playerDaimyo);
+    if (consume>0){
+      const target=consume*6, price=st.ricePrice??100;
+      if ((d.rice||0)<target){ const buy=Math.min(target-(d.rice||0), Math.floor((d.gold-reserve)/Math.max(1,price))); if (buy>0){ d.gold-=buy*price; d.rice=(d.rice||0)+buy; } }
+    }
+  }
   _alms(game){
     const st=this.state, pid=this.selected, prov=st.provinces[pid];
     const cost=80;
@@ -3698,6 +3768,8 @@ class MapScene extends GameKit.Scene {
         if (d.id===st.playerDaimyo && lost>0) aiLog.push('兵糧が尽き、'+lost+'の兵が離散した…（収穫は秋・商人で兵糧購入可）');
       }
     });
+    // 委任: プレイヤーの内政を自動処理
+    if (st.delegateInternal) this._autoManagePlayer(st);
     // AI 各大名
     st.pendingDefenses=[];
     daimyoOf(st).forEach(d=>{
@@ -3933,6 +4005,7 @@ class MapScene extends GameKit.Scene {
       {jp:'内政', en:'Domestic', icon:'♜', action:g=>this._runProvinceCommand(g, this._openNaisei)},
       {jp:'城強化', en:'Castle', icon:'♛', action:g=>this._runProvinceCommand(g, this._castle)},
       {jp:'徴兵', en:'Recruit', icon:'⚔', action:g=>this._runProvinceCommand(g, this._recruit)},
+      {jp:'統治', en:'Govern', icon:'❖', action:g=>this._openBulkGov(g)},
       {jp:'調略', en:'Intrigue', icon:'✦', action:g=>this._runProvinceCommand(g, this._openPloy)},
       {jp:'外交', en:'Diplomacy', icon:'⚑', action:()=>{ this.showClans=!this.showClans; this.selClan=null; }},
       {jp:'地図', en:'Map', icon:'▣', action:()=>{ this.showClans=false; this.cam.zoom=this.cam.min; this._clampCam(); }},
@@ -4078,6 +4151,20 @@ class MapScene extends GameKit.Scene {
         accent:'rgba(148,163,184,0.30)', on:false, action:()=>this._flash('家宝購入は準備中です')});
       bs.push({x:px+60, y:py+ph-80, w:180, h:64, jp:'戻る', en:'Back', sz:24, action:()=>{ this.overlay={type:'naisei'}; }});
       bs.push({x:px+pw-240, y:py+ph-80, w:180, h:64, jp:'閉じる', en:'Close', sz:24, action:()=>{ this.overlay=null; }});
+    } else if (ov.type==='bulkGov'){
+      const d=st.daimyo[st.playerDaimyo], gold=d.gold;
+      const px=W/2-440, py=H/2-420, pw=880, ph=820;
+      const bw=(pw-180)/2, bx1=px+70, bx2=px+70+bw+40;
+      const s=this._bulkStats();
+      bs.push({x:bx1, y:py+300, w:bw, h:96, jp:'全国一括開発 '+s.devN+'城', en:'-'+s.devCost+'貫  Develop all', sz:24, ensz:15,
+        accent:'rgba(74,222,128,0.55)', on:s.devN>0 && gold>=220, action:g=>this._bulkDevelop(g)});
+      bs.push({x:bx2, y:py+300, w:bw, h:96, jp:'全国一括徴兵 '+s.recN+'城', en:'-'+s.recCost+'貫  Recruit all', sz:24, ensz:15,
+        accent:'rgba(248,113,113,0.55)', on:s.recN>0 && gold>0, action:g=>this._bulkRecruit(g)});
+      bs.push({x:bx1, y:py+430, w:bw, h:96, jp:(s.riceBuy>0?'兵糧補給 +'+s.riceBuy+'千石':'兵糧は十分'), en:(s.riceBuy>0?'-'+s.riceCost+'貫  Resupply 6mo':'Rice OK'), sz:23, ensz:15,
+        accent:'rgba(251,191,36,0.55)', on:s.riceBuy>0 && gold>0, action:g=>this._bulkBuyRice(g)});
+      bs.push({x:bx2, y:py+430, w:bw, h:96, jp:(st.delegateInternal?'委任を解除':'内政を委任する'), en:(st.delegateInternal?'Delegation: ON':'Delegation: OFF'), sz:23, ensz:15,
+        accent:st.delegateInternal?'rgba(74,222,128,0.7)':'rgba(148,163,184,0.5)', action:g=>this._toggleDelegate(g)});
+      bs.push({x:px+pw/2-110, y:py+ph-92, w:220, h:70, jp:'閉じる', en:'Close', sz:26, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='allGenerals'){
       const allGens=this._getAllGensSorted();
       const PER_PAGE=15, page=this.allGenPage, pageCount=Math.max(1,Math.ceil(allGens.length/PER_PAGE));
@@ -4578,6 +4665,7 @@ class MapScene extends GameKit.Scene {
     else if (ov.type==='generalDetail') this._drawGeneralDetail(ctx, ov.gid);
     else if (ov.type==='naisei') this._drawNaisei(ctx);
     else if (ov.type==='shonin') this._drawShonin(ctx);
+    else if (ov.type==='bulkGov') this._drawBulkGov(ctx);
     const btns=this._overlayButtons(); for (const b of btns){
       if (b._noRender) continue;
       if (b._gen){ drawGenToggle(ctx, b, this.march, st); }
@@ -4762,6 +4850,44 @@ class MapScene extends GameKit.Scene {
     T(ctx, '米売買（10千石単位）', px+60, py+242, {size:20, color:'#94a3b8'});
     T(ctx, '軍備（50単位）', px+60+pw/2, py+242, {size:20, color:'#94a3b8'});
     T(ctx, '家宝購入（今後実装予定）', px+60, py+480, {size:20, color:'#64748b'});
+  }
+  // 一括統治の見積り（ボタン表示と描画で共用）
+  _bulkStats(){
+    const st=this.state, d=st.daimyo[st.playerDaimyo], price=st.ricePrice??100;
+    let devN=0, recN=0, recCost=0;
+    ownedProvinces(st, st.playerDaimyo).forEach(pid=>{
+      const prov=st.provinces[pid];
+      if (prov.development<95) devN++;
+      const cap=DATA.provById[pid].kokudaka*4 + prov.castleLevel*600;
+      if (prov.soldiers<cap){ recN++; const bg=bestGeneralIn(st,pid); const sei=bg?DATA.genById[bg].stats.sei:45; recCost+=Math.round(500*(0.6 - sei/400)); }
+    });
+    const consume=riceConsumptionOf(st, st.playerDaimyo);
+    const riceBuy=Math.max(0, consume*6-(d.rice||0));
+    return {devN, devCost:devN*220, recN, recCost, riceBuy, riceCost:riceBuy*price, consume};
+  }
+  _drawBulkGov(ctx){
+    const st=this.state, d=st.daimyo[st.playerDaimyo];
+    const px=W/2-440, py=H/2-420, pw=880, ph=820;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(8,14,26,0.97)', stroke:'rgba(232,192,122,0.5)'});
+    T(ctx, '統治 / Governance', px+pw/2, py+36, {size:38, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx, '全国一括の内政と、家臣への委任（自動内政）', px+pw/2, py+82, {size:20, color:'#94a3b8', align:'center'});
+    // 国情サマリー
+    const owned=ownedProvinces(st, st.playerDaimyo);
+    let totalSol=0; owned.forEach(pid=>totalSol+=st.provinces[pid].soldiers);
+    const consume=riceConsumptionOf(st, st.playerDaimyo);
+    const months=consume>0?Math.floor((d.rice||0)/consume):'∞';
+    const statY=py+134;
+    [['領国', owned.length+'城','#e2e8f0'],['総兵力', totalSol+'人','#e2e8f0'],['金銭', d.gold+'貫','#f6d58a']].forEach((c,i)=>{
+      const cx=px+90+i*((pw-180)/3)+((pw-180)/6);
+      T(ctx, c[0], cx, statY, {size:22, color:'#94a3b8', align:'center'});
+      T(ctx, c[1], cx, statY+38, {size:34, weight:'bold', color:c[2], align:'center'});
+    });
+    const riceWarn=(consume>0 && (d.rice||0)<consume*2);
+    T(ctx, '兵糧 '+Math.round(d.rice||0)+'千石　月消費 '+consume+'　備蓄 約'+months+'ヶ月分'+(riceWarn?'  ⚠兵站危機':''), px+pw/2, py+224, {size:22, weight:riceWarn?'bold':'normal', color:riceWarn?'#f87171':'#cbd5e1', align:'center'});
+    // 委任ステータス（ボタン群の下）
+    const on=!!st.delegateInternal;
+    T(ctx, '委任 / Delegation：'+(on?'ON（毎ターン自動で開発・徴兵・施し・兵糧補給）':'OFF'), px+pw/2, py+560, {size:23, weight:'bold', color:on?'#4ade80':'#94a3b8', align:'center'});
+    T(ctx, '※一括／委任は自国領のみ。金の続く範囲で実行されます', px+pw/2, py+600, {size:17, color:'#7d93ab', align:'center'});
   }
   _drawBattleResult(ctx, d){
     const px=W/2-360, py=H/2-280, pw=720, ph=580;
