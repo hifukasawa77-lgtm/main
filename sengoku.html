@@ -44,6 +44,20 @@
   .fs-toggle:active { background:rgba(34,211,238,0.18); }
   body.is-touch.is-fullscreen .fs-toggle { top:max(12px, env(safe-area-inset-top)); right:max(12px, env(safe-area-inset-right)); }
 
+  /* ---- BGMミュートボタン（全デバイス表示） ---- */
+  .bgm-toggle {
+    position:fixed; top:12px; right:12px; z-index:50;
+    width:40px; height:40px; display:flex; align-items:center; justify-content:center;
+    font-size:18px; line-height:1; color:#e2e8f0;
+    background:rgba(12,20,36,0.72); border:1px solid rgba(167,139,250,0.5);
+    border-radius:10px; backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    box-shadow:0 4px 16px rgba(0,0,0,0.45); cursor:pointer; opacity:0.82;
+  }
+  .bgm-toggle:hover { opacity:1; }
+  .bgm-toggle.off { color:#64748b; border-color:rgba(148,163,184,0.35); }
+  body.is-touch .bgm-toggle { right:64px; }
+  body.is-touch.is-fullscreen .bgm-toggle { top:max(12px, env(safe-area-inset-top)); right:max(64px, calc(env(safe-area-inset-right) + 52px)); }
+
   body.is-touch .fs-gate { display:flex; }
   .fs-gate {
     position:fixed; inset:0; z-index:100;
@@ -218,6 +232,7 @@
 <body>
 <canvas id="game"></canvas>
 <button id="fsToggle" class="fs-toggle" type="button" aria-label="全画面 / Fullscreen">⛶</button>
+<button id="bgmToggle" class="bgm-toggle" type="button" aria-label="BGM オン/オフ / Toggle music">♪</button>
 <div id="fsGate" class="fs-gate" role="button" tabindex="0" aria-label="タップして全画面で開始 / Tap to start fullscreen">
   <div class="fs-gate-card">
     <div class="fs-gate-icon">⛶</div>
@@ -882,6 +897,78 @@ window.addEventListener('touchend', endMapPan);
 const game = new GameKit.Engine(canvas, { width: W, height: H });
 const save = new GameKit.Save('sengoku');
 const SAVE_VERSION = 2;
+
+/* ===== プロシージャルBGM（Web Audio・自作／APIキー不要・CLAUDE.md準拠） =====
+ * 都節音階（陰旋法）による疎らな旋律＋低ドローン。戦闘時は太鼓の鼓動を重ねる。 */
+const BGM = {
+  enabled: (()=>{ try { return localStorage.getItem('sengokuBgm')!=='0'; } catch(_){ return true; } })(),
+  ac:null, master:null, drone:[], mood:'title', _timer:null, _step:0,
+  _scale:[0,1,5,7,8,12,13,17,19,20], // 都節（半音: 0,1,5,7,8）を2オクターブ
+  _root:220,
+  ensure(){
+    if (this.ac) return true;
+    try {
+      this.ac = game.audio._ac();
+      this.master = this.ac.createGain();
+      this.master.gain.value = this.enabled?0.2:0.0;
+      this.master.connect(this.ac.destination);
+      [0,4].forEach((det,i)=>{ // 低いドローン（デチューンした2本のサイン）
+        const o=this.ac.createOscillator(), g=this.ac.createGain();
+        o.type='sine'; o.frequency.value=(this._root/2)*Math.pow(2, det/1200);
+        g.gain.value=0.055; o.connect(g).connect(this.master); o.start(); this.drone.push({o,g});
+      });
+    } catch(_){ this.ac=null; return false; }
+    return true;
+  },
+  _freq(step){ return this._root*Math.pow(2, this._scale[step % this._scale.length]/12); },
+  _note(freq, dur, vol, type){
+    const ac=this.ac, t=ac.currentTime;
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.type=type||'triangle'; o.frequency.value=freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t+0.05);
+    g.gain.exponentialRampToValueAtTime(0.0006, t+dur);
+    o.connect(g).connect(this.master); o.start(t); o.stop(t+dur+0.06);
+  },
+  _thump(){
+    const ac=this.ac, t=ac.currentTime;
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.type='sine'; o.frequency.setValueAtTime(120,t); o.frequency.exponentialRampToValueAtTime(46,t+0.18);
+    g.gain.setValueAtTime(0.5,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.22);
+    o.connect(g).connect(this.master); o.start(t); o.stop(t+0.24);
+  },
+  start(){
+    if (this._timer) return;
+    if (!this.ensure()) return;
+    const step=()=>{
+      if (!this.ac) return;
+      const battle = this.mood==='battle';
+      this._step++;
+      if (Math.random() < (battle?0.7:0.45)){
+        const s=Math.floor(Math.random()*this._scale.length);
+        const dur = battle? 0.45+Math.random()*0.4 : 1.2+Math.random()*1.5;
+        this._note(this._freq(s), dur, battle?0.10:0.085, battle?'triangle':'sine');
+        if (!battle && Math.random()<0.25) this._note(this._freq((s+2)%this._scale.length)/2, dur*1.15, 0.045, 'sine');
+      }
+      if (battle && this._step%2===0) this._thump();
+      this._timer=setTimeout(step, this.mood==='battle'?520:1150);
+    };
+    step();
+  },
+  setMood(m){ this.mood=m; },
+  setEnabled(on){
+    this.enabled=on; try{ localStorage.setItem('sengokuBgm', on?'1':'0'); }catch(_){}
+    if (this.master && this.ac) this.master.gain.setTargetAtTime(on?0.2:0.0, this.ac.currentTime, 0.12);
+    const btn=document.getElementById('bgmToggle'); if (btn){ btn.textContent=on?'♪':'🔇'; btn.classList.toggle('off',!on); }
+  },
+  toggle(){ this.ensure(); this.setEnabled(!this.enabled); if (this.enabled) this.start(); },
+};
+(function(){
+  const btn=document.getElementById('bgmToggle');
+  if (!btn) return;
+  btn.textContent=BGM.enabled?'♪':'🔇'; btn.classList.toggle('off',!BGM.enabled);
+  btn.addEventListener('click',(e)=>{ e.preventDefault(); e.stopPropagation(); BGM.toggle(); });
+})();
 
 /* ---- 静的データ登録（JSONロード後に格納） ---- */
 const DATA = { provinces:null, provById:{}, generals:null, genById:{}, scenarios:null };
@@ -2609,6 +2696,7 @@ function rollGeneralDeaths(state, generals, lossFrac, isLord, rngFn){
 class BootScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
+    BGM.setMood('title'); BGM.start();
     this.t=0; this.progress=0; this.targetProgress=0; this.error=null; this.done=false;
     const imgKeys = Object.keys(GPT_ASSETS);
     const totalItems = 3 + imgKeys.length;
@@ -2674,6 +2762,7 @@ class BootScene extends GameKit.Scene {
 class TitleScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
+    BGM.setMood('title'); BGM.start();
     this.particles = new GameKit.Particles(W, H, {count:60, colors:['#e8c07a','#a78bfa','#22d3ee']});
     this.t=0;
     this.hasSave = !!save.get('autosave', null);
@@ -2782,6 +2871,7 @@ function updateButtonHot(buttons, p){ for (const b of buttons){ b._hot = pointIn
 class ScenarioSelectScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
+    BGM.setMood('title'); BGM.start();
     this.particles = new GameKit.Particles(W, H, {count:56, colors:['#e8c07a','#a78bfa','#22d3ee']});
     this.t=0; this.step='scenario'; this.scn=null; this.scrollDaimyo=0; this.difficulty='normal';
     this.buttons=[]; this._daimyoMaxScroll=0; this._daimyoViewport=null;
@@ -2931,6 +3021,7 @@ class MapScene extends GameKit.Scene {
   constructor(state){ super(); this.state=state; }
   enter(game){
     setCanvasViewportMode('fit');
+    BGM.setMood('map'); BGM.start();
     ensureCustomCastlesInState(this.state);
     applyCastleMetaOverridesToState(this.state);
     this.cells = computeProvinceCells();
@@ -5308,6 +5399,7 @@ class BattleScene extends GameKit.Scene {
   constructor(state){ super(); this.state=state; this.ctx=state.pendingBattle; }
   enter(game){
     setCanvasViewportMode('fit');
+    BGM.setMood('battle'); BGM.start();
     const c=this.ctx; this.state.pendingBattle=null;
     // プレイヤーが操作する側（攻撃時='atk'、防衛時='def'）
     this.playerSide = c.playerSide || 'atk';
