@@ -1475,6 +1475,22 @@ const SEASONS = [
   {jp:'冬', en:'Winter', mod:0.5},
 ];
 
+/* ---- 兵糧（兵站）モデル ----
+ * rice は千石単位の備蓄。毎月 兵1000人あたり RICE_CONSUME_PER_1000 千石を消費し、
+ * 秋（season===2）の各月に石高×開発度に応じた収穫が入る。備蓄が尽きると兵が離散する。 */
+const RICE_CONSUME_PER_1000 = 1;   // 千石/月（兵1000人あたり）
+const RICE_HARVEST_RATE     = 0.05; // 秋の各月に kokudaka*(dev/100)*rate を収穫（年3回）
+const RICE_INIT_MONTHS      = 10;   // ゲーム開始時の備蓄（消費○ヶ月分）
+/* 大名の総兵数 */
+function totalSoldiersOf(state, did){
+  let n=0; ownedProvinces(state, did).forEach(pid=>{ n+=state.provinces[pid].soldiers||0; });
+  return n;
+}
+/* 月あたりの兵糧消費（千石） */
+function riceConsumptionOf(state, did){
+  return Math.round(totalSoldiersOf(state, did)/1000 * RICE_CONSUME_PER_1000);
+}
+
 /* ---- 兵科 ---- */
 const UNITS = {
   spear:    {jp:'足軽', en:'Ashigaru', move:3, range:1, atk:1.0, def:1.15, color:'#cbd5e1'},
@@ -2459,6 +2475,11 @@ function buildGameState(scenarioId, playerDaimyo){
       }
     });
   }
+  // 兵糧の初期備蓄（開始兵力に応じて消費○ヶ月分を配布）
+  scn.daimyo.forEach(d=>{
+    const sol = totalSoldiersOf(state, d.id);
+    state.daimyo[d.id].rice = Math.round(sol/1000 * RICE_CONSUME_PER_1000 * RICE_INIT_MONTHS) + 20;
+  });
   applyCastleMetaOverridesToState(state);
   return state;
 }
@@ -3644,18 +3665,40 @@ class MapScene extends GameKit.Scene {
   /* ---- ターン終了 → AI処理 ---- */
   _endTurn(game){
     const st=this.state;
-    // 収入
+    const aiLog=[];
+    const season=this._stateSeason();
+    // 収入・兵糧（収穫／消費／兵站破綻）
     daimyoOf(st).forEach(d=>{
       if (!st.daimyo[d.id].alive) return;
-      let inc=0;
+      const treas=st.daimyo[d.id];
+      let inc=0, harvest=0, sol=0;
       ownedProvinces(st,d.id).forEach(pid=>{
         const prov=st.provinces[pid];
-        inc += Math.round(DATA.provById[pid].kokudaka*(prov.development/100)*SEASONS[this._stateSeason()].mod*0.9);
+        const kd=DATA.provById[pid].kokudaka;
+        inc += Math.round(kd*(prov.development/100)*SEASONS[season].mod*0.9);
+        sol += prov.soldiers;
+        if (season===2) harvest += Math.round(kd*(prov.development/100)*RICE_HARVEST_RATE);
       });
-      st.daimyo[d.id].gold += inc;
+      treas.gold += inc;
+      // 兵糧：収穫を加え、兵の消費を差し引く
+      const consume=Math.round(sol/1000*RICE_CONSUME_PER_1000);
+      treas.rice=(treas.rice||0)+harvest-consume;
+      // 兵糧が尽きたら養えぬ兵が離散
+      if (treas.rice<0){
+        let starve=Math.round(-treas.rice*1000); // 養えなかった兵数
+        treas.rice=0;
+        const provs=ownedProvinces(st,d.id).map(pid=>st.provinces[pid]).filter(p=>p.soldiers>0);
+        const tot=provs.reduce((a,p)=>a+p.soldiers,0);
+        let lost=0;
+        if (tot>0){
+          // 1ターンの離散は最大35%まで（一気に全滅させず、立て直す猶予を残す）
+          starve=Math.min(starve, Math.round(tot*0.35));
+          provs.forEach(p=>{ const l=Math.min(p.soldiers, Math.round(starve*p.soldiers/tot)); p.soldiers-=l; lost+=l; });
+        }
+        if (d.id===st.playerDaimyo && lost>0) aiLog.push('兵糧が尽き、'+lost+'の兵が離散した…（収穫は秋・商人で兵糧購入可）');
+      }
     });
     // AI 各大名
-    const aiLog=[];
     st.pendingDefenses=[];
     daimyoOf(st).forEach(d=>{
       if (d.id===st.playerDaimyo || !st.daimyo[d.id].alive) return;
@@ -4213,7 +4256,11 @@ class MapScene extends GameKit.Scene {
     const gold=st.daimyo[st.playerDaimyo].gold;
     let totalSoldiers=0, totalKoku=0;
     owned.forEach(pid=>{ const p=DATA.provById[pid], prov=st.provinces[pid]; totalSoldiers+=prov.soldiers; totalKoku+=p?p.kokudaka:0; });
-    const rice=totalKoku*100;
+    // 兵糧＝実備蓄（千石）と月消費。残供給が乏しいと警告色。
+    const riceStore=Math.max(0, Math.round(st.daimyo[st.playerDaimyo].rice||0));
+    const riceConsume=Math.round(totalSoldiers/1000*RICE_CONSUME_PER_1000);
+    const rice=riceStore+(riceConsume>0?'(-'+riceConsume+')':'');
+    const riceColor=(riceConsume>0 && riceStore<riceConsume*2)?'#f87171':(riceConsume>0 && riceStore<riceConsume*4)?'#fbbf24':'#e7d3a3';
     const month=this._stateMonth();
     const big=IS_TOUCH;
     const h=big?140:88;
@@ -4229,14 +4276,14 @@ class MapScene extends GameKit.Scene {
       {text:st.year+'年 '+month+'月', x:36, color:'#f8f0dc', size:40},
       {text:pd.nameJP, x:330, color:'#f8f0dc', size:41, mark:'●', markColor:pd.color},
       {text:'金銭：'+gold, x:700, color:'#f6d58a', size:39, mark:'◆'},
-      {text:'兵糧：'+rice, x:1080, color:'#e7d3a3', size:39, mark:'◒'},
+      {text:'兵糧：'+rice, x:1080, color:riceColor, size:39, mark:'◒'},
       {text:'兵士：'+totalSoldiers, x:1470, color:'#e2e8f0', size:39, mark:'♟'},
       {text:'領国：'+owned.length+'/'+DATA.provinces.length, x:1830, color:'#cbd5e1', size:38, mark:'⚑'}
     ]:[
       {text:st.year+'年 '+month+'月', x:34, color:'#f8f0dc', size:25},
       {text:pd.nameJP, x:244, color:'#f8f0dc', size:26, mark:'●', markColor:pd.color},
       {text:'金銭：'+gold, x:520, color:'#f6d58a', size:24, mark:'◆'},
-      {text:'兵糧：'+rice, x:800, color:'#e7d3a3', size:24, mark:'◒'},
+      {text:'兵糧：'+rice, x:800, color:riceColor, size:24, mark:'◒'},
       {text:'兵士：'+totalSoldiers, x:1110, color:'#e2e8f0', size:24, mark:'♟'},
       {text:'領国：'+owned.length+'/'+DATA.provinces.length, x:1424, color:'#cbd5e1', size:23, mark:'⚑'},
       {text:'倍率 '+Math.round(this.cam.zoom/4.47*100)+'%', x:1720, color:'#7dd3fc', size:21}
@@ -4590,6 +4637,29 @@ class MapScene extends GameKit.Scene {
     T(ctx, DATA.provById[nb].nameJP+(tdef?'（'+tdef.nameJP+'）':''), b.x+52, b.y+b.h/2-16, {size:22, weight:'bold', color:'#eef2f7'});
     T(ctx, '兵'+tp.soldiers, b.x+b.w-16, b.y+b.h/2-12, {size:19, color:'#9fb2c6', align:'right'});
   }
+  /* 出陣プレビュー: 現在の選択でモンテカルロ試行し勝率・想定生存兵を返す（ゲーム乱数は消費しない） */
+  _battleForecast(m){
+    const st=this.state, dst=st.provinces[m.dstId];
+    const gens=Object.keys(m.pick).filter(g=>m.pick[g]);
+    const troops=clamp(m.troops,100,m.maxSend);
+    const key=m.dstId+'|'+troops+'|'+gens.slice().sort().join(',');
+    if (this._forecastCache && this._forecastCache.key===key) return this._forecastCache.val;
+    const defGens=dst.generals.filter(g=>st.generals[g] && st.generals[g].alive);
+    const N=60; let wins=0, aSum=0, dSum=0;
+    for (let i=0;i<N;i++){
+      const r=autoResolveBattle({
+        atkSoldiers:troops, atkGenerals:gens, atkFamily:st.playerDaimyo,
+        defSoldiers:dst.soldiers, defGenerals:defGens, defFamily:dst.owner||'',
+        year:st.year, castleLevel:dst.castleLevel, terrain:DATA.provById[m.dstId].terrain,
+        rngFn:Math.random,
+      });
+      if (r.attackerWins) wins++;
+      aSum+=r.atkSurvivors; dSum+=r.defSurvivors;
+    }
+    const val={winPct:Math.round(wins/N*100), atkSurv:Math.round(aSum/N), defSurv:Math.round(dSum/N)};
+    this._forecastCache={key, val};
+    return val;
+  }
   _drawMarch(ctx){
     const st=this.state, m=this.march;
     const px=W/2-390, py=H/2-330, pw=780, ph=720;
@@ -4600,6 +4670,12 @@ class MapScene extends GameKit.Scene {
     T(ctx, (enemy?'出陣 / March to Battle':'増援 / Reinforce'), px+pw/2, py+30, {size:34, weight:'bold', color:'#e8c07a', align:'center'});
     T(ctx, src.nameJP+'  →  '+dst.nameJP+(dstProv.owner?'（'+daimyoDef(st,dstProv.owner).nameJP+'家）':'（空白地）'), px+pw/2, py+86, {size:22, color:'#cbd5e1', align:'center'});
     T(ctx, '敵兵力 約'+dstProv.soldiers+'人 ・ 城Lv'+dstProv.castleLevel+' ・ 地形'+terrainJP(dst.terrain), px+pw/2, py+122, {size:18, color:'#9fb2c6', align:'center'});
+    // 戦力予測（敵地への出陣時のみ・1行で簡潔に）
+    if (enemy){
+      const f=this._battleForecast(m);
+      const col=f.winPct>=65?'#4ade80':f.winPct>=40?'#fbbf24':'#f87171';
+      T(ctx, '戦力予測  勝率 '+f.winPct+'%  ・  想定生存 自約'+f.atkSurv+'／敵約'+f.defSurv, px+pw/2, py+150, {size:18, weight:'bold', color:col, align:'center'});
+    }
     // troops
     T(ctx, '出陣兵数', px+pw/2, py+170, {size:20, color:'#9fb2c6', align:'center'});
     T(ctx, m.troops+' 人', px+pw/2, py+205, {size:40, weight:'bold', color:'#f1e6cf', align:'center'});
@@ -4676,6 +4752,12 @@ class MapScene extends GameKit.Scene {
     const hb=Math.round(Math.min(Math.sqrt(d.horse||0)*0.025,0.25)*100);
     const gb=Math.round(Math.min(Math.sqrt(d.gun  ||0)*0.025,0.25)*100);
     T(ctx, '騎馬ボーナス +'+hb+'%　　鉄砲ボーナス +'+gb+'%', px+pw/2, invY+82, {size:20, color:'#cbd5e1', align:'center'});
+    // 兵站ステータス（月消費と備蓄の持続月数）— パネル下部の空き領域に配置
+    const consume=riceConsumptionOf(st, st.playerDaimyo);
+    const months=consume>0?Math.floor((d.rice||0)/consume):'∞';
+    const warn=(consume>0 && (d.rice||0)<consume*2);
+    T(ctx, '兵糧 月消費 '+consume+'千石　備蓄 約'+months+'ヶ月分'+(warn?'  ⚠兵站危機':''), px+pw/2, py+624, {size:19, weight: warn?'bold':'normal', color: warn?'#f87171':'#94a3b8', align:'center'});
+    T(ctx, '※兵糧は秋に収穫。尽きると兵が離散します', px+pw/2, py+652, {size:16, color:'#7d93ab', align:'center'});
     // ボタン説明
     T(ctx, '米売買（10千石単位）', px+60, py+242, {size:20, color:'#94a3b8'});
     T(ctx, '軍備（50単位）', px+60+pw/2, py+242, {size:20, color:'#94a3b8'});
@@ -4747,6 +4829,14 @@ function runStrategicAI(st, d, log){
       if (prov.soldiers<cap*0.7 && Math.random()<0.6){ const cost=300; if(treasury.gold>=cost){ treasury.gold-=cost; prov.soldiers=Math.min(cap, prov.soldiers+500);} }
     }
   });
+  // 兵糧の備蓄が乏しければ商人から購入して兵站を維持する
+  const consume=riceConsumptionOf(st, d.id);
+  if (consume>0 && (treasury.rice||0) < consume*4 && treasury.gold>800){
+    const price=st.ricePrice??100;
+    let buy=consume*6-(treasury.rice||0);
+    buy=Math.max(0, Math.min(buy, Math.floor((treasury.gold-400)/Math.max(1,price))));
+    if (buy>0){ treasury.gold-=buy*price; treasury.rice=(treasury.rice||0)+buy; }
+  }
   // 攻撃判断（最大2回/ターン）
   let attacks=0;
   const order = myProvs.slice().sort(()=> Math.random()-0.5);
