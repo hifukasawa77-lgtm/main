@@ -4059,6 +4059,7 @@ class MapScene extends GameKit.Scene {
     const dstId=ov.data.dstId, prov=st.provinces[dstId];
     const g=st.generals[gid]; if (!g) return;
     g.alive=true; g.daimyo=st.playerDaimyo; g.location=dstId; g.loyalty=60;
+    st.captivesRecruited=(st.captivesRecruited||0)+1;
     if (prov && prov.owner===st.playerDaimyo && !prov.generals.includes(gid)) prov.generals.push(gid);
     const i=ov.data.captives.indexOf(gid); if (i>=0) ov.data.captives.splice(i,1);
     game.audio.jingle([{f:523,d:0.08},{f:784,d:0.12}]);
@@ -4170,6 +4171,7 @@ class MapScene extends GameKit.Scene {
     st.turn++;
     this.selected=null; this.mode='select';
     this._updateDaimyoAlive();
+    st.peakProvinces=Math.max(st.peakProvinces||0, ownedProvinces(st, st.playerDaimyo).length);
     // 民忠低下 & 一揆チェック
     const ikkiLog=[];
     Object.keys(st.provinces).forEach(pid=>{
@@ -4542,8 +4544,8 @@ class MapScene extends GameKit.Scene {
       bs.push({x:px+60, y:by, w:340, h:84, jp:'手動で防衛', en:'Defend (Hex Battle)', sz:26, ensz:16, accent:'rgba(52,211,153,0.7)', action:g=>this._resolveDefense(g,true)});
       bs.push({x:px+pw-400, y:by, w:340, h:84, jp:'自動で防衛', en:'Auto Defend', sz:26, ensz:16, accent:'rgba(251,191,36,0.7)', action:g=>this._resolveDefense(g,false)});
     } else if (ov.type==='gameover'){
-      bs.push({x:W/2-260, y:H/2+170, w:240, h:64, jp:'タイトルへ', en:'Title', sz:24, action:()=>{ save.set('autosave',null); game.changeScene(new TitleScene()); }});
-      bs.push({x:W/2+20, y:H/2+170, w:240, h:64, jp:'続ける', en:'Keep', sz:24, action:()=>{ this.overlay=null; }});
+      bs.push({x:W/2-260, y:H/2+276, w:240, h:64, jp:'タイトルへ', en:'Title', sz:24, action:()=>{ save.set('autosave',null); game.changeScene(new TitleScene()); }});
+      bs.push({x:W/2+20, y:H/2+276, w:240, h:64, jp:'続ける', en:'Keep', sz:24, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='ploy'){
       const pl=this.ploy; const px=W/2-460, py=H/2-380, pw=920, ph=760;
       // 対象洲リスト（左列）
@@ -5406,13 +5408,35 @@ class MapScene extends GameKit.Scene {
     }
   }
   _drawGameOver(ctx, win){
-    const px=W/2-380, py=H/2-260, pw=760, ph=520;
-    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(14,22,38,0.97)', stroke: win?'rgba(232,192,122,0.6)':'rgba(248,113,113,0.5)'});
-    T(ctx, win?'天下統一！':'落 城', px+pw/2, py+60, {size:60, weight:'bold', color: win?'#e8c07a':'#f87171', align:'center'});
-    T(ctx, win?'Unification of the Realm':'Castle Fallen', px+pw/2, py+132, {size:24, weight:'bold', color: win?'rgba(232,192,122,0.8)':'rgba(248,113,113,0.8)', align:'center'});
-    T(ctx, win?'全'+DATA.provinces.length+'洲を制覇した！ All '+DATA.provinces.length+' provinces conquered!':'貴家は滅亡した… Your clan has fallen.', px+pw/2, py+180, {size:22, color:'#cbd5e1', align:'center'});
     const st=this.state;
-    T(ctx, st.scenarioNameJP+' / '+st.year+'年 / '+st.turn+'ターン', px+pw/2, py+230, {size:18, color:'#9fb2c6', align:'center'});
+    const px=W/2-420, py=H/2-360, pw=840, ph=720;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:24, fill:'rgba(12,18,32,0.98)', stroke: win?'rgba(232,192,122,0.65)':'rgba(248,113,113,0.55)'});
+    T(ctx, win?'天下統一！':'落 城', px+pw/2, py+64, {size:64, weight:'bold', color: win?'#e8c07a':'#f87171', align:'center', shadow:true});
+    T(ctx, win?'Unification of the Realm':'Castle Fallen', px+pw/2, py+140, {size:24, weight:'bold', color: win?'rgba(232,192,122,0.8)':'rgba(248,113,113,0.8)', align:'center'});
+    const pd=daimyoDef(st, st.playerDaimyo);
+    const clan=(pd?pd.nameJP:'')+'家';
+    T(ctx, win? (clan+'が乱世を制した！ / '+clan+' conquered the realm!') : (clan+'は滅亡した… / '+clan+' has fallen.'), px+pw/2, py+190, {size:23, color:'#cbd5e1', align:'center'});
+    // 戦績サマリー
+    const startYear=(DATA.scenarios.find(s=>s.id===st.scenarioId)||{}).year || st.year;
+    const owned=ownedProvinces(st, st.playerDaimyo).length;
+    const gens=DATA.generals.filter(g=>st.generals[g.id] && st.generals[g.id].alive && st.generals[g.id].daimyo===st.playerDaimyo).length;
+    const diff=difficultyOf(st);
+    const yrs=Math.max(0, st.year-startYear);
+    const stats=[
+      ['在位', yrs+'年（'+startYear+'→'+st.year+'）'],
+      ['ターン数', st.turn+'ターン'],
+      ['難易度', diff.jp],
+      [win?'領国':'最大版図', (win?owned:(st.peakProvinces||owned))+' / '+DATA.provinces.length+'洲'],
+      ['配下武将', gens+'名'],
+      ['勝ち戦', (st.battlesWon||0)+'戦'],
+      ['武将登用', (st.captivesRecruited||0)+'名（捕縛）'],
+    ];
+    GameKit.UI.glassPanel(ctx, px+70, py+232, pw-140, 360, {radius:16, fill:'rgba(255,255,255,0.04)', stroke:'rgba(232,192,122,0.25)'});
+    T(ctx, '── 戦績 / Chronicle ──', px+pw/2, py+256, {size:22, weight:'bold', color:'#e8c07a', align:'center'});
+    stats.forEach((s,i)=>{ const y=py+308+i*46;
+      T(ctx, s[0], px+140, y, {size:24, color:'#9fb2c6'});
+      T(ctx, s[1], px+pw-140, y, {size:26, weight:'bold', color:'#f1e6cf', align:'right'});
+    });
   }
 }
 function terrainJP(t){ return {plain:'平地',mountain:'山地',coast:'沿岸',river:'河川'}[t]||t; }
@@ -5621,6 +5645,7 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
   if (playerInvolved){
     const defense = ctx.defender.daimyo===st.playerDaimyo && ctx.attacker.daimyo!==st.playerDaimyo;
     const playerWon = defense ? !res.attackerWins : res.attackerWins;
+    if (playerWon) st.battlesWon=(st.battlesWon||0)+1;
     st.pendingResult = { win:res.attackerWins, playerWon, defense, dstId:ctx.dstId, atkSurvivors:res.atkSurvivors, defSurvivors:res.defSurvivors, generalsLost, captives:playerCaptives };
   }
 }
