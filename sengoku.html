@@ -2535,6 +2535,48 @@ const GENERAL_BIRTH_DEATH = {
   tsugaru_nobuhira:   {born:1586},
 };
 
+/* ===================================================================
+ * 史実合戦イベント（HISTORICAL_EVENTS）
+ *   - year: 発火年（st.year>=year で未発火なら発火）
+ *   - atkClan/defClan: 参加大名ID（両者生存が発火条件）
+ *   - provId: 係争国（プレイヤー参加時の攻撃対象／史実で領地が動く場合の対象）
+ *   - atkTroops/defTroops: 合戦の兵数（ゲーム規模にスケール）
+ *   - allies: 攻撃側に史実で加勢したクラン（ログ表記用。生存時のみ表示）
+ *   - autoOutcome: プレイヤー非当事者のとき史実を再現する scripted 効果
+ *       attackerWins / atkLoss / defLoss（兵損耗の割合） / scriptedDeaths / transferProvTo
+ * =================================================================== */
+const HISTORICAL_EVENTS = [
+  { id:'okehazama', year:1560, nameJP:'桶狭間の戦い', nameEN:'Battle of Okehazama',
+    desc:'今川義元が大軍を率いて尾張へ侵攻。織田信長が奇襲を仕掛ける。',
+    atkClan:'imagawa', defClan:'oda', provId:'owari', atkTroops:8000, defTroops:2500,
+    autoOutcome:{ attackerWins:false, atkLoss:0.6, defLoss:0.15, scriptedDeaths:['imagawa_yoshimoto'] } },
+  { id:'kawanakajima', year:1561, nameJP:'川中島の戦い', nameEN:'Battle of Kawanakajima',
+    desc:'武田信玄と上杉謙信が信濃・川中島で激突。一進一退の死闘となる。',
+    atkClan:'takeda', defClan:'uesugi', provId:'shinano', atkTroops:6000, defTroops:6000,
+    autoOutcome:{ attackerWins:false, atkLoss:0.35, defLoss:0.35, scriptedDeaths:['takeda_nobushige'] } },
+  { id:'kanegasaki', year:1570, nameJP:'金ヶ崎の退き口', nameEN:'Retreat at Kanegasaki',
+    desc:'越前攻めの織田軍が浅井の裏切りで挟撃の危機に。決死の撤退戦となる。',
+    atkClan:'oda', defClan:'asakura', provId:'echizen', atkTroops:5000, defTroops:4000,
+    allies:['tokugawa'], autoOutcome:{ attackerWins:false, atkLoss:0.25, defLoss:0.1, scriptedDeaths:[] } },
+  { id:'anegawa', year:1570, nameJP:'姉川の戦い', nameEN:'Battle of Anegawa',
+    desc:'織田・徳川連合軍が浅井・朝倉連合軍と近江・姉川で対峙する。',
+    atkClan:'oda', defClan:'azai', provId:'kita_omi', atkTroops:6000, defTroops:5000,
+    allies:['tokugawa'], autoOutcome:{ attackerWins:true, atkLoss:0.2, defLoss:0.45, scriptedDeaths:[] } },
+  { id:'mikatagahara', year:1573, nameJP:'三方ヶ原の戦い', nameEN:'Battle of Mikatagahara',
+    desc:'上洛を目指す武田信玄の大軍が徳川領へ。徳川家康が野戦を挑む。',
+    atkClan:'takeda', defClan:'tokugawa', provId:'totomi', atkTroops:7000, defTroops:3000,
+    autoOutcome:{ attackerWins:true, atkLoss:0.12, defLoss:0.4, scriptedDeaths:[] } },
+  { id:'nagashino', year:1575, nameJP:'長篠の戦い', nameEN:'Battle of Nagashino',
+    desc:'織田・徳川連合軍が鉄砲隊で武田騎馬軍団を迎え撃つ。',
+    atkClan:'oda', defClan:'takeda', provId:'mikawa', atkTroops:8000, defTroops:6000,
+    allies:['tokugawa'], autoOutcome:{ attackerWins:true, atkLoss:0.12, defLoss:0.5,
+      scriptedDeaths:['baba_nobuharu','sanada_nobutsuna','sanada_masateru'] } },
+  { id:'tedorigawa', year:1577, nameJP:'手取川の戦い', nameEN:'Battle of Tedorigawa',
+    desc:'上杉謙信が加賀・手取川で織田の北陸方面軍と対決する。',
+    atkClan:'uesugi', defClan:'oda', provId:'kaga', atkTroops:6000, defTroops:5000,
+    autoOutcome:{ attackerWins:true, atkLoss:0.15, defLoss:0.35, scriptedDeaths:[] } },
+];
+
 const GENERAL_KANOI = {
   imagawa_yoshimoto:  '治部大輔',
   oda_nobunaga:       '弾正少弼',
@@ -2604,6 +2646,8 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
     diplomacy:{},
     log:[], pendingBattle:null, pendingResult:null, pendingDefenses:[],
     ricePrice: 100,
+    // 史実合戦イベント：シナリオ開始年より前の戦は「既に起きた」ものとして発火済み扱い
+    firedHistoricalEvents: (()=>{ const f={}; HISTORICAL_EVENTS.forEach(ev=>{ if (ev.year < scn.year) f[ev.id]=true; }); return f; })(),
   };
   state.rngSeq = (state.rng >>> 0) || 1;
   // count provinces per daimyo for starting gold
@@ -3124,7 +3168,11 @@ class MapScene extends GameKit.Scene {
     this._clampCam();
     this._bindInput();
     // 戦闘から戻った結果の適用／ターン解決の継続
-    if (this.state.awaitingFinalize){
+    if (this.state.awaitingHistResolution){
+      // 史実合戦（手動）から復帰：結果を見せ、OKで残りの史実イベント→評定を継続
+      if (this.state.pendingResult){ this.overlay={type:'battleResult', data:this.state.pendingResult, _afterHist:true}; this.state.pendingResult=null; }
+      else { this._processHistEvents(game); }
+    } else if (this.state.awaitingFinalize){
       // 防衛戦（手動）から復帰：まず結果を見せ、OKで残りの防衛→ターン確定を継続
       if (this.state.pendingResult){ this.overlay={type:'battleResult', data:this.state.pendingResult, _afterDefense:true}; this.state.pendingResult=null; }
       else { this._processTurnResolution(game); }
@@ -4196,10 +4244,157 @@ class MapScene extends GameKit.Scene {
     const lifeLog = (st.month===1) ? this._yearlyLifeEvents(st) : [];
     const eventLog = (st.month===1) ? this._yearlyEvents(st) : [];
     const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
+    // 史実合戦イベント（年明け）。発火があれば専用ポップアップを先に処理し、評定は後回し
+    const hist = (st.month===1) ? this._checkHistoricalEvents(st) : [];
+    if (hist.length){
+      st.pendingSummaryLog = aiLog;
+      st.pendingHistEvents = hist;
+      game.audio.beep(500,0.12,'triangle');
+      this._save();
+      this._processHistEvents(game);
+      return;
+    }
     this.overlay={type:'turnSummary', data:aiLog};
     game.audio.beep(500,0.12,'triangle');
     this._save();
     this._checkEnd(game);
+  }
+  // 史実イベントの発火判定。未発火・年到達・両クラン生存のものを返し、発火済みマークする
+  _checkHistoricalEvents(st){
+    st.firedHistoricalEvents = st.firedHistoricalEvents || {};
+    const fired=[];
+    for (const ev of HISTORICAL_EVENTS){
+      if (st.firedHistoricalEvents[ev.id]) continue;
+      if (st.year < ev.year) continue;
+      const a=st.daimyo[ev.atkClan], d=st.daimyo[ev.defClan];
+      if (!a || !a.alive || !d || !d.alive) continue;
+      st.firedHistoricalEvents[ev.id]=true;
+      fired.push(ev);
+    }
+    return fired;
+  }
+  // 史実イベントを1件ずつ処理。空になったら退避しておいた評定を表示
+  _processHistEvents(game){
+    const st=this.state;
+    if (st.pendingHistEvents && st.pendingHistEvents.length){
+      this.overlay={type:'historyEvent', data:st.pendingHistEvents[0]};
+      game.audio.beep(360,0.18,'sawtooth');
+    } else {
+      this.overlay={type:'turnSummary', data:st.pendingSummaryLog||[]};
+      st.pendingSummaryLog=null;
+      this._save();
+      this._checkEnd(game);
+    }
+  }
+  // 史実イベント（プレイヤー非当事者）を自動解決＝史実を再現。ログを評定へ合流し次を処理
+  _resolveHistEventAuto(game, ev){
+    const st=this.state;
+    const log=this._applyHistAuto(st, ev);
+    st.pendingSummaryLog=(st.pendingSummaryLog||[]).concat(log);
+    if (st.pendingHistEvents && st.pendingHistEvents[0]===ev) st.pendingHistEvents.shift();
+    this._updateDaimyoAlive();
+    this._save();
+    this._processHistEvents(game);
+  }
+  // autoOutcome に従い兵損耗・討死・領地移動を適用しログを返す（_yearlyLifeEvents の死亡処理と同型）
+  _applyHistAuto(st, ev){
+    const out=ev.autoOutcome||{}; const log=[];
+    const removeFromProv=(gid,g)=>{ const loc=g.location; if (loc && st.provinces[loc]){ const i=st.provinces[loc].generals.indexOf(gid); if(i>=0) st.provinces[loc].generals.splice(i,1); } };
+    const clanLoss=(clanId, frac)=>{ if (!frac) return 0; let lost=0; ownedProvinces(st, clanId).forEach(pid=>{ const p=st.provinces[pid]; const l=Math.round(p.soldiers*frac); p.soldiers=Math.max(0,p.soldiers-l); lost+=l; }); return lost; };
+    const aLost=clanLoss(ev.atkClan, out.atkLoss);
+    const dLost=clanLoss(ev.defClan, out.defLoss);
+    (out.scriptedDeaths||[]).forEach(gid=>{
+      const g=st.generals[gid]; if (!g || !g.alive) return;
+      removeFromProv(gid,g); g.alive=false; g.location=null; g.daimyo=null;
+      const gd=DATA.genById[gid];
+      log.push('【'+ev.nameJP+'】'+(gd?gd.nameJP:gid)+' 討死');
+    });
+    if (out.transferProvTo && st.provinces[ev.provId]){
+      const prov=st.provinces[ev.provId]; const from=prov.owner;
+      if (from && from!==out.transferProvTo){
+        prov.owner=out.transferProvTo;
+        prov.generals.slice().forEach(gid=>{ const g=st.generals[gid]; if (g){ g.location=null; g.daimyo=null; } });
+        prov.generals=[];
+        log.push('【'+ev.nameJP+'】'+(DATA.provById[ev.provId]?.nameJP||ev.provId)+'が'+(daimyoDef(st,out.transferProvTo)?.nameJP||out.transferProvTo)+'の手に落ちた');
+      }
+    }
+    const atkName=daimyoDef(st,ev.atkClan)?.nameJP||ev.atkClan;
+    const defName=daimyoDef(st,ev.defClan)?.nameJP||ev.defClan;
+    const winnerName=out.attackerWins?atkName:defName;
+    log.unshift('【'+ev.nameJP+'】'+winnerName+'が勝利（'+atkName+'兵-'+aLost+' / '+defName+'兵-'+dLost+'）');
+    return log;
+  }
+  // 史実イベント（プレイヤー当事者）を実際の合戦として開始。manual=ヘックス戦 / auto=集約解決
+  _startHistEventBattle(game, ev, manual){
+    const st=this.state;
+    const built=this._buildHistBattleContext(ev);
+    if (!built){
+      // 合戦を構築できない（出陣可能な領地が無い等）→ 自動解決にフォールバック
+      this._resolveHistEventAuto(game, ev);
+      return;
+    }
+    const ctx=built.ctx; ctx.playerSide=built.playerSide;
+    if (manual){
+      st.pendingBattle=ctx; st.awaitingHistResolution=true; this.overlay=null;
+      this._save();
+      game.changeScene(new BattleScene(st));
+      return;
+    }
+    const res=autoResolveBattle({
+      atkSoldiers:ctx.attacker.soldiers, atkGenerals:ctx.attacker.generals, atkFamily:ctx.attacker.family,
+      defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
+      year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
+    });
+    applyBattleResult(st, ctx, res);
+    game.audio.jingle(res.attackerWins?[{f:523,d:0.1},{f:784,d:0.16}]:[{f:392,d:0.12},{f:262,d:0.2}]);
+    st.awaitingHistResolution=true; // 結果確認の「了解」で queue を1件消費して継続
+    this.overlay={type:'battleResult', data:st.pendingResult, _afterHist:true};
+    st.pendingResult=null; this.selected=null; this.mode='select';
+    this._save();
+  }
+  // 合戦（プレイヤー当事者）確認後の継続。queue を1件消費して次イベント／評定へ
+  _continueHistEvents(game){
+    const st=this.state;
+    st.awaitingHistResolution=false;
+    if (st.pendingHistEvents && st.pendingHistEvents.length) st.pendingHistEvents.shift();
+    this._updateDaimyoAlive();
+    this._save();
+    this._processHistEvents(game);
+  }
+  // 史実合戦用の戦闘コンテキストを構築（攻撃側＝atkClan・防御側＝defClan で一般化）
+  _buildHistBattleContext(ev){
+    const st=this.state;
+    const attackerClan=ev.atkClan, defenderClan=ev.defClan;
+    const atkProvs=new Set(ownedProvinces(st, attackerClan));
+    // 攻撃対象（防御側領地）を決定
+    let dstId=null;
+    if (ev.provId && st.provinces[ev.provId] && st.provinces[ev.provId].owner===defenderClan) dstId=ev.provId;
+    if (!dstId){ const defProvs=ownedProvinces(st, defenderClan);
+      dstId=defProvs.find(pid=>neighborsOf(pid).some(nb=>atkProvs.has(nb)));
+      if (!dstId){ const cap=daimyoDef(st,defenderClan)?.capital; if (cap && st.provinces[cap]?.owner===defenderClan) dstId=cap; }
+      if (!dstId) dstId=defProvs[0];
+    }
+    if (!dstId) return null;
+    // 出陣元（攻撃側領地）を決定
+    let srcId=[...atkProvs].find(pid=>neighborsOf(dstId).includes(pid));
+    if (!srcId){ const cap=daimyoDef(st,attackerClan)?.capital; if (cap && st.provinces[cap]?.owner===attackerClan) srcId=cap; }
+    if (!srcId) srcId=[...atkProvs].sort((a,b)=>st.provinces[b].soldiers-st.provinces[a].soldiers)[0];
+    if (!srcId || srcId===dstId) return null;
+    const src=st.provinces[srcId], dst=st.provinces[dstId];
+    const avail=Math.max(0, src.soldiers-100);
+    if (avail<100) return null;
+    const troops=clamp(Math.min(ev.atkTroops||avail, avail), 100, avail);
+    const gens=src.generals.filter(g=>st.generals[g].alive).slice();
+    src.soldiers-=troops;
+    gens.forEach(g=>{ const i=src.generals.indexOf(g); if(i>=0) src.generals.splice(i,1); });
+    src.hasActed=true;
+    const ctx={
+      srcId, dstId, year:st.year,
+      attacker:{ daimyo:attackerClan, family:daimyoDef(st,attackerClan).id, soldiers:troops, generals:gens },
+      defender:{ daimyo:defenderClan, family:defenderClan, soldiers:dst.soldiers, generals:dst.generals.filter(g=>st.generals[g].alive).slice(), castleLevel:dst.castleLevel },
+      terrain: DATA.provById[dstId].terrain,
+    };
+    return { ctx, playerSide: (attackerClan===st.playerDaimyo)?'atk':'def' };
   }
   // 年次の寿命・下剋上イベント（年明けに1回）。死去・出奔を処理しログを返す
   _yearlyLifeEvents(st){
@@ -4523,7 +4718,8 @@ class MapScene extends GameKit.Scene {
       const px=W/2-820, py=H/2-610, pw=1640, ph=1220;
       bs.push({x:px+pw-286, y:py+42, w:240, h:78, jp:'閉じる', en:'Close', sz:30, ensz:17, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='battleResult' || ov.type==='turnSummary'){
-      const after=ov._afterDefense;
+      const after=ov._afterDefense, afterHist=ov._afterHist;
+      const cont=g=>{ this.overlay=null; if (afterHist) this._continueHistEvents(g); else if (after) this._processTurnResolution(g); };
       const caps=(ov.data && ov.data.captives)?ov.data.captives.slice(0,5):[];
       if (caps.length){
         // 捕縛武将ごとの登用ボタン（パネル座標に合わせる）
@@ -4534,9 +4730,19 @@ class MapScene extends GameKit.Scene {
         });
         const by=py+352+caps.length*76+18;
         bs.push({x:px+60, y:by, w:300, h:66, jp:'全員を登用', en:'Recruit all', sz:24, accent:'rgba(52,211,153,0.55)', action:g=>this._recruitAllCaptives(g)});
-        bs.push({x:px+pw-360, y:by, w:300, h:66, jp:'残りは解放して終了', en:'Release & continue', sz:22, accent:'rgba(232,192,122,0.6)', action:g=>{ this.overlay=null; if(after) this._processTurnResolution(g); }});
+        bs.push({x:px+pw-360, y:by, w:300, h:66, jp:'残りは解放して終了', en:'Release & continue', sz:22, accent:'rgba(232,192,122,0.6)', action:cont});
       } else {
-        bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:g=>{ this.overlay=null; if(after) this._processTurnResolution(g); }});
+        bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:cont});
+      }
+    } else if (ov.type==='historyEvent'){
+      const ev=ov.data; const st=this.state;
+      const isPlayer = ev.atkClan===st.playerDaimyo || ev.defClan===st.playerDaimyo;
+      const px=W/2-440, py=H/2-300, pw=880, ph=600; const by=py+ph-112;
+      if (isPlayer){
+        bs.push({x:px+60, y:by, w:340, h:84, jp:'出陣する（合戦）', en:'Take the field', sz:26, ensz:15, accent:'rgba(248,113,113,0.7)', action:g=>this._startHistEventBattle(g, ev, true)});
+        bs.push({x:px+pw-400, y:by, w:340, h:84, jp:'軍師に任せる（自動）', en:'Auto resolve', sz:24, ensz:15, accent:'rgba(251,191,36,0.7)', action:g=>this._startHistEventBattle(g, ev, false)});
+      } else {
+        bs.push({x:W/2-170, y:by, w:340, h:84, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:g=>this._resolveHistEventAuto(g, ev)});
       }
     } else if (ov.type==='defense'){
       const c=ov.data; const px=W/2-440, py=H/2-320, pw=880, ph=620; const by=py+ph-116;
@@ -5130,6 +5336,7 @@ class MapScene extends GameKit.Scene {
     else if (ov.type==='shonin') this._drawShonin(ctx);
     else if (ov.type==='bulkGov') this._drawBulkGov(ctx);
     else if (ov.type==='ranking') this._drawRanking(ctx);
+    else if (ov.type==='historyEvent') this._drawHistoryEvent(ctx, ov.data);
     else if (ov.type==='help') this._drawHelp(ctx);
     const btns=this._overlayButtons(); for (const b of btns){
       if (b._noRender) continue;
@@ -5404,6 +5611,34 @@ class MapScene extends GameKit.Scene {
     else {
       log.slice(0,9).forEach((line,i)=>{ T(ctx, '・'+line, px+50, py+130+i*42, {size:20, color:'#cbd5e1'}); });
       if (log.length>9) T(ctx, '…他 '+(log.length-9)+' 件', px+50, py+130+9*42, {size:18, color:'#7d93ab'});
+    }
+  }
+  _drawHistoryEvent(ctx, ev){
+    const st=this.state;
+    const px=W/2-440, py=H/2-300, pw=880, ph=600;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(16,12,10,0.97)', stroke:'rgba(232,192,122,0.55)'});
+    T(ctx, '― 史 実 / Historical Event ―', px+pw/2, py+28, {size:20, weight:'bold', color:'#c98b4b', align:'center'});
+    T(ctx, ev.nameJP, px+pw/2, py+64, {size:46, weight:'bold', color:'#f1e6cf', align:'center', shadow:true});
+    T(ctx, ev.nameEN, px+pw/2, py+126, {size:22, color:'#c9a06a', align:'center'});
+    T(ctx, ev.year+'年', px+pw/2, py+166, {size:24, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx, ev.desc, px+pw/2, py+222, {size:22, color:'#cbd5e1', align:'center'});
+    // 対戦カード（攻め手・受け手）
+    const atkName=daimyoDef(st,ev.atkClan)?.nameJP||ev.atkClan;
+    const defName=daimyoDef(st,ev.defClan)?.nameJP||ev.defClan;
+    const allies=(ev.allies||[]).filter(c=>st.daimyo[c]&&st.daimyo[c].alive).map(c=>daimyoDef(st,c)?.nameJP||c);
+    const atkLabel=atkName+(allies.length?('・'+allies.join('・')):'')+'家';
+    const cy=py+292;
+    T(ctx, atkLabel, px+pw/2-170, cy, {size:28, weight:'bold', color:'#f87171', align:'center'});
+    T(ctx, 'VS', px+pw/2, cy, {size:26, weight:'bold', color:'#9fb2c6', align:'center'});
+    T(ctx, defName+'家', px+pw/2+170, cy, {size:28, weight:'bold', color:'#60a5fa', align:'center'});
+    // プレイヤー当事者の案内
+    const isPlayer = ev.atkClan===st.playerDaimyo || ev.defClan===st.playerDaimyo;
+    if (isPlayer){
+      const side = ev.atkClan===st.playerDaimyo ? '攻め手' : '受け手';
+      T(ctx, 'あなたはこの合戦の'+side+'。歴史を変えるか？', px+pw/2, cy+58, {size:22, weight:'bold', color:'#e8c07a', align:'center'});
+      T(ctx, 'You are a participant — will you change history?', px+pw/2, cy+90, {size:16, color:'#9fb2c6', align:'center'});
+    } else {
+      T(ctx, '諸国で歴史的な合戦が起こった。', px+pw/2, cy+68, {size:20, color:'#9fb2c6', align:'center'});
     }
   }
   _drawGameOver(ctx, win){
