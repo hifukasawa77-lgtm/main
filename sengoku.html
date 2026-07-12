@@ -2536,14 +2536,17 @@ const GENERAL_BIRTH_DEATH = {
 };
 
 /* ===================================================================
- * 史実合戦イベント（HISTORICAL_EVENTS）
+ * 史実イベント（HISTORICAL_EVENTS）
  *   - year: 発火年（st.year>=year で未発火なら発火）
- *   - atkClan/defClan: 参加大名ID（両者生存が発火条件）
- *   - provId: 係争国（プレイヤー参加時の攻撃対象／史実で領地が動く場合の対象）
- *   - atkTroops/defTroops: 合戦の兵数（ゲーム規模にスケール）
- *   - allies: 攻撃側に史実で加勢したクラン（ログ表記用。生存時のみ表示）
- *   - autoOutcome: プレイヤー非当事者のとき史実を再現する scripted 効果
- *       attackerWins / atkLoss / defLoss（兵損耗の割合） / scriptedDeaths / transferProvTo
+ *   - kind: 'battle'（既定・当事者が戦う合戦）/ 'effect'（効果のみ・「了解」で確定）
+ *   - requires: 発火に生存が必要な大名ID配列（battle は既定で [atkClan,defClan]）
+ *   - condition: 追加発火条件の述語 (st)=>bool（任意）
+ *   【battle】atkClan/defClan/provId/atkTroops/defTroops/allies/autoOutcome
+ *       autoOutcome: attackerWins / atkLoss / defLoss（兵損耗割合） / scriptedDeaths / transferProvTo
+ *   【effect】card:{type,clan|a,b} 表示 ＋ effect:{} 効果プリミティブ
+ *       diplomacy:[{a,b,ally,truce,rel}] / fame:{clan:±N} / gold:{clan:±N}
+ *       clanTroopLoss:{clan:frac} / provinceHit:[{clan,provId?,minchu?,dev?,soldiers?,castle?}]
+ *       castleUp:{clan,delta} / loyalty:{clan,delta} / scriptedDeaths:[gid] / transferProv:{provId,to}
  * =================================================================== */
 const HISTORICAL_EVENTS = [
   { id:'okehazama', year:1560, nameJP:'桶狭間の戦い', nameEN:'Battle of Okehazama',
@@ -2575,6 +2578,60 @@ const HISTORICAL_EVENTS = [
     desc:'上杉謙信が加賀・手取川で織田の北陸方面軍と対決する。',
     atkClan:'uesugi', defClan:'oda', provId:'kaga', atkTroops:6000, defTroops:5000,
     autoOutcome:{ attackerWins:true, atkLoss:0.15, defLoss:0.35, scriptedDeaths:[] } },
+
+  /* ---- 第2弾：政治・外交・文化・内乱・築城イベント（effect中心） ---- */
+  { id:'sanshi_no_oshie', year:1560, kind:'effect', nameJP:'三矢の教え', nameEN:'Lesson of the Three Arrows',
+    desc:'毛利元就が三本の矢の逸話で子らに結束を説く。毛利家中の忠誠が高まる。',
+    requires:['mori'], card:{type:'single',clan:'mori'},
+    effect:{ loyalty:{clan:'mori', delta:12}, fame:{mori:8} } },
+  // 清洲同盟・三河一向一揆は史実では1562-63だが、ゲームでは徳川が独立勢力となる1568シナリオでのみ
+  // 表現可能なため発火年を1568とし、ポップアップには史実年(displayYear)を表示する。
+  { id:'kiyosu_alliance', year:1568, displayYear:1562, kind:'effect', nameJP:'清洲同盟', nameEN:'Kiyosu Alliance',
+    desc:'織田信長と徳川家康が清洲城で会盟。以後20年に及ぶ強固な同盟が成る。',
+    requires:['oda','tokugawa'], card:{type:'alliance',a:'oda',b:'tokugawa'},
+    effect:{ diplomacy:[{a:'oda',b:'tokugawa',ally:true,rel:25}], fame:{oda:5,tokugawa:5} } },
+  { id:'mikawa_ikko', year:1568, displayYear:1563, kind:'effect', nameJP:'三河一向一揆', nameEN:'Mikawa Ikko-ikki',
+    desc:'三河の一向宗門徒が徳川に蜂起。家中を二分する激しい内乱となる。',
+    requires:['tokugawa'], condition:(st)=> !!(st.provinces['mikawa'] && st.provinces['mikawa'].owner==='tokugawa'),
+    card:{type:'internal',clan:'tokugawa'},
+    effect:{ provinceHit:[{clan:'tokugawa',provId:'mikawa',minchu:-28,dev:-8,soldiers:0.15}] } },
+  { id:'eiroku_incident', year:1565, kind:'effect', nameJP:'永禄の変', nameEN:'Eiroku Incident',
+    desc:'三好・松永の軍勢が将軍足利義輝を襲撃。室町幕府の権威が大きく揺らぐ。',
+    requires:['ashikaga','miyoshi'], card:{type:'single',clan:'ashikaga'},
+    effect:{ clanTroopLoss:{ashikaga:0.2}, fame:{ashikaga:-15, miyoshi:10}, provinceHit:[{clan:'ashikaga',minchu:-12}] } },
+  { id:'hieizan_yakiuchi', year:1571, kind:'effect', nameJP:'比叡山焼き討ち', nameEN:'Burning of Mt. Hiei',
+    desc:'織田信長が延暦寺を焼き討ち。仏敵の汚名を負うも、寺社の財を得て勢力を強める。',
+    requires:['oda'], card:{type:'single',clan:'oda'},
+    effect:{ gold:{oda:700}, fame:{oda:-5}, provinceHit:[{clan:'oda',minchu:-8}] } },
+  { id:'muromachi_end', year:1573, kind:'effect', nameJP:'室町幕府滅亡', nameEN:'Fall of the Muromachi Shogunate',
+    desc:'織田信長が将軍足利義昭を京より追放。240年続いた室町幕府がここに滅ぶ。',
+    requires:['ashikaga'], card:{type:'single',clan:'ashikaga'},
+    effect:{ transferProv:{provId:'yamashiro',to:'oda'}, fame:{ashikaga:-30, oda:15} } },
+  { id:'azuchi_castle', year:1576, kind:'effect', nameJP:'安土城築城', nameEN:'Construction of Azuchi Castle',
+    desc:'織田信長が壮麗な安土城を築く。天下人の威容を示し、名声は天を衝く。',
+    requires:['oda'], card:{type:'single',clan:'oda'},
+    effect:{ castleUp:{clan:'oda',delta:1}, fame:{oda:12}, gold:{oda:-500} } },
+  { id:'kizugawaguchi', year:1576, nameJP:'木津川口の戦い', nameEN:'Battle of Kizugawaguchi',
+    desc:'毛利水軍が石山本願寺へ兵糧を運び込むべく、織田水軍と大坂湾で激突する。',
+    atkClan:'mori', defClan:'oda', provId:'settsu', atkTroops:5000, defTroops:4000,
+    autoOutcome:{ attackerWins:true, atkLoss:0.15, defLoss:0.35, scriptedDeaths:[] } },
+  { id:'otate_rebellion', year:1578, kind:'effect', nameJP:'御館の乱', nameEN:'Otate Rebellion',
+    desc:'上杉謙信の急死により、景勝と景虎が家督を争う。上杉家中が分裂し疲弊する。',
+    requires:['uesugi'], card:{type:'internal',clan:'uesugi'},
+    effect:{ clanTroopLoss:{uesugi:0.25}, fame:{uesugi:-10}, provinceHit:[{clan:'uesugi',minchu:-15}] } },
+  { id:'araki_revolt', year:1578, kind:'effect', nameJP:'荒木村重謀反', nameEN:'Revolt of Araki Murashige',
+    desc:'摂津の荒木村重が織田に叛旗を翻す。有岡城の攻防で織田の後方が乱れる。',
+    requires:['oda'], card:{type:'internal',clan:'oda'},
+    effect:{ provinceHit:[{clan:'oda',provId:'settsu',minchu:-20,soldiers:0.15}] } },
+  { id:'honnoji', year:1582, kind:'effect', nameJP:'本能寺の変', nameEN:'Honno-ji Incident',
+    desc:'明智光秀が主君・織田信長を京・本能寺に急襲。信長ここに斃れ、天下は再び乱れる。',
+    requires:['oda'], condition:(st)=> !!(st.generals['oda_nobunaga'] && st.generals['oda_nobunaga'].alive),
+    card:{type:'single',clan:'oda'},
+    effect:{ scriptedDeaths:['oda_nobunaga'], clanTroopLoss:{oda:0.15}, provinceHit:[{clan:'oda',minchu:-20}] } },
+  { id:'odawara_siege', year:1590, kind:'effect', nameJP:'小田原城包囲', nameEN:'Siege of Odawara',
+    desc:'天下統一を目指す大軍が小田原城を包囲。北条氏は籠城の末に窮地へ追い込まれる。',
+    requires:['hojo'], card:{type:'single',clan:'hojo'},
+    effect:{ clanTroopLoss:{hojo:0.4}, fame:{hojo:-15}, provinceHit:[{clan:'hojo',minchu:-20}] } },
 ];
 
 const GENERAL_KANOI = {
@@ -4266,8 +4323,11 @@ class MapScene extends GameKit.Scene {
     for (const ev of HISTORICAL_EVENTS){
       if (st.firedHistoricalEvents[ev.id]) continue;
       if (st.year < ev.year) continue;
-      const a=st.daimyo[ev.atkClan], d=st.daimyo[ev.defClan];
-      if (!a || !a.alive || !d || !d.alive) continue;
+      // 生存が必要な大名（battle は既定で攻守両クラン）
+      const req = ev.requires || [ev.atkClan, ev.defClan];
+      if (!req.every(id=> st.daimyo[id] && st.daimyo[id].alive)) continue;
+      // 追加発火条件（任意）
+      if (typeof ev.condition==='function' && !ev.condition(st)) continue;
       st.firedHistoricalEvents[ev.id]=true;
       fired.push(ev);
     }
@@ -4322,6 +4382,79 @@ class MapScene extends GameKit.Scene {
     const defName=daimyoDef(st,ev.defClan)?.nameJP||ev.defClan;
     const winnerName=out.attackerWins?atkName:defName;
     log.unshift('【'+ev.nameJP+'】'+winnerName+'が勝利（'+atkName+'兵-'+aLost+' / '+defName+'兵-'+dLost+'）');
+    return log;
+  }
+  // effect イベント（合戦にならない政治・文化・内乱）を適用しログを評定へ合流→次を処理
+  _resolveHistEventEffect(game, ev){
+    const st=this.state;
+    const log=this._applyHistEffect(st, ev);
+    st.pendingSummaryLog=(st.pendingSummaryLog||[]).concat(log);
+    if (st.pendingHistEvents && st.pendingHistEvents[0]===ev) st.pendingHistEvents.shift();
+    this._updateDaimyoAlive();
+    this._save();
+    this._processHistEvents(game);
+  }
+  // effect プリミティブを適用しログを返す（既存の値変更・討死・外交ヘルパを流用）
+  _applyHistEffect(st, ev){
+    const e=ev.effect||{}; const log=[]; const tag='【'+ev.nameJP+'】';
+    const nameOf=(id)=>daimyoDef(st,id)?.nameJP||id;
+    // 対象国を解決：指定 provId が当該クランの保有国でなければ首都/任意保有国にフォールバック
+    const resolveProv=(clan, provId)=>{
+      if (provId && st.provinces[provId] && st.provinces[provId].owner===clan) return provId;
+      const cap=daimyoDef(st,clan)?.capital;
+      if (cap && st.provinces[cap] && st.provinces[cap].owner===clan) return cap;
+      const owned=ownedProvinces(st, clan); return owned.length?owned[0]:null;
+    };
+    // 外交（同盟・停戦・関係）
+    (e.diplomacy||[]).forEach(d=>{
+      if (!st.daimyo[d.a] || !st.daimyo[d.b]) return;
+      const dip=getDip(st, d.a, d.b);
+      if (d.ally){ dip.ally=true; dip.truceUntil=st.turn+999; }
+      if (d.truce){ dip.truceUntil=Math.max(dip.truceUntil, st.turn+d.truce); }
+      if (d.rel) addRel(st, d.a, d.b, d.rel);
+      log.push(tag+nameOf(d.a)+'家と'+nameOf(d.b)+'家が'+(d.ally?'同盟を結んだ':'誼を通じた'));
+    });
+    // 名声
+    for (const id in (e.fame||{})){ if (st.daimyo[id]){ st.daimyo[id].fame=Math.max(0,(st.daimyo[id].fame||0)+e.fame[id]); } }
+    // 金
+    for (const id in (e.gold||{})){ if (st.daimyo[id]){ st.daimyo[id].gold=Math.max(0,(st.daimyo[id].gold||0)+e.gold[id]); } }
+    // クラン兵損耗（割合）
+    for (const id in (e.clanTroopLoss||{})){
+      let lost=0; ownedProvinces(st, id).forEach(pid=>{ const p=st.provinces[pid]; const l=Math.round(p.soldiers*e.clanTroopLoss[id]); p.soldiers=Math.max(0,p.soldiers-l); lost+=l; });
+      if (lost>0) log.push(tag+nameOf(id)+'家 兵-'+lost);
+    }
+    // 国別の民忠/開発/兵/城
+    (e.provinceHit||[]).forEach(h=>{
+      const pid=resolveProv(h.clan, h.provId); if (!pid) return; const p=st.provinces[pid];
+      const parts=[];
+      if (h.minchu){ p.minchu=Math.max(0,(p.minchu??60)+h.minchu); parts.push('民忠'+(h.minchu>0?'+':'')+h.minchu); }
+      if (h.dev){ p.development=Math.max(0,(p.development||0)+h.dev); parts.push('開発'+(h.dev>0?'+':'')+h.dev); }
+      if (h.soldiers){ const l=Math.round(p.soldiers*h.soldiers); p.soldiers=Math.max(0,p.soldiers-l); if (l>0) parts.push('兵-'+l); }
+      if (h.castle){ p.castleLevel=clamp((p.castleLevel||1)+h.castle,1,5); parts.push('城'+(h.castle>0?'+':'')+h.castle); }
+      if (parts.length) log.push(tag+(DATA.provById[pid]?.nameJP||pid)+'：'+parts.join('・'));
+    });
+    // 城レベル上昇（首都）
+    if (e.castleUp){ const pid=resolveProv(e.castleUp.clan); if (pid){ const p=st.provinces[pid]; p.castleLevel=clamp((p.castleLevel||1)+e.castleUp.delta,1,5); log.push(tag+(DATA.provById[pid]?.nameJP||pid)+'の城が壮大になった（城+'+e.castleUp.delta+'）'); } }
+    // クラン全武将の忠誠
+    if (e.loyalty){ const c=e.loyalty.clan; Object.keys(st.generals).forEach(gid=>{ const g=st.generals[gid]; if (g && g.alive && g.daimyo===c){ g.loyalty=clamp((g.loyalty||60)+e.loyalty.delta,0,100); } }); log.push(tag+nameOf(c)+'家中の忠誠が'+(e.loyalty.delta>0?'高まった':'下がった')); }
+    // 討死
+    (e.scriptedDeaths||[]).forEach(gid=>{
+      const g=st.generals[gid]; if (!g || !g.alive) return;
+      const loc=g.location; if (loc && st.provinces[loc]){ const i=st.provinces[loc].generals.indexOf(gid); if(i>=0) st.provinces[loc].generals.splice(i,1); }
+      g.alive=false; g.location=null; g.daimyo=null;
+      log.push(tag+(DATA.genById[gid]?.nameJP||gid)+' 討死');
+    });
+    // 領地移動（移動先クランが生存している時のみ）
+    if (e.transferProv){
+      const t=e.transferProv, prov=st.provinces[t.provId];
+      if (prov && prov.owner && prov.owner!==t.to && st.daimyo[t.to] && st.daimyo[t.to].alive){
+        prov.owner=t.to;
+        prov.generals.slice().forEach(gid=>{ const g=st.generals[gid]; if (g){ g.location=null; g.daimyo=null; } });
+        prov.generals=[];
+        log.push(tag+(DATA.provById[t.provId]?.nameJP||t.provId)+'が'+nameOf(t.to)+'家の手に落ちた');
+      }
+    }
+    if (!log.length) log.push(tag+ev.nameJP+'が起こった');
     return log;
   }
   // 史実イベント（プレイヤー当事者）を実際の合戦として開始。manual=ヘックス戦 / auto=集約解決
@@ -4736,9 +4869,11 @@ class MapScene extends GameKit.Scene {
       }
     } else if (ov.type==='historyEvent'){
       const ev=ov.data; const st=this.state;
-      const isPlayer = ev.atkClan===st.playerDaimyo || ev.defClan===st.playerDaimyo;
       const px=W/2-440, py=H/2-300, pw=880, ph=600; const by=py+ph-112;
-      if (isPlayer){
+      if (ev.kind==='effect'){
+        // 効果イベントは常に単一「了解」で確定（自家に不利でも史実どおり適用）
+        bs.push({x:W/2-170, y:by, w:340, h:84, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:g=>this._resolveHistEventEffect(g, ev)});
+      } else if (ev.atkClan===st.playerDaimyo || ev.defClan===st.playerDaimyo){
         bs.push({x:px+60, y:by, w:340, h:84, jp:'出陣する（合戦）', en:'Take the field', sz:26, ensz:15, accent:'rgba(248,113,113,0.7)', action:g=>this._startHistEventBattle(g, ev, true)});
         bs.push({x:px+pw-400, y:by, w:340, h:84, jp:'軍師に任せる（自動）', en:'Auto resolve', sz:24, ensz:15, accent:'rgba(251,191,36,0.7)', action:g=>this._startHistEventBattle(g, ev, false)});
       } else {
@@ -5620,25 +5755,39 @@ class MapScene extends GameKit.Scene {
     T(ctx, '― 史 実 / Historical Event ―', px+pw/2, py+28, {size:20, weight:'bold', color:'#c98b4b', align:'center'});
     T(ctx, ev.nameJP, px+pw/2, py+64, {size:46, weight:'bold', color:'#f1e6cf', align:'center', shadow:true});
     T(ctx, ev.nameEN, px+pw/2, py+126, {size:22, color:'#c9a06a', align:'center'});
-    T(ctx, ev.year+'年', px+pw/2, py+166, {size:24, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx, (ev.displayYear||ev.year)+'年', px+pw/2, py+166, {size:24, weight:'bold', color:'#e8c07a', align:'center'});
     T(ctx, ev.desc, px+pw/2, py+222, {size:22, color:'#cbd5e1', align:'center'});
-    // 対戦カード（攻め手・受け手）
-    const atkName=daimyoDef(st,ev.atkClan)?.nameJP||ev.atkClan;
-    const defName=daimyoDef(st,ev.defClan)?.nameJP||ev.defClan;
-    const allies=(ev.allies||[]).filter(c=>st.daimyo[c]&&st.daimyo[c].alive).map(c=>daimyoDef(st,c)?.nameJP||c);
-    const atkLabel=atkName+(allies.length?('・'+allies.join('・')):'')+'家';
+    const nameOf=(id)=>daimyoDef(st,id)?.nameJP||id;
     const cy=py+292;
-    T(ctx, atkLabel, px+pw/2-170, cy, {size:28, weight:'bold', color:'#f87171', align:'center'});
-    T(ctx, 'VS', px+pw/2, cy, {size:26, weight:'bold', color:'#9fb2c6', align:'center'});
-    T(ctx, defName+'家', px+pw/2+170, cy, {size:28, weight:'bold', color:'#60a5fa', align:'center'});
-    // プレイヤー当事者の案内
-    const isPlayer = ev.atkClan===st.playerDaimyo || ev.defClan===st.playerDaimyo;
-    if (isPlayer){
-      const side = ev.atkClan===st.playerDaimyo ? '攻め手' : '受け手';
-      T(ctx, 'あなたはこの合戦の'+side+'。歴史を変えるか？', px+pw/2, cy+58, {size:22, weight:'bold', color:'#e8c07a', align:'center'});
-      T(ctx, 'You are a participant — will you change history?', px+pw/2, cy+90, {size:16, color:'#9fb2c6', align:'center'});
+    if (ev.kind==='effect'){
+      // 効果イベント：カード種別に応じてクラン表示を切替（VSは使わない）
+      const card=ev.card||{type:'single', clan:ev.requires&&ev.requires[0]};
+      if (card.type==='alliance'){
+        T(ctx, nameOf(card.a)+'家', px+pw/2-160, cy, {size:28, weight:'bold', color:'#34d399', align:'center'});
+        T(ctx, '⇔', px+pw/2, cy, {size:28, weight:'bold', color:'#e8c07a', align:'center'});
+        T(ctx, nameOf(card.b)+'家', px+pw/2+160, cy, {size:28, weight:'bold', color:'#34d399', align:'center'});
+      } else {
+        const label = nameOf(card.clan)+'家'+(card.type==='internal'?'（家中）':'');
+        T(ctx, label, px+pw/2, cy, {size:30, weight:'bold', color:'#e8c07a', align:'center'});
+      }
+      const isMine = ev.card && ((ev.card.clan===st.playerDaimyo)||(ev.card.a===st.playerDaimyo)||(ev.card.b===st.playerDaimyo));
+      T(ctx, isMine?'あなたの家に関わる出来事だ。':'諸国で歴史が動いた。', px+pw/2, cy+64, {size:20, color:'#9fb2c6', align:'center'});
     } else {
-      T(ctx, '諸国で歴史的な合戦が起こった。', px+pw/2, cy+68, {size:20, color:'#9fb2c6', align:'center'});
+      // 合戦カード（攻め手 VS 受け手）
+      const atkName=nameOf(ev.atkClan), defName=nameOf(ev.defClan);
+      const allies=(ev.allies||[]).filter(c=>st.daimyo[c]&&st.daimyo[c].alive).map(c=>nameOf(c));
+      const atkLabel=atkName+(allies.length?('・'+allies.join('・')):'')+'家';
+      T(ctx, atkLabel, px+pw/2-170, cy, {size:28, weight:'bold', color:'#f87171', align:'center'});
+      T(ctx, 'VS', px+pw/2, cy, {size:26, weight:'bold', color:'#9fb2c6', align:'center'});
+      T(ctx, defName+'家', px+pw/2+170, cy, {size:28, weight:'bold', color:'#60a5fa', align:'center'});
+      const isPlayer = ev.atkClan===st.playerDaimyo || ev.defClan===st.playerDaimyo;
+      if (isPlayer){
+        const side = ev.atkClan===st.playerDaimyo ? '攻め手' : '受け手';
+        T(ctx, 'あなたはこの合戦の'+side+'。歴史を変えるか？', px+pw/2, cy+58, {size:22, weight:'bold', color:'#e8c07a', align:'center'});
+        T(ctx, 'You are a participant — will you change history?', px+pw/2, cy+90, {size:16, color:'#9fb2c6', align:'center'});
+      } else {
+        T(ctx, '諸国で歴史的な合戦が起こった。', px+pw/2, cy+68, {size:20, color:'#9fb2c6', align:'center'});
+      }
     }
   }
   _drawGameOver(ctx, win){
