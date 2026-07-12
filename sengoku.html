@@ -2878,7 +2878,18 @@ function rollGeneralDeaths(state, generals, lossFrac, isLord, rngFn){
     if (!g || !g.alive) return;
     let chance = 0.10 + lossFrac*0.4;
     if (isLord && isLord(gid)) chance *= 0.5;
-    if (rnd() < chance){ g.alive=false; dead.push(gid); }
+    if (rnd() < chance){
+      g.alive=false;
+      // 討死した武将は盤上から完全に除去（配置国の武将リストから外し、所属・在城をクリア）。
+      // これを怠ると討死武将が占領地の守備武将として残留し、所属大名参照も宙に浮く。
+      if (g.location && state.provinces[g.location]){
+        const arr = state.provinces[g.location].generals;
+        const i = arr.indexOf(gid);
+        if (i>=0) arr.splice(i,1);
+      }
+      g.location=null; g.daimyo=null;
+      dead.push(gid);
+    }
   });
   return dead;
 }
@@ -4614,11 +4625,11 @@ class MapScene extends GameKit.Scene {
         if (dip.ally) bs.push({x:bx, y:by, w:bw, h:82, jp:'同盟を破棄', en:'Break alliance', sz:22, ensz:14, accent:'rgba(248,113,113,0.6)', on:!acted, action:g=>this._diploPropose(g,'break')});
         const byD = dip.ally ? by+98 : by;
         const daughters = st.daimyo[me].daughters ?? 1;
-        bs.push({x:bx, y:byD, w:bw, h:92, jp:'従属の提案（200貫）', en:'Propose vassalage', sz:21, ensz:13, accent:'rgba(251,191,36,0.55)', on: gold>=200 && !acted && !dip.ally && !inTruce(st,me,rid) && !dip.vassal && st.daimyo[rid].vassalOf!==me, action:g=>this._diploPropose(g,'vassal')});
+        bs.push({x:bx, y:byD, w:bw, h:92, jp:'従属の提案（200貫）', en:'Propose vassalage', sz:21, ensz:13, accent:'rgba(251,191,36,0.55)', on: gold>=200 && !acted && !dip.ally && !inTruce(st,me,rid) && (dip.vassalUntil||0)<=st.turn && st.daimyo[rid].vassalOf!==me, action:g=>this._diploPropose(g,'vassal')});
         if (st.daimyo[rid].vassalOf===me){
           bs.push({x:bx, y:byD+106, w:bw, h:92, jp:'併合する（従属国を吸収）', en:'Annex vassal', sz:21, ensz:13, accent:'rgba(52,211,153,0.7)', on:!acted, action:g=>this._diploPropose(g,'annex')});
         } else {
-          bs.push({x:bx, y:byD+106, w:bw, h:92, jp:'臣従を要求', en:'Demand submission', sz:22, ensz:14, accent:'rgba(248,113,113,0.55)', on: !acted && !dip.ally && !dip.vassal, action:g=>this._diploPropose(g,'demand')});
+          bs.push({x:bx, y:byD+106, w:bw, h:92, jp:'臣従を要求', en:'Demand submission', sz:22, ensz:14, accent:'rgba(248,113,113,0.55)', on: !acted && !dip.ally && (dip.vassalUntil||0)<=st.turn, action:g=>this._diploPropose(g,'demand')});
         }
         bs.push({x:bx, y:byD+212, w:bw, h:92, jp:'婚姻の提案', en:'Propose marriage', sz:22, ensz:14, accent:'rgba(244,114,182,0.6)', on: daughters>=1 && dip.relation>=80 && !acted && !dip.ally && !dip.married, action:g=>this._diploPropose(g,'marriage')});
       }
@@ -5072,7 +5083,7 @@ class MapScene extends GameKit.Scene {
     if (st.daimyo[me] && st.daimyo[me].vassalOf===rid) return {jp:'主家', en:'Suzerain', color:'#fb923c'};
     if (dip.married) return {jp:'婚姻同盟', en:'Married', color:'#f472b6'};
     if (dip.ally) return {jp:'同盟', en:'Ally', color:'#a78bfa'};
-    if (dip.vassal) return {jp:'従属中', en:'Vassal', color:'#fbbf24'};
+    if ((dip.vassalUntil||0) > st.turn) return {jp:'従属中', en:'Vassal', color:'#fbbf24'};
     if (dip.truceUntil>=st.turn) return {jp:'停戦中', en:'Truce', color:'#eab308'};
     if (dip.relation<=-40) return {jp:'敵対', en:'Hostile', color:'#f87171'};
     return {jp:'中立', en:'Neutral', color:'#94a3b8'};
@@ -5109,7 +5120,7 @@ class MapScene extends GameKit.Scene {
     } else if (kind==='vassal'){
       if (st.daimyo[me].gold<200){ this._flash('金が足りません','Not enough gold'); return; }
       pay(200); dip.actedTurn=st.turn;
-      dip.truceUntil=st.turn+20; dip.vassal=true; addRel(st,me,rid,15);
+      dip.truceUntil=st.turn+20; dip.vassalUntil=st.turn+20; addRel(st,me,rid,15);
       game.audio.jingle([{f:392,d:0.12},{f:330,d:0.18}]);
       this._flash(daimyoDef(st,rid).nameJP+'家に従属（停戦20ターン、関係+15）', 'Submitted as vassal (truce 20 turns)');
     } else if (kind==='demand'){
@@ -5183,7 +5194,7 @@ class MapScene extends GameKit.Scene {
       const extraInfo=[];
       if (st.daimyo[rid].vassalOf===me) extraInfo.push('従属国（毎季貢納・併合可能）👑');
       if (dip.married) extraInfo.push('婚姻同盟成立済み 💐');
-      if (dip.vassal) extraInfo.push('従属中（停戦'+Math.max(0,dip.truceUntil-st.turn)+'ターン残）');
+      if ((dip.vassalUntil||0) > st.turn) extraInfo.push('従属中（停戦'+Math.max(0,dip.truceUntil-st.turn)+'ターン残）');
       if (dip.actedTurn===st.turn) extraInfo.push('※今季は交渉済み');
       if (extraInfo.length) T(ctx, extraInfo.join(' ・ '), L.rightX+L.rightW/2, L.py+300, {size:18, color:'#7d93ab', align:'center'});
     } else {
