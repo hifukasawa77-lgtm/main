@@ -259,6 +259,26 @@
   }
   .daimyo-edit-actions button.primary { background:rgba(180,100,0,0.85); border-color:rgba(251,191,36,0.65); }
   .daimyo-edit-actions button:hover { filter:brightness(1.14); }
+  .cl-interior { width:100%; min-height:30px; border-radius:6px; border:1px solid rgba(56,189,248,0.45); background:rgba(14,45,65,0.9); color:#bae6fd; font-size:12px; cursor:pointer; }
+  .cl-interior:hover { filter:brightness(1.18); }
+  .castle-interior-panel { position:fixed; inset:0; z-index:95; display:none; align-items:center; justify-content:center; padding:18px; background:rgba(0,0,0,0.82); }
+  body.castle-interior-open .castle-interior-panel { display:flex; }
+  .castle-interior-inner { width:min(1180px,calc(100vw - 28px)); max-height:calc(100vh - 28px); overflow:auto; padding:18px; border-radius:16px; background:rgba(8,13,24,0.98); border:1px solid rgba(232,192,122,0.6); box-shadow:0 20px 60px rgba(0,0,0,0.8); color:#e2e8f0; font-family:"Hiragino Sans","Yu Gothic","Segoe UI",sans-serif; }
+  .castle-interior-header { display:flex; align-items:baseline; gap:14px; margin-bottom:12px; }
+  .castle-interior-title { color:#facc15; font-size:22px; font-weight:800; }
+  .castle-interior-help { color:#9fb2c6; font-size:13px; }
+  .castle-interior-palette { display:grid; grid-template-columns:repeat(7,minmax(90px,1fr)); gap:6px; margin-bottom:10px; }
+  .castle-interior-palette button, .castle-interior-actions button { min-height:42px; border-radius:7px; border:1px solid rgba(148,163,184,0.42); background:rgba(30,41,59,0.92); color:#f8fafc; font-weight:700; cursor:pointer; }
+  .castle-interior-palette button { display:flex; align-items:center; justify-content:center; gap:5px; overflow:hidden; }
+  .castle-interior-palette button img { width:32px; height:32px; object-fit:contain; pointer-events:none; }
+  .castle-interior-palette button.active { border-color:#22d3ee; background:rgba(14,116,144,0.6); color:#cffafe; }
+  .castle-interior-grid { display:grid; grid-template-columns:repeat(17,minmax(24px,1fr)); gap:3px; padding:12px; border-radius:10px; background:linear-gradient(rgba(54,74,42,0.88),rgba(116,91,48,0.92)), url("assets/sengoku/gpt/sengoku-hex-battlefield-gpt-image-2.jpg") center/cover; border:2px solid rgba(208,169,83,0.62); box-shadow:inset 0 0 28px rgba(0,0,0,0.45); }
+  .castle-interior-cell { aspect-ratio:1; min-width:0; padding:0; border:1px solid rgba(236,214,151,0.28); border-radius:3px; background:rgba(111,101,55,0.44); color:#e2e8f0; font-size:9px; overflow:hidden; cursor:pointer; position:relative; box-shadow:inset 0 0 12px rgba(0,0,0,0.2); }
+  .castle-interior-cell img { width:100%; height:100%; object-fit:contain; display:block; pointer-events:none; }
+  .castle-interior-cell.occupied { background:rgba(146,64,14,0.76); border-color:rgba(251,191,36,0.7); }
+  .castle-interior-actions { display:flex; gap:10px; margin-top:12px; }
+  .castle-interior-actions button { flex:1; min-height:42px; font-size:14px; }
+  .castle-interior-actions button.primary { background:rgba(180,100,0,0.9); border-color:rgba(251,191,36,0.75); }
 </style>
 </head>
 <body>
@@ -302,6 +322,8 @@
             <th data-sort="prov" style="width:16%">国名<span class="castle-list-sort-ind"></span></th>
             <th data-sort="lv" style="width:9%">城Lv<span class="castle-list-sort-ind"></span></th>
             <th style="width:26%">城配置座標</th>
+            <th style="width:12%">城種類</th>
+            <th style="width:8%">城内編集</th>
             <th style="width:7%">削除</th>
           </tr>
         </thead>
@@ -313,6 +335,14 @@
       <button id="castleListAdd" type="button">城追加</button>
       <button id="castleListConfirm" class="primary" type="button">確定</button>
     </div>
+  </div>
+</div>
+<div id="castleInteriorPanel" class="castle-interior-panel" aria-label="城内編集">
+  <div class="castle-interior-inner">
+    <div class="castle-interior-header"><div id="castleInteriorTitle" class="castle-interior-title">城内編集 / Interior Layout</div><div class="castle-interior-help">オブジェクトを選び、17×15ヘックスをクリックして配置</div></div>
+    <div id="castleInteriorPalette" class="castle-interior-palette"></div>
+    <div id="castleInteriorGrid" class="castle-interior-grid"></div>
+    <div class="castle-interior-actions"><button id="castleInteriorRotate" type="button">向き: 横</button><button id="castleInteriorCancel" type="button">キャンセル</button><button id="castleInteriorClear" type="button">全消去</button><button id="castleInteriorSave" class="primary" type="button">配置を保存</button></div>
   </div>
 </div>
 <div id="generalListPanel" class="general-list-panel" aria-label="武将一覧パネル">
@@ -528,6 +558,10 @@ function applyCastleMetaOverridesToState(state){
   Object.entries(CASTLE_META_OVERRIDES).forEach(([id, meta])=>{
     if (meta.deleted){ removeCastleFromState(state, id); return; }
     if (meta.daimyoId && state.provinces[id]) state.provinces[id].owner=meta.daimyoId;
+    if (state.provinces[id]){
+      if (['hirajiro','hirayamajiro','yamajiro'].includes(meta.castleType)) state.provinces[id].castleType=meta.castleType;
+      if (Array.isArray(meta.castleLayout)) state.provinces[id].castleLayout=meta.castleLayout;
+    }
   });
 }
 function updateCustomCastleRecord(id, patch){
@@ -894,7 +928,7 @@ function ensureCustomCastlesInState(state){
   if (!state || !state.provinces) return;
   CUSTOM_CASTLES.forEach(c=>{
     if (!DATA.provById[c.id]) addCustomCastleToData(c);
-    if (!state.provinces[c.id]) state.provinces[c.id]={owner:c.daimyoId, soldiers:800, development:35, castleLevel:1, generals:[], hasActed:false, minchu:60};
+    if (!state.provinces[c.id]) state.provinces[c.id]={owner:c.daimyoId, soldiers:800, development:35, castleLevel:1, castleType:'hirajiro', castleLayout:[], generals:[], hasActed:false, minchu:60};
     else state.provinces[c.id].owner=c.daimyoId;
   });
 }
@@ -1045,6 +1079,28 @@ const GPT_ASSETS = {
   castleGoten: 'assets/sengoku/gpt/tiles/sengoku-castle-goten.png',
   castleStonewall: 'assets/sengoku/gpt/tiles/sengoku-castle-stonewall.png',
   castleEarthwork: 'assets/sengoku/gpt/tiles/sengoku-castle-earthwork.png',
+  castleWallH: 'assets/sengoku/gpt/tiles/sengoku-castle-wall-h.png',
+  castleWallV: 'assets/sengoku/gpt/tiles/sengoku-castle-wall-v.png',
+  castlePalisadeH: 'assets/sengoku/gpt/tiles/sengoku-castle-palisade-h.png',
+  castlePalisadeV: 'assets/sengoku/gpt/tiles/sengoku-castle-palisade-v.png',
+  castleMoatH: 'assets/sengoku/gpt/tiles/sengoku-castle-moat-h.png',
+  castleMoatV: 'assets/sengoku/gpt/tiles/sengoku-castle-moat-v.png',
+  castleDryMoatH: 'assets/sengoku/gpt/tiles/sengoku-castle-dry-moat-h.png',
+  castleDryMoatV: 'assets/sengoku/gpt/tiles/sengoku-castle-dry-moat-v.png',
+  castleStonewallH: 'assets/sengoku/gpt/tiles/sengoku-castle-stonewall-h.png',
+  castleStonewallV: 'assets/sengoku/gpt/tiles/sengoku-castle-stonewall-v.png',
+  castleEarthworkH: 'assets/sengoku/gpt/tiles/sengoku-castle-earthwork-h.png',
+  castleEarthworkV: 'assets/sengoku/gpt/tiles/sengoku-castle-earthwork-v.png',
+  castleKuruwaH: 'assets/sengoku/gpt/tiles/sengoku-castle-kuruwa-h.png',
+  castleKuruwaV: 'assets/sengoku/gpt/tiles/sengoku-castle-kuruwa-v.png',
+  castleWallCorner: 'assets/sengoku/gpt/tiles/sengoku-castle-wall-corner.png',
+  castleMoatCorner: 'assets/sengoku/gpt/tiles/sengoku-castle-moat-corner.png',
+  castleDryMoatCorner: 'assets/sengoku/gpt/tiles/sengoku-castle-dry-moat-corner.png',
+  castlePalisadeCorner: 'assets/sengoku/gpt/tiles/sengoku-castle-palisade-corner.png',
+  unitCavalry: 'assets/sengoku/gpt/units/unit-cavalry.png',
+  unitSpear: 'assets/sengoku/gpt/units/unit-spear.png',
+  unitBow: 'assets/sengoku/gpt/units/unit-bow.png',
+  unitGun: 'assets/sengoku/gpt/units/unit-gun.png',
   portrait1: 'assets/sengoku/gpt/sengoku-portraits-page-1-gpt-image-2.jpg',
   portrait2: 'assets/sengoku/gpt/sengoku-portraits-page-2-gpt-image-2.jpg',
   portrait3: 'assets/sengoku/gpt/sengoku-portraits-page-3-gpt-image-2.jpg',
@@ -1081,8 +1137,24 @@ const GPT_ASSETS = {
   kamonRedrawSix: 'assets/sengoku/gpt/sengoku-kamon-redraw-six-clans-gpt-image-2.png',
 };
 const ASSETS = { img:{}, portraitSlots:{}, portraitCols:6, portraitRows:6, kamonCols:5, kamonRows:5, extraKamonCols:4, extraKamonRows:2 };
+const ORIENTED_CASTLE_ASSETS = {
+  castleWall:['castleWallH','castleWallV'], castlePalisade:['castlePalisadeH','castlePalisadeV'],
+  castleMoat:['castleMoatH','castleMoatV'], castleDryMoat:['castleDryMoatH','castleDryMoatV'],
+  castleStonewall:['castleStonewallH','castleStonewallV'], castleEarthwork:['castleEarthworkH','castleEarthworkV'],
+  castleKuruwa:['castleKuruwaH','castleKuruwaV']
+};
+const CASTLE_OBJECT_MAX_HP = {castleWall:520,castleGate:340,castleWallCorner:520,castleStonewall:460,castleEarthwork:380,castlePalisade:180,castlePalisadeCorner:180,castleMoat:Infinity,castleMoatCorner:Infinity,castleDryMoat:Infinity,castleDryMoatCorner:Infinity,castleKeep:720,castleYagura:300,castleUmadashi:260,castleKuruwa:320,castleYakata:260,castleGoten:300};
+function castleObjectMaxHp(asset){ return CASTLE_OBJECT_MAX_HP[asset]===undefined ? 240 : CASTLE_OBJECT_MAX_HP[asset]; }
+function castleObjectCanBurn(asset){ return ['castleYagura','castlePalisade','castlePalisadeCorner','castleKeep','castleGate'].includes(asset); }
+function orientedCastleAsset(asset, rotation){
+  const pair=ORIENTED_CASTLE_ASSETS[asset];
+  return pair ? pair[(Number(rotation)||0)===90?1:0] : asset;
+}
 function castleTypeForProvince(pid, prov){
   const p=DATA.provById[pid];
+  const meta=CASTLE_META_OVERRIDES[pid] || {};
+  const explicit=(prov&&prov.castleType) || meta.castleType;
+  if (['hirajiro','hirayamajiro','yamajiro'].includes(explicit)) return explicit;
   if (!p) return 'hirajiro';
   const level=Math.max(1, Number(prov&&prov.castleLevel)||1);
   if (p.terrain==='mountain' || p.terrain==='forest') return 'yamajiro';
@@ -1695,6 +1767,13 @@ const UNITS = {
   cannon:   {jp:'大筒', en:'Cannon',   move:1, range:3, atk:0.5, def:0.4, color:'#f59e0b'}, // 攻城兵器（攻城戦の攻撃側のみ）
 };
 const UNIT_ORDER = ['spear','cavalry','bow','gun'];
+const UNIT_ASSET_KEYS = {spear:'unitSpear', cavalry:'unitCavalry', bow:'unitBow', gun:'unitGun'};
+const UNIT_COMMANDS = {
+  cavalry:{id:'charge', jp:'\u7a81\u6483', en:'Charge'},
+  spear:{id:'shieldWall', jp:'\u69cd\u8851', en:'Spear Hedge'},
+  bow:{id:'fireArrow', jp:'\u706b\u77e2', en:'Fire Arrows'},
+  gun:{id:'threeVolley', jp:'\u4e09\u5f3e\u6253\u3061', en:'Three-Round Volley'}
+};
 /* 兵科相性: 足軽>騎馬>鉄砲>足軽 */
 function advantage(a, d){
   if (a==='spear'   && d==='cavalry') return 1.3;
@@ -2658,7 +2737,7 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
   // provinces
   DATA.provinces.forEach(p=>{
     const owner = scn.own[p.id] || null;
-    const prov = { owner, soldiers:0, development:0, castleLevel:1, generals:[], hasActed:false, minchu:60 };
+    const prov = { owner, soldiers:0, development:0, castleLevel:1, castleType:null, castleLayout:[], generals:[], hasActed:false, minchu:60 };
     if (owner){
       const dd = dById[owner];
       const isCap = dd && dd.capital===p.id;
@@ -3138,6 +3217,7 @@ class MapScene extends GameKit.Scene {
     BGM.setMood('map'); BGM.start();
     ensureCustomCastlesInState(this.state);
     applyCastleMetaOverridesToState(this.state);
+    resetLegacyCastleLayouts(this.state);
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
@@ -3333,7 +3413,7 @@ class MapScene extends GameKit.Scene {
       const pos=CASTLE_POS_OVERRIDES[p.id];
       const posX=pos&&Number.isFinite(pos.x)?pos.x:'';
       const posY=pos&&Number.isFinite(pos.y)?pos.y:'';
-      rows.push({p,prov,castleName,owner,ownerName,provName,castleLv,posX,posY});
+      rows.push({p,prov,castleName,owner,ownerName,provName,castleLv,castleType:castleTypeForProvince(p.id,prov),posX,posY});
     });
     // Apply sort
     if (sc.col){
@@ -3347,15 +3427,16 @@ class MapScene extends GameKit.Scene {
     }
     // Build rows
     body.innerHTML='';
-    rows.forEach(({p,prov,castleName,owner,provName,castleLv,posX,posY})=>{
+    rows.forEach(({p,prov,castleName,owner,provName,castleLv,castleType,posX,posY})=>{
       const daimyoOpts='<option value="">(なし)</option>'+daimyos.map(d=>`<option value="${d.id}"${d.id===owner?' selected':''}>${d.nameJP}家</option>`).join('');
       const allProvs=provNames.includes(provName)?provNames:[provName,...provNames];
       const provOpts=allProvs.map(n=>`<option value="${n}"${n===provName?' selected':''}>${n}</option>`).join('');
-      const lvOpts=Array.from({length:10},(_,i)=>i+1).map(lv=>`<option value="${lv}"${lv===castleLv?' selected':''}>${lv}</option>`).join('');
+      const typeOpts=[['hirajiro','\u5e73\u57ce'],['hirayamajiro','\u5e73\u5c71\u57ce'],['yamajiro','\u5c71\u57ce']].map(([v,l])=>`<option value="${v}"${v===castleType?' selected':''}>${l}</option>`).join('');
       const tr=document.createElement('tr');
       tr.dataset.id=p.id;
-      tr.innerHTML=`<td><input type="text" class="cl-name" value="${castleName.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}" maxlength="30"></td><td><select class="cl-daimyo">${daimyoOpts}</select></td><td><select class="cl-prov">${provOpts}</select></td><td><select class="cl-lv">${lvOpts}</select></td><td><div class="cl-coord-wrap"><span>X</span><input type="number" class="cl-cx" value="${posX}" step="1"><span>Y</span><input type="number" class="cl-cy" value="${posY}" step="1"></div></td><td class="castle-list-del-cell"><input type="checkbox" class="cl-del"></td>`;
+      tr.innerHTML=`<td><input type="text" class="cl-name" value="${castleName.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}" maxlength="30"></td><td><select class="cl-daimyo">${daimyoOpts}</select></td><td><select class="cl-prov">${provOpts}</select></td><td><select class="cl-lv">${lvOpts}</select></td><td><div class="cl-coord-wrap"><span>X</span><input type="number" class="cl-cx" value="${posX}" step="1"><span>Y</span><input type="number" class="cl-cy" value="${posY}" step="1"></div></td><td><select class="cl-type">${typeOpts}</select></td><td><button type="button" class="cl-interior">\u57ce\u5185\u7de8\u96c6</button></td><td class="castle-list-del-cell"><input type="checkbox" class="cl-del"></td>`;
       body.appendChild(tr);
+      tr.querySelector('.cl-interior').onclick=()=>{ this._closeCastleListPanel(); this._openCastleInteriorEditor(p.id); };
     });
     if (countEl) countEl.textContent='全'+rows.length+'城';
     // Sort indicators and click handlers
@@ -3373,6 +3454,60 @@ class MapScene extends GameKit.Scene {
     document.getElementById('castleListAdd').onclick=()=>{ this._closeCastleListPanel(); this._startCastleAdd(this._listGame); };
     this.castleMetaEdit=false; this.castleEdit=false; this._hideCastleAddPanel();
     document.body.classList.add('castle-list-open');
+  }
+  _openCastleInteriorEditor(id){
+    const p=DATA.provById[id], prov=this.state.provinces[id];
+    if (!p || !prov) return;
+    const storedLayout=Array.isArray(prov.castleLayout)?prov.castleLayout:[];
+    this.castleInteriorEdit={id, selected:'castleWall', rotation:0, layout:storedLayout.length?storedLayout.map(v=>({col:Number(v.col),row:Number(v.row),asset:v.asset,rotation:Number(v.rotation)||0})):randomCastleLayout(id,castleTypeForProvince(id,prov),prov.castleLevel)};
+    this._closeCastleListPanel();
+    document.body.classList.add('castle-interior-open');
+    const title=document.getElementById('castleInteriorTitle');
+    if (title) title.textContent=castleNameForProvince(p)+' \u57ce\u5185\u7de8\u96c6 / Interior Layout';
+    const palette=document.getElementById('castleInteriorPalette');
+    const items=[
+      ['castleWall','\u57ce\u58c1'],['castleWallCorner','\u57ce\u58c1\u89d2'],['castleGate','\u57ce\u9580'],['castlePalisade','\u67f5'],['castlePalisadeCorner','\u67f5\u89d2'],['castleYagura','\u6adb'],
+      ['castleDryMoat','\u7a7a\u5800'],['castleDryMoatCorner','\u7a7a\u5800\u89d2'],['castleMoat','\u5800'],['castleMoatCorner','\u5800\u89d2'],['castleKeep','\u5929\u5b88'],['castleKuruwa','\u66f2\u8f2a'],
+      ['castleUmadashi','\u99ac\u51fa\u3057'],['castleYakata','\u9928'],['castleGoten','\u5fa1\u6bbf'],['castleStonewall','\u77f3\u57a3'],['castleEarthwork','\u571f\u5841'],['erase','\u6d88\u53bb']
+    ];
+    if (palette){ palette.innerHTML=''; items.forEach(([key,label])=>{ const b=document.createElement('button'); b.type='button'; b.dataset.asset=key; b.title=label; if (GPT_ASSETS[key]){ const img=document.createElement('img'); img.src=GPT_ASSETS[key]; img.alt=''; b.appendChild(img); } const span=document.createElement('span'); span.textContent=label; b.appendChild(span); b.onclick=()=>{ this.castleInteriorEdit.selected=key; this._renderCastleInteriorGrid(); }; palette.appendChild(b); }); }
+    const rotate=document.getElementById('castleInteriorRotate');
+    if (rotate) rotate.onclick=()=>{ this.castleInteriorEdit.rotation=this.castleInteriorEdit.rotation===90?0:90; rotate.textContent='\u5411\u304d: '+(this.castleInteriorEdit.rotation===90?'\u7e26':'\u6a2a'); this._renderCastleInteriorGrid(); };
+    document.getElementById('castleInteriorCancel').onclick=()=>{ this.castleInteriorEdit=null; document.body.classList.remove('castle-interior-open'); };
+    document.getElementById('castleInteriorClear').onclick=()=>{ this.castleInteriorEdit.layout=[]; this._renderCastleInteriorGrid(); };
+    document.getElementById('castleInteriorSave').onclick=()=>{
+      const layout=this.castleInteriorEdit.layout.map(v=>({col:v.col,row:v.row,asset:v.asset,rotation:Number(v.rotation)||0}));
+      prov.castleLayout=layout; setCastleMetaOverride(id,{castleLayout:layout});
+      this._save(); this.castleInteriorEdit=null; document.body.classList.remove('castle-interior-open');
+      this._flash('\u57ce\u5185\u914d\u7f6e\u3092\u4fdd\u5b58\u3057\u307e\u3057\u305f / Interior layout saved');
+    };
+    this._renderCastleInteriorGrid();
+  }
+  _renderCastleInteriorGrid(){
+    const edit=this.castleInteriorEdit, grid=document.getElementById('castleInteriorGrid');
+    if (!edit || !grid) return;
+    const labels={castleWall:'\u57ce\u58c1',castleWallCorner:'\u57ce\u58c1\u89d2',castleGate:'\u57ce\u9580',castlePalisade:'\u67f5',castlePalisadeCorner:'\u67f5\u89d2',castleYagura:'\u6adb',castleDryMoat:'\u7a7a\u5800',castleDryMoatCorner:'\u7a7a\u5800\u89d2',castleMoat:'\u5800',castleMoatCorner:'\u5800\u89d2',castleKeep:'\u5929\u5b88',castleKuruwa:'\u66f2\u8f2a',castleUmadashi:'\u99ac\u51fa\u3057',castleYakata:'\u9928',castleGoten:'\u5fa1\u6bbf',castleStonewall:'\u77f3\u57a3',castleEarthwork:'\u571f\u5841'};
+    const palette=document.getElementById('castleInteriorPalette');
+    if (palette) palette.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.asset===edit.selected));
+    grid.innerHTML='';
+    for (let row=0;row<15;row++) for (let col=0;col<17;col++){
+      const b=document.createElement('button'); b.type='button'; b.className='castle-interior-cell';
+      const item=edit.layout.find(v=>v.col===col&&v.row===row);
+      if (item){
+        b.classList.add('occupied');
+        const img=document.createElement('img'); img.src=GPT_ASSETS[orientedCastleAsset(item.asset,item.rotation)]||GPT_ASSETS[item.asset]||''; img.alt=labels[item.asset]||item.asset;
+        img.style.transform=ORIENTED_CASTLE_ASSETS[item.asset]?'none':'rotate('+(Number(item.rotation)||0)+'deg)'; b.appendChild(img);
+      }
+      b.title=`${col},${row}`;
+      b.onclick=()=>{
+        const idx=edit.layout.findIndex(v=>v.col===col&&v.row===row);
+        if (edit.selected==='erase'){ if(idx>=0) edit.layout.splice(idx,1); }
+        else if(idx>=0){ edit.layout[idx].asset=edit.selected; edit.layout[idx].rotation=edit.rotation; }
+        else edit.layout.push({col,row,asset:edit.selected,rotation:edit.rotation});
+        this._renderCastleInteriorGrid();
+      };
+      grid.appendChild(b);
+    }
   }
   _closeCastleListPanel(){
     if (castleListPanel) document.body.classList.remove('castle-list-open');
@@ -3418,6 +3553,7 @@ class MapScene extends GameKit.Scene {
       const daimyoId=row.querySelector('.cl-daimyo').value;
       const provinceName=(row.querySelector('.cl-prov').value||'').trim();
       const castleLevel=parseInt(row.querySelector('.cl-lv').value,10);
+      const castleType=row.querySelector('.cl-type').value;
       const cxVal=(row.querySelector('.cl-cx').value||'').trim();
       const cyVal=(row.querySelector('.cl-cy').value||'').trim();
       if (!castleName) return;
@@ -3778,6 +3914,7 @@ class MapScene extends GameKit.Scene {
       defender: { daimyo: dstOwner, family: dstOwner||'', soldiers: dst.soldiers, generals: dst.generals.filter(g=>st.generals[g].alive).slice(), castleLevel: dst.castleLevel },
       terrain: DATA.provById[dstId].terrain,
       castleType: castleTypeForProvince(dstId, dst),
+      castleLayout: Array.isArray(dst.castleLayout)?dst.castleLayout:[],
     };
   }
   _startBattleFromChoice(game, ctx, battleType){
@@ -5372,16 +5509,16 @@ class MapScene extends GameKit.Scene {
     const hb=Math.round(Math.min(Math.sqrt(d.horse||0)*0.025,0.25)*100);
     const gb=Math.round(Math.min(Math.sqrt(d.gun  ||0)*0.025,0.25)*100);
     T(ctx, '騎馬ボーナス +'+hb+'%　　鉄砲ボーナス +'+gb+'%', px+pw/2, invY+82, {size:20, color:'#cbd5e1', align:'center'});
-    // 兵站ステータス（月消費と備蓄の持続月数）— パネル下部の空き領域に配置
-    const consume=riceConsumptionOf(st, st.playerDaimyo);
-    const months=consume>0?Math.floor((d.rice||0)/consume):'∞';
-    const warn=(consume>0 && (d.rice||0)<consume*2);
-    T(ctx, '兵糧 月消費 '+consume+'千石　備蓄 約'+months+'ヶ月分'+(warn?'  ⚠兵站危機':''), px+pw/2, py+624, {size:19, weight: warn?'bold':'normal', color: warn?'#f87171':'#94a3b8', align:'center'});
-    T(ctx, '※兵糧は秋に収穫。尽きると兵が離散します', px+pw/2, py+652, {size:16, color:'#7d93ab', align:'center'});
     // ボタン説明
-    T(ctx, '米売買（10千石単位）', px+60, py+242, {size:20, color:'#94a3b8'});
-    T(ctx, '軍備（50単位）', px+60+pw/2, py+242, {size:20, color:'#94a3b8'});
-    T(ctx, '家宝購入（今後実装予定）', px+60, py+480, {size:20, color:'#64748b'});
+    const consume=riceConsumptionOf(st, st.playerDaimyo);
+    const months=consume>0?Math.floor((d.rice||0)/consume):'\u221e';
+    const warn=(consume>0 && (d.rice||0)<consume*2);
+    T(ctx, '\u5175\u7ce7 \u6708\u6d88\u8cbb '+consume+'\u5343\u77f3 \u5099\u84c4 \u7d04'+months+'\u30f6\u6708\u5206'+(warn?'  \u26a0\u5175\u7ad9\u5371\u6a5f':''), px+pw/2, py+624, {size:19, weight:warn?'bold':'normal', color:warn?'#f87171':'#94a3b8', align:'center'});
+    T(ctx, '\u203b\u5175\u7ce7\u306f\u6708\u3054\u3068\u306b\u6d88\u8cbb\u3057\u307e\u3059', px+pw/2, py+652, {size:16, color:'#7d93ab', align:'center'});
+    // 繝懊ち繝ｳ隱ｬ譏・
+    T(ctx, '\u5175\u529b: 0\u4eba', px+60, py+242, {size:20, color:'#94a3b8'});
+    T(ctx, '\u7c73\u50f0: 0\u5343\u77f3', px+60+pw/2, py+242, {size:20, color:'#94a3b8'});
+    T(ctx, '\u7ba1\u7406\u6c11\u5fe0: \u2014', px+60, py+480, {size:20, color:'#64748b'});
   }
   // 一括統治の見積り（ボタン表示と描画で共用）
   _bulkStats(){
@@ -5709,10 +5846,53 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
   }
 }
 
+const CASTLE_LAYOUT_RESET_STORE='sengokuCastleLayoutReset:v3';
+function resetLegacyCastleLayouts(state){
+  let done=false; try{ done=localStorage.getItem(CASTLE_LAYOUT_RESET_STORE)==='1'; }catch(_){ }
+  if (done) return;
+  Object.values(CASTLE_META_OVERRIDES).forEach(meta=>{ if (meta && meta.castleLayout) delete meta.castleLayout; });
+  if (state && state.provinces) Object.values(state.provinces).forEach(prov=>{ prov.castleLayout=[]; });
+  saveCastleMetaOverrides();
+  try{ localStorage.setItem(CASTLE_LAYOUT_RESET_STORE,'1'); }catch(_){ }
+}
+function castleLayoutSeed(id,type,level){
+  let n=2166136261>>>0;
+  for (const ch of String(id||'castle')+'|'+String(type||'hirajiro')+'|'+String(level||1)){ n^=ch.charCodeAt(0); n=Math.imul(n,16777619)>>>0; }
+  return n||1;
+}
+function randomCastleLayout(id,type,level){
+  let seed=castleLayoutSeed(id,type,level), rand=()=>{ seed=(Math.imul(seed,1664525)+1013904223)>>>0; return seed/4294967296; };
+  const out=[], used=new Set(), mid=8, centerY=7;
+  const put=(col,row,asset,rotation=0,scale=0.86,alpha=0.96)=>{ if(col<0||col>=17||row<0||row>=15)return; const key=col+','+row; if(used.has(key))return; used.add(key); out.push({col,row,asset,rotation,scale,alpha}); };
+  const ring=(left,top,right,bottom,straight,corner)=>{
+    for(let col=left+1;col<right;col++) put(col,top,straight,0);
+    for(let col=left+1;col<right;col++) put(col,bottom,straight,0);
+    for(let row=top+1;row<bottom;row++){ put(left,row,straight,90); put(right,row,straight,90); }
+    put(right,top,corner,0); put(right,bottom,corner,90); put(left,bottom,corner,180); put(left,top,corner,270);
+  };
+  // 17x15繧剃ｽｿ縺・・繧倶ｸ蛾㍾讒矩: 螟門捉=蝣縲∽ｸｭ谿ｵ=遨ｺ蝣縲∝・蜻ｨ=蝓主｣・
+
+  ring(1,2,15,12,'castleDryMoat','castleDryMoatCorner');
+  for(let col=3;col<14;col++) put(col,3,col===mid?'castleGate':'castleWall',0);
+  for(let col=3;col<14;col++) if(col!==mid) put(col,11,'castleWall',0);
+  for(let row=4;row<11;row++){ put(2,row,'castleWall',90); put(14,row,'castleWall',90); }
+  put(14,3,'castleWallCorner',0); put(14,11,'castleWallCorner',90); put(2,11,'castleWallCorner',180); put(2,3,'castleWallCorner',270);
+  // 蜀・・縺ｮ譟ｵ縺ｯ譖ｲ霈ｪ繧貞玄蛻・ｋ
+  ring(5,5,11,9,'castlePalisade','castlePalisadeCorner');
+  put(5,5,'castlePalisadeCorner',270); put(11,5,'castlePalisadeCorner',0); put(11,9,'castlePalisadeCorner',90); put(5,9,'castlePalisadeCorner',180);
+  put(4,4,'castleYagura'); put(12,4,'castleYagura'); put(4,10,'castleYagura'); put(12,10,'castleYagura');
+  put(mid,6,'castleKeep',0,1.02,1);
+  if(type==='yamajiro'){ put(4,8,'castleKuruwa'); put(12,8,'castleEarthwork'); }
+  else if(type==='hirayamajiro'){ put(4,8,'castleGoten'); put(12,8,'castleYakata'); }
+  else { put(4,8,'castleYakata'); put(12,8,'castleGoten'); }
+  const extras=['castleStonewall','castleEarthwork','castleKuruwa','castleUmadashi'];
+  for(let i=0;i<18;i++){ const col=3+Math.floor(rand()*10), row=4+Math.floor(rand()*6); if(!used.has(col+','+row) && rand()>0.35) put(col,row,extras[Math.floor(rand()*extras.length)],rand()>0.5?90:0,0.72,0.78); }
+  return out;
+}
 /* ===================================================================
  * BattleScene — ヘックス戦術戦闘
  * =================================================================== */
-const HEX = { size:88, cols:11, rows:9, ox:480, oy:320 };
+const HEX = { size:52, cols:17, rows:15, ox:220, oy:250 };
 function hexNeighbors(col,row){
   const even = (row%2)===0;
   const d = even
@@ -5744,12 +5924,15 @@ class BattleScene extends GameKit.Scene {
     this.battleType=c.battleType || (c.playerSide==='def' ? 'siege' : 'field');
     this.castleLevel=c.defender.castleLevel||1;
     this.castleType=c.castleType || castleTypeForProvince(c.dstId, this.state.provinces[c.dstId]);
+    this.castleLayout=Array.isArray(c.castleLayout)?c.castleLayout:[];
+    this.weather=c.weather || ((((this.state.rng||1) ^ (c.dstId?c.dstId.length:0)) % 5)===0 ? 'rain' : 'clear');
     this.castleTiles=this._buildCastleTiles();
     // プレイヤーが操作する側（攻撃時='atk'、防衛時='def'）
     this.playerSide = c.playerSide || 'atk';
     this.aiSide = this.playerSide==='atk' ? 'def' : 'atk';
     this.t=0; this.round=1; this.maxRounds=12; this.phase='player'; this.selected=null;
     this.reach={}; this.targets={}; this.message=null; this.messageT=0;
+    this.objectTargets={};
     this.terrainMap = this._genTerrain(c.terrain);
     this.stacks = [];
     this._buildStacks('atk', c.attacker, c.year, c.attacker.family, false);
@@ -5760,12 +5943,29 @@ class BattleScene extends GameKit.Scene {
     this.floaters=[]; this.sparks=[]; // 戦闘演出（ダメージ数値・被弾火花）
     // 攻城戦: プレイヤーが城Lv3以上へ攻め込む時のみ発動（城壁を破り天守を制圧する）
     this.walls={}; this.keepHex=null; this.wallTargets={};
-    this.siege = (this.playerSide==='atk') && ((c.defender.castleLevel||1) >= 3);
-    if (this.siege){ this._buildCastle(c.defender.castleLevel||3); this._deploySiegeCannon(); }
+    this.siege = this.battleType==='siege' || ((this.playerSide==='atk') && ((c.defender.castleLevel||1) >= 3));
+    if (this.siege){ this._buildCastle(c.defender.castleLevel||3); this._placeSiegeDefenders(); this._deploySiegeCannon(); }
   }
   // 攻城戦の攻撃側に大筒を1門配備（後列中央付近）
+  _placeSiegeDefenders(){
+    if (!this.siege) return;
+    const defenders=this.stacks.filter(s=>s.side==='def');
+    const slots=Object.entries(this.castleTiles||{}).filter(([,tile])=>['castleKeep','castleYagura','castleUmadashi','castleStonewall','castleEarthwork','castleKuruwa'].includes(tile.baseAsset||tile.asset)).map(([key,tile])=>({key,tile,col:Number(key.split(',')[0]),row:Number(key.split(',')[1])}));
+    if (!defenders.length || !slots.length) return;
+    const keep=slots.find(v=>(v.tile.baseAsset||v.tile.asset)==='castleKeep') || slots[0];
+    const leader=defenders.find(s=>s.gen) || defenders[0];
+    leader.col=keep.col; leader.row=keep.row; leader.castlePost='keep'; leader.castleSlot=keep.key; leader.highGround=false;
+    let seed=castleLayoutSeed(this.ctx.dstId,'defenders',this.castleLevel);
+    const rand=()=>{ seed=(Math.imul(seed,1664525)+1013904223)>>>0; return seed/4294967296; };
+    const pool=slots.filter(v=>v.key!==keep.key).sort(()=>rand()-0.5);
+    defenders.filter(s=>s!==leader).forEach((s,i)=>{
+      const slot=pool[i%Math.max(1,pool.length)]; if(!slot) return;
+      const asset=slot.tile.baseAsset||slot.tile.asset;
+      s.col=slot.col; s.row=slot.row; s.castlePost=asset==='castleYagura'?'yagura':asset==='castleUmadashi'?'umadashi':'highGround'; s.castleSlot=slot.key; s.highGround=s.castlePost==='highGround';
+    });
+  }
   _deploySiegeCannon(){
-    let col=5, row=HEX.rows-1;
+    let col=Math.floor(HEX.cols/2), row=HEX.rows-1;
     if (this.stackAt(col,row)){
       let placed=false;
       for (const r of [HEX.rows-1, HEX.rows-2]){ for (let c=0;c<HEX.cols;c++){ if (!this.stackAt(c,r)){ col=c; row=r; placed=true; break; } } if (placed) break; }
@@ -5774,16 +5974,24 @@ class BattleScene extends GameKit.Scene {
   }
   _buildCastle(level){
     this.walls={};
-    const wr=2; // 前面城壁の行（全列を塞ぐ。突破しないと城内へ入れない）
-    for (let c=0;c<HEX.cols;c++){
-      const gate=(c===5);
-      const hp = gate ? 160+level*60 : 280+level*110;
-      this.walls[c+','+wr]={hp, max:hp, gate};
-    }
-    this.keepHex=[5,0];
+    Object.entries(this.castleTiles||{}).forEach(([key,tile])=>{
+      if (!['castleWall','castleGate','castleWallCorner','castleStonewall','castleEarthwork'].includes(tile.baseAsset||tile.asset)) return;
+      const base=tile.baseAsset||tile.asset, gate=base==='castleGate', hp=gate ? 160+level*60 : 280+level*110;
+      tile.hp=hp; tile.maxHp=hp;
+      this.walls[key]={hp,max:hp,gate};
+    });
+    const keep=Object.entries(this.castleTiles||{}).find(([,tile])=>(tile.baseAsset||tile.asset)==='castleKeep');
+    this.keepHex=keep ? keep[0].split(',').map(Number) : [Math.floor(HEX.cols/2),Math.floor(HEX.rows/2)];
     this.maxRounds=16;
   }
   isWall(c,r){ const w=this.walls[c+','+r]; return !!(w && w.hp>0); }
+  isCastleBlocked(c,r){
+    if (this.isWall(c,r)) return true;
+    const tile=this.castleTiles && this.castleTiles[c+','+r];
+    if (!tile) return false;
+    const asset=tile.baseAsset||tile.asset;
+    return !tile.destroyed && ['castleMoat','castleMoatCorner','castleDryMoat','castleDryMoatCorner','castlePalisade','castlePalisadeCorner'].includes(asset);
+  }
   // 被弾演出: 対象スタックの位置にダメージ数値と火花を発生させ、被弾フラッシュを点ける
   _spawnHitFx(stack, dmg, ranged){
     if (!stack) return;
@@ -5802,6 +6010,9 @@ class BattleScene extends GameKit.Scene {
     for (let i=this.floaters.length-1;i>=0;i--){ const f=this.floaters[i]; f.y+=f.vy*dt; f.vy*=0.92; f.life-=dt*1.4; if (f.life<=0) this.floaters.splice(i,1); }
     for (let i=this.sparks.length-1;i>=0;i--){ const s=this.sparks[i]; s.x+=s.vx*dt; s.y+=s.vy*dt; s.vy+=G*dt; s.life-=dt; if (s.life<=0) this.sparks.splice(i,1); }
     this.stacks.forEach(s=>{ if (s._hitT>0) s._hitT-=dt; });
+    Object.values(this.castleTiles||{}).forEach(tile=>{
+      if (tile.flameT>0){ tile.flameT=Math.max(0,tile.flameT-dt); if (Number.isFinite(tile.hp)){ tile.hp=Math.max(0,tile.hp-dt*8); if (tile.hp<=0) tile.destroyed=true; } }
+    });
   }
   _drawFx(ctx){
     ctx.save();
@@ -5812,67 +6023,40 @@ class BattleScene extends GameKit.Scene {
   }
   _buildCastleTiles(){
     if (this.battleType!=='siege') return {};
-    const tiles={};
-    const add=(col,row,asset,scale=0.86,alpha=1)=>{ tiles[col+','+row]={asset,scale,alpha}; };
-    add(5,4,'castleKeep',1.02,1);
-    add(5,5,'castleGate',0.92,1);
-    add(4,4,'castleWall',0.84,0.92); add(6,4,'castleWall',0.84,0.92);
-    add(4,5,'castleYagura',0.76,0.98); add(6,5,'castleYagura',0.76,0.98);
-    add(5,3,'castlePalisade',0.78,0.88);
-    add(3,4,'castleDryMoat',0.78,0.72); add(7,4,'castleMoat',0.78,0.72);
-    if (this.castleType==='yamajiro'){
-      add(3,5,'castleKuruwa',0.82,0.82); add(7,5,'castleEarthwork',0.82,0.82);
-    } else if (this.castleType==='hirayamajiro'){
-      add(3,5,'castleYakata',0.78,0.86); add(7,5,'castleGoten',0.78,0.86);
-    } else {
-      add(3,5,'castleGoten',0.78,0.86); add(7,5,'castleYakata',0.78,0.86);
-    }
-    if (this.castleLevel>=3){
-      add(4,3,'castleStonewall',0.76,0.82); add(6,3,'castleEarthwork',0.76,0.82);
-    }
-    if (this.castleLevel>=4){
-      add(3,3,'castleKuruwa',0.76,0.74); add(7,3,'castleUmadashi',0.76,0.86);
-    }
+    const tiles={}, source=this.castleLayout.length ? this.castleLayout : randomCastleLayout(this.ctx.dstId,this.castleType,this.castleLevel);
+    this.castleLayout=source;
+    source.forEach(item=>{
+      const col=Number(item.col), row=Number(item.row), asset=item.asset;
+      const oriented=orientedCastleAsset(asset,item.rotation), baseAsset=asset;
+      if (Number.isInteger(col)&&Number.isInteger(row)&&GPT_ASSETS[oriented]){ const maxHp=castleObjectMaxHp(baseAsset); tiles[col+','+row]={asset:oriented,baseAsset,scale:Number(item.scale)||0.86,alpha:Number(item.alpha)||1,rotation:ORIENTED_CASTLE_ASSETS[baseAsset]?0:(Number(item.rotation)||0),hp:maxHp,maxHp,flameT:0,elevation:['castleStonewall','castleEarthwork','castleKuruwa'].includes(baseAsset)?-10:0}; }
+    });
     return tiles;
   }
   _genTerrain(baseTerrain){
-    const rng = GameKit.Gen.rng((this.state.rng||1) ^ (this.ctx.dstId?this.ctx.dstId.length*97:7));
+    const rng=GameKit.Gen.rng((this.state.rng||1) ^ (this.ctx.dstId?this.ctx.dstId.length*97:7));
     const map={};
-    for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
+    for(let r=0;r<HEX.rows;r++) for(let c=0;c<HEX.cols;c++){
       let t='plain'; const v=rng();
-      if (baseTerrain==='mountain'){ if(v<0.32) t='mountain'; else if(v<0.5) t='forest'; }
-      else if (baseTerrain==='river'){ if (r===Math.floor(HEX.rows/2) && v<0.7) t='river'; else if(v<0.18) t='forest'; }
-      else if (baseTerrain==='coast'){ if(v<0.16) t='forest'; if (c===0||c===HEX.cols-1) { if(v<0.4) t='water'; } }
-      else { if(v<0.2) t='forest'; }
+      if(this.battleType!=='siege'){
+        if(baseTerrain==='mountain'){ if(v<0.32)t='mountain'; else if(v<0.5)t='forest'; }
+        else if(baseTerrain==='river'){ if(r===Math.floor(HEX.rows/2)&&v<0.7)t='river'; else if(v<0.18)t='forest'; }
+        else if(baseTerrain==='coast'){ if(v<0.16)t='forest'; if(c===0||c===HEX.cols-1){ if(v<0.4)t='water'; } }
+        else { if(v<0.2)t='forest'; }
+      }
       map[c+','+r]=t;
     }
     return map;
   }
   _buildStacks(side, force, year, family, isDef){
-    const comp=compFor(year, family);
-    const total=force.soldiers;
-    const types=UNIT_ORDER.filter(t=>Math.round(total*comp[t])>=50);
-    if (!types.length) types.push('spear');
-    // 武将を兵力順スタックへ割当
-    const gens=(force.generals||[]).slice().sort((a,b)=>{
-      const ga=DATA.genById[a], gb=DATA.genById[b];
-      return (gb?gb.stats.tou+gb.stats.bu:0)-(ga?ga.stats.tou+ga.stats.bu:0);
-    });
-    const sized = types.map(t=>({t, n:Math.max(1,Math.round(total*comp[t]))})).sort((a,b)=>b.n-a.n);
-    let gi=0;
-    const baseRow = isDef? 0 : HEX.rows-1;
-    const row2 = isDef? 1 : HEX.rows-2;
+    const comp=compFor(year,family), total=force.soldiers;
+    const types=UNIT_ORDER.filter(t=>Math.round(total*comp[t])>=50); if(!types.length)types.push('spear');
+    const gens=(force.generals||[]).slice().sort((a,b)=>{ const ga=DATA.genById[a],gb=DATA.genById[b]; return (gb?gb.stats.tou+gb.stats.bu:0)-(ga?ga.stats.tou+ga.stats.bu:0); });
+    const sized=types.map(t=>({t,n:Math.max(1,Math.round(total*comp[t]))})).sort((a,b)=>b.n-a.n);
+    let gi=0; const siegeDef=isDef&&this.battleType==='siege';
+    const baseRow=siegeDef?4:(isDef?0:HEX.rows-1), row2=siegeDef?5:(isDef?1:HEX.rows-2);
     sized.forEach((s,idx)=>{
-      const gid = gi<gens.length? gens[gi++] : null;
-      const gstat = gid? DATA.genById[gid].stats : {tou:48,bu:48,chi:48,sei:48};
-      const col = 2 + idx*2;
-      const row = idx%2===0? baseRow : row2;
-      this.stacks.push({
-        id: side+idx, side, type:s.t, count:s.n, count0:s.n,
-        col: clamp(col,0,HEX.cols-1), row,
-        gen:gid, name: gid? DATA.genById[gid].nameJP : (isDef?'守備隊':'足軽隊'),
-        stat:gstat, hasMoved:false, hasAttacked:false, castle: isDef? (force.castleLevel||1):0,
-      });
+      const gid=gi<gens.length?gens[gi++]:null, gstat=gid?DATA.genById[gid].stats:{tou:48,bu:48,chi:48,sei:48};
+      const col=2+idx*2,row=idx%2===0?baseRow:row2;
     });
   }
   stackAt(col,row){ return this.stacks.find(s=>s.col===col&&s.row===row); }
@@ -5909,6 +6093,7 @@ class BattleScene extends GameKit.Scene {
       // 攻撃対象か（敵側スタック）
       if (s && s.side===this.aiSide && this.targets[c+','+r]){ this._attack(game, sel, s); return; }
       // 攻城戦: 射程内の城壁を攻撃
+      if (this.siege && !s && this.objectTargets && this.objectTargets[c+','+r]){ this._attackCastleObject(game, sel, c, r); return; }
       if (this.siege && !s && this.wallTargets && this.wallTargets[c+','+r]){ this._attackWall(game, sel, c, r); return; }
       // 移動先か
       if (!s && this.reach[c+','+r]!==undefined && !sel.hasMoved){
@@ -5927,7 +6112,7 @@ class BattleScene extends GameKit.Scene {
   }
   _select(s){ this.selected=s; this._computeRange(s); }
   _computeRange(s){
-    this.reach={}; this.targets={}; this.wallTargets={};
+    this.reach={}; this.targets={}; this.wallTargets={}; this.objectTargets={};
     // 攻撃対象（射程内の敵）
     if (!s.hasAttacked){
       const range=UNITS[s.type].range;
@@ -5939,6 +6124,17 @@ class BattleScene extends GameKit.Scene {
         for (const k in this.walls){ const w=this.walls[k]; if (w.hp<=0) continue;
           const [wc,wr]=k.split(',').map(Number);
           if (hexDist(s.col,s.row,wc,wr)<=range) this.wallTargets[k]=true;
+        }
+      }
+
+      if (this.siege && s.side==='atk'){
+        for (const k in this.castleTiles||{}){
+          const tile=this.castleTiles[k]; if (!tile || tile.destroyed) continue;
+          const base=tile.baseAsset||tile.asset; if (!Number.isFinite(tile.hp)) continue;
+          const canTarget= s.type==='cannon' || (s.type==='bow' && s._fireArrowReady && castleObjectCanBurn(base));
+          if (!canTarget) continue;
+          const [oc,or]=k.split(',').map(Number);
+          if (hexDist(s.col,s.row,oc,or)<=range) this.objectTargets[k]=true;
         }
       }
     }
@@ -5956,7 +6152,7 @@ class BattleScene extends GameKit.Scene {
       if ((cc!==s.col||cr!==s.row) && enemyAdj(cc,cr)) continue;
       hexNeighbors(cc,cr).forEach(([nc,nr])=>{
         const occ=this.stackAt(nc,nr); if (occ) return;
-        if (this.isWall(nc,nr)) return; // 未破壊の城壁は通れない
+        if (this.isCastleBlocked(nc,nr)) return; // 蝓主｣√・蝣繝ｻ遨ｺ蝣繝ｻ譟ｵ縺ｯ萓ｵ蜈･荳榊庄
         const terr=this.terrainMap[nc+','+nr];
         if (terr==='water') return;
         let cost=1; if (terr==='forest'||terr==='mountain') cost=2; if (terr==='river') cost=2;
@@ -5965,6 +6161,23 @@ class BattleScene extends GameKit.Scene {
       });
     }
     for (const k in dist){ if (k!==s.col+','+s.row) this.reach[k]=dist[k]; }
+  }
+  _useUnitCommand(game){
+    const s=this.selected;
+    if (!s || s.side!==this.playerSide || s.commandUsed || !UNIT_COMMANDS[s.type]) return;
+    if (s.type==='bow' && this.weather==='rain'){ this._flash('\u96e8\u5929\u306e\u305f\u3081\u706b\u77e2\u306f\u4f7f\u3048\u307e\u305b\u3093 / Fire arrows unavailable in rain'); return; }
+    s.commandUsed=true;
+    if (s.type==='cavalry'){
+      s.count=Math.max(1,Math.floor(s.count*0.75)); s._chargeReady=true;
+      this._flash('\u9a0e\u99ac\u300c\u7a81\u6483\u300d: \u6b21\u306e\u653b\u6483\u306f2\u500d\u3001\u5175\u657025%\u6e1b');
+    } else if (s.type==='spear'){
+      s._shieldWall=true; this._flash('\u8db3\u8efd\u300c\u69cd\u8851\u300d: \u9632\u5fa1\u5f37\u5316');
+    } else if (s.type==='bow'){
+      s._fireArrowReady=true; this._flash('\u5f13\u300c\u706b\u77e2\u300d: \u6b21\u306e\u5c04\u6483\u306b\u706b\u713c\u52b9\u679c');
+    } else if (s.type==='gun'){
+      s._threeVolleyReady=true; this._flash('\u9244\u7832\u300c\u4e09\u5f3e\u6253\u3061\u300d: \u6b21\u306e\u5c04\u6483\u3092\u5f37\u5316');
+    }
+    this._computeRange(s);
   }
   _attack(game, atk, def){
     const res=this._resolveMelee(atk, def);
@@ -5977,6 +6190,23 @@ class BattleScene extends GameKit.Scene {
     this._checkBattleEnd(game);
   }
   // 攻城戦: 城壁への攻撃（兵科で攻城力が異なる。破壊で侵入路が開く）
+  _attackCastleObject(game, atk, c, r){
+    const key=c+','+r, tile=this.castleTiles[key];
+    if (!tile || tile.destroyed || !Number.isFinite(tile.hp)) return;
+    if (atk.type!=='cannon' && !(atk.type==='bow' && atk._fireArrowReady)) return;
+    const dmg=atk.type==='cannon' ? Math.max(1,220+Math.round(atk.count*0.22)) : Math.max(1,Math.round(Math.min(atk.count,1800)*0.11));
+    tile.hp=Math.max(0,tile.hp-dmg); tile.flameT=3.2;
+    if (this.walls[key]) this.walls[key].hp=tile.hp;
+    if (atk.type==='bow') atk._fireArrowReady=false;
+    atk.hasAttacked=true; atk.hasMoved=true;
+    const [x,y]=hexCenter(c,r);
+    this.floaters.push({x,y:y-HEX.size*0.3,vy:-58,life:1.0,text:'-'+dmg,color:'#fb923c',size:30});
+    for(let i=0;i<14;i++){ const a=Math.random()*Math.PI*2,sp=80+Math.random()*180; this.sparks.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-40,life:0.35+Math.random()*0.35,color:Math.random()<0.5?'#fb923c':'#facc15',r:2+Math.random()*3}); }
+    if (tile.hp<=0){ tile.destroyed=true; this._flash('\u57ce\u90ed\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3092\u7834\u58ca / Castle object destroyed'); }
+    else this._flash('\u706b\u77e2\u30fb\u5927\u7832\u304c\u547d\u4e2d / '+dmg+' HP');
+    game.audio.noise(0.24,0.28);
+    this.selected=null; this.reach={}; this.targets={}; this.wallTargets={}; this.objectTargets={};
+  }
   _attackWall(game, atk, c, r){
     const w=this.walls[c+','+r]; if (!w || w.hp<=0) return;
     // 大筒は攻城専用の強力な砲撃（射程3・兵数に依らずまとまった耐久を削る）
@@ -5988,20 +6218,21 @@ class BattleScene extends GameKit.Scene {
       dmg=Math.max(1, Math.round(Math.min(atk.count,2200)*0.14*f));
     }
     w.hp=Math.max(0, w.hp-dmg);
+    const wallTile=this.castleTiles[c+','+r]; if (wallTile){ wallTile.hp=w.hp; if (w.hp<=0) wallTile.destroyed=true; }
     atk.hasAttacked=true; atk.hasMoved=true;
     game.audio.noise(0.2,0.24);
     const [x,y]=hexCenter(c,r);
     this.floaters.push({x, y:y-HEX.size*0.3, vy:-58, life:1.0, text:'-'+dmg, color:'#fcd34d', size:30});
     for (let i=0;i<12;i++){ const a=Math.random()*Math.PI*2, sp=80+Math.random()*180; this.sparks.push({x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-30, life:0.3+Math.random()*0.3, color:Math.random()<0.5?'#cbd5e1':'#a8a29e', r:2+Math.random()*3}); }
-    if (w.hp<=0){ this._flash((w.gate?'城門':'城壁')+'を突破した！ / Breach!'); game.audio.jingle([{f:392,d:0.1},{f:523,d:0.14}]); }
-    else this._flash((w.gate?'城門':'城壁')+'を攻撃  耐久-'+dmg+'（残'+w.hp+'）');
-    this.selected=null; this.reach={}; this.targets={}; this.wallTargets={};
+    if (w.hp<=0){ this._flash((w.gate?'\u57ce\u9580':'\u57ce\u58c1')+'\u3092\u7a81\u7834\u3057\u305f / Breach!'); game.audio.jingle([{f:392,d:0.1},{f:523,d:0.14}]); }
+    else this._flash((w.gate?'\u57ce\u9580':'\u57ce\u58c1')+'\u3092\u653b\u6483  \u8010\u4e45-'+dmg+'\uff08\u6b8b'+w.hp+'\uff09');
+    this.selected=null; this.reach={}; this.targets={}; this.wallTargets={}; this.objectTargets={};
   }
   // 攻城戦: 攻撃側が天守を占拠したら勝利
   _checkKeep(game){
     if (!this.siege || !this.keepHex || this.over) return false;
     const occ=this.stackAt(this.keepHex[0], this.keepHex[1]);
-    if (occ && occ.side===this.playerSide){ this._finish(game, true, '天守を制圧 / Keep captured'); return true; }
+    if (occ && occ.side===this.playerSide){ this._finish(game, true, '\u5929\u5b88\u3092\u5236\u5727 / Keep captured'); return true; }
     return false;
   }
   _resolveMelee(atk, def){
@@ -6013,8 +6244,13 @@ class BattleScene extends GameKit.Scene {
     const castle=1+Math.max(0,(def.castle||1)-1)*0.05;
     // 攻城戦: 城内（rows0-1）に籠る守将は堅固
     const fort=(this.siege && def.side==='def' && def.row<=1) ? (1.25+(def.castle||1)*0.05) : 1;
-    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type);
-    const baseDef = def.count*ud.def*(1+def.stat.tou/200)*terrDef*castle*fort;
+    let commandAtk=1;
+    if (atk._chargeReady){ commandAtk*=2; atk._chargeReady=false; }
+    if (atk._fireArrowReady){ commandAtk*=1.35; atk._fireArrowReady=false; }
+    if (atk._threeVolleyReady){ commandAtk*=1.5; atk._threeVolleyReady=false; }
+    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type)*commandAtk;
+    const commandDef=def._shieldWall?1.35:1;
+    const baseDef = def.count*ud.def*(1+def.stat.tou/200)*terrDef*castle*fort*commandDef;
     const ratio = baseAtk/Math.max(1,baseDef);
     // 致死性は中庸に。兵力・兵科相性・地形が効きつつ、技量で覆せる余地を残す
     let defLossFrac = clamp(0.13*ratio,0.03,0.5)*(0.85+Math.random()*0.3);
@@ -6040,15 +6276,27 @@ class BattleScene extends GameKit.Scene {
     this.phase='enemy';
     this._runEnemyPhase(game);
   }
+  _resolveSiegeDrop(game, def, target){
+    const dmg=Math.max(1,Math.round(target.count*(def.castlePost==='highGround'?0.12:0.10)));
+    target.count=Math.max(0,target.count-dmg); def._dropUsed=true;
+    this._spawnHitFx(target,dmg,false);
+    this._flash((def.castlePost==='highGround'?'\u77f3\u843d\u3068\u3057':'\u6728\u6750\u843d\u3068\u3057')+' / -'+dmg);
+    game.audio.noise(0.18,0.24); this._cleanupStacks();
+  }
   _runEnemyPhase(game){
     // AI側（プレイヤーが攻撃なら守備AI、プレイヤーが防衛なら攻撃AI）greedy
     const enemies=this.stacks.filter(s=>s.side===this.aiSide);
     enemies.forEach(e=>{
       if (e.dead) return;
+      if (e.highGround && !e._dropUsed){
+        const dropTarget=this.stacks.filter(s=>s.side===this.playerSide && hexDist(e.col,e.row,s.col,s.row)<=2).sort((a,b)=>b.count-a.count)[0];
+        if (dropTarget){ this._resolveSiegeDrop(game,e,dropTarget); return; }
+      }
       // 射程内の敵を探す
       let target=null, bestEval=-1;
+      const attackRange=(this.siege && e.side==='def' && e.castlePost==='yagura' && (e.type==='bow'||e.type==='gun')) ? 3 : UNITS[e.type].range;
       this.stacks.filter(s=>s.side===this.playerSide).forEach(a=>{
-        if (hexDist(e.col,e.row,a.col,a.row)<=UNITS[e.type].range){
+        if (hexDist(e.col,e.row,a.col,a.row)<=attackRange){
           const ev=advantage(e.type,a.type)*a.count;
           if (ev>bestEval){ bestEval=ev; target=a; }
         }
@@ -6074,7 +6322,7 @@ class BattleScene extends GameKit.Scene {
           const [cc,cr,cd]=frontier.shift(); if (cd>=mp) continue;
           hexNeighbors(cc,cr).forEach(([nc,nr])=>{
             if (seen[nc+','+nr]) return; seen[nc+','+nr]=true;
-            if (this.stackAt(nc,nr)) return; if (this.isWall(nc,nr)) return; const terr=this.terrainMap[nc+','+nr]; if(terr==='water') return;
+            if (this.stackAt(nc,nr)) return; if (this.isCastleBlocked(nc,nr)) return; const terr=this.terrainMap[nc+','+nr]; if(terr==='water') return;
             const d=hexDist(nc,nr,nearest.col,nearest.row);
             if (d<bestD){ bestD=d; bestHex=[nc,nr]; }
             frontier.push([nc,nr,cd+1]);
@@ -6088,7 +6336,7 @@ class BattleScene extends GameKit.Scene {
     // 次ラウンドへ
     this.round++;
     if (this.round>this.maxRounds){ this._finish(game, false, '時間切れ・守勢勝ち / Time up: defender holds'); return; }
-    this.stacks.forEach(s=>{ s.hasMoved=false; s.hasAttacked=false; });
+    this.stacks.forEach(s=>{ s.hasMoved=false; s.hasAttacked=false; s.commandUsed=false; s._shieldWall=false; s._fireArrowReady=false; s._threeVolleyReady=false; s._dropUsed=false; });
     this.phase='player';
   }
   _checkBattleEnd(game){
@@ -6138,13 +6386,18 @@ class BattleScene extends GameKit.Scene {
   _buttons(){
     const bs=[];
     if (this.over){
-      bs.push({x:W/2-170, y:H/2+100, w:340, h:96, sz:34, jp:'戦評定へ', en:'Continue', accent:'rgba(232,192,122,0.7)', action:g=>{ g.changeScene(new MapScene(this.state)); }});
+      bs.push({x:W/2-170, y:H/2+100, w:340, h:96, sz:34, jp:'\u6226\u8a55\u5b9a\u3078', en:'Continue', accent:'rgba(232,192,122,0.7)', action:g=>{ g.changeScene(new MapScene(this.state)); }});
       return bs;
     }
     if (this.phase==='player'){
-      bs.push({x:780, y:H-150, w:320, h:96, sz:34, jp:'手番終了', en:'End Phase', accent:'rgba(232,192,122,0.6)', action:g=>this._endPlayerPhase(g)});
-      bs.push({x:1120, y:H-150, w:300, h:96, sz:34, jp:'自動で決着', en:'Auto', accent:'rgba(251,191,36,0.6)', action:g=>this._autoFinish(g)});
-      bs.push({x:W-340, y:H-150, w:320, h:96, sz:34, jp:'撤退', en:'Retreat', accent:'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
+      if (this.selected && this.selected.side===this.playerSide && UNIT_COMMANDS[this.selected.type]){
+        const command=UNIT_COMMANDS[this.selected.type];
+        const unavailable=this.selected.commandUsed || (this.selected.type==='bow' && this.weather==='rain');
+        bs.push({x:780, y:H-260, w:320, h:82, sz:24, jp:command.jp, en:command.en, on:!unavailable, accent:unavailable?'rgba(100,116,139,0.35)':'rgba(34,211,238,0.65)', action:g=>this._useUnitCommand(g)});
+      }
+      bs.push({x:780, y:H-150, w:320, h:96, sz:34, jp:'\u7d42\u4e86', en:'End Phase', accent:'rgba(232,192,122,0.6)', action:g=>this._endPlayerPhase(g)});
+      bs.push({x:1120, y:H-150, w:300, h:96, sz:34, jp:'\u81ea\u52d5\u3067\u6c7a\u7740', en:'Auto', accent:'rgba(251,191,36,0.6)', action:g=>this._autoFinish(g)});
+      bs.push({x:W-340, y:H-150, w:320, h:96, sz:34, jp:'\u64a4\u9000', en:'Retreat', accent:'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
     }
     return bs;
   }
@@ -6193,13 +6446,27 @@ class BattleScene extends GameKit.Scene {
     }
   }
   _drawCastleTile(ctx, tile, x, y){
+    if (tile.destroyed) return;
     const img=ASSETS.img[tile.asset];
     if (!img || !(img.naturalWidth||img.width)) return;
     const size=HEX.size*2.05*tile.scale;
     ctx.save();
     ctx.globalAlpha=tile.alpha;
-    ctx.drawImage(img, x-size/2, y-size/2, size, size);
+    ctx.translate(x,y+(tile.elevation||0)); ctx.rotate((Number(tile.rotation)||0)*Math.PI/180);
+    ctx.drawImage(img, -size/2, -size/2, size, size);
     ctx.restore();
+    if (Number.isFinite(tile.maxHp) && tile.maxHp>0){
+      const bw=HEX.size*0.72, bx=x-bw/2, by=y+HEX.size*0.38;
+      ctx.fillStyle='rgba(0,0,0,0.68)'; ctx.fillRect(bx,by,bw,5);
+      ctx.fillStyle=tile.flameT>0?'#f97316':'#a7f3d0'; ctx.fillRect(bx,by,bw*Math.max(0,tile.hp/tile.maxHp),5);
+    }
+    if (tile.flameT>0){
+      const pulse=0.7+Math.sin(this.t*14+x)*0.2;
+      ctx.save(); ctx.globalAlpha=Math.min(0.9,tile.flameT/2.5)*pulse;
+      ctx.fillStyle='#f97316'; ctx.beginPath(); ctx.ellipse(x-8,y-8,8,15,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#fde047'; ctx.beginPath(); ctx.ellipse(x+6,y-13,6,11,0,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
   }
   _hexPath(ctx,x,y){
     ctx.beginPath();
@@ -6208,34 +6475,17 @@ class BattleScene extends GameKit.Scene {
   }
   _drawCastle(ctx){
     if (!this.siege) return;
-    // 城壁・城門
-    for (const k in this.walls){
-      const w=this.walls[k]; const [c,r]=k.split(',').map(Number); const [x,y]=hexCenter(c,r);
-      if (w.hp>0){
-        this._hexPath(ctx,x,y); ctx.save();
+    for (const key in this.walls){
+      const wall=this.walls[key], [col,row]=key.split(',').map(Number), [x,y]=hexCenter(col,row);
+      if (wall.hp<=0){ this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(70,58,44,0.28)'; ctx.fill(); ctx.setLineDash([5,4]); ctx.lineWidth=2; ctx.strokeStyle='rgba(226,183,110,0.48)'; ctx.stroke(); ctx.restore(); }
+      const bw=HEX.size*0.78, bx=x-bw/2, by=y+HEX.size*0.36;
+      ctx.fillStyle='rgba(0,0,0,0.58)'; ctx.fillRect(bx,by,bw,5);
         ctx.fillStyle = w.gate?'rgba(120,90,50,0.95)':'rgba(88,94,102,0.95)'; ctx.fill();
-        ctx.lineWidth=3; ctx.strokeStyle = w.gate?'#caa24f':'#8b95a1'; ctx.stroke();
-        // 石垣の質感（横線）
-        ctx.globalAlpha=0.35; ctx.strokeStyle='#1c2026'; ctx.lineWidth=1.5;
-        for (let yy=-1;yy<=1;yy++){ ctx.beginPath(); ctx.moveTo(x-HEX.size*0.7, y+yy*HEX.size*0.32); ctx.lineTo(x+HEX.size*0.7, y+yy*HEX.size*0.32); ctx.stroke(); }
-        ctx.restore();
-        T(ctx, w.gate?'城門':'城壁', x, y-HEX.size*0.18, {size:20, weight:'bold', color:'#e8eef6', align:'center', baseline:'middle'});
-        // 耐久バー
-        const bw=HEX.size*1.1, bx=x-bw/2, by=y+HEX.size*0.30;
-        ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(bx,by,bw,9);
-        ctx.fillStyle = w.gate?'#e0b34a':'#9aa6b2'; ctx.fillRect(bx,by,bw*(w.hp/w.max),9);
-        // 攻撃対象ハイライト
-        if (this.wallTargets && this.wallTargets[k]){ this._hexPath(ctx,x,y); ctx.save(); ctx.lineWidth=4; ctx.strokeStyle='rgba(251,191,36,0.9)'; ctx.stroke(); ctx.restore(); }
-      } else {
-        // 破壊された城壁（瓦礫・侵入路）
-        this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(70,58,44,0.45)'; ctx.fill(); ctx.setLineDash([6,5]); ctx.lineWidth=2; ctx.strokeStyle='rgba(226,183,110,0.5)'; ctx.stroke(); ctx.restore();
-      }
+      if (this.wallTargets && this.wallTargets[key]){ this._hexPath(ctx,x,y); ctx.save(); ctx.lineWidth=4; ctx.strokeStyle='rgba(251,191,36,0.92)'; ctx.stroke(); ctx.restore(); }
     }
-    // 天守
     if (this.keepHex){
       const [x,y]=hexCenter(this.keepHex[0], this.keepHex[1]);
       this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(180,140,60,0.32)'; ctx.fill(); ctx.lineWidth=3.5; ctx.strokeStyle='#e8c07a'; ctx.stroke(); ctx.restore();
-      T(ctx, '天守', x, y-HEX.size*0.02, {size:22, weight:'bold', color:'#ffe6a6', align:'center', baseline:'middle'});
     }
   }
   _drawStacks(ctx){
@@ -6249,6 +6499,8 @@ class BattleScene extends GameKit.Scene {
       ctx.fill();
       ctx.lineWidth= sel?5:2.5; ctx.strokeStyle= sel?'#22d3ee': (s.hasMoved&&s.hasAttacked?'rgba(255,255,255,0.25)':UNITS[s.type].color);
       ctx.stroke();
+      const unitImg=ASSETS.img[UNIT_ASSET_KEYS[s.type]];
+      if (unitImg && (unitImg.naturalWidth||unitImg.width)){ ctx.globalAlpha=0.88; ctx.drawImage(unitImg,x-HEX.size*0.58,y-HEX.size*0.58,HEX.size*1.16,HEX.size*1.16); }
       // 被弾フラッシュ
       if (s._hitT>0){ ctx.globalAlpha=Math.min(0.6, s._hitT*1.8); ctx.fillStyle='#ff5a4a'; ctx.beginPath(); ctx.arc(x,y,HEX.size*0.62,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1; }
       ctx.restore();
@@ -6260,33 +6512,30 @@ class BattleScene extends GameKit.Scene {
   }
   _drawHUD(ctx){
     const c=this.ctx;
-    GameKit.UI.glassPanel(ctx, 16, 16, 660, 236, {radius:14, fill:'rgba(10,16,28,0.85)'});
-    if (this.battleType==='siege'){
-      T(ctx, '\u653b\u57ce\u6226 / Siege Battle', 36, 178, {size:26, weight:'bold', color:'#f87171'});
-      T(ctx, castleTypeLabel(this.castleType)+'  '+castleSizeLabel(this.castleLevel), 36, 212, {size:20, color:'#f2c879'});
+    GameKit.UI.glassPanel(ctx,16,16,660,236,{radius:14,fill:'rgba(10,16,28,0.85)'});
+    const targetName=castleNameForProvince(DATA.provById[c.dstId]);
+    T(ctx,this.battleType==='siege'?targetName+'\u306e\u653b\u57ce\u6226':DATA.provById[c.dstId].nameJP+'\u4ed8\u8fd1\u306e\u6226\u3044',36,42,{size:30,weight:'bold',color:'#f2c879'});
+    T(ctx,'\u30e9\u30a6\u30f3\u30c9 '+this.round+' / '+this.maxRounds+'  '+(this.phase==='player'?'\u81ea\u8ecd\u30bf\u30fc\u30f3':'\u6575\u8ecd\u30bf\u30fc\u30f3'),36,82,{size:22,color:'#9fb2c6'});
+    T(ctx,daimyoDef(this.state,c.attacker.daimyo).nameJP+'  /  '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP:'\u7121\u6240\u5c5e'),36,116,{size:22,color:'#cbd5e1'});
+    if(this.battleType==='siege'){
+      T(ctx,castleTypeLabel(this.castleType)+'  '+castleSizeLabel(this.castleLevel),36,150,{size:20,color:'#f2c879'});
+      const intact=Object.values(this.walls).filter(w=>w.hp>0).length,total=Object.keys(this.walls).length;
+      T(ctx,'\u57ce\u58c1\u8010\u4e45 '+intact+'/'+total+'  /  '+castleTypeLabel(this.castleType),36,184,{size:20,weight:'bold',color:'#f6d58a'});
     }
-    T(ctx, DATA.provById[c.dstId].nameJP+' の戦い', 36, 32, {size:34, weight:'bold', color:'#e8c07a'});
-    T(ctx, '攻: '+daimyoDef(this.state,c.attacker.daimyo).nameJP+'家  /  守: '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP+'家':'空白'), 36, 92, {size:24, color:'#cbd5e1'});
-    T(ctx, 'ラウンド '+this.round+' / '+this.maxRounds+'　手番:'+(this.phase==='player'?'自軍':'敵軍'), 36, 140, {size:24, color:'#9fb2c6'});
-    if (this.siege){
-      const intact=Object.values(this.walls).filter(w=>w.hp>0).length, total=Object.keys(this.walls).length;
-      T(ctx, '⚔ 攻城戦：城壁を破り天守を制圧せよ（城壁 '+intact+'/'+total+'・大筒は射程3で砲撃）', 36, 178, {size:21, weight:'bold', color:'#f6d58a'});
-    }
-    // 右: 兵科相性
-    GameKit.UI.glassPanel(ctx, W-560, 16, 544, 200, {radius:14, fill:'rgba(10,16,28,0.85)'});
-    T(ctx,'兵科相性 / Counters', W-288, 30, {size:24, color:'#e8c07a', align:'center'});
-    T(ctx,'足軽 ▶ 騎馬 ▶ 鉄砲 ▶ 足軽', W-288, 76, {size:24, color:'#cbd5e1', align:'center'});
-    T(ctx,'弓・鉄砲は射程2（反撃なし）', W-288, 120, {size:22, color:'#9fb2c6', align:'center'});
-    T(ctx,'クリック=選択→移動/攻撃', W-288, 162, {size:22, color:'#7d93ab', align:'center'});
-    // 選択中スタック詳細
-    if (this.selected){
-      const s=this.selected;
-      GameKit.UI.glassPanel(ctx, 16, H-300, 720, 240, {radius:14, fill:'rgba(10,16,28,0.85)'});
-      if (s.gen) drawGeneralPortrait(ctx, s.gen, 36, H-280, 100, {stroke:UNITS[s.type].color, lineWidth:2.5});
-      const tx = s.gen ? 160 : 36;
-      T(ctx, s.name+'隊 ('+UNITS[s.type].jp+')', tx, H-282, {size:30, weight:'bold', color:'#dbe4ee'});
-      T(ctx, '兵'+s.count+'  統'+s.stat.tou+' 武'+s.stat.bu, tx, H-228, {size:24, color:'#9fb2c6'});
-      T(ctx, (s.hasMoved?'移動済 ':'移動可 ')+(s.hasAttacked?'攻撃済':'攻撃可'), tx, H-182, {size:24, color:'#7d93ab'});
+    GameKit.UI.glassPanel(ctx,W-560,16,544,200,{radius:14,fill:'rgba(10,16,28,0.85)'});
+    T(ctx,'\u5929\u5019 / '+(this.weather==='rain'?'\u96e8':'\u6674'),W-288,48,{size:22,color:this.weather==='rain'?'#7dd3fc':'#f2c879',align:'center'});
+    T(ctx,'\u5175\u79d1\u76f8\u6027 / Counters',W-288,84,{size:22,color:'#e8c07a',align:'center'});
+    T(ctx,'\u8db3\u8efd > \u9a0e\u99ac > \u9244\u7832 > \u8db3\u8efd',W-288,122,{size:20,color:'#cbd5e1',align:'center'});
+    T(ctx,'\u5f13\u30fb\u9244\u7832\u306f\u9060\u8ddd\u96e2',W-288,158,{size:20,color:'#9fb2c6',align:'center'});
+    if(this.selected){
+      const s=this.selected; GameKit.UI.glassPanel(ctx,16,H-300,720,240,{radius:14,fill:'rgba(10,16,28,0.85)'});
+      if(s.gen)drawGeneralPortrait(ctx,s.gen,36,H-280,100,{stroke:UNITS[s.type].color,lineWidth:2.5});
+      const tx=s.gen?160:36;
+      T(ctx,s.name+' / '+UNITS[s.type].jp,tx,H-282,{size:28,weight:'bold',color:'#dbe4ee'});
+      T(ctx,'\u5175 '+s.count+'  /  \u7d71\u6cbb '+s.stat.tou+'  \u6b66 '+s.stat.bu,tx,H-228,{size:22,color:'#9fb2c6'});
+      const cmd=UNIT_COMMANDS[s.type];
+      T(ctx,(s.hasMoved?'\u79fb\u52d5\u6e08':'\u79fb\u52d5\u53ef')+' / '+(s.hasAttacked?'\u653b\u6483\u6e08':'\u653b\u6483\u53ef'),tx,H-182,{size:21,color:'#7d93ab'});
+      if(cmd)T(ctx,'\u30b3\u30de\u30f3\u30c9: '+cmd.jp+(s.commandUsed?' (\u4f7f\u7528\u6e08)':' (\u672a\u4f7f\u7528)'),tx,H-142,{size:19,color:s.commandUsed?'#64748b':'#67e8f9'});
     }
   }
   _drawResult(ctx){
