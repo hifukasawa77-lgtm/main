@@ -98,20 +98,7 @@ function loadArt(src){
 function loadChromaAtlas(src){
   const atlas = { image:null };
   const img = new Image();
-  img.onload = ()=>{
-    const c=document.createElement('canvas');
-    c.width=img.naturalWidth; c.height=img.naturalHeight;
-    const g=c.getContext('2d',{willReadFrequently:true});
-    g.drawImage(img,0,0);
-    const pixels=g.getImageData(0,0,c.width,c.height);
-    for(let i=0;i<pixels.data.length;i+=4){
-      const r=pixels.data[i], green=pixels.data[i+1], b=pixels.data[i+2];
-      if(green>145 && r<120 && b<140 && green-r>50 && green-b>40) pixels.data[i+3]=0;
-      else if(green>r+24 && green>b+24) pixels.data[i+1]=Math.min(green,Math.max(r,b)+16);
-    }
-    g.putImageData(pixels,0,0);
-    atlas.image=c;
-  };
+  img.onload=()=>{ atlas.image=img; };
   img.src=src;
   return atlas;
 }
@@ -131,7 +118,11 @@ const ART = {
     hurt: loadArt('assets/kage-shura-gpt/actors/hero-idle.png'),
     bandit: loadArt('assets/kage-shura-gpt/actors/bandit.png'),
     yokai: loadArt('assets/kage-shura-gpt/actors/yokai.png'),
-    boss: loadArt('assets/kage-shura-gpt/actors/boss-oni.png')
+    boss: loadArt('assets/kage-shura-gpt/actors/v2/fudo-king.png'),
+    ashura: loadArt('assets/kage-shura-gpt/actors/v2/ashura.png'),
+    nioGuardian: loadArt('assets/kage-shura-gpt/actors/v2/nio-guardian.png'),
+    gundariMyoo: loadArt('assets/kage-shura-gpt/actors/v2/gundari-myoo.png'),
+    shutenDoji: loadArt('assets/kage-shura-gpt/actors/v2/shuten-doji.png')
   },
   props: {
     ground: loadArt('assets/kage-shura-gpt/props/ground.png'),
@@ -394,7 +385,13 @@ const stages = [
   { // STAGE 2 — 雪晴れの古社 / Snowbound Shrine
     name:'雪晴れの古社 / Snowbound Shrine', theme:'yashiro',
     w: 3200, h: 480, spawn:{ x:40, y:360 }, goal:{ x:3100, y:280, w:22, h:120 },
-    boss:{ x:2700, y:300, type:'oni' }, // 大鬼「業螺王」 / great oni boss
+    boss:{ x:2700, y:300, type:'nioGuardian' },
+    bosses:[
+      { x:2700, y:300, type:'nioGuardian' },
+      { x:2700, y:300, type:'ashura' },
+      { x:2700, y:300, type:'gundariMyoo' },
+      { x:2700, y:300, type:'shutenDoji' }
+    ], // 大鬼「業螺王」 / great oni boss
     bossArena:2150,                      // この地点を越えるとボス起動 / boss triggers past here
     platforms: [
       { x:0,    y:432, w:3200, h:48, type:'ground' },
@@ -429,6 +426,8 @@ let platforms = stage.platforms;
 const items = [];          // 収集・回復アイテム / collectibles & pickups
 const projectiles = [];    // ボス等の飛び道具 / projectiles
 let boss = null;           // 現ステージのボス / current boss
+let bossQueue = [];        // remaining bosses in the current gauntlet
+let bossIndex = 0;         // defeated boss count
 let bossActive = false;    // ボス起動フラグ
 let scrolls = 0;           // 収集した巻物の総数 / collected scrolls
 
@@ -859,11 +858,21 @@ function drawProjectiles(){
     ctx.globalCompositeOperation='source-over';
   }
 }
+const BOSS_PROFILES = {
+  oni: { art:'boss', hp:18, w:30, h:38, name:'?? / Great Oni' },
+  nioGuardian: { art:'nioGuardian', hp:22, w:34, h:44, name:'Nio Guardian' },
+  ashura: { art:'ashura', hp:28, w:38, h:50, name:'Ashura' },
+  gundariMyoo: { art:'gundariMyoo', hp:32, w:36, h:52, name:'Gundari Myoo' },
+  shutenDoji: { art:'shutenDoji', hp:38, w:40, h:52, name:'Shuten Doji' }
+};
+function bossLabel(type){ return (BOSS_PROFILES[type] || BOSS_PROFILES.oni).name; }
 class Boss {
-  constructor(x,y){
-    this.x=x; this.y=y; this.w=30; this.h=38;
+  constructor(x,y,type){
+    const profile=BOSS_PROFILES[type]||BOSS_PROFILES.oni;
+    this.type=type||'oni'; this.artKey=profile.art;
+    this.x=x; this.y=y; this.w=profile.w; this.h=profile.h;
     this.vx=0; this.vy=0; this.dir=-1; this.onGround=false;
-    this.hp=18; this.maxHp=18; this.dead=false; this.hitFlash=0;
+    this.hp=profile.hp; this.maxHp=profile.hp; this.dead=false; this.hitFlash=0;
     this.phase='idle'; this.timer=90; this.t=0; this.invuln=0;
   }
   update(){
@@ -924,20 +933,28 @@ class Boss {
       this.dead=true; triggerShake(8,40);
       for(let i=0;i<40;i++) spawnParticles(this.x+rnd(0,this.w), this.y+rnd(0,this.h), (i%2)?'#7a1f26':'#e9663a', 1, 1.6, 2.6, 30);
       playSFX('clear');
+      if(bossQueue.length){
+        const next=bossQueue.shift();
+        bossIndex++;
+        boss=new Boss(this.x,this.y,next.type||next);
+        bossActive=true;
+        triggerShake(6,18);
+      }
     }
   }
   draw(){
     if(this.dead) return;
     const x=Math.round(this.x-camera.x), y=Math.round(this.y-camera.y);
     const flash = this.hitFlash>0 && this.hitFlash%2===0;
-    if(artReady(ART.actors.boss)){
+    const bossArt=ART.actors[this.artKey]||ART.actors.boss;
+    if(artReady(bossArt)){
       if(this.phase==='charge'){
         ctx.globalAlpha=0.22;
-        drawArt(ART.actors.boss,x-this.dir*7,y-17,48,58,this.dir<0);
+        drawArt(bossArt,x-this.dir*8,y-22,64,76,this.dir<0);
         ctx.globalAlpha=1;
       }
       if(flash) ctx.globalAlpha=0.55;
-      drawArt(ART.actors.boss,x-9,y-17,48,58,this.dir<0);
+      drawArt(bossArt,x-18,y-22,64,76,this.dir<0);
       ctx.globalAlpha=1;
       return;
     }
@@ -1564,7 +1581,10 @@ function loadStage(n){
   for(const s of (stage.enemies||[])) enemies.push(new Enemy(s.x, s.y, s.type));
   items.length = 0;
   for(const it of (stage.items||[])) items.push({ x:it.x, y:it.y, type:it.type, t:Math.random()*6 });
-  boss = stage.boss ? new Boss(stage.boss.x, stage.boss.y) : null;
+  bossQueue = (stage.bosses||[]).slice(1);
+  bossIndex = 0;
+  const firstBoss = stage.bosses?.[0] || stage.boss;
+  boss = firstBoss ? new Boss(firstBoss.x, firstBoss.y, firstBoss.type) : null;
   bossActive = false;
   camera.x = clamp(player.x - BASE_W*0.42, 0, stage.w-BASE_W);
   camera.y = clamp(player.y - BASE_H*0.55, 0, stage.h-BASE_H);
