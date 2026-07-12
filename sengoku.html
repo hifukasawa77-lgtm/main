@@ -6575,25 +6575,43 @@ class BattleScene extends GameKit.Scene {
     const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t);
   }
   _drawGrid(ctx){
+    // 地形（ベース塗り＋地形アトラスタイル）は戦闘中不変（terrainMapはenterで確定）。255ヘックス分の
+    // 塗り＋クリップ＋drawImageを毎フレーム行っていたのをオフスクリーンへ一度合成しブリット。
+    // 動的要素（城郭タイルの破壊/炎上・移動/攻撃ハイライト・グリッド枠線）は従来順のまま毎フレーム描画。
+    ctx.drawImage(this._terrainLayer(), 0, 0);
     for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
-      const [x,y]=hexCenter(c,r); const terr=this.terrainMap[c+','+r];
-      const atlas=ASSETS.img.battleTiles;
-      const fill={plain:'#2f3525',forest:'#18351f',mountain:'#4b4633',river:'#1d5270',water:'#12324f'}[terr]||'#2f3525';
-      this._hexPath(ctx,x,y); ctx.save(); ctx.globalAlpha=0.88; ctx.fillStyle=fill; ctx.fill(); ctx.restore();
-      if (atlas && (atlas.naturalWidth||atlas.width)){
-        const tile={plain:0,forest:1,mountain:2,river:3,water:4}[terr] ?? 5;
-        const tw=(atlas.naturalWidth||atlas.width)/3, th=(atlas.naturalHeight||atlas.height)/2;
-        this._hexPath(ctx,x,y); ctx.save(); ctx.clip(); ctx.globalAlpha=0.74;
-        ctx.drawImage(atlas, (tile%3)*tw, Math.floor(tile/3)*th, tw, th, x-HEX.size*1.05, y-HEX.size*1.05, HEX.size*2.1, HEX.size*2.1);
-        ctx.restore();
-      }
-      // 移動可能/攻撃ハイライト
-      const castleTile=this.castleTiles && this.castleTiles[c+','+r];
+      const key=c+','+r;
+      const [x,y]=hexCenter(c,r);
+      const castleTile=this.castleTiles && this.castleTiles[key];
       if (castleTile) this._drawCastleTile(ctx, castleTile, x, y);
-      if (this.reach[c+','+r]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
-      if (this.targets[c+','+r]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
+      if (this.reach[key]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
+      if (this.targets[key]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
       ctx.lineWidth=1; ctx.strokeStyle='rgba(120,150,180,0.18)'; this._hexPath(ctx,x,y); ctx.stroke();
     }
+  }
+  _terrainLayer(){
+    const atlas=ASSETS.img.battleTiles;
+    const atlasReady=!!(atlas && (atlas.naturalWidth||atlas.width));
+    // 構築済み（アトラス込み or アトラス未ロード中の暫定）を再利用。アトラスが遅延ロードで後から
+    // 到着した場合のみ一度だけ作り直す。
+    if (this._terrainCanvas && (this._terrainCanvasComplete || !atlasReady)) return this._terrainCanvas;
+    const cv=this._terrainCanvas || document.createElement('canvas');
+    cv.width=W; cv.height=H;
+    const c=cv.getContext('2d'); c.clearRect(0,0,W,H);
+    for (let r=0;r<HEX.rows;r++) for (let cc=0;cc<HEX.cols;cc++){
+      const [x,y]=hexCenter(cc,r); const terr=this.terrainMap[cc+','+r];
+      const fill={plain:'#2f3525',forest:'#18351f',mountain:'#4b4633',river:'#1d5270',water:'#12324f'}[terr]||'#2f3525';
+      this._hexPath(c,x,y); c.save(); c.globalAlpha=0.88; c.fillStyle=fill; c.fill(); c.restore();
+      if (atlasReady){
+        const tile={plain:0,forest:1,mountain:2,river:3,water:4}[terr] ?? 5;
+        const tw=(atlas.naturalWidth||atlas.width)/3, th=(atlas.naturalHeight||atlas.height)/2;
+        this._hexPath(c,x,y); c.save(); c.clip(); c.globalAlpha=0.74;
+        c.drawImage(atlas, (tile%3)*tw, Math.floor(tile/3)*th, tw, th, x-HEX.size*1.05, y-HEX.size*1.05, HEX.size*2.1, HEX.size*2.1);
+        c.restore();
+      }
+    }
+    this._terrainCanvas=cv; this._terrainCanvasComplete=atlasReady;
+    return cv;
   }
   _drawCastleTile(ctx, tile, x, y){
     if (tile.destroyed) return;
