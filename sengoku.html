@@ -4978,6 +4978,33 @@ class MapScene extends GameKit.Scene {
     ctx.restore();
   }
   _drawCastleLayer(ctx){
+    // 城レイヤーのラベル配置はワールド座標系（カメラ変換はctx側）で計算されるため、
+    // ズーム/パンでは変化しない。所有・選択・ホバー・ターンが変わらない限り毎フレーム同一。
+    // 高コストな配置探索（海判定サンプリング×候補×全洲）を毎フレーム再計算していたのを、
+    // 変化検知でメモ化して描画のみ毎フレーム行う（マップFPSのボトルネック解消）。
+    const items = this._castleLayoutItems();
+    const labelSize=7, gap=7, iconSize=13;
+    for (const it of items){
+      drawCastleIcon(ctx, it.cx-5, it.cy+9, iconSize, it.color);
+      drawKamon(ctx, it.ddId, it.crestX, it.crestY, it.crestSize, it.color);
+      drawVerticalLabel(ctx, it.name, it.nx, it.ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
+    }
+  }
+  _castleLayoutItems(){
+    // 編集/ドラッグ中は都度再計算（インタラクティブ操作を即時反映）。
+    const editing = this.castleEdit || this.castleMetaEdit || this.dragCastle;
+    const customCount = (typeof CUSTOM_CASTLES!=='undefined' && CUSTOM_CASTLES) ? CUSTOM_CASTLES.length : 0;
+    const key = editing ? null :
+      this.state.turn+'|'+this.selected+'|'+this.hover+'|'+customCount+'|'+(this.editCastleId||'');
+    // キャッシュヒット条件: キー一致 かつ 0.5秒以内（所有権変化等の取りこぼしを自己修復）。
+    if (!editing && this._castleLayout && this._castleLayout.key===key && (this.t - this._castleLayout.t) < 0.5){
+      return this._castleLayout.items;
+    }
+    const items = this._computeCastleLayout();
+    if (!editing) this._castleLayout = { key, t:this.t, items };
+    return items;
+  }
+  _computeCastleLayout(){
     const st=this.state;
     const occupied=[];
     const overlaps=(a,b)=>!(a.x+a.w<b.x || b.x+b.w<a.x || a.y+a.h<b.y || b.y+b.h<a.y);
@@ -4993,11 +5020,10 @@ class MapScene extends GameKit.Scene {
       const hot = p.id===this.selected || p.id===this.hover;
       return {p, prov, dd, capital, hot, priority:(hot?10000:0)+(capital?5000:0)+p.kokudaka};
     }).filter(e=>e.dd).sort((a,b)=>b.priority-a.priority);
+    const out=[];
     for (const e of entries){
       const p=e.p, dd=e.dd;
       const [cx, cy]=provinceScreenPoint(p);
-      const iconSize=13;
-      drawCastleIcon(ctx, cx-5, cy+9, iconSize, dd.color);
       const name=castleNameForProvince(p);
       const force=e.hot;
       const labelSize=7;
@@ -5025,11 +5051,11 @@ class MapScene extends GameKit.Scene {
         if (!best || score<best.score) best={r,score};
       }
       const nrect = pick || (best?best.r:nameRect(0,0));
-      // 描画: 城アイコンに家紋を被せ、その上に城名
-      drawKamon(ctx, dd.id, crestX, crestY, crestSize, dd.color);
-      drawVerticalLabel(ctx, name, nrect.x+nrect.w/2, nrect.y, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
       occupied.push(nrect);
+      // 描画に必要な確定値のみを保持（drawKamon/drawVerticalLabel/drawCastleIcon 用）
+      out.push({ cx, cy, ddId:dd.id, color:dd.color, crestX, crestY, crestSize, name, force, nx:nrect.x+nrect.w/2, ny:nrect.y });
     }
+    return out;
   }
   _drawMapCoordinateReadout(ctx){
     if (!this.lastMapCoord) return;
