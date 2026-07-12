@@ -1165,6 +1165,21 @@ const GPT_ASSETS = {
   kamonRedrawSix: 'assets/sengoku/gpt/sengoku-kamon-redraw-six-clans-gpt-image-2.png',
 };
 const ASSETS = { img:{}, portraitSlots:{}, portraitCols:6, portraitRows:6, kamonCols:5, kamonRows:5, extraKamonCols:4, extraKamonRows:2 };
+// 初回ロード高速化: タイトル/マップ表示に必要な最小限だけを先読みし、残りは背景で遅延読み込みする。
+// 描画側は未ロード画像を安全にフォールバックするため、遅延分は読み込み完了次第そのまま反映される。
+// CRITICAL = タイトル画像 + 日本地図 + 家紋アトラス（マップ上の家紋表示に必要）。約10MB。
+const CRITICAL_ASSET_KEYS = ['title','map','kamon','kamonExtra','kamonExtraWest','kamonExtraCentral','kamonRegional','kamonRedraw','kamonRedrawSix'];
+// 遅延分の読み込み優先度: まもなく使う（大名選択の顔画像・野戦）→ 後で使う（攻城戦の城・城郭タイル）の順。
+const DEFERRED_ASSET_PRIORITY = ['portrait','unit','battle'];
+function splitAssetsByPriority(){
+  const critical={}, soon={}, later={};
+  for (const [k,url] of Object.entries(GPT_ASSETS)){
+    if (CRITICAL_ASSET_KEYS.includes(k)) critical[k]=url;
+    else if (DEFERRED_ASSET_PRIORITY.some(p=>k.startsWith(p))) soon[k]=url;
+    else later[k]=url;
+  }
+  return { critical, soon, later };
+}
 const ORIENTED_CASTLE_ASSETS = {
   castleWall:['castleWallH','castleWallV'], castlePalisade:['castlePalisadeH','castlePalisadeV'],
   castleMoat:['castleMoatH','castleMoatV'], castleDryMoat:['castleDryMoatH','castleDryMoatV'],
@@ -1753,6 +1768,18 @@ async function loadOptionalImages(map, onLoad){
     Object.entries(map).map(([name, url]) => loadOneImage(name, url, onLoad))
   );
   return Object.fromEntries(pairs.filter(([,img])=>!!img));
+}
+// 背景読み込み: 各画像は完了した時点で ASSETS.img へ即時反映する（描画側が未ロードを安全に扱うため画面には順次表示される）。
+function loadImagesIntoAssets(map){
+  return Promise.all(Object.entries(map).map(([name, url]) =>
+    loadOneImage(name, url).then(([n, img]) => { if (img) ASSETS.img[n] = img; return [n, img]; })
+  ));
+}
+// タイトル遷移後に、残りのアセットを優先度順（まもなく使う→後で使う）で非同期プリロードする。
+function preloadDeferredAssets(soon, later){
+  loadImagesIntoAssets(soon)
+    .then(() => loadImagesIntoAssets(later))
+    .catch(err => console.warn('Deferred asset preload issue:', err));
 }
 
 /* ---- マップ描画パラメータ（論理座標→画面座標） ---- */
@@ -2946,15 +2973,16 @@ class BootScene extends GameKit.Scene {
     setCanvasViewportMode('fit');
     BGM.setMood('title'); BGM.start();
     this.t=0; this.progress=0; this.targetProgress=0; this.error=null; this.done=false;
-    const imgKeys = Object.keys(GPT_ASSETS);
-    const totalItems = 3 + imgKeys.length;
+    // 初回ロード高速化: 先読みはタイトル/マップ表示に必要な最小限のみ（残りは背景で遅延読み込み）。
+    const { critical, soon, later } = splitAssetsByPriority();
+    const totalItems = 3 + Object.keys(critical).length;
     let loaded = 0;
     const onItemLoaded = () => { loaded++; this.targetProgress = loaded / totalItems; };
     Promise.all([
       loadSengokuJSON('provinces', 'assets/sengoku/provinces.json').then(r=>{onItemLoaded();return r;}),
       loadSengokuJSON('generals', 'assets/sengoku/generals.json').then(r=>{onItemLoaded();return r;}),
       loadSengokuJSON('scenarios', 'assets/sengoku/scenarios.json').then(r=>{onItemLoaded();return r;}),
-      loadOptionalImages(GPT_ASSETS, onItemLoaded),
+      loadOptionalImages(critical, onItemLoaded),
     ]).then(([prov, gen, scn, imgs])=>{
       DATA.provinces = prov.provinces;
       DATA.provinces.forEach(p=>DATA.provById[p.id]=p);
@@ -2967,7 +2995,7 @@ class BootScene extends GameKit.Scene {
       });
       DATA.generals = gen.generals;
       DATA.generals.forEach(g=>DATA.genById[g.id]=g);
-      ASSETS.img = imgs;
+      Object.assign(ASSETS.img, imgs);
       DATA.scenarios = scn.scenarios;
       applySengokuExpansions();
       applyCustomCastlesToData();
@@ -2976,6 +3004,8 @@ class BootScene extends GameKit.Scene {
     }).then(()=>{
       buildPortraitSlots();
       this.targetProgress=1; this.done=true;
+      // 残りのアセット（顔画像・城・城郭タイル等）は背景で優先度順に読み込む。
+      preloadDeferredAssets(soon, later);
       game.changeScene(new TitleScene());
     }).catch(e=>{ this.error = e.message || String(e); console.error(e); });
   }
