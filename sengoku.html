@@ -1029,6 +1029,22 @@ const GPT_ASSETS = {
   title: 'assets/sengoku/gpt/sengoku-title-gpt-image-2.jpg',
   battle: 'assets/sengoku/gpt/sengoku-hex-battlefield-gpt-image-2.jpg',
   battleTiles: 'assets/sengoku/gpt/sengoku-hex-terrain-atlas-gpt-image-2.jpg',
+  siegeHirajiro: 'assets/sengoku/gpt/sengoku-siege-hirajiro-gpt-image-2.png',
+  siegeYamajiro: 'assets/sengoku/gpt/sengoku-siege-yamajiro-gpt-image-2.png',
+  siegeHirayamajiro: 'assets/sengoku/gpt/sengoku-siege-hirayamajiro-gpt-image-2.png',
+  castleWall: 'assets/sengoku/gpt/tiles/sengoku-castle-wall.png',
+  castleGate: 'assets/sengoku/gpt/tiles/sengoku-castle-gate.png',
+  castlePalisade: 'assets/sengoku/gpt/tiles/sengoku-castle-palisade.png',
+  castleYagura: 'assets/sengoku/gpt/tiles/sengoku-castle-yagura.png',
+  castleDryMoat: 'assets/sengoku/gpt/tiles/sengoku-castle-dry-moat.png',
+  castleMoat: 'assets/sengoku/gpt/tiles/sengoku-castle-moat.png',
+  castleKeep: 'assets/sengoku/gpt/tiles/sengoku-castle-keep.png',
+  castleKuruwa: 'assets/sengoku/gpt/tiles/sengoku-castle-kuruwa.png',
+  castleUmadashi: 'assets/sengoku/gpt/tiles/sengoku-castle-umadashi.png',
+  castleYakata: 'assets/sengoku/gpt/tiles/sengoku-castle-yakata.png',
+  castleGoten: 'assets/sengoku/gpt/tiles/sengoku-castle-goten.png',
+  castleStonewall: 'assets/sengoku/gpt/tiles/sengoku-castle-stonewall.png',
+  castleEarthwork: 'assets/sengoku/gpt/tiles/sengoku-castle-earthwork.png',
   portrait1: 'assets/sengoku/gpt/sengoku-portraits-page-1-gpt-image-2.jpg',
   portrait2: 'assets/sengoku/gpt/sengoku-portraits-page-2-gpt-image-2.jpg',
   portrait3: 'assets/sengoku/gpt/sengoku-portraits-page-3-gpt-image-2.jpg',
@@ -1065,6 +1081,20 @@ const GPT_ASSETS = {
   kamonRedrawSix: 'assets/sengoku/gpt/sengoku-kamon-redraw-six-clans-gpt-image-2.png',
 };
 const ASSETS = { img:{}, portraitSlots:{}, portraitCols:6, portraitRows:6, kamonCols:5, kamonRows:5, extraKamonCols:4, extraKamonRows:2 };
+function castleTypeForProvince(pid, prov){
+  const p=DATA.provById[pid];
+  if (!p) return 'hirajiro';
+  const level=Math.max(1, Number(prov&&prov.castleLevel)||1);
+  if (p.terrain==='mountain' || p.terrain==='forest') return 'yamajiro';
+  if (level>=3) return 'hirayamajiro';
+  return 'hirajiro';
+}
+function castleTypeLabel(type){
+  return type==='yamajiro' ? '\u5c71\u57ce / Yamajiro' : type==='hirayamajiro' ? '\u5e73\u5c71\u57ce / Hirayamajiro' : '\u5e73\u57ce / Hirajiro';
+}
+function castleSizeLabel(level){
+  return (level||1)>=4 ? '\u5927\u898f\u6a21 / Grand' : (level||1)>=3 ? '\u4e2d\u898f\u6a21 / Medium' : '\u5c0f\u898f\u6a21 / Small';
+}
 const KAMON_CLANS = ['date','mogami','satake','satomi','hojo','uesugi','asakura','honganji','takeda','saito','imagawa','oda','kitabatake','rokkaku','miyoshi','ukita','amago','mori','kono','chosokabe','otomo','ryuzoji','shimazu','tokugawa','azai'];
 const KAMON_SLOT = Object.fromEntries(KAMON_CLANS.map((id,i)=>[id,{col:i%5,row:Math.floor(i/5)}]));
 const EXTRA_KAMON_CLANS = ['tsugaru','nanbu','kasai','soma','ashina','ando','jinbo','miki'];
@@ -3731,10 +3761,10 @@ class MapScene extends GameKit.Scene {
     const ctx = this._buildBattleContext(m.srcId, m.dstId, troops, gens);
     this.overlay=null; this.march=null;
     if (auto){
+      ctx.battleType='field';
       this._resolveAutoPlayerBattle(game, ctx);
     } else {
-      st.pendingBattle = ctx;
-      game.changeScene(new BattleScene(st));
+      this.overlay={type:'battleType', ctx};
     }
   }
   _buildBattleContext(srcId, dstId, troops, gens){
@@ -3747,7 +3777,14 @@ class MapScene extends GameKit.Scene {
       attacker: { daimyo: st.playerDaimyo, family: daimyoDef(st,st.playerDaimyo).id, soldiers: troops, generals: gens },
       defender: { daimyo: dstOwner, family: dstOwner||'', soldiers: dst.soldiers, generals: dst.generals.filter(g=>st.generals[g].alive).slice(), castleLevel: dst.castleLevel },
       terrain: DATA.provById[dstId].terrain,
+      castleType: castleTypeForProvince(dstId, dst),
     };
+  }
+  _startBattleFromChoice(game, ctx, battleType){
+    ctx.battleType=battleType;
+    this.state.pendingBattle=ctx;
+    this.overlay=null;
+    game.changeScene(new BattleScene(this.state));
   }
   _resolveAutoPlayerBattle(game, ctx){
     const st=this.state;
@@ -4143,6 +4180,7 @@ class MapScene extends GameKit.Scene {
     const ctx=(st.pendingDefenses||[]).shift();
     if (!ctx){ this._processTurnResolution(game); return; }
     ctx.playerSide='def';
+    ctx.battleType='siege';
     if (manual){
       st.pendingBattle=ctx; this.overlay=null;
       game.changeScene(new BattleScene(st)); // 決着後は新MapScene.enterが解決を継続
@@ -4476,7 +4514,9 @@ class MapScene extends GameKit.Scene {
     updateButtonHot(btns, p);
     // marchのスライダー等
     if (p.justPressed){
-      for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.05,'sine'); b.action(game); return; } }
+      // _hitFirstボタン（底部アクションボタン）を先にチェックして武将トグルより常に優先
+      for (const b of btns){ if (b._hitFirst&&(b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.05,'sine'); b.action(game); return; } }
+      for (const b of btns){ if (!b._hitFirst&&(b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.05,'sine'); b.action(game); return; } }
     }
   }
   _overlayButtons(){
@@ -4491,8 +4531,8 @@ class MapScene extends GameKit.Scene {
       bs.push({x:px+pw-198, y:py+384, w:132, h:69, label:'+500', sz:24, action:()=>{ m.troops=clamp(m.troops+500,100,m.maxSend); }});
       bs.push({x:px+pw/2-225, y:py+405, w:195, h:66, label:'半数', sz:27, action:()=>{ m.troops=clamp(Math.round(m.maxSend*0.5/100)*100,100,m.maxSend); }});
       bs.push({x:px+pw/2+30, y:py+405, w:195, h:66, label:'全軍', sz:27, action:()=>{ m.troops=m.maxSend; }});
-      // generals toggles（スクロール対応: 底部ボタンに被らないよう5行まで表示）
-      const GEN_VIS = 5;
+      // generals toggles（スクロール対応: 底部ボタンに被らないよう3行まで表示）
+      const GEN_VIS = 3;
       const genOff = m.genOffset||0;
       const totalGenRows = Math.ceil(m.generals.length/2);
       const maxGenOff = Math.max(0, totalGenRows-GEN_VIS);
@@ -4512,13 +4552,19 @@ class MapScene extends GameKit.Scene {
       const enemy = dst.owner!==st.playerDaimyo;
       const by=py+ph-129;
       if (enemy){
-        bs.push({x:px+60, y:by, w:315, h:90, jp:'出陣（戦）', en:'Hex Battle', sz:39, accent:'rgba(248,113,113,0.7)', action:g=>this._confirmMarch(g,false)});
-        bs.push({x:px+405, y:by, w:315, h:90, jp:'自動解決', en:'Auto', sz:39, accent:'rgba(251,191,36,0.7)', action:g=>this._confirmMarch(g,true)});
-        bs.push({x:px+pw-285, y:by, w:225, h:90, jp:'取消', en:'Cancel', sz:36, action:()=>{ this.overlay=null; this.march=null; }});
+        bs.push({x:px+60, y:by, w:315, h:90, jp:'出陣（戦）', en:'Hex Battle', sz:39, accent:'rgba(248,113,113,0.7)', _hitFirst:true, action:g=>this._confirmMarch(g,false)});
+        bs.push({x:px+405, y:by, w:315, h:90, jp:'自動解決', en:'Auto', sz:39, accent:'rgba(251,191,36,0.7)', _hitFirst:true, action:g=>this._confirmMarch(g,true)});
+        bs.push({x:px+pw-285, y:by, w:225, h:90, jp:'取消', en:'Cancel', sz:36, _hitFirst:true, action:()=>{ this.overlay=null; this.march=null; }});
       } else {
-        bs.push({x:px+60, y:by, w:390, h:90, jp:'増援を送る', en:'Reinforce', sz:39, accent:'rgba(52,211,153,0.7)', action:g=>this._confirmMarch(g,false)});
-        bs.push({x:px+pw-285, y:by, w:225, h:90, jp:'取消', en:'Cancel', sz:36, action:()=>{ this.overlay=null; this.march=null; }});
+        bs.push({x:px+60, y:by, w:390, h:90, jp:'増援を送る', en:'Reinforce', sz:39, accent:'rgba(52,211,153,0.7)', _hitFirst:true, action:g=>this._confirmMarch(g,false)});
+        bs.push({x:px+pw-285, y:by, w:225, h:90, jp:'取消', en:'Cancel', sz:36, _hitFirst:true, action:()=>{ this.overlay=null; this.march=null; }});
       }
+    } else if (ov.type==='battleType'){
+      const c=ov.ctx; const px=W/2-520, py=H/2-330, pw=1040, ph=660;
+      const by=py+448;
+      bs.push({x:px+60, y:by, w:286, h:92, jp:'\u91ce\u6226', en:'Field Battle', sz:32, accent:'rgba(52,211,153,0.7)', action:g=>this._startBattleFromChoice(g,c,'field')});
+      bs.push({x:px+377, y:by, w:286, h:92, jp:'\u653b\u57ce\u6226', en:'Siege Battle', sz:32, accent:'rgba(248,113,113,0.75)', action:g=>this._startBattleFromChoice(g,c,'siege')});
+      bs.push({x:px+694, y:by, w:286, h:92, jp:'\u53d6\u6d88\u3057', en:'Cancel', sz:28, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='provinceInfo'){
       const px=W/2-820, py=H/2-610, pw=1640, ph=1220;
       bs.push({x:px+pw-286, y:py+42, w:240, h:78, jp:'閉じる', en:'Close', sz:30, ensz:17, action:()=>{ this.overlay=null; }});
@@ -5118,6 +5164,7 @@ class MapScene extends GameKit.Scene {
     const ov=this.overlay, st=this.state;
     ctx.save(); ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,W,H); ctx.restore();
     if (ov.type==='march') this._drawMarch(ctx);
+    else if (ov.type==='battleType') this._drawBattleType(ctx, ov.ctx);
     else if (ov.type==='provinceInfo') this._drawProvinceInfo(ctx, ov.pid);
     else if (ov.type==='battleResult') this._drawBattleResult(ctx, ov.data);
     else if (ov.type==='turnSummary') this._drawTurnSummary(ctx, ov.data);
@@ -5137,6 +5184,19 @@ class MapScene extends GameKit.Scene {
       else if (b._ployTarget){ this._drawPloyTargetRow(ctx, b); }
       else drawButton(ctx,b,this.t);
     }
+  }
+  _drawBattleType(ctx, c){
+    const px=W/2-520, py=H/2-330, pw=1040, ph=660;
+    const dst=DATA.provById[c.dstId], prov=this.state.provinces[c.dstId];
+    const type=castleTypeForProvince(c.dstId, prov), level=prov.castleLevel||1;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:24, fill:'rgba(10,16,28,0.98)', stroke:'rgba(232,192,122,0.6)'});
+    T(ctx, '\u6226\u95d8\u65b9\u5f0f\u3092\u9078\u629e / Choose Battle', px+pw/2, py+54, {size:42, weight:'bold', color:'#e8c07a', align:'center'});
+    T(ctx, (dst?dst.nameJP:'')+'  '+castleTypeLabel(type), px+pw/2, py+140, {size:30, weight:'bold', color:'#f1e6cf', align:'center'});
+    T(ctx, '\u57ceLv'+level+'  /  '+castleSizeLabel(level), px+pw/2, py+188, {size:24, color:'#cbd5e1', align:'center'});
+    T(ctx, '\u91ce\u6226: \u57ce\u5916\u3067\u6a5f\u52d5\u529b\u3068\u5175\u79d1\u76f8\u6027\u3092\u91cd\u8996', px+pw/2, py+274, {size:22, color:'#9fb2c6', align:'center'});
+    T(ctx, 'Field: fight outside the castle and rely on mobility.', px+pw/2, py+310, {size:17, color:'#71839a', align:'center'});
+    T(ctx, '\u653b\u57ce\u6226: \u57ce\u58c1\u30fb\u578b\u30fb\u898f\u6a21\u304c\u6226\u5834\u306b\u53cd\u6620', px+pw/2, py+356, {size:22, color:'#f2c879', align:'center'});
+    T(ctx, 'Siege: the castle type and scale shape the battlefield.', px+pw/2, py+392, {size:17, color:'#9b8663', align:'center'});
   }
   _drawPloy(ctx){
     const st=this.state, pl=this.ploy;
@@ -5236,7 +5296,7 @@ class MapScene extends GameKit.Scene {
     T(ctx, '― 従軍武将 ―', px+pw/2, py+498, {size:30, color:'#e8c07a', align:'center'});
     if (m.generals.length===0) T(ctx,'（武将なし）', px+pw/2, py+558, {size:27, color:'#7d93ab', align:'center'});
     // 隠れている武将数をスクロールエリア下端に表示
-    const _gVis=5, _gOff=m.genOffset||0;
+    const _gVis=3, _gOff=m.genOffset||0;
     const _totalRows=Math.ceil(m.generals.length/2);
     if (_totalRows>_gVis){
       const _hidden=Math.max(0, _totalRows-_gOff-_gVis)*2;
@@ -5681,6 +5741,10 @@ class BattleScene extends GameKit.Scene {
     setCanvasViewportMode('fit');
     BGM.setMood('battle'); BGM.start();
     const c=this.ctx; this.state.pendingBattle=null;
+    this.battleType=c.battleType || (c.playerSide==='def' ? 'siege' : 'field');
+    this.castleLevel=c.defender.castleLevel||1;
+    this.castleType=c.castleType || castleTypeForProvince(c.dstId, this.state.provinces[c.dstId]);
+    this.castleTiles=this._buildCastleTiles();
     // プレイヤーが操作する側（攻撃時='atk'、防衛時='def'）
     this.playerSide = c.playerSide || 'atk';
     this.aiSide = this.playerSide==='atk' ? 'def' : 'atk';
@@ -5745,6 +5809,31 @@ class BattleScene extends GameKit.Scene {
     ctx.globalAlpha=1;
     this.floaters.forEach(f=>{ ctx.globalAlpha=Math.max(0,Math.min(1,f.life)); T(ctx, f.text, f.x, f.y, {size:f.size, weight:'bold', color:f.color, align:'center', baseline:'middle', shadow:true}); });
     ctx.restore();
+  }
+  _buildCastleTiles(){
+    if (this.battleType!=='siege') return {};
+    const tiles={};
+    const add=(col,row,asset,scale=0.86,alpha=1)=>{ tiles[col+','+row]={asset,scale,alpha}; };
+    add(5,4,'castleKeep',1.02,1);
+    add(5,5,'castleGate',0.92,1);
+    add(4,4,'castleWall',0.84,0.92); add(6,4,'castleWall',0.84,0.92);
+    add(4,5,'castleYagura',0.76,0.98); add(6,5,'castleYagura',0.76,0.98);
+    add(5,3,'castlePalisade',0.78,0.88);
+    add(3,4,'castleDryMoat',0.78,0.72); add(7,4,'castleMoat',0.78,0.72);
+    if (this.castleType==='yamajiro'){
+      add(3,5,'castleKuruwa',0.82,0.82); add(7,5,'castleEarthwork',0.82,0.82);
+    } else if (this.castleType==='hirayamajiro'){
+      add(3,5,'castleYakata',0.78,0.86); add(7,5,'castleGoten',0.78,0.86);
+    } else {
+      add(3,5,'castleGoten',0.78,0.86); add(7,5,'castleYakata',0.78,0.86);
+    }
+    if (this.castleLevel>=3){
+      add(4,3,'castleStonewall',0.76,0.82); add(6,3,'castleEarthwork',0.76,0.82);
+    }
+    if (this.castleLevel>=4){
+      add(3,3,'castleKuruwa',0.76,0.74); add(7,3,'castleUmadashi',0.76,0.86);
+    }
+    return tiles;
   }
   _genTerrain(baseTerrain){
     const rng = GameKit.Gen.rng((this.state.rng||1) ^ (this.ctx.dstId?this.ctx.dstId.length*97:7));
@@ -6011,6 +6100,12 @@ class BattleScene extends GameKit.Scene {
     return false;
   }
   _retreat(game){
+    if (this.battleType==='field' && this.playerSide==='atk'){
+      this.ctx.battleType='siege';
+      this.state.pendingBattle=this.ctx;
+      game.changeScene(new BattleScene(this.state));
+      return;
+    }
     // プレイヤーが攻撃側なら撤退＝敗北。防衛側なら城放棄＝攻撃側勝利。
     if (this.playerSide==='def') this._finish(game, true, '城を放棄した / Abandoned castle');
     else this._finish(game, false, '撤退した / Retreated');
@@ -6056,8 +6151,12 @@ class BattleScene extends GameKit.Scene {
 
   /* ---- 描画 ---- */
   draw(ctx, game){
-    if (!drawCoverImage(ctx, ASSETS.img.battle, 0, 0, W, H, 1)) { ctx.fillStyle='#070a12'; ctx.fillRect(0,0,W,H); }
-    ctx.fillStyle='rgba(4,7,12,0.36)'; ctx.fillRect(0,0,W,H);
+    const siegeKey=this.castleType==='yamajiro'?'siegeYamajiro':this.castleType==='hirayamajiro'?'siegeHirayamajiro':'siegeHirajiro';
+    const backdrop=this.battleType==='siege' ? ASSETS.img[siegeKey] : ASSETS.img.battle;
+    const siegeZoom=this.battleType==='siege' ? 1+Math.min(0.1, Math.max(0,(this.castleLevel||1)-1)*0.025) : 1;
+    const bx=(W-W*siegeZoom)/2, by=(H-H*siegeZoom)/2;
+    if (!drawCoverImage(ctx, backdrop, bx, by, W*siegeZoom, H*siegeZoom, 1)) { ctx.fillStyle='#070a12'; ctx.fillRect(0,0,W,H); }
+    ctx.fillStyle=this.battleType==='siege'?'rgba(4,7,12,0.18)':'rgba(4,7,12,0.36)'; ctx.fillRect(0,0,W,H);
     this.particles.draw(ctx);
     this._drawGrid(ctx);
     this._drawCastle(ctx);
@@ -6086,10 +6185,21 @@ class BattleScene extends GameKit.Scene {
         ctx.restore();
       }
       // 移動可能/攻撃ハイライト
+      const castleTile=this.castleTiles && this.castleTiles[c+','+r];
+      if (castleTile) this._drawCastleTile(ctx, castleTile, x, y);
       if (this.reach[c+','+r]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
       if (this.targets[c+','+r]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
       ctx.lineWidth=1; ctx.strokeStyle='rgba(120,150,180,0.18)'; this._hexPath(ctx,x,y); ctx.stroke();
     }
+  }
+  _drawCastleTile(ctx, tile, x, y){
+    const img=ASSETS.img[tile.asset];
+    if (!img || !(img.naturalWidth||img.width)) return;
+    const size=HEX.size*2.05*tile.scale;
+    ctx.save();
+    ctx.globalAlpha=tile.alpha;
+    ctx.drawImage(img, x-size/2, y-size/2, size, size);
+    ctx.restore();
   }
   _hexPath(ctx,x,y){
     ctx.beginPath();
@@ -6150,7 +6260,11 @@ class BattleScene extends GameKit.Scene {
   }
   _drawHUD(ctx){
     const c=this.ctx;
-    GameKit.UI.glassPanel(ctx, 16, 16, 660, 184, {radius:14, fill:'rgba(10,16,28,0.85)'});
+    GameKit.UI.glassPanel(ctx, 16, 16, 660, 236, {radius:14, fill:'rgba(10,16,28,0.85)'});
+    if (this.battleType==='siege'){
+      T(ctx, '\u653b\u57ce\u6226 / Siege Battle', 36, 178, {size:26, weight:'bold', color:'#f87171'});
+      T(ctx, castleTypeLabel(this.castleType)+'  '+castleSizeLabel(this.castleLevel), 36, 212, {size:20, color:'#f2c879'});
+    }
     T(ctx, DATA.provById[c.dstId].nameJP+' の戦い', 36, 32, {size:34, weight:'bold', color:'#e8c07a'});
     T(ctx, '攻: '+daimyoDef(this.state,c.attacker.daimyo).nameJP+'家  /  守: '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP+'家':'空白'), 36, 92, {size:24, color:'#cbd5e1'});
     T(ctx, 'ラウンド '+this.round+' / '+this.maxRounds+'　手番:'+(this.phase==='player'?'自軍':'敵軍'), 36, 140, {size:24, color:'#9fb2c6'});
