@@ -6737,7 +6737,10 @@ class BattleScene extends GameKit.Scene {
     // 地形（ベース塗り＋地形アトラスタイル）は戦闘中不変（terrainMapはenterで確定）。255ヘックス分の
     // 塗り＋クリップ＋drawImageを毎フレーム行っていたのをオフスクリーンへ一度合成しブリット。
     // 動的要素（城郭タイルの破壊/炎上・移動/攻撃ハイライト・グリッド枠線）は従来順のまま毎フレーム描画。
-    ctx.drawImage(this._terrainLayer(), 0, 0);
+    // 攻城戦は既にアセット済みの城グラフィック（背景）を前面に見せる方針のため、不透明な地形塗りレイヤーは
+    // 敷かず、城背景を透過させたうえにヘックス「枠」だけを重ねる（参考: 戦国風の攻城UI）。
+    const siege=this.battleType==='siege';
+    if (!siege) ctx.drawImage(this._terrainLayer(), 0, 0);
     for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
       const key=c+','+r;
       const [x,y]=hexCenter(c,r);
@@ -6745,7 +6748,14 @@ class BattleScene extends GameKit.Scene {
       if (castleTile) this._drawCastleTile(ctx, castleTile, x, y);
       if (this.reach[key]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
       if (this.targets[key]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
-      ctx.lineWidth=1; ctx.strokeStyle='rgba(120,150,180,0.18)'; this._hexPath(ctx,x,y); ctx.stroke();
+      // 攻城戦は城背景の上に映える明るめの枠線（内側に淡い陰影を敷いて可読性を確保）。野戦は従来の淡い枠。
+      if (siege){
+        this._hexPath(ctx,x,y);
+        ctx.lineWidth=2.4; ctx.strokeStyle='rgba(8,12,20,0.28)'; ctx.stroke();
+        ctx.lineWidth=1.2; ctx.strokeStyle='rgba(233,240,250,0.34)'; ctx.stroke();
+      } else {
+        ctx.lineWidth=1; ctx.strokeStyle='rgba(120,150,180,0.18)'; this._hexPath(ctx,x,y); ctx.stroke();
+      }
     }
   }
   _terrainLayer(){
@@ -6777,12 +6787,17 @@ class BattleScene extends GameKit.Scene {
     const img=ASSETS.img[tile.asset];
     if (!img || !(img.naturalWidth||img.width)) return;
     const size=HEX.size*2.05*tile.scale;
+    // 攻城戦は事前制作の城グラフィック（背景）を主役に据えるため、城郭タイルは背景へ馴染む控えめな
+    // 不透明度で重ねる（＝ヘックス上の攻略対象マーカーとして機能させつつ、城の造形は背景側で見せる）。
+    const siege=this.battleType==='siege';
     ctx.save();
-    ctx.globalAlpha=tile.alpha;
+    ctx.globalAlpha=tile.alpha*(siege?0.7:1);
     ctx.translate(x,y+(tile.elevation||0)); ctx.rotate((Number(tile.rotation)||0)*Math.PI/180);
     ctx.drawImage(img, -size/2, -size/2, size, size);
     ctx.restore();
-    if (Number.isFinite(tile.maxHp) && tile.maxHp>0){
+    // HPバーは損傷時（または炎上時）のみ表示。満タンの城郭でバーが埋め尽くされる雑然さを避け、
+    // 参照画像のように「無傷の城は綺麗に見える」状態を保つ。
+    if (Number.isFinite(tile.maxHp) && tile.maxHp>0 && (tile.flameT>0 || tile.hp<tile.maxHp)){
       const bw=HEX.size*0.72, bx=x-bw/2, by=y+HEX.size*0.38;
       ctx.fillStyle='rgba(0,0,0,0.68)'; ctx.fillRect(bx,by,bw,5);
       ctx.fillStyle=tile.flameT>0?'#f97316':'#a7f3d0'; ctx.fillRect(bx,by,bw*Math.max(0,tile.hp/tile.maxHp),5);
@@ -6805,9 +6820,12 @@ class BattleScene extends GameKit.Scene {
     for (const key in this.walls){
       const wall=this.walls[key], [col,row]=key.split(',').map(Number), [x,y]=hexCenter(col,row);
       if (wall.hp<=0){ this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(70,58,44,0.28)'; ctx.fill(); ctx.setLineDash([5,4]); ctx.lineWidth=2; ctx.strokeStyle='rgba(226,183,110,0.48)'; ctx.stroke(); ctx.restore(); }
-      const bw=HEX.size*0.78, bx=x-bw/2, by=y+HEX.size*0.36;
-      ctx.fillStyle='rgba(0,0,0,0.58)'; ctx.fillRect(bx,by,bw,5);
-      ctx.fillStyle = wall.gate?'rgba(120,90,50,0.95)':'rgba(88,94,102,0.95)'; ctx.fillRect(bx,by,bw*Math.max(0,wall.hp/wall.maxHp),5);
+      // 城壁HPバーも損傷時のみ（無傷の城壁は背景グラフィックのまま綺麗に見せる）。
+      if (wall.hp<wall.max){
+        const bw=HEX.size*0.78, bx=x-bw/2, by=y+HEX.size*0.36;
+        ctx.fillStyle='rgba(0,0,0,0.58)'; ctx.fillRect(bx,by,bw,5);
+        ctx.fillStyle = wall.gate?'rgba(120,90,50,0.95)':'rgba(88,94,102,0.95)'; ctx.fillRect(bx,by,bw*Math.max(0,wall.hp/wall.maxHp),5);
+      }
       if (this.wallTargets && this.wallTargets[key]){ this._hexPath(ctx,x,y); ctx.save(); ctx.lineWidth=4; ctx.strokeStyle='rgba(251,191,36,0.92)'; ctx.stroke(); ctx.restore(); }
     }
     if (this.keepHex){
