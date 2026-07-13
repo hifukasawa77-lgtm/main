@@ -6242,14 +6242,14 @@ class BattleScene extends GameKit.Scene {
     this.over=false; this.result=null;
     this.floaters=[]; this.sparks=[]; // 戦闘演出（ダメージ数値・被弾火花）
     // 攻城戦: プレイヤーが城Lv3以上へ攻め込む時のみ発動（城壁を破り天守を制圧する）
-    this.walls={}; this.keepHex=null; this.wallTargets={};
+    this.walls={}; this.keepHex=null; this.wallTargets={}; this.castleCells={};
     this.siege = this.battleType==='siege' || ((this.playerSide==='atk') && ((c.defender.castleLevel||1) >= 3));
     if (this.siege){ this._buildCastle(c.defender.castleLevel||3); this._placeSiegeDefenders(); this._deploySiegeCannon(); }
   }
   // 攻城戦の攻撃側に大筒を1門配備（後列中央付近）
   _placeSiegeDefenders(){
-    // 城郭スロット（櫓・曲輪等）は廃止。守将（最強＝武将持ち）を天守に据え、他の守備隊は
-    // _buildStacks の既定上段配置のまま城を守る。
+    // 守将(最強＝武将持ち)を天守に据える。城壁/堀/柵など通過不可のマスに湧いた守備隊は
+    // 城内(二の丸〜本丸)の通行可能なマスへ退避させる。
     if (!this.siege || !this.keepHex) return;
     const defenders=this.stacks.filter(s=>s.side==='def');
     if (!defenders.length) return;
@@ -6258,6 +6258,18 @@ class BattleScene extends GameKit.Scene {
     const occ=this.stackAt(kc,kr);
     if (occ && occ!==leader){ occ.col=leader.col; occ.row=leader.row; }
     leader.col=kc; leader.row=kr; leader.castlePost='keep';
+    defenders.forEach(s=>{
+      if (s===leader) return;
+      if (this._cellObstructs(s.col,s.row) || this.stackAt(s.col,s.row)!==s){ const spot=this._findGarrisonSpot(); if (spot){ s.col=spot[0]; s.row=spot[1]; } }
+    });
+  }
+  // 守備隊を置きたくない(通過不可 or 渡河ペナルティ)マスか。天守は可。
+  _cellObstructs(c,r){ const cell=this.castleCells && this.castleCells[c+','+r]; return !!(cell && cell.kind!=='keep'); }
+  _findGarrisonSpot(){
+    for (let r=5;r<=9;r++) for (let c=3;c<HEX.cols-3;c++){
+      if (this.stackAt(c,r)) continue; if (this._cellObstructs(c,r)) continue; return [c,r];
+    }
+    return null;
   }
   _deploySiegeCannon(){
     let col=Math.floor(HEX.cols/2), row=HEX.rows-1;
@@ -6268,18 +6280,47 @@ class BattleScene extends GameKit.Scene {
     this.stacks.push({ id:'atkCannon', side:'atk', type:'cannon', count:400, count0:400, col, row, gen:null, name:'大筒隊', stat:{tou:42,bu:42,chi:42,sei:42}, hasMoved:false, hasAttacked:false, castle:0 });
   }
   _buildCastle(level){
-    // 城壁・城郭オブジェクトは全面廃止したため城壁HP管理は行わない。占拠目標＝天守を最上段中央に置く。
+    // 城グラフィックに対応する戦術レイヤー(城壁/石垣/土塁/柵/城門/堀/空堀/天守)をヘックスに配置する。
+    // 城壁・石垣・土塁・堀＝通過不可(破壊不可)、城門・柵＝破壊で通過可、空堀＝通過可だが攻撃側は兵数減。
     this.walls={};
-    this.keepHex=[Math.floor(HEX.cols/2), 1];
+    this.castleCells=this._buildCastleCells(level);
+    const keep=Object.entries(this.castleCells).find(([,cell])=>cell.kind==='keep');
+    this.keepHex=keep ? keep[0].split(',').map(Number) : [Math.floor(HEX.cols/2), 2];
     this.maxRounds=16;
   }
-  isWall(c,r){ const w=this.walls[c+','+r]; return !!(w && w.hp>0); }
+  // 攻撃側は最下段(row13-14)から攻め上がる。城は上方＝背面に天守、手前(下)に多重の防御帯を敷く。
+  _buildCastleCells(level){
+    const cells={}, mid=Math.floor(HEX.cols/2); // 8
+    const gateHp=170+level*70, palHp=80+level*26;
+    const set=(c,r,kind)=>{
+      if (c<0||c>=HEX.cols||r<0||r>=HEX.rows) return;
+      const k=c+','+r; if (cells[k] && cells[k].kind==='keep') return;
+      const hp = kind==='gate'?gateHp : kind==='palisade'?palHp : 0;
+      cells[k]={kind, hp, maxHp:hp, destroyed:false, flameT:0};
+    };
+    // (1) 最外周: 水堀(通過不可)。中央のみ空堀の渡河点(通過可・兵数減)
+    for (let c=0;c<HEX.cols;c++) set(c,12, (c>=mid-2 && c<=mid+2)?'drymoat':'moat');
+    // (2) 外郭: 城壁を横一文字に、中央に城門(破壊で通過)。両端寄りの土塁で側面を締める
+    for (let c=2;c<=HEX.cols-3;c++) set(c,10, c===mid?'gate':'wall');
+    set(3,9,'earthwork'); set(HEX.cols-4,9,'earthwork');
+    // (3) 二の丸の柵(破壊可)。中央は空けて城門からの導線を残す
+    for (let c=mid-3;c<=mid+3;c++) if (c!==mid) set(c,8,'palisade');
+    // (4) 本丸の石垣＋内門(破壊で通過)。天守を囲う
+    for (let c=mid-3;c<=mid+3;c++) set(c,4, c===mid?'gate':'stonewall');
+    for (let c=mid-3;c<=mid+3;c++) set(c,1,'stonewall');
+    set(mid-3,2,'stonewall'); set(mid+3,2,'stonewall'); set(mid-3,3,'stonewall'); set(mid+3,3,'stonewall');
+    // (5) 天守(占拠目標)
+    cells[mid+','+2]={kind:'keep', hp:0, maxHp:0, destroyed:false, flameT:0};
+    return cells;
+  }
+  isWall(c,r){ const cell=this.castleCells && this.castleCells[c+','+r]; return !!(cell && cell.kind==='wall'); }
+  // 通過可否。城壁/石垣/土塁/堀＝不可、城門/柵＝未破壊なら不可(破壊で可)、空堀/天守＝可。
   isCastleBlocked(c,r){
-    if (this.isWall(c,r)) return true;
-    const tile=this.castleTiles && this.castleTiles[c+','+r];
-    if (!tile) return false;
-    const asset=tile.baseAsset||tile.asset;
-    return !tile.destroyed && ['castleMoat','castleMoatCorner','castleDryMoat','castleDryMoatCorner','castlePalisade','castlePalisadeCorner'].includes(asset);
+    const cell=this.castleCells && this.castleCells[c+','+r];
+    if (!cell) return false;
+    if (cell.kind==='drymoat' || cell.kind==='keep') return false;
+    if (cell.kind==='gate' || cell.kind==='palisade') return !cell.destroyed;
+    return true; // wall / stonewall / earthwork / moat
   }
   // 被弾演出: 対象スタックの位置にダメージ数値と火花を発生させ、被弾フラッシュを点ける
   _spawnHitFx(stack, dmg, ranged){
@@ -6299,9 +6340,7 @@ class BattleScene extends GameKit.Scene {
     for (let i=this.floaters.length-1;i>=0;i--){ const f=this.floaters[i]; f.y+=f.vy*dt; f.vy*=0.92; f.life-=dt*1.4; if (f.life<=0) this.floaters.splice(i,1); }
     for (let i=this.sparks.length-1;i>=0;i--){ const s=this.sparks[i]; s.x+=s.vx*dt; s.y+=s.vy*dt; s.vy+=G*dt; s.life-=dt; if (s.life<=0) this.sparks.splice(i,1); }
     this.stacks.forEach(s=>{ if (s._hitT>0) s._hitT-=dt; });
-    Object.values(this.castleTiles||{}).forEach(tile=>{
-      if (tile.flameT>0){ tile.flameT=Math.max(0,tile.flameT-dt); if (Number.isFinite(tile.hp)){ tile.hp=Math.max(0,tile.hp-dt*8); if (tile.hp<=0) tile.destroyed=true; } }
-    });
+    Object.values(this.castleCells||{}).forEach(cell=>{ if (cell.flameT>0) cell.flameT=Math.max(0,cell.flameT-dt); });
   }
   _drawFx(ctx){
     ctx.save();
@@ -6336,7 +6375,7 @@ class BattleScene extends GameKit.Scene {
     const gens=(force.generals||[]).slice().sort((a,b)=>{ const ga=DATA.genById[a],gb=DATA.genById[b]; return (gb?gb.stats.tou+gb.stats.bu:0)-(ga?ga.stats.tou+ga.stats.bu:0); });
     const sized=types.map(t=>({t,n:Math.max(1,Math.round(total*comp[t]))})).sort((a,b)=>b.n-a.n);
     let gi=0; const siegeDef=isDef&&this.battleType==='siege';
-    const baseRow=siegeDef?4:(isDef?0:HEX.rows-1), row2=siegeDef?5:(isDef?1:HEX.rows-2);
+    const baseRow=siegeDef?6:(isDef?0:HEX.rows-1), row2=siegeDef?7:(isDef?1:HEX.rows-2);
     sized.forEach((s,idx)=>{
       const gid=gi<gens.length?gens[gi++]:null, gstat=gid?DATA.genById[gid].stats:{tou:48,bu:48,chi:48,sei:48};
       const col=2+idx*2,row=idx%2===0?baseRow:row2;
@@ -6378,13 +6417,13 @@ class BattleScene extends GameKit.Scene {
       const sel=this.selected;
       // 攻撃対象か（敵側スタック）
       if (s && s.side===this.aiSide && this.targets[c+','+r]){ this._attack(game, sel, s); return; }
-      // 攻城戦: 射程内の城壁を攻撃
-      if (this.siege && !s && this.objectTargets && this.objectTargets[c+','+r]){ this._attackCastleObject(game, sel, c, r); return; }
-      if (this.siege && !s && this.wallTargets && this.wallTargets[c+','+r]){ this._attackWall(game, sel, c, r); return; }
+      // 攻城戦: 射程内の破壊可能な防御物(城門・柵)を攻撃
+      if (this.siege && !s && this.wallTargets && this.wallTargets[c+','+r]){ this._attackBarrier(game, sel, c, r); return; }
       // 移動先か
       if (!s && this.reach[c+','+r]!==undefined && !sel.hasMoved){
         sel.col=c; sel.row=r; sel.hasMoved=true;
         game.audio.beep(420,0.05,'sine');
+        this._applyDryMoatCross(game, sel, c, r); // 空堀を渡ると兵数減
         if (this._checkKeep(game)) return; // 天守を制圧したら決着
         this._computeRange(sel);
         return;
@@ -6405,22 +6444,12 @@ class BattleScene extends GameKit.Scene {
       this.stacks.filter(e=>e.side!==s.side).forEach(e=>{
         if (hexDist(s.col,s.row,e.col,e.row)<=range) this.targets[e.col+','+e.row]=true;
       });
-      // 攻城戦: 射程内の城壁を攻撃対象に（破って侵入路をつくる）
+      // 攻城戦: 射程内の破壊可能な防御物(城門・柵)を攻撃対象に（破って侵入路をつくる）
       if (this.siege && s.side==='atk'){
-        for (const k in this.walls){ const w=this.walls[k]; if (w.hp<=0) continue;
-          const [wc,wr]=k.split(',').map(Number);
-          if (hexDist(s.col,s.row,wc,wr)<=range) this.wallTargets[k]=true;
-        }
-      }
-
-      if (this.siege && s.side==='atk'){
-        for (const k in this.castleTiles||{}){
-          const tile=this.castleTiles[k]; if (!tile || tile.destroyed) continue;
-          const base=tile.baseAsset||tile.asset; if (!Number.isFinite(tile.hp)) continue;
-          const canTarget= s.type==='cannon' || (s.type==='bow' && s._fireArrowReady && castleObjectCanBurn(base));
-          if (!canTarget) continue;
-          const [oc,or]=k.split(',').map(Number);
-          if (hexDist(s.col,s.row,oc,or)<=range) this.objectTargets[k]=true;
+        for (const k in this.castleCells){ const cell=this.castleCells[k]; if (!cell || cell.destroyed) continue;
+          if (cell.kind!=='gate' && cell.kind!=='palisade') continue;
+          const [bc,br]=k.split(',').map(Number);
+          if (hexDist(s.col,s.row,bc,br)<=range) this.wallTargets[k]=true;
         }
       }
     }
@@ -6436,6 +6465,8 @@ class BattleScene extends GameKit.Scene {
       if (cd>dist[cc+','+cr]) continue;
       // ZOC: 敵隣接hexからは更に進めない（このhexには入れる）
       if ((cc!==s.col||cr!==s.row) && enemyAdj(cc,cr)) continue;
+      // 空堀に入ったらそのターンは渡り切れない（マス上で停止＝渡河の兵数減が確実に発生）
+      if ((cc!==s.col||cr!==s.row) && this.castleCells && this.castleCells[cc+','+cr] && this.castleCells[cc+','+cr].kind==='drymoat') continue;
       hexNeighbors(cc,cr).forEach(([nc,nr])=>{
         const occ=this.stackAt(nc,nr); if (occ) return;
         if (this.isCastleBlocked(nc,nr)) return; // 蝓主｣√・蝣繝ｻ遨ｺ蝣繝ｻ譟ｵ縺ｯ萓ｵ蜈･荳榊庄
@@ -6475,43 +6506,36 @@ class BattleScene extends GameKit.Scene {
     this.selected=null; this.reach={}; this.targets={};
     this._checkBattleEnd(game);
   }
-  // 攻城戦: 城壁への攻撃（兵科で攻城力が異なる。破壊で侵入路が開く）
-  _attackCastleObject(game, atk, c, r){
-    const key=c+','+r, tile=this.castleTiles[key];
-    if (!tile || tile.destroyed || !Number.isFinite(tile.hp)) return;
-    if (atk.type!=='cannon' && !(atk.type==='bow' && atk._fireArrowReady)) return;
-    const dmg=atk.type==='cannon' ? Math.max(1,220+Math.round(atk.count*0.22)) : Math.max(1,Math.round(Math.min(atk.count,1800)*0.11));
-    tile.hp=Math.max(0,tile.hp-dmg); tile.flameT=3.2;
-    if (this.walls[key]) this.walls[key].hp=tile.hp;
-    if (atk.type==='bow') atk._fireArrowReady=false;
-    atk.hasAttacked=true; atk.hasMoved=true;
+  // 空堀を渡る攻撃部隊は兵数が減る（渡河の損害）
+  _applyDryMoatCross(game, s, c, r){
+    if (!this.siege || s.side!=='atk') return;
+    const cell=this.castleCells && this.castleCells[c+','+r];
+    if (!cell || cell.kind!=='drymoat') return;
+    const loss=Math.max(1, Math.round(s.count*0.10));
+    s.count=Math.max(1, s.count-loss);
     const [x,y]=hexCenter(c,r);
-    this.floaters.push({x,y:y-HEX.size*0.3,vy:-58,life:1.0,text:'-'+dmg,color:'#fb923c',size:30});
-    for(let i=0;i<14;i++){ const a=Math.random()*Math.PI*2,sp=80+Math.random()*180; this.sparks.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-40,life:0.35+Math.random()*0.35,color:Math.random()<0.5?'#fb923c':'#facc15',r:2+Math.random()*3}); }
-    if (tile.hp<=0){ tile.destroyed=true; this._flash('\u57ce\u90ed\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3092\u7834\u58ca / Castle object destroyed'); }
-    else this._flash('\u706b\u77e2\u30fb\u5927\u7832\u304c\u547d\u4e2d / '+dmg+' HP');
-    game.audio.noise(0.24,0.28);
-    this.selected=null; this.reach={}; this.targets={}; this.wallTargets={}; this.objectTargets={};
+    this.floaters.push({x, y:y-HEX.size*0.3, vy:-58, life:1.0, text:'-'+loss, color:'#fca5a5', size:28});
+    this._flash('\u7a7a\u5800\u3092\u6e21\u6cb3  \u5175-'+loss+' / Crossing the dry moat');
+    if (game && game.audio) game.audio.noise(0.16,0.18);
   }
-  _attackWall(game, atk, c, r){
-    const w=this.walls[c+','+r]; if (!w || w.hp<=0) return;
-    // 大筒は攻城専用の強力な砲撃（射程3・兵数に依らずまとまった耐久を削る）
+  // 攻城戦: 破壊可能な防御物(城門・柵)への攻撃。耐久0で破壊＝通過可能になる。城壁/石垣/土塁/堀は破壊不可。
+  _attackBarrier(game, atk, c, r){
+    const cell=this.castleCells && this.castleCells[c+','+r];
+    if (!cell || cell.destroyed || !(cell.kind==='gate'||cell.kind==='palisade')) return;
     let dmg;
     if (atk.type==='cannon'){ dmg=Math.max(1, 200 + Math.round(atk.count*0.25)); }
     else {
-      const f={spear:1.0, cavalry:0.5, bow:0.7, gun:1.35}[atk.type] || 1.0;
-      // 城壁ダメージは兵数に上限を設ける（大軍でも一撃では崩せない＝数ラウンドの攻城）
+      const f={spear:1.0, cavalry:0.6, bow:0.7, gun:1.35}[atk.type] || 1.0;
       dmg=Math.max(1, Math.round(Math.min(atk.count,2200)*0.14*f));
     }
-    w.hp=Math.max(0, w.hp-dmg);
-    const wallTile=this.castleTiles[c+','+r]; if (wallTile){ wallTile.hp=w.hp; if (w.hp<=0) wallTile.destroyed=true; }
+    cell.hp=Math.max(0, cell.hp-dmg); cell.flameT=2.6;
     atk.hasAttacked=true; atk.hasMoved=true;
     game.audio.noise(0.2,0.24);
-    const [x,y]=hexCenter(c,r);
+    const [x,y]=hexCenter(c,r); const label=cell.kind==='gate'?'\u57ce\u9580':'\u67f5';
     this.floaters.push({x, y:y-HEX.size*0.3, vy:-58, life:1.0, text:'-'+dmg, color:'#fcd34d', size:30});
-    for (let i=0;i<12;i++){ const a=Math.random()*Math.PI*2, sp=80+Math.random()*180; this.sparks.push({x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-30, life:0.3+Math.random()*0.3, color:Math.random()<0.5?'#cbd5e1':'#a8a29e', r:2+Math.random()*3}); }
-    if (w.hp<=0){ this._flash((w.gate?'\u57ce\u9580':'\u57ce\u58c1')+'\u3092\u7a81\u7834\u3057\u305f / Breach!'); game.audio.jingle([{f:392,d:0.1},{f:523,d:0.14}]); }
-    else this._flash((w.gate?'\u57ce\u9580':'\u57ce\u58c1')+'\u3092\u653b\u6483  \u8010\u4e45-'+dmg+'\uff08\u6b8b'+w.hp+'\uff09');
+    for (let i=0;i<12;i++){ const a=Math.random()*Math.PI*2, sp=80+Math.random()*180; this.sparks.push({x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-30, life:0.3+Math.random()*0.3, color:Math.random()<0.5?'#cbd5e1':'#a8752e', r:2+Math.random()*3}); }
+    if (cell.hp<=0){ cell.destroyed=true; this._flash(label+'\u3092\u7a81\u7834\u3057\u305f / Breach!'); game.audio.jingle([{f:392,d:0.1},{f:523,d:0.14}]); }
+    else this._flash(label+'\u3092\u653b\u6483  \u8010\u4e45-'+dmg+'\uff08\u6b8b'+cell.hp+'\uff09');
     this.selected=null; this.reach={}; this.targets={}; this.wallTargets={}; this.objectTargets={};
   }
   // 攻城戦: 攻撃側が天守を占拠したら勝利
@@ -6727,10 +6751,12 @@ class BattleScene extends GameKit.Scene {
     for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
       const key=c+','+r;
       const [x,y]=hexCenter(c,r);
-      const castleTile=this.castleTiles && this.castleTiles[key];
-      if (castleTile) this._drawCastleTile(ctx, castleTile, x, y);
+      const cell=this.castleCells && this.castleCells[key];
+      if (siege && cell) this._drawCastleCell(ctx, cell, x, y);
       if (this.reach[key]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
       if (this.targets[key]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
+      // 破壊可能な防御物(城門・柵)の攻撃対象ハイライト
+      if (siege && this.wallTargets && this.wallTargets[key]){ this._hexPath(ctx,x,y); ctx.save(); ctx.lineWidth=4; ctx.strokeStyle='rgba(251,191,36,0.9)'; ctx.stroke(); ctx.restore(); }
       // 攻城戦は城背景の上に映える明るめの枠線（内側に淡い陰影を敷いて可読性を確保）。野戦は従来の淡い枠。
       if (siege){
         this._hexPath(ctx,x,y);
@@ -6739,6 +6765,50 @@ class BattleScene extends GameKit.Scene {
       } else {
         ctx.lineWidth=1; ctx.strokeStyle='rgba(120,150,180,0.18)'; this._hexPath(ctx,x,y); ctx.stroke();
       }
+    }
+  }
+  // 攻城戦の戦術要素をヘックスマーカーで描画（城グラフィックの手前に控えめに重ねる）。
+  // 城壁/石垣/土塁=石色の縁、堀=青、空堀=乾いた破線、柵/城門=木色（破壊で破線）＋耐久バー。
+  _drawCastleCell(ctx, cell, x, y){
+    const k=cell.kind;
+    if (k==='keep') return; // 天守は_drawCastleで強調
+    ctx.save();
+    this._hexPath(ctx,x,y);
+    if (k==='moat'){
+      ctx.fillStyle='rgba(24,72,116,0.55)'; ctx.fill();
+      ctx.lineWidth=2; ctx.strokeStyle='rgba(120,190,230,0.5)'; ctx.stroke();
+    } else if (k==='drymoat'){
+      ctx.fillStyle='rgba(120,96,58,0.40)'; ctx.fill();
+      ctx.setLineDash([6,5]); ctx.lineWidth=2; ctx.strokeStyle='rgba(210,180,120,0.6)'; ctx.stroke(); ctx.setLineDash([]);
+    } else if (k==='wall' || k==='stonewall'){
+      ctx.fillStyle = k==='stonewall' ? 'rgba(96,92,86,0.48)' : 'rgba(80,86,96,0.48)'; ctx.fill();
+      ctx.lineWidth=4.5; ctx.strokeStyle = k==='stonewall' ? 'rgba(198,188,168,0.92)' : 'rgba(182,188,198,0.92)'; ctx.stroke();
+      ctx.lineWidth=1.5; ctx.strokeStyle='rgba(18,20,26,0.55)'; ctx.stroke();
+    } else if (k==='earthwork'){
+      ctx.fillStyle='rgba(120,96,56,0.5)'; ctx.fill();
+      ctx.lineWidth=4; ctx.strokeStyle='rgba(160,128,80,0.9)'; ctx.stroke();
+    } else if (k==='palisade' || k==='gate'){
+      if (cell.destroyed){
+        ctx.setLineDash([5,5]); ctx.lineWidth=2; ctx.strokeStyle='rgba(180,150,100,0.45)'; ctx.stroke(); ctx.setLineDash([]);
+      } else {
+        ctx.fillStyle = k==='gate' ? 'rgba(74,52,30,0.62)' : 'rgba(120,84,44,0.5)'; ctx.fill();
+        ctx.lineWidth = k==='gate'?4.5:3.2; ctx.strokeStyle = k==='gate'?'rgba(216,170,98,0.95)':'rgba(198,152,86,0.9)'; ctx.stroke();
+      }
+    }
+    ctx.restore();
+    if (k==='gate' && !cell.destroyed) T(ctx,'門',x,y,{size:24,weight:'bold',color:'#f2d18a',align:'center',baseline:'middle',shadow:true});
+    // 破壊可能物の耐久バー（損傷時のみ）
+    if ((k==='gate'||k==='palisade') && !cell.destroyed && cell.hp<cell.maxHp){
+      const bw=HEX.size*0.7, bx=x-bw/2, by=y+HEX.size*0.42;
+      ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(bx,by,bw,5);
+      ctx.fillStyle=cell.flameT>0?'#fb923c':'#a7f3d0'; ctx.fillRect(bx,by,bw*Math.max(0,cell.hp/cell.maxHp),5);
+    }
+    if (cell.flameT>0){
+      const pulse=0.7+Math.sin(this.t*14+x)*0.2;
+      ctx.save(); ctx.globalAlpha=Math.min(0.85,cell.flameT/2.6)*pulse;
+      ctx.fillStyle='#f97316'; ctx.beginPath(); ctx.ellipse(x-6,y-6,7,13,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#fde047'; ctx.beginPath(); ctx.ellipse(x+6,y-11,5,9,0,0,Math.PI*2); ctx.fill();
+      ctx.restore();
     }
   }
   _terrainLayer(){
@@ -6799,24 +6869,11 @@ class BattleScene extends GameKit.Scene {
     ctx.closePath();
   }
   _drawCastle(ctx){
-    if (!this.siege) return;
-    for (const key in this.walls){
-      const wall=this.walls[key], [col,row]=key.split(',').map(Number), [x,y]=hexCenter(col,row);
-      if (wall.hp<=0){ this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(70,58,44,0.28)'; ctx.fill(); ctx.setLineDash([5,4]); ctx.lineWidth=2; ctx.strokeStyle='rgba(226,183,110,0.48)'; ctx.stroke(); ctx.restore(); }
-      // 城壁HPバーも損傷時のみ（無傷の城壁は背景グラフィックのまま綺麗に見せる）。
-      if (wall.hp<wall.max){
-        const bw=HEX.size*0.78, bx=x-bw/2, by=y+HEX.size*0.36;
-        ctx.fillStyle='rgba(0,0,0,0.58)'; ctx.fillRect(bx,by,bw,5);
-        ctx.fillStyle = wall.gate?'rgba(120,90,50,0.95)':'rgba(88,94,102,0.95)'; ctx.fillRect(bx,by,bw*Math.max(0,wall.hp/wall.maxHp),5);
-      }
-      if (this.wallTargets && this.wallTargets[key]){ this._hexPath(ctx,x,y); ctx.save(); ctx.lineWidth=4; ctx.strokeStyle='rgba(251,191,36,0.92)'; ctx.stroke(); ctx.restore(); }
-    }
-    if (this.keepHex){
-      const [x,y]=hexCenter(this.keepHex[0], this.keepHex[1]);
-      this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(180,140,60,0.32)'; ctx.fill(); ctx.lineWidth=3.5; ctx.strokeStyle='#e8c07a'; ctx.stroke(); ctx.restore();
-      // 城壁を廃止したため占拠目標（天守）をラベルで明示する。
-      T(ctx,'天守',x,y-HEX.size*0.66,{size:22,weight:'bold',color:'#f6d58a',align:'center',baseline:'middle',shadow:true});
-    }
+    if (!this.siege || !this.keepHex) return;
+    // 防御物(城壁/堀/柵/城門)は_drawCastleCellで描画。ここでは占拠目標＝天守のみ強調する。
+    const [x,y]=hexCenter(this.keepHex[0], this.keepHex[1]);
+    this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(180,140,60,0.34)'; ctx.fill(); ctx.lineWidth=3.5; ctx.strokeStyle='#e8c07a'; ctx.stroke(); ctx.restore();
+    T(ctx,'天守',x,y-HEX.size*0.66,{size:22,weight:'bold',color:'#f6d58a',align:'center',baseline:'middle',shadow:true});
   }
   _drawStacks(ctx){
     this.stacks.forEach(s=>{
