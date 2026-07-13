@@ -17,8 +17,11 @@ if [ -z "$PROFILES" ]; then ok "混入なし"; else
   while IFS= read -r p; do [ -n "$p" ] && note_fail "プロファイル混入: $p（削除または .gitignore へ）"; done <<< "$PROFILES"
 fi
 
-echo "== 2. console.log の追加行（git diff HEAD） =="
-LOGS=$(git diff HEAD --unified=0 -- '*.html' '*.js' 2>/dev/null | grep -E '^\+[^+].*console\.log' | head -10 || true)
+echo "== 2. console.log の追加行（git diff HEAD、scripts/ 除外） =="
+# scripts/ はCLIツール（実行ログが仕様）のため対象外（ADR 0013, 2026-07-13 深澤承認）
+# 注: 「^\+[^+].*パターン」の1段regexは行頭直書き（+console.log…）を取りこぼすため、+++ヘッダ除外を分離する。
+#     除外側は必ず -E で書く（BREだと \+ がGNU拡張の量指定子になり全行除外される罠）
+LOGS=$(git diff HEAD --unified=0 -- '*.html' '*.js' ':(exclude)scripts/**' 2>/dev/null | grep -E '^\+' | grep -Ev '^\+\+\+' | grep 'console\.log' | head -10 || true)
 if [ -z "$LOGS" ]; then ok "追加なし"; else
   while IFS= read -r l; do [ -n "$l" ] && note_fail "console.log残り: ${l:0:100}"; done <<< "$LOGS"
 fi

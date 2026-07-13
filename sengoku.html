@@ -2740,12 +2740,15 @@ function drawGeneralPortrait(ctx, gid, x, y, size, opts={}){
   ctx.beginPath(); ctx.roundRect(x, y, size, size, radius); ctx.stroke();
 }
 
-function drawKamon(ctx, clanId, x, y, size, fallbackColor='#64748b'){
-  const slot = RELIGIOUS_KAMON_SLOT[clanId] || REDRAW_SIX_KAMON_SLOT[clanId] || REDRAW_KAMON_SLOT[clanId] || REGIONAL_KAMON_SLOT[clanId] || EXTRA_CENTRAL_KAMON_SLOT[clanId] || EXTRA_WEST_KAMON_SLOT[clanId] || EXTRA_KAMON_SLOT[clanId] || KAMON_SLOT[clanId];
+function kamonSlotFor(clanId){
+  return RELIGIOUS_KAMON_SLOT[clanId] || REDRAW_SIX_KAMON_SLOT[clanId] || REDRAW_KAMON_SLOT[clanId] || REGIONAL_KAMON_SLOT[clanId] || EXTRA_CENTRAL_KAMON_SLOT[clanId] || EXTRA_WEST_KAMON_SLOT[clanId] || EXTRA_KAMON_SLOT[clanId] || KAMON_SLOT[clanId];
+}
+function drawKamon(ctx, clanId, x, y, size, fallbackColor='#64748b', shadow=null){
+  const slot = kamonSlotFor(clanId);
   const img = slot ? ASSETS.img[slot.img || 'kamon'] : null;
   const cx=x+size/2, cy=y+size/2;
   ctx.save();
-  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=4; ctx.shadowOffsetY=2;
+  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=shadow?shadow.blur:4; ctx.shadowOffsetY=shadow?shadow.offsetY:2;
   ctx.fillStyle=fallbackColor || '#64748b';
   ctx.beginPath(); ctx.arc(cx, cy, size/2, 0, Math.PI*2); ctx.fill();
   ctx.shadowColor='transparent';
@@ -2770,10 +2773,39 @@ function drawKamon(ctx, clanId, x, y, size, fallbackColor='#64748b'){
   ctx.lineWidth=Math.max(1,size*0.045); ctx.strokeStyle='rgba(3,7,14,0.82)'; ctx.beginPath(); ctx.arc(cx,cy,size/2,0,Math.PI*2); ctx.stroke();
   ctx.restore();
 }
-function drawCastleIcon(ctx, x, y, size, color){
+// マップ用の家紋スプライトキャッシュ（Cycle 7, attribution実測でdrawKamonがマップFPSの主犯と特定）:
+// 毎フレームの shadowBlur・radialGradient生成・clip・3重ストロークを、clanId×色ごとに一度だけ
+// オフスクリーンへ描いて以降は drawImage 1回に置換する。LABEL_ZOOM_CLAMP=4.0 により画面上の
+// 家紋サイズに上限（世界15px×4×縦1.5=最大90px、寺社22pxで132px）があるため、144px固定解像度で
+// 高ズームでもボケない（「ズーム変換配下のビットマップ化の罠」はサイズ非有界の場合の話）。
+// 画面固定UI（大名パネルの112px家紋）は従来どおりライブ描画（drawKamon直呼び）で忠実度を保つ。
+const KAMON_SPRITE = { size:144, pad:36, cache:new Map() };
+function kamonMapSprite(clanId, color){
+  const key = clanId + '|' + color;
+  const hit = KAMON_SPRITE.cache.get(key);
+  if (hit) return hit;
+  const slot = kamonSlotFor(clanId);
+  const img = slot ? ASSETS.img[slot.img || 'kamon'] : null;
+  if (slot && !(img && (img.naturalWidth || img.width))) return null;  // アトラス遅延ロード中は生成しない
+  const S = KAMON_SPRITE.size, P = KAMON_SPRITE.pad;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S + P*2;
+  // 影はライブ描画だとデバイス座標系の固定4px（ズーム非依存）。スプライトではワールドに焼き込まれる
+  // ため、既定ズーム2.4・世界サイズ15pxでの見た目（画面4px相当）に合わせて比例値へ換算する。
+  drawKamon(cv.getContext('2d'), clanId, P, P, S, color, {blur:16, offsetY:8});
+  KAMON_SPRITE.cache.set(key, cv);
+  return cv;
+}
+function drawKamonMap(ctx, clanId, x, y, size, color){
+  const spr = kamonMapSprite(clanId, color);
+  if (!spr){ drawKamon(ctx, clanId, x, y, size, color); return; }  // ロード待ちの間はライブ描画
+  const k = size / KAMON_SPRITE.size;
+  ctx.drawImage(spr, x - KAMON_SPRITE.pad*k, y - KAMON_SPRITE.pad*k, spr.width*k, spr.height*k);
+}
+function drawCastleIcon(ctx, x, y, size, color, shadow=null){
   ctx.save();
   ctx.translate(x, y);
-  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=5; ctx.shadowOffsetY=3;
+  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=shadow?shadow.blur:5; ctx.shadowOffsetY=shadow?shadow.offsetY:3;
   ctx.fillStyle='rgba(10,14,20,0.92)';
   ctx.beginPath(); ctx.moveTo(-size*0.55,size*0.30); ctx.lineTo(0,-size*0.10); ctx.lineTo(size*0.55,size*0.30); ctx.closePath(); ctx.fill();
   ctx.fillStyle='rgba(226,232,240,0.86)';
@@ -2784,6 +2816,64 @@ function drawCastleIcon(ctx, x, y, size, color){
   ctx.beginPath(); ctx.moveTo(-size*0.30,-size*0.24); ctx.lineTo(0,-size*0.55); ctx.lineTo(size*0.30,-size*0.24); ctx.closePath(); ctx.fill();
   ctx.strokeStyle='rgba(2,6,23,0.7)'; ctx.lineWidth=1; ctx.strokeRect(-size*0.34,-size*0.04,size*0.68,size*0.38);
   ctx.restore();
+}
+// 城マーカー（城アイコン＋家紋）の統合スプライト（Cycle 8）: 両方 clanId×色 でキー化できるため
+// 1枚に焼き込み、城ごとの描画を drawImage 2回→1回に。相対配置は _drawCastleLayer のライブ描画
+// （アイコン中心に家紋15pxを重ねる・描画順もアイコン→家紋）を厳密に踏襲する。
+const MARKER_SPRITE = { cache:new Map() };
+function castleMarkerSprite(clanId, color){
+  const key = clanId + '|' + color;
+  const hit = MARKER_SPRITE.cache.get(key);
+  if (hit) return hit;
+  const slot = kamonSlotFor(clanId);
+  const img = slot ? ASSETS.img[slot.img || 'kamon'] : null;
+  if (slot && !(img && (img.naturalWidth || img.width))) return null;  // アトラス遅延ロード中は生成しない
+  const S = KAMON_SPRITE.size, P = KAMON_SPRITE.pad, k = S/15;  // 家紋世界15px基準のスケール
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S + P*2;
+  const c = cv.getContext('2d');
+  const ctr = P + S/2;  // アイコン中心＝家紋中心
+  drawCastleIcon(c, ctr, ctr, 13*k, color, {blur:5*k/2.4, offsetY:3*k/2.4});  // 影は既定ズーム2.4相当へ比例換算
+  drawKamon(c, clanId, P, P, S, color, {blur:16, offsetY:8});
+  MARKER_SPRITE.cache.set(key, cv);
+  return cv;
+}
+function drawCastleMarker(ctx, clanId, x, y, color){  // (x,y)=アイコン中心（ワールド座標）
+  const spr = castleMarkerSprite(clanId, color);
+  if (!spr){  // ロード待ちの間はライブ描画（従来と同一の呼び出し）
+    drawCastleIcon(ctx, x, y, 13, color);
+    drawKamonMap(ctx, clanId, x-7.5, y-7.5, 15, color);
+    return;
+  }
+  const kk = 15/KAMON_SPRITE.size;
+  const off = (KAMON_SPRITE.pad + KAMON_SPRITE.size/2) * kk;
+  ctx.drawImage(spr, x-off, y-off, spr.width*kk, spr.height*kk);
+}
+// 縦書きラベルのスプライトキャッシュ（Cycle 8）: drawVerticalLabel は影を使わない
+// （ずらし重ね描きのみ）＝純粋に変換スケールで再現できるため、テキスト×スタイルごとに
+// クランプ上限解像度（x4・y6=ズーム4×縦1.5）で一度だけ焼き、以降は drawImage 1回。
+const LABEL_SPRITE = { sx:4, sy:6, margin:4, cache:new Map() };
+function verticalLabelSprite(text, opts){
+  const key = text+'|'+(opts.size||11)+'|'+(opts.gap||11)+'|'+(opts.fill||'')+'|'+(opts.stroke||'')+'|'+(opts.color||'')+'|'+(opts.weight||'');
+  const hit = LABEL_SPRITE.cache.get(key);
+  if (hit) return hit;
+  if (LABEL_SPRITE.cache.size > 512) LABEL_SPRITE.cache.clear();  // 編集で名前/色が変わり続けた場合の安全弁
+  const chars = Array.from(text||''), size = opts.size||11, gap = opts.gap||11, pad = 3;
+  const h = Math.max(18, chars.length*gap + pad*2);
+  const m = LABEL_SPRITE.margin;
+  const w0 = size + pad*2 + m*2, h0 = h + m*2;  // ワールド座標での箱＋マージン
+  const cv = document.createElement('canvas');
+  cv.width = Math.ceil(w0*LABEL_SPRITE.sx); cv.height = Math.ceil(h0*LABEL_SPRITE.sy);
+  const c = cv.getContext('2d');
+  c.scale(LABEL_SPRITE.sx, LABEL_SPRITE.sy);
+  drawVerticalLabel(c, text, w0/2, pad+m, opts);  // アンカー（x=中心, y=箱上端）がマージン内に収まる位置
+  const spr = { cv, ax:w0/2, ay:pad+m, w:w0, h:h0 };
+  LABEL_SPRITE.cache.set(key, spr);
+  return spr;
+}
+function drawVerticalLabelCached(ctx, text, x, y, opts={}){
+  const spr = verticalLabelSprite(text, opts);
+  ctx.drawImage(spr.cv, x-spr.ax, y-spr.ay, spr.w, spr.h);
 }
 function drawVerticalLabel(ctx, text, x, y, opts={}){
   const chars = Array.from(text || '');
@@ -5286,13 +5376,45 @@ class MapScene extends GameKit.Scene {
   _drawMap(ctx){
     ctx.save();
     ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
+    this._drawTerrainScreenCached(ctx);
     ctx.save();
     this._camApply(ctx);
-    drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
     this._drawCastleLayer(ctx);
     this._drawCastleEditHints(ctx);
     ctx.restore();
     ctx.restore();
+  }
+  // 地形のスクリーン座標二次キャッシュ（Cycle 9, attributionで拡縮ブリットがz2.4最大コストと特定）:
+  // 地形はワールド不変（Cycle4のワールド解像度オフスクリーン）だが、毎フレームのカメラ変換つき
+  // drawImage（高コストな拡縮リサンプリング）が残っていた。カメラが静止していれば画面上も不変
+  // なので、静止1フレーム後にスクリーン解像度へ一度だけ変換結果を焼き、以降は等倍コピー1回にする。
+  // カメラ移動/ズーム中は従来のライブ描画（同一経路）のため、パン・ズーム時の性能・見た目は不変。
+  _drawTerrainScreenCached(ctx){
+    const c=this.cam;
+    const mapReady=(ASSETS.img.map && (ASSETS.img.map.naturalWidth||ASSETS.img.map.width))?1:0;
+    const key=c.zoom+'|'+c.cx+'|'+c.cy+'|'+mapReady;
+    if (key===this._terrScreenKey){
+      if (!this._terrScreenValid){
+        const cv=this._terrScreenCanvas || (this._terrScreenCanvas=document.createElement('canvas'));
+        const w=Math.ceil(MAP.clip.w), h=Math.ceil(MAP.clip.h);
+        if (cv.width!==w || cv.height!==h){ cv.width=w; cv.height=h; }
+        const sc=cv.getContext('2d');
+        sc.save();
+        sc.clearRect(0,0,cv.width,cv.height);
+        sc.translate(-MAP.clip.x, -MAP.clip.y);
+        this._camApply(sc);
+        drawTerrainBackdrop(sc, ASSETS.img.map, this.t);
+        sc.restore();
+        this._terrScreenValid=true;
+      }
+      ctx.drawImage(this._terrScreenCanvas, MAP.clip.x, MAP.clip.y);
+    } else {
+      ctx.save();
+      this._camApply(ctx);
+      drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
+      ctx.restore();
+      this._terrScreenKey=key; this._terrScreenValid=false;
+    }
   }
   _drawCastleLayer(ctx){
     // 城レイヤーのラベル配置はワールド座標系（カメラ変換はctx側）で計算されるため、
@@ -5300,7 +5422,12 @@ class MapScene extends GameKit.Scene {
     // 高コストな配置探索（海判定サンプリング×候補×全洲）を毎フレーム再計算していたのを、
     // 変化検知でメモ化して描画のみ毎フレーム行う（マップFPSのボトルネック解消）。
     const items = this._castleLayoutItems();
-    const labelSize=7, gap=7, iconSize=13;
+    const labelSize=7, gap=7;  // 城アイコン13px・家紋15pxは drawCastleMarker のスプライトへ焼き込み済み（Cycle 8）
+    // 高ズームでのラベル/家紋/アイコンの巨大化・重畳を抑える上限クランプ（深澤承認 2026-07-13）:
+    // zoom<=LABEL_ZOOM_CLAMP までは地図と一体で拡大し、超えたら画面上サイズを頭打ちにする。
+    // 各城のアンカー（ワールド座標）を基点に逆スケールするため、位置は地図に追従したまま。
+    const LABEL_ZOOM_CLAMP=4.0;
+    const lscale=Math.min(1, LABEL_ZOOM_CLAMP/this.cam.zoom);
     // ビューフラスタムカリング: 画面外の城は描画をスキップ（特に高ズーム時、106洲中の可視分のみ描く）。
     // レイアウトはカメラ非依存でキャッシュ済みのため、カリングは毎フレームこのカメラに対して安全に判定する。
     const tl=this._screenToWorld(MAP.clip.x, MAP.clip.y);
@@ -5310,17 +5437,20 @@ class MapScene extends GameKit.Scene {
     const vy0=Math.min(tl.y,br.y)-m, vy1=Math.max(tl.y,br.y)+m;
     for (const it of items){
       if (it.cx<vx0 || it.cx>vx1 || it.cy<vy0 || it.cy>vy1) continue;
-      drawCastleIcon(ctx, it.cx-5, it.cy+9, iconSize, it.color);
-      drawKamon(ctx, it.ddId, it.crestX, it.crestY, it.crestSize, it.color);
-      drawVerticalLabel(ctx, it.name, it.nx, it.ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
+      if (lscale<1){ ctx.save(); ctx.translate(it.cx, it.cy); ctx.scale(lscale, lscale); ctx.translate(-it.cx, -it.cy); }
+      drawCastleMarker(ctx, it.ddId, it.cx-5, it.cy+9, it.color);
+      drawVerticalLabelCached(ctx, it.name, it.nx, it.ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
+      if (lscale<1) ctx.restore();
     }
     // 寺社勢力は領地を奪わず、史跡位置に独立勢力マーカーとして表示する。
     for (const force of RELIGIOUS_FORCES){
       const [cx, cy] = religiousForcePoint(force);
       const crestId = force.id;
       const size = 22;
-      drawKamon(ctx, crestId, cx-size/2, cy-size/2, size, force.color);
-      drawVerticalLabel(ctx, force.nameJP, cx+15, cy-44, {size:8, gap:8, fill:'rgba(8,12,18,0.92)', stroke:force.color, color:'#fff7ed'});
+      if (lscale<1){ ctx.save(); ctx.translate(cx, cy); ctx.scale(lscale, lscale); ctx.translate(-cx, -cy); }
+      drawKamonMap(ctx, crestId, cx-size/2, cy-size/2, size, force.color);
+      drawVerticalLabelCached(ctx, force.nameJP, cx+15, cy-44, {size:8, gap:8, fill:'rgba(8,12,18,0.92)', stroke:force.color, color:'#fff7ed'});
+      if (lscale<1) ctx.restore();
     }
   }
   _castleLayoutItems(){

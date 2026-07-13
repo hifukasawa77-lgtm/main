@@ -33,6 +33,8 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0009-daily-hygiene-rule]] — Daily圧縮（recallコンテキスト節約）をsecond-brainスキルの書式ルールへ昇格
 - [[0010-skills-expansion]] — スキル一括拡充（8本→23本、監査スクリプト同梱型）
 - [[0011-mtime-free-file-selection]] — mtime依存のファイル選択を廃止（recall hook誤想起の修正）＋lint検査#7
+- [[0012-canvas-perf-patterns-promotion]] — Canvasパフォーマンス実証知見（メモ化/オフスクリーン合成/attribution）とOG画像知見をスキルへ昇格
+- [[0013-release-check-scripts-exclusion]] — release-check検査#2からscripts/を除外＋grep正規表現バグ2件（行頭直書き取りこぼし/BRE `\+` 量指定子）を修正
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
