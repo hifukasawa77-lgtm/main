@@ -5376,13 +5376,45 @@ class MapScene extends GameKit.Scene {
   _drawMap(ctx){
     ctx.save();
     ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
+    this._drawTerrainScreenCached(ctx);
     ctx.save();
     this._camApply(ctx);
-    drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
     this._drawCastleLayer(ctx);
     this._drawCastleEditHints(ctx);
     ctx.restore();
     ctx.restore();
+  }
+  // 地形のスクリーン座標二次キャッシュ（Cycle 9, attributionで拡縮ブリットがz2.4最大コストと特定）:
+  // 地形はワールド不変（Cycle4のワールド解像度オフスクリーン）だが、毎フレームのカメラ変換つき
+  // drawImage（高コストな拡縮リサンプリング）が残っていた。カメラが静止していれば画面上も不変
+  // なので、静止1フレーム後にスクリーン解像度へ一度だけ変換結果を焼き、以降は等倍コピー1回にする。
+  // カメラ移動/ズーム中は従来のライブ描画（同一経路）のため、パン・ズーム時の性能・見た目は不変。
+  _drawTerrainScreenCached(ctx){
+    const c=this.cam;
+    const mapReady=(ASSETS.img.map && (ASSETS.img.map.naturalWidth||ASSETS.img.map.width))?1:0;
+    const key=c.zoom+'|'+c.cx+'|'+c.cy+'|'+mapReady;
+    if (key===this._terrScreenKey){
+      if (!this._terrScreenValid){
+        const cv=this._terrScreenCanvas || (this._terrScreenCanvas=document.createElement('canvas'));
+        const w=Math.ceil(MAP.clip.w), h=Math.ceil(MAP.clip.h);
+        if (cv.width!==w || cv.height!==h){ cv.width=w; cv.height=h; }
+        const sc=cv.getContext('2d');
+        sc.save();
+        sc.clearRect(0,0,cv.width,cv.height);
+        sc.translate(-MAP.clip.x, -MAP.clip.y);
+        this._camApply(sc);
+        drawTerrainBackdrop(sc, ASSETS.img.map, this.t);
+        sc.restore();
+        this._terrScreenValid=true;
+      }
+      ctx.drawImage(this._terrScreenCanvas, MAP.clip.x, MAP.clip.y);
+    } else {
+      ctx.save();
+      this._camApply(ctx);
+      drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
+      ctx.restore();
+      this._terrScreenKey=key; this._terrScreenValid=false;
+    }
   }
   _drawCastleLayer(ctx){
     // 城レイヤーのラベル配置はワールド座標系（カメラ変換はctx側）で計算されるため、
