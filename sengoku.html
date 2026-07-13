@@ -2740,12 +2740,15 @@ function drawGeneralPortrait(ctx, gid, x, y, size, opts={}){
   ctx.beginPath(); ctx.roundRect(x, y, size, size, radius); ctx.stroke();
 }
 
-function drawKamon(ctx, clanId, x, y, size, fallbackColor='#64748b'){
-  const slot = RELIGIOUS_KAMON_SLOT[clanId] || REDRAW_SIX_KAMON_SLOT[clanId] || REDRAW_KAMON_SLOT[clanId] || REGIONAL_KAMON_SLOT[clanId] || EXTRA_CENTRAL_KAMON_SLOT[clanId] || EXTRA_WEST_KAMON_SLOT[clanId] || EXTRA_KAMON_SLOT[clanId] || KAMON_SLOT[clanId];
+function kamonSlotFor(clanId){
+  return RELIGIOUS_KAMON_SLOT[clanId] || REDRAW_SIX_KAMON_SLOT[clanId] || REDRAW_KAMON_SLOT[clanId] || REGIONAL_KAMON_SLOT[clanId] || EXTRA_CENTRAL_KAMON_SLOT[clanId] || EXTRA_WEST_KAMON_SLOT[clanId] || EXTRA_KAMON_SLOT[clanId] || KAMON_SLOT[clanId];
+}
+function drawKamon(ctx, clanId, x, y, size, fallbackColor='#64748b', shadow=null){
+  const slot = kamonSlotFor(clanId);
   const img = slot ? ASSETS.img[slot.img || 'kamon'] : null;
   const cx=x+size/2, cy=y+size/2;
   ctx.save();
-  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=4; ctx.shadowOffsetY=2;
+  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=shadow?shadow.blur:4; ctx.shadowOffsetY=shadow?shadow.offsetY:2;
   ctx.fillStyle=fallbackColor || '#64748b';
   ctx.beginPath(); ctx.arc(cx, cy, size/2, 0, Math.PI*2); ctx.fill();
   ctx.shadowColor='transparent';
@@ -2769,6 +2772,35 @@ function drawKamon(ctx, clanId, x, y, size, fallbackColor='#64748b'){
   ctx.lineWidth=Math.max(1,size*0.055); ctx.strokeStyle='rgba(255,255,255,0.82)'; ctx.beginPath(); ctx.arc(cx,cy,size/2-size*0.16,0,Math.PI*2); ctx.stroke();
   ctx.lineWidth=Math.max(1,size*0.045); ctx.strokeStyle='rgba(3,7,14,0.82)'; ctx.beginPath(); ctx.arc(cx,cy,size/2,0,Math.PI*2); ctx.stroke();
   ctx.restore();
+}
+// マップ用の家紋スプライトキャッシュ（Cycle 7, attribution実測でdrawKamonがマップFPSの主犯と特定）:
+// 毎フレームの shadowBlur・radialGradient生成・clip・3重ストロークを、clanId×色ごとに一度だけ
+// オフスクリーンへ描いて以降は drawImage 1回に置換する。LABEL_ZOOM_CLAMP=4.0 により画面上の
+// 家紋サイズに上限（世界15px×4×縦1.5=最大90px、寺社22pxで132px）があるため、144px固定解像度で
+// 高ズームでもボケない（「ズーム変換配下のビットマップ化の罠」はサイズ非有界の場合の話）。
+// 画面固定UI（大名パネルの112px家紋）は従来どおりライブ描画（drawKamon直呼び）で忠実度を保つ。
+const KAMON_SPRITE = { size:144, pad:36, cache:new Map() };
+function kamonMapSprite(clanId, color){
+  const key = clanId + '|' + color;
+  const hit = KAMON_SPRITE.cache.get(key);
+  if (hit) return hit;
+  const slot = kamonSlotFor(clanId);
+  const img = slot ? ASSETS.img[slot.img || 'kamon'] : null;
+  if (slot && !(img && (img.naturalWidth || img.width))) return null;  // アトラス遅延ロード中は生成しない
+  const S = KAMON_SPRITE.size, P = KAMON_SPRITE.pad;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S + P*2;
+  // 影はライブ描画だとデバイス座標系の固定4px（ズーム非依存）。スプライトではワールドに焼き込まれる
+  // ため、既定ズーム2.4・世界サイズ15pxでの見た目（画面4px相当）に合わせて比例値へ換算する。
+  drawKamon(cv.getContext('2d'), clanId, P, P, S, color, {blur:16, offsetY:8});
+  KAMON_SPRITE.cache.set(key, cv);
+  return cv;
+}
+function drawKamonMap(ctx, clanId, x, y, size, color){
+  const spr = kamonMapSprite(clanId, color);
+  if (!spr){ drawKamon(ctx, clanId, x, y, size, color); return; }  // ロード待ちの間はライブ描画
+  const k = size / KAMON_SPRITE.size;
+  ctx.drawImage(spr, x - KAMON_SPRITE.pad*k, y - KAMON_SPRITE.pad*k, spr.width*k, spr.height*k);
 }
 function drawCastleIcon(ctx, x, y, size, color){
   ctx.save();
@@ -5317,7 +5349,7 @@ class MapScene extends GameKit.Scene {
       if (it.cx<vx0 || it.cx>vx1 || it.cy<vy0 || it.cy>vy1) continue;
       if (lscale<1){ ctx.save(); ctx.translate(it.cx, it.cy); ctx.scale(lscale, lscale); ctx.translate(-it.cx, -it.cy); }
       drawCastleIcon(ctx, it.cx-5, it.cy+9, iconSize, it.color);
-      drawKamon(ctx, it.ddId, it.crestX, it.crestY, it.crestSize, it.color);
+      drawKamonMap(ctx, it.ddId, it.crestX, it.crestY, it.crestSize, it.color);
       drawVerticalLabel(ctx, it.name, it.nx, it.ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
       if (lscale<1) ctx.restore();
     }
@@ -5327,7 +5359,7 @@ class MapScene extends GameKit.Scene {
       const crestId = force.id;
       const size = 22;
       if (lscale<1){ ctx.save(); ctx.translate(cx, cy); ctx.scale(lscale, lscale); ctx.translate(-cx, -cy); }
-      drawKamon(ctx, crestId, cx-size/2, cy-size/2, size, force.color);
+      drawKamonMap(ctx, crestId, cx-size/2, cy-size/2, size, force.color);
       drawVerticalLabel(ctx, force.nameJP, cx+15, cy-44, {size:8, gap:8, fill:'rgba(8,12,18,0.92)', stroke:force.color, color:'#fff7ed'});
       if (lscale<1) ctx.restore();
     }
