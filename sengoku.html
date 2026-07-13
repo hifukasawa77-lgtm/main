@@ -6248,21 +6248,16 @@ class BattleScene extends GameKit.Scene {
   }
   // 攻城戦の攻撃側に大筒を1門配備（後列中央付近）
   _placeSiegeDefenders(){
-    if (!this.siege) return;
+    // 城郭スロット（櫓・曲輪等）は廃止。守将（最強＝武将持ち）を天守に据え、他の守備隊は
+    // _buildStacks の既定上段配置のまま城を守る。
+    if (!this.siege || !this.keepHex) return;
     const defenders=this.stacks.filter(s=>s.side==='def');
-    const slots=Object.entries(this.castleTiles||{}).filter(([,tile])=>['castleKeep','castleYagura','castleUmadashi','castleStonewall','castleEarthwork','castleKuruwa'].includes(tile.baseAsset||tile.asset)).map(([key,tile])=>({key,tile,col:Number(key.split(',')[0]),row:Number(key.split(',')[1])}));
-    if (!defenders.length || !slots.length) return;
-    const keep=slots.find(v=>(v.tile.baseAsset||v.tile.asset)==='castleKeep') || slots[0];
+    if (!defenders.length) return;
+    const [kc,kr]=this.keepHex;
     const leader=defenders.find(s=>s.gen) || defenders[0];
-    leader.col=keep.col; leader.row=keep.row; leader.castlePost='keep'; leader.castleSlot=keep.key; leader.highGround=false;
-    let seed=castleLayoutSeed(this.ctx.dstId,'defenders',this.castleLevel);
-    const rand=()=>{ seed=(Math.imul(seed,1664525)+1013904223)>>>0; return seed/4294967296; };
-    const pool=slots.filter(v=>v.key!==keep.key).sort(()=>rand()-0.5);
-    defenders.filter(s=>s!==leader).forEach((s,i)=>{
-      const slot=pool[i%Math.max(1,pool.length)]; if(!slot) return;
-      const asset=slot.tile.baseAsset||slot.tile.asset;
-      s.col=slot.col; s.row=slot.row; s.castlePost=asset==='castleYagura'?'yagura':asset==='castleUmadashi'?'umadashi':'highGround'; s.castleSlot=slot.key; s.highGround=s.castlePost==='highGround';
-    });
+    const occ=this.stackAt(kc,kr);
+    if (occ && occ!==leader){ occ.col=leader.col; occ.row=leader.row; }
+    leader.col=kc; leader.row=kr; leader.castlePost='keep';
   }
   _deploySiegeCannon(){
     let col=Math.floor(HEX.cols/2), row=HEX.rows-1;
@@ -6273,15 +6268,9 @@ class BattleScene extends GameKit.Scene {
     this.stacks.push({ id:'atkCannon', side:'atk', type:'cannon', count:400, count0:400, col, row, gen:null, name:'大筒隊', stat:{tou:42,bu:42,chi:42,sei:42}, hasMoved:false, hasAttacked:false, castle:0 });
   }
   _buildCastle(level){
+    // 城壁・城郭オブジェクトは全面廃止したため城壁HP管理は行わない。占拠目標＝天守を最上段中央に置く。
     this.walls={};
-    Object.entries(this.castleTiles||{}).forEach(([key,tile])=>{
-      if (!['castleWall','castleGate','castleWallCorner','castleStonewall','castleEarthwork'].includes(tile.baseAsset||tile.asset)) return;
-      const base=tile.baseAsset||tile.asset, gate=base==='castleGate', hp=gate ? 160+level*60 : 280+level*110;
-      tile.hp=hp; tile.maxHp=hp;
-      this.walls[key]={hp,max:hp,gate};
-    });
-    const keep=Object.entries(this.castleTiles||{}).find(([,tile])=>(tile.baseAsset||tile.asset)==='castleKeep');
-    this.keepHex=keep ? keep[0].split(',').map(Number) : [Math.floor(HEX.cols/2),Math.floor(HEX.rows/2)];
+    this.keepHex=[Math.floor(HEX.cols/2), 1];
     this.maxRounds=16;
   }
   isWall(c,r){ const w=this.walls[c+','+r]; return !!(w && w.hp>0); }
@@ -6322,15 +6311,9 @@ class BattleScene extends GameKit.Scene {
     ctx.restore();
   }
   _buildCastleTiles(){
-    if (this.battleType!=='siege') return {};
-    const tiles={}, source=this.castleLayout.length ? this.castleLayout : randomCastleLayout(this.ctx.dstId,this.castleType,this.castleLevel);
-    this.castleLayout=source;
-    source.forEach(item=>{
-      const col=Number(item.col), row=Number(item.row), asset=item.asset;
-      const oriented=orientedCastleAsset(asset,item.rotation), baseAsset=asset;
-      if (Number.isInteger(col)&&Number.isInteger(row)&&GPT_ASSETS[oriented]){ const maxHp=castleObjectMaxHp(baseAsset); tiles[col+','+row]={asset:oriented,baseAsset,scale:Number(item.scale)||0.86,alpha:Number(item.alpha)||1,rotation:ORIENTED_CASTLE_ASSETS[baseAsset]?0:(Number(item.rotation)||0),hp:maxHp,maxHp,flameT:0,elevation:['castleStonewall','castleEarthwork','castleKuruwa'].includes(baseAsset)?-10:0}; }
-    });
-    return tiles;
+    // 攻城戦の城郭オブジェクト（堀・城壁・門・櫓・曲輪など手前に重ねていたスプライト）は全面廃止。
+    // 城の造形は事前制作の城グラフィック（背景）で見せ、戦場はヘックスグリッド＋兵旗のみで構成する。
+    return {};
   }
   _genTerrain(baseTerrain){
     const rng=GameKit.Gen.rng((this.state.rng||1) ^ (this.ctx.dstId?this.ctx.dstId.length*97:7));
@@ -6831,6 +6814,8 @@ class BattleScene extends GameKit.Scene {
     if (this.keepHex){
       const [x,y]=hexCenter(this.keepHex[0], this.keepHex[1]);
       this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(180,140,60,0.32)'; ctx.fill(); ctx.lineWidth=3.5; ctx.strokeStyle='#e8c07a'; ctx.stroke(); ctx.restore();
+      // 城壁を廃止したため占拠目標（天守）をラベルで明示する。
+      T(ctx,'天守',x,y-HEX.size*0.66,{size:22,weight:'bold',color:'#f6d58a',align:'center',baseline:'middle',shadow:true});
     }
   }
   _drawStacks(ctx){
@@ -6864,8 +6849,8 @@ class BattleScene extends GameKit.Scene {
     T(ctx,daimyoDef(this.state,c.attacker.daimyo).nameJP+'  /  '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP:'\u7121\u6240\u5c5e'),36,116,{size:22,color:'#cbd5e1'});
     if(this.battleType==='siege'){
       T(ctx,castleTypeLabel(this.castleType)+'  '+castleSizeLabel(this.castleLevel),36,150,{size:20,color:'#f2c879'});
-      const intact=Object.values(this.walls).filter(w=>w.hp>0).length,total=Object.keys(this.walls).length;
-      T(ctx,'\u57ce\u58c1\u8010\u4e45 '+intact+'/'+total+'  /  '+castleTypeLabel(this.castleType),36,184,{size:20,weight:'bold',color:'#f6d58a'});
+      // \u57ce\u58c1\u306f\u5ec3\u6b62\u3057\u305f\u305f\u3081\u57ce\u58c1\u8010\u4e45\u3067\u306f\u306a\u304f\u5360\u62e0\u76ee\u6a19\uff08\u5929\u5b88\uff09\u3092\u660e\u793a\u3059\u308b\u3002
+      T(ctx,'\u76ee\u6a19: \u5929\u5b88\u3092\u5236\u5727 / Capture the keep',36,184,{size:20,weight:'bold',color:'#f6d58a'});
     }
     GameKit.UI.glassPanel(ctx,W-560,16,544,200,{radius:14,fill:'rgba(10,16,28,0.85)'});
     T(ctx,'\u5929\u5019 / '+(this.weather==='rain'?'\u96e8':'\u6674'),W-288,48,{size:22,color:this.weather==='rain'?'#7dd3fc':'#f2c879',align:'center'});
