@@ -6,6 +6,19 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self';">
 <meta name="description" content="戦国の野望 — 信長の野望風の戦国歴史シミュレーション。全国64洲をヘックス戦で攻め取る。1560/1568/1574の3シナリオ。Canvas + GameKit製。">
 <title>戦国の野望 | Sengoku no Yabou — 戦国シミュレーション</title>
+<link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/sengoku.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="戦国の野望 | Sengoku no Yabou">
+<meta property="og:description" content="信長の野望風の戦国歴史シミュレーション。全国64洲をヘックス戦で攻め取る。1560/1568/1574の3シナリオ。Canvas + GameKit製。">
+<meta property="og:url" content="https://hifukasawa77-lgtm.github.io/main/sengoku.html">
+<meta property="og:image" content="https://hifukasawa77-lgtm.github.io/main/assets/og/sengoku.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:site_name" content="hide_0001 Portfolio">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="戦国の野望 | Sengoku no Yabou">
+<meta name="twitter:description" content="信長の野望風の戦国歴史シミュレーション。全国64洲をヘックス戦で攻め取る。Canvas + GameKit製。">
+<meta name="twitter:image" content="https://hifukasawa77-lgtm.github.io/main/assets/og/sengoku.jpg">
 <style>
   :root { --bg:#05070d; --cyan:#22d3ee; --purple:#a78bfa; --text:#e2e8f0; }
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -1925,23 +1938,35 @@ function pointInLand(x, y){
     return pointInPoly(x, y, poly);
   });
 }
+// 地形背景（海グラデ＋地図画像＋暗幕オーバーレイ）は時間非依存で毎フレーム同一。
+// 毎フレームのグラデ生成＋大判画像の高品質リサンプルを避け、ワールド解像度のオフスクリーンへ
+// 一度だけ合成してブリットする（描画結果は不変。カメラ拡縮はブリット後のctx変換が担う）。
+let _terrainBackdropCanvas=null, _terrainBackdropKey='';
 function drawTerrainBackdrop(ctx, mapImg, t=0){
   const w=MAP.world;
+  if (mapImg && (mapImg.naturalWidth||mapImg.width)){
+    const key=(mapImg.src||'')+'|'+Math.round(w.w)+'x'+Math.round(w.h);
+    if (!_terrainBackdropCanvas || _terrainBackdropKey!==key){
+      const cw=Math.max(1,Math.ceil(w.w)), ch=Math.max(1,Math.ceil(w.h));
+      const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
+      const c=cv.getContext('2d');
+      const sea=c.createLinearGradient(0,0,cw,ch);
+      sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
+      c.fillStyle=sea; c.fillRect(0,0,cw,ch);
+      const iw=mapImg.naturalWidth||mapImg.width, ih=mapImg.naturalHeight||mapImg.height;
+      const scale=w.w/iw, dh=ih*scale, dy=(w.h-dh)/2;   // 横幅基準contain（左右クロップなし）
+      c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high';
+      c.drawImage(mapImg, 0, 0, iw, ih, 0, dy, w.w, dh);
+      c.fillStyle='rgba(3,7,14,0.08)'; c.fillRect(0,0,cw,ch);
+      _terrainBackdropCanvas=cv; _terrainBackdropKey=key;
+    }
+    ctx.drawImage(_terrainBackdropCanvas, w.x, w.y);
+    return;
+  }
+  // 地図画像未ロード時のフォールバック（海グラデのみ）
   const sea=ctx.createLinearGradient(w.x,w.y,w.x+w.w,w.y+w.h);
   sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
   ctx.fillStyle=sea; ctx.fillRect(w.x, w.y, w.w, w.h);
-  if (mapImg && (mapImg.naturalWidth||mapImg.width)){
-    const iw=mapImg.naturalWidth||mapImg.width, ih=mapImg.naturalHeight||mapImg.height;
-    // Width-driven contain: show full image horizontally, no left/right cropping
-    const scale=w.w/iw;
-    const dh=ih*scale;
-    const dy=w.y+(w.h-dh)/2;
-    ctx.save();
-    ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality='high';
-    ctx.drawImage(mapImg, 0, 0, iw, ih, w.x, dy, w.w, dh);
-    ctx.restore();
-  }
-  ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(w.x,w.y,w.w,w.h);
 }
 function drawCoastlineGuide(ctx){
   ctx.save();
@@ -4978,6 +5003,41 @@ class MapScene extends GameKit.Scene {
     ctx.restore();
   }
   _drawCastleLayer(ctx){
+    // 城レイヤーのラベル配置はワールド座標系（カメラ変換はctx側）で計算されるため、
+    // ズーム/パンでは変化しない。所有・選択・ホバー・ターンが変わらない限り毎フレーム同一。
+    // 高コストな配置探索（海判定サンプリング×候補×全洲）を毎フレーム再計算していたのを、
+    // 変化検知でメモ化して描画のみ毎フレーム行う（マップFPSのボトルネック解消）。
+    const items = this._castleLayoutItems();
+    const labelSize=7, gap=7, iconSize=13;
+    // ビューフラスタムカリング: 画面外の城は描画をスキップ（特に高ズーム時、106洲中の可視分のみ描く）。
+    // レイアウトはカメラ非依存でキャッシュ済みのため、カリングは毎フレームこのカメラに対して安全に判定する。
+    const tl=this._screenToWorld(MAP.clip.x, MAP.clip.y);
+    const br=this._screenToWorld(MAP.clip.x+MAP.clip.w, MAP.clip.y+MAP.clip.h);
+    const m=64;   // 城名ラベル・家紋の広がりを見込んだ余白（ワールド座標）
+    const vx0=Math.min(tl.x,br.x)-m, vx1=Math.max(tl.x,br.x)+m;
+    const vy0=Math.min(tl.y,br.y)-m, vy1=Math.max(tl.y,br.y)+m;
+    for (const it of items){
+      if (it.cx<vx0 || it.cx>vx1 || it.cy<vy0 || it.cy>vy1) continue;
+      drawCastleIcon(ctx, it.cx-5, it.cy+9, iconSize, it.color);
+      drawKamon(ctx, it.ddId, it.crestX, it.crestY, it.crestSize, it.color);
+      drawVerticalLabel(ctx, it.name, it.nx, it.ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
+    }
+  }
+  _castleLayoutItems(){
+    // 編集/ドラッグ中は都度再計算（インタラクティブ操作を即時反映）。
+    const editing = this.castleEdit || this.castleMetaEdit || this.dragCastle;
+    const customCount = (typeof CUSTOM_CASTLES!=='undefined' && CUSTOM_CASTLES) ? CUSTOM_CASTLES.length : 0;
+    const key = editing ? null :
+      this.state.turn+'|'+this.selected+'|'+this.hover+'|'+customCount+'|'+(this.editCastleId||'');
+    // キャッシュヒット条件: キー一致 かつ 0.5秒以内（所有権変化等の取りこぼしを自己修復）。
+    if (!editing && this._castleLayout && this._castleLayout.key===key && (this.t - this._castleLayout.t) < 0.5){
+      return this._castleLayout.items;
+    }
+    const items = this._computeCastleLayout();
+    if (!editing) this._castleLayout = { key, t:this.t, items };
+    return items;
+  }
+  _computeCastleLayout(){
     const st=this.state;
     const occupied=[];
     const overlaps=(a,b)=>!(a.x+a.w<b.x || b.x+b.w<a.x || a.y+a.h<b.y || b.y+b.h<a.y);
@@ -4993,11 +5053,10 @@ class MapScene extends GameKit.Scene {
       const hot = p.id===this.selected || p.id===this.hover;
       return {p, prov, dd, capital, hot, priority:(hot?10000:0)+(capital?5000:0)+p.kokudaka};
     }).filter(e=>e.dd).sort((a,b)=>b.priority-a.priority);
+    const out=[];
     for (const e of entries){
       const p=e.p, dd=e.dd;
       const [cx, cy]=provinceScreenPoint(p);
-      const iconSize=13;
-      drawCastleIcon(ctx, cx-5, cy+9, iconSize, dd.color);
       const name=castleNameForProvince(p);
       const force=e.hot;
       const labelSize=7;
@@ -5025,11 +5084,11 @@ class MapScene extends GameKit.Scene {
         if (!best || score<best.score) best={r,score};
       }
       const nrect = pick || (best?best.r:nameRect(0,0));
-      // 描画: 城アイコンに家紋を被せ、その上に城名
-      drawKamon(ctx, dd.id, crestX, crestY, crestSize, dd.color);
-      drawVerticalLabel(ctx, name, nrect.x+nrect.w/2, nrect.y, {size:labelSize, gap, fill:force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:dd.color, color:'#ffffff'});
       occupied.push(nrect);
+      // 描画に必要な確定値のみを保持（drawKamon/drawVerticalLabel/drawCastleIcon 用）
+      out.push({ cx, cy, ddId:dd.id, color:dd.color, crestX, crestY, crestSize, name, force, nx:nrect.x+nrect.w/2, ny:nrect.y });
     }
+    return out;
   }
   _drawMapCoordinateReadout(ctx){
     if (!this.lastMapCoord) return;
@@ -6529,25 +6588,43 @@ class BattleScene extends GameKit.Scene {
     const btns=this._buttons(); for (const b of btns) drawButton(ctx,b,this.t);
   }
   _drawGrid(ctx){
+    // 地形（ベース塗り＋地形アトラスタイル）は戦闘中不変（terrainMapはenterで確定）。255ヘックス分の
+    // 塗り＋クリップ＋drawImageを毎フレーム行っていたのをオフスクリーンへ一度合成しブリット。
+    // 動的要素（城郭タイルの破壊/炎上・移動/攻撃ハイライト・グリッド枠線）は従来順のまま毎フレーム描画。
+    ctx.drawImage(this._terrainLayer(), 0, 0);
     for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
-      const [x,y]=hexCenter(c,r); const terr=this.terrainMap[c+','+r];
-      const atlas=ASSETS.img.battleTiles;
-      const fill={plain:'#2f3525',forest:'#18351f',mountain:'#4b4633',river:'#1d5270',water:'#12324f'}[terr]||'#2f3525';
-      this._hexPath(ctx,x,y); ctx.save(); ctx.globalAlpha=0.88; ctx.fillStyle=fill; ctx.fill(); ctx.restore();
-      if (atlas && (atlas.naturalWidth||atlas.width)){
-        const tile={plain:0,forest:1,mountain:2,river:3,water:4}[terr] ?? 5;
-        const tw=(atlas.naturalWidth||atlas.width)/3, th=(atlas.naturalHeight||atlas.height)/2;
-        this._hexPath(ctx,x,y); ctx.save(); ctx.clip(); ctx.globalAlpha=0.74;
-        ctx.drawImage(atlas, (tile%3)*tw, Math.floor(tile/3)*th, tw, th, x-HEX.size*1.05, y-HEX.size*1.05, HEX.size*2.1, HEX.size*2.1);
-        ctx.restore();
-      }
-      // 移動可能/攻撃ハイライト
-      const castleTile=this.castleTiles && this.castleTiles[c+','+r];
+      const key=c+','+r;
+      const [x,y]=hexCenter(c,r);
+      const castleTile=this.castleTiles && this.castleTiles[key];
       if (castleTile) this._drawCastleTile(ctx, castleTile, x, y);
-      if (this.reach[c+','+r]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
-      if (this.targets[c+','+r]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
+      if (this.reach[key]!==undefined){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(34,211,238,0.20)'; ctx.fill(); }
+      if (this.targets[key]){ this._hexPath(ctx,x,y); ctx.fillStyle='rgba(248,113,113,0.28)'; ctx.fill(); }
       ctx.lineWidth=1; ctx.strokeStyle='rgba(120,150,180,0.18)'; this._hexPath(ctx,x,y); ctx.stroke();
     }
+  }
+  _terrainLayer(){
+    const atlas=ASSETS.img.battleTiles;
+    const atlasReady=!!(atlas && (atlas.naturalWidth||atlas.width));
+    // 構築済み（アトラス込み or アトラス未ロード中の暫定）を再利用。アトラスが遅延ロードで後から
+    // 到着した場合のみ一度だけ作り直す。
+    if (this._terrainCanvas && (this._terrainCanvasComplete || !atlasReady)) return this._terrainCanvas;
+    const cv=this._terrainCanvas || document.createElement('canvas');
+    cv.width=W; cv.height=H;
+    const c=cv.getContext('2d'); c.clearRect(0,0,W,H);
+    for (let r=0;r<HEX.rows;r++) for (let cc=0;cc<HEX.cols;cc++){
+      const [x,y]=hexCenter(cc,r); const terr=this.terrainMap[cc+','+r];
+      const fill={plain:'#2f3525',forest:'#18351f',mountain:'#4b4633',river:'#1d5270',water:'#12324f'}[terr]||'#2f3525';
+      this._hexPath(c,x,y); c.save(); c.globalAlpha=0.88; c.fillStyle=fill; c.fill(); c.restore();
+      if (atlasReady){
+        const tile={plain:0,forest:1,mountain:2,river:3,water:4}[terr] ?? 5;
+        const tw=(atlas.naturalWidth||atlas.width)/3, th=(atlas.naturalHeight||atlas.height)/2;
+        this._hexPath(c,x,y); c.save(); c.clip(); c.globalAlpha=0.74;
+        c.drawImage(atlas, (tile%3)*tw, Math.floor(tile/3)*th, tw, th, x-HEX.size*1.05, y-HEX.size*1.05, HEX.size*2.1, HEX.size*2.1);
+        c.restore();
+      }
+    }
+    this._terrainCanvas=cv; this._terrainCanvasComplete=atlasReady;
+    return cv;
   }
   _drawCastleTile(ctx, tile, x, y){
     if (tile.destroyed) return;
