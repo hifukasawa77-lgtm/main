@@ -3463,7 +3463,7 @@ function getAF(st, forceId){
 /* ===================================================================
  * 戦闘モデル（手動・自動共通の評価関数）
  * =================================================================== */
-function armyQuality(generals, year, family, defender, castleLevel, terrain){
+function armyQuality(generals, year, family, defender, castleLevel, terrain, navalBonus){
   let bu=50, tou=50;
   if (generals && generals.length){
     let mb=0, mt=0;
@@ -3480,7 +3480,22 @@ function armyQuality(generals, year, family, defender, castleLevel, terrain){
     else if (terrain==='river') q *= 1.08;
     else if (terrain==='coast') q *= 1.03;
   }
+  // 水軍ボーナス（海戦・沿岸戦。従属水軍の vassalBonus 合計。OS-03/sengoku_expansion_v1）
+  if (navalBonus) q *= (1 + navalBonus);
   return q;
+}
+// 沿岸戦での水軍ボーナス。didが従属させた水軍の vassalBonus 合計（terrain='coast'の洲でのみ有効・上限0.5）
+function navalBonusFor(st, did, provId){
+  if (!did || !provId) return 0;
+  const prov=DATA.provById[provId];
+  if (!prov || prov.terrain!=='coast') return 0;
+  if (!st.armedForces) return 0;
+  let sum=0;
+  NAVAL_FORCES.forEach(f=>{
+    const af=st.armedForces[f.id];
+    if (af && af.allied && af.vassalOf===did) sum+=f.vassalBonus||0;
+  });
+  return Math.min(0.5, sum);
 }
 /* 自動解決（ヘッドレス・集約攻防） */
 function autoResolveBattle(opts){
@@ -3489,8 +3504,8 @@ function autoResolveBattle(opts){
   let an = opts.atkSoldiers, dn = opts.defSoldiers;
   const a0=an, d0=dn;
   // 戦ごとの士気・運（±10%）で番狂わせの余地を残す
-  const aq = armyQuality(opts.atkGenerals, opts.year, opts.atkFamily, false, 0, null) * (0.9+rnd()*0.2);
-  const dq = armyQuality(opts.defGenerals, opts.year, opts.defFamily, true, opts.castleLevel, opts.terrain) * (0.9+rnd()*0.2);
+  const aq = armyQuality(opts.atkGenerals, opts.year, opts.atkFamily, false, 0, null, opts.atkNaval||0) * (0.9+rnd()*0.2);
+  const dq = armyQuality(opts.defGenerals, opts.year, opts.defFamily, true, opts.castleLevel, opts.terrain, opts.defNaval||0) * (0.9+rnd()*0.2);
   let round=0;
   while (round<24 && an>a0*0.16 && dn>d0*0.16){
     const aDmg = an*aq*0.105*(0.85+rnd()*0.3);
@@ -4645,6 +4660,7 @@ class MapScene extends GameKit.Scene {
       terrain: DATA.provById[dstId].terrain,
       castleType: castleTypeForProvince(dstId, dst),
       castleLayout: Array.isArray(dst.castleLayout)?dst.castleLayout:[],
+      navalBonus: navalBonusFor(st, st.playerDaimyo, dstId), // 攻撃側=プレイヤーの水軍支援（沿岸のみ）
     };
   }
   _startBattleFromChoice(game, ctx, battleType){
@@ -4659,8 +4675,10 @@ class MapScene extends GameKit.Scene {
       atkSoldiers:ctx.attacker.soldiers, atkGenerals:ctx.attacker.generals, atkFamily:ctx.attacker.family,
       defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
       year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
+      atkNaval: navalBonusFor(st, st.playerDaimyo, ctx.dstId),
     });
     applyBattleResult(st, ctx, res);
+    if (res.attackerWins && navalBonusFor(st, st.playerDaimyo, ctx.dstId)>0) this._flash('水軍の支援で海路を制した', 'Naval support secured the coast');
     game.audio.jingle(res.attackerWins?[{f:523,d:0.1},{f:784,d:0.16}]:[{f:392,d:0.12},{f:262,d:0.2}]);
     this.overlay={type:'battleResult', data: st.pendingResult}; st.pendingResult=null;
     this.selected=null; this.mode='select'; this._save();
@@ -4890,6 +4908,45 @@ class MapScene extends GameKit.Scene {
     game.audio.beep(480,0.1,'square'); this._flash('鉄砲+'+qty+'丁（'+cost+'貫）', 'Guns +'+qty); this._save();
   }
 
+  /* ---- 特産品交易（OS-10・sengoku_expansion_v1） ---- */
+  // 所有する湊・鉱山・特産品を集計し、当季の交易利益を見積る（表示と実行で共用）
+  _tradeStats(){
+    const st=this.state, me=st.playerDaimyo;
+    const ports=[], mines=[], goods=[];
+    ownedProvinces(st, me).forEach(pid=>{
+      if (PORT_PROVINCES[pid]) ports.push({pid, ...PORT_PROVINCES[pid]});
+      if (MINE_PROVINCES[pid]) mines.push({pid, ...MINE_PROVINCES[pid]});
+      if (SPECIALTY_PRODUCTS[pid]) goods.push({pid, ...SPECIALTY_PRODUCTS[pid]});
+    });
+    // 交易利益 = 特産品ボーナス合計 + 湊収入の半分（交易高）。湊数が多いほど交易網ボーナス。
+    const goodsSum = goods.reduce((s,g)=>s+g.bonus, 0);
+    const portSum  = ports.reduce((s,p)=>s+p.incomeBonus, 0);
+    const networkMul = 1 + Math.min(0.5, ports.length*0.06);
+    // 南蛮交易: 南蛮物の湊（平戸/長崎・大坂・堺）を持つと交易高が上振れ
+    const nanban = goods.some(g=>g.pid==='hizen') || ports.some(p=>p.pid==='hizen'||p.pid==='izumi'||p.pid==='settsu');
+    const base = Math.round((goodsSum + portSum*0.5) * networkMul * (nanban?1.25:1));
+    // 相場変動（±25%、srandで再現可能）
+    const market = 0.75 + srand(st)*0.5;
+    const tradeValue = Math.round(base*market);
+    return {ports, mines, goods, goodsSum, portSum, nanban, tradeValue,
+      passiveIncome: goodsSum + portSum + mines.reduce((s,m)=>s+m.incomeBonus,0)};
+  }
+  // 交易を実行（1ターン1回）。金を得て、交易拠点の民忠が僅かに向上する。
+  _doTrade(game){
+    const st=this.state, me=st.playerDaimyo, d=st.daimyo[me];
+    if (st.tradeActedTurn===st.turn){ this._flash('今季の交易は既に実施済みです', 'Already traded this season'); return; }
+    const ts=this._tradeStats();
+    if (ts.tradeValue<=0){ this._flash('交易できる特産品・湊がありません', 'No goods or ports to trade'); return; }
+    d.gold += ts.tradeValue;
+    st.tradeActedTurn = st.turn;
+    // 交易拠点（湊・特産）の民忠を+3（商いの活気）
+    [...ts.ports, ...ts.goods].forEach(o=>{ const p=st.provinces[o.pid]; if(p) p.minchu=Math.min(100,(p.minchu??60)+3); });
+    d.prestige = Math.min(300, (d.prestige ?? 5) + 1);
+    game.audio.jingle([{f:523,d:0.09},{f:659,d:0.11},{f:784,d:0.14}]);
+    this._flash('交易成立！ 金 +'+ts.tradeValue+'貫'+(ts.nanban?'（南蛮交易）':''), 'Trade concluded: +'+ts.tradeValue+' mon');
+    this._save();
+  }
+
   /* ---- コマンド: 調略（謀略） ---- */
   _ployAgent(pid){
     // 対象洲の最も智略の高い生存武将（調略の担い手）
@@ -5066,6 +5123,7 @@ class MapScene extends GameKit.Scene {
       atkSoldiers:ctx.attacker.soldiers, atkGenerals:ctx.attacker.generals, atkFamily:ctx.attacker.family,
       defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
       year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
+      defNaval: navalBonusFor(st, st.playerDaimyo, ctx.dstId), // 守備側=プレイヤーの水軍支援（沿岸のみ）
     });
     applyBattleResult(st, ctx, res);
     game.audio.jingle(res.attackerWins?[{f:392,d:0.12},{f:262,d:0.2}]:[{f:523,d:0.1},{f:784,d:0.16}]);
@@ -5130,8 +5188,15 @@ class MapScene extends GameKit.Scene {
     const lifeLog = (st.month===1) ? this._yearlyLifeEvents(st) : [];
     const eventLog = (st.month===1) ? this._yearlyEvents(st) : [];
     const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
-    this.overlay={type:'turnSummary', data:aiLog};
-    game.audio.beep(500,0.12,'triangle');
+    // 重大イベント（プレイヤーの選択を要する）。発生すれば先に提示し、決着後に評定へ。（OS-04）
+    const majorEvent=this._rollMajorEvent(st);
+    if (majorEvent){
+      this.overlay={type:'event', ev:majorEvent, log:aiLog};
+      game.audio.beep(300,0.16,'sawtooth');
+    } else {
+      this.overlay={type:'turnSummary', data:aiLog};
+      game.audio.beep(500,0.12,'triangle');
+    }
     this._save();
     this._checkEnd(game);
   }
@@ -5189,6 +5254,71 @@ class MapScene extends GameKit.Scene {
       else { const loss=Math.round(prov.soldiers*(0.08+R()*0.08)); prov.soldiers=Math.max(0,prov.soldiers-loss); prov.minchu=Math.max(0,(prov.minchu??60)-6); if (isP) log.push('【疫病】'+pname+'で疫病が流行。兵'+loss+'を失う'); }
     });
     return log;
+  }
+  // プレイヤーに選択を迫る重大イベント（OS-04）。発生すれば event 型を返し、無ければ null。
+  _rollMajorEvent(st){
+    const me=st.playerDaimyo;
+    const owned=ownedProvinces(st, me);
+    if (!owned.length) return null;
+    const removeFromProv=(gid, g)=>{ const loc=g.location; if (loc && st.provinces[loc]){ const i=st.provinces[loc].generals.indexOf(gid); if(i>=0) st.provinces[loc].generals.splice(i,1); } };
+    const candidates=[];
+    // A. 一揆の兆し（低民忠の自国領）
+    const unrest=owned.map(pid=>({pid, mc:st.provinces[pid].minchu??60})).filter(o=>o.mc<40).sort((a,b)=>a.mc-b.mc)[0];
+    if (unrest){
+      const pn=DATA.provById[unrest.pid]?.nameJP||unrest.pid; const prov=st.provinces[unrest.pid];
+      candidates.push({icon:'🔥', color:'rgba(248,113,113,0.6)',
+        titleJP:'一揆の兆し', titleEN:'Signs of Revolt',
+        descJP:pn+'の民心が乱れ、一揆の気配が漂っている。民忠は'+unrest.mc+'。いかに処するか。',
+        descEN:'Unrest stirs in '+pn+' (loyalty '+unrest.mc+'). How will you respond?',
+        choices:[
+          {jp:'兵で鎮圧する', en:'Suppress by force', sub:'民忠+8 / 兵 少々損耗', effect:()=>{ prov.minchu=Math.min(100,(prov.minchu??60)+8); const loss=Math.round(prov.soldiers*0.04); prov.soldiers=Math.max(0,prov.soldiers-loss); return '【裁定】'+pn+'の一揆を鎮圧（民忠+8・兵-'+loss+'）'; }},
+          {jp:'施しで懐柔する（150貫）', en:'Appease with alms (150)', sub:'民忠+25', on:st.daimyo[me].gold>=150, effect:()=>{ st.daimyo[me].gold-=150; prov.minchu=Math.min(100,(prov.minchu??60)+25); return '【裁定】'+pn+'に施し、民心を鎮めた（民忠+25）'; }},
+          {jp:'放置する', en:'Ignore it', sub:'城下開発-8 / 民忠-8', effect:()=>{ prov.development=Math.max(0,prov.development-8); prov.minchu=Math.max(0,(prov.minchu??60)-8); return '【裁定】'+pn+'の一揆を放置（開発-8・民忠悪化）'; }},
+        ]});
+    }
+    // B. 謀反の兆し（低忠誠の自家武将）
+    const lowLoyal=[];
+    owned.forEach(pid=>st.provinces[pid].generals.forEach(gid=>{ const g=st.generals[gid]; if(g&&g.alive&&g.daimyo===me&&g.loyalty<40) lowLoyal.push({gid, loy:g.loyalty}); }));
+    lowLoyal.sort((a,b)=>a.loy-b.loy);
+    if (lowLoyal[0]){
+      const gid=lowLoyal[0].gid; const g=st.generals[gid]; const gd=DATA.genById[gid]; const gn=gd?gd.nameJP:gid;
+      candidates.push({icon:'⚑', color:'rgba(167,139,250,0.6)',
+        titleJP:'謀反の兆し', titleEN:'Whispers of Betrayal',
+        descJP:'家臣 '+gn+' の忠誠が'+g.loyalty+'まで下がり、謀反の噂が立っている。',
+        descEN:'Retainer '+gn+'’s loyalty has fallen to '+g.loyalty+'. Rumors of treason spread.',
+        choices:[
+          {jp:'加増して慰留する（200貫）', en:'Reward to retain (200)', sub:'忠誠+25', on:st.daimyo[me].gold>=200, effect:()=>{ st.daimyo[me].gold-=200; g.loyalty=Math.min(100,g.loyalty+25); return '【裁定】'+gn+'に加増、忠誠を回復（+25）'; }},
+          {jp:'詰問する', en:'Interrogate', sub:'成れば忠誠+10／失敗で出奔', effect:()=>{ if(srand(st)<0.5){ g.loyalty=Math.min(100,g.loyalty+10); return '【裁定】'+gn+'を詰問、忠義を確かめた（忠誠+10）'; } else { removeFromProv(gid,g); g.location=null; g.daimyo=null; return '【下剋上】'+gn+'が出奔した…'; } }},
+          {jp:'静観する', en:'Wait and see', sub:'忠誠-8', effect:()=>{ g.loyalty=Math.max(0,g.loyalty-8); return '【裁定】'+gn+'を静観（忠誠さらに低下）'; }},
+        ]});
+    }
+    // C. 流浪の武将（仕官先を求める浪人）
+    const ronin=DATA.generals.filter(gd=>{ const g=st.generals[gd.id]; return g&&g.alive&&!g.daimyo&&(gd.stats.tou+gd.stats.bu+gd.stats.chi>=210); });
+    if (ronin.length){
+      const gd=ronin[Math.floor(srand(st)*ronin.length)]; const gn=gd.nameJP; const cap=daimyoDef(st,me)?.capital||owned[0];
+      candidates.push({icon:'🀄', color:'rgba(56,189,248,0.6)',
+        titleJP:'流浪の武将', titleEN:'A Wandering Warrior',
+        descJP:'名の知れた浪人 '+gn+'（統'+gd.stats.tou+'・武'+gd.stats.bu+'・智'+gd.stats.chi+'）が仕官を求めて参上した。',
+        descEN:'The renowned ronin '+gn+' seeks to enter your service.',
+        choices:[
+          {jp:'召し抱える（200貫）', en:'Recruit (200)', sub:(DATA.provById[cap]?.nameJP||cap)+'に配属', on:st.daimyo[me].gold>=200, effect:()=>{ st.daimyo[me].gold-=200; const g=st.generals[gd.id]; g.daimyo=me; g.location=cap; g.loyalty=62; g.alive=true; if(!st.provinces[cap].generals.includes(gd.id)) st.provinces[cap].generals.push(gd.id); return '【登用】'+gn+'を召し抱えた（'+(DATA.provById[cap]?.nameJP||cap)+'）'; }},
+          {jp:'見送る', en:'Decline', sub:'', effect:()=>'【裁定】'+gn+'の仕官を見送った'},
+        ]});
+    }
+    // D. 慶事（吉兆）
+    candidates.push({icon:'🎏', color:'rgba(52,211,153,0.6)',
+      titleJP:'瑞祥の報せ', titleEN:'An Auspicious Omen',
+      descJP:'領内に瑞兆が現れ、家中の士気が高まっている。この機をどう活かすか。',
+      descEN:'A good omen lifts the spirits of your retainers.',
+      choices:[
+        {jp:'恩賞を配る', en:'Grant rewards', sub:'自家武将の忠誠+8', effect:()=>{ let n=0; owned.forEach(pid=>st.provinces[pid].generals.forEach(gid=>{ const g=st.generals[gid]; if(g&&g.alive&&g.daimyo===me){ g.loyalty=Math.min(100,g.loyalty+8); n++; } })); return '【慶事】恩賞を配り、'+n+'名の忠誠が高まった（+8）'; }},
+        {jp:'国庫に納める', en:'Fill the treasury', sub:'金+300', effect:()=>{ st.daimyo[me].gold+=300; return '【慶事】献上の品を国庫に納めた（金+300）'; }},
+      ]});
+    // 発生判定: 不穏イベント(A/B)があれば優先的に、無ければ低確率で吉兆/浪人
+    const urgent=candidates.filter(c=>c.titleJP==='一揆の兆し'||c.titleJP==='謀反の兆し');
+    if (urgent.length){ if (srand(st)<0.6) return urgent[Math.floor(srand(st)*urgent.length)]; return null; }
+    if (srand(st)<0.22){ const pool=candidates; return pool[Math.floor(srand(st)*pool.length)]; }
+    return null;
   }
   _updateDaimyoAlive(){
     const st=this.state;
@@ -5645,7 +5775,17 @@ class MapScene extends GameKit.Scene {
         accent:'rgba(251,191,36,0.55)', on:s.riceBuy>0 && gold>0, action:g=>this._bulkBuyRice(g)});
       bs.push({x:bx2, y:py+430, w:bw, h:96, jp:(st.delegateInternal?'委任を解除':'内政を委任する'), en:(st.delegateInternal?'Delegation: ON':'Delegation: OFF'), sz:23, ensz:15,
         accent:st.delegateInternal?'rgba(74,222,128,0.7)':'rgba(148,163,184,0.5)', action:g=>this._toggleDelegate(g)});
+      bs.push({x:bx1, y:py+606, w:pw-140, h:84, jp:'特産品交易 ▶ 湊・鉱山・特産の売買', en:'Specialty Trade (Ports / Mines / Goods)', sz:24, ensz:14,
+        accent:'rgba(56,189,248,0.55)', action:()=>{ this.overlay={type:'trade'}; }});
       bs.push({x:px+pw/2-110, y:py+ph-92, w:220, h:70, jp:'閉じる', en:'Close', sz:26, action:()=>{ this.overlay=null; }});
+    } else if (ov.type==='trade'){
+      const d=st.daimyo[st.playerDaimyo];
+      const ts=this._tradeStats();
+      const px=W/2-560, py=H/2-520, pw=1120, ph=1040;
+      const acted=(st.tradeActedTurn===st.turn);
+      bs.push({x:px+80, y:py+ph-208, w:pw-160, h:104, jp:acted?'今季の交易は実施済み':('特産品を交易する（利益 約'+ts.tradeValue+'貫）'), en:acted?'Traded this season':('Conduct trade (~'+ts.tradeValue+' mon)'), sz:26, ensz:15,
+        accent:acted?'rgba(148,163,184,0.3)':'rgba(56,189,248,0.6)', on:!acted && ts.tradeValue>0, action:g=>this._doTrade(g)});
+      bs.push({x:px+pw/2-110, y:py+ph-92, w:220, h:70, jp:'閉じる', en:'Close', sz:26, action:()=>{ this.overlay={type:'bulkGov'}; }});
     } else if (ov.type==='allGenerals'){
       const allGens=this._getAllGensSorted();
       const PER_PAGE=15, page=this.allGenPage, pageCount=Math.max(1,Math.ceil(allGens.length/PER_PAGE));
@@ -5686,8 +5826,29 @@ class MapScene extends GameKit.Scene {
       bs.push({x:px+pw-308, y:py+18, w:144, h:64, jp:'詳細', en:'Detail', sz:24, accent:this.allGenSelected?'rgba(232,192,122,0.55)':'', action:()=>{ if (this.allGenSelected) this.overlay={type:'generalDetail', gid:this.allGenSelected}; else this._flash('武将を選択してください'); }});
     } else if (ov.type==='generalDetail'){
       const px=W/2-480, py=H/2-560, pw=960, ph=1120;
-      bs.push({x:px+pw/2-160, y:py+ph-90, w:150, h:64, jp:'戻る', en:'Back', sz:24, action:()=>{ if (ov.fromPanel){ this.overlay=null; this._openGeneralListPanel(); } else { this.overlay={type:'allGenerals'}; } }});
+      bs.push({x:px+pw/2-336, y:py+ph-90, w:172, h:64, jp:'列伝', en:'Chronicle', sz:24, ensz:14, accent:'rgba(167,139,250,0.55)', action:()=>{ this.overlay={type:'generalChronicle', gid:ov.gid, fromPanel:ov.fromPanel}; }});
+      bs.push({x:px+pw/2-150, y:py+ph-90, w:150, h:64, jp:'戻る', en:'Back', sz:24, action:()=>{ if (ov.fromPanel){ this.overlay=null; this._openGeneralListPanel(); } else { this.overlay={type:'allGenerals'}; } }});
+      bs.push({x:px+pw/2+16, y:py+ph-90, w:150, h:64, jp:'閉じる', en:'Close', sz:24, action:()=>{ this.overlay=null; }});
+    } else if (ov.type==='generalChronicle'){
+      const px=W/2-560, py=H/2-560, pw=1120, ph=1120;
+      bs.push({x:px+pw/2-160, y:py+ph-90, w:150, h:64, jp:'戻る', en:'Back', sz:24, action:()=>{ this.overlay={type:'generalDetail', gid:ov.gid, fromPanel:ov.fromPanel}; }});
       bs.push({x:px+pw/2+10, y:py+ph-90, w:150, h:64, jp:'閉じる', en:'Close', sz:24, action:()=>{ this.overlay=null; }});
+    } else if (ov.type==='event'){
+      const ev=ov.ev; const px=W/2-560, py=H/2-460, pw=1120, ph=920;
+      const choices=ev.choices||[];
+      const bh=104, gap=22, bw=pw-160;
+      const startY=py+ph-120-choices.length*(bh+gap);
+      choices.forEach((ch,i)=>{
+        bs.push({x:px+80, y:startY+i*(bh+gap), w:bw, h:bh, jp:ch.jp, en:ch.en, sz:26, ensz:15,
+          accent:ev.color||'rgba(232,192,122,0.6)', on: ch.on!==false, _hitFirst:true,
+          action:g=>{
+            const line=ch.effect(this.state);
+            const log=((this.overlay&&this.overlay.log)||[]).slice();
+            if (line) log.push(line);
+            this.overlay={type:'turnSummary', data:log};
+            g.audio.beep(560,0.08,'triangle'); this._save();
+          }});
+      });
     }
     return bs;
   }
@@ -6649,6 +6810,91 @@ class MapScene extends GameKit.Scene {
     const kahoY=kanoiY+108;
     T(ctx, '家宝', px+60, kahoY, {size:22, color:'#b7a06a'});
     T(ctx, GENERAL_KAHO[gid]||'所持なし', px+60, kahoY+36, {size:30, weight:'bold', color:'#86efac'});
+    // 列伝への導線
+    T(ctx, '▶「列伝」で経歴と人物評を読む', px+pw/2, kahoY+92, {size:20, color:'#a78bfa', align:'center'});
+  }
+
+  // 幅で折り返してテキストを描画（日英対応）。返り値は次のy。
+  _drawWrapped(ctx, text, x, y, maxW, lineH, opts){
+    const o=opts||{}; const size=o.size||22;
+    ctx.save();
+    ctx.font=(o.weight?o.weight+' ':'')+size+'px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
+    const hasSpace=/\s/.test(text) && /[A-Za-z]/.test(text);
+    const units=hasSpace?text.split(/(\s+)/):text.split('');
+    let line='';
+    const flush=()=>{ if(line){ T(ctx, line, x, y, {size, color:o.color||'#cbd5e1', weight:o.weight}); y+=lineH; line=''; } };
+    for (const u of units){
+      const test=line+u;
+      if (ctx.measureText(test).width>maxW && line){ flush(); line=(hasSpace&&/^\s+$/.test(u))?'':u; }
+      else line=test;
+    }
+    flush();
+    ctx.restore();
+    return y;
+  }
+  // 武将列伝の人物評テキストを生成（史実着想のオリジナル設定・OS-06/OS-14準拠）
+  _generalChronicleText(gid){
+    const st=this.state, g=DATA.genById[gid], gs=st.generals[gid];
+    if (!g||!gs) return {epithetJP:'', epithetEN:'', jp:[], en:[]};
+    const s=g.stats;
+    const dDef=gs.daimyo?daimyoDef(st,gs.daimyo):null;
+    const daimyoJP=dDef?dDef.nameJP+'家':'無所属（浪人）';
+    const daimyoEN=dDef?'the '+(dDef.nameEN||dDef.nameJP)+' clan':'a masterless ronin';
+    const homeProv=gs.location?DATA.provById[gs.location]:null;
+    const homeJP=homeProv?castleNameForProvince(homeProv):'各地';
+    // 素質のアーキタイプ（最大能力）
+    const arr=[['tou',s.tou,'采配に長けた将','a gifted field commander'],['bu',s.bu,'一騎当千の猛将','a peerless warrior'],['chi',s.chi,'謀を巡らす智将','a cunning strategist'],['sei',s.sei,'内政に秀でた吏才の臣','an able administrator']];
+    arr.sort((a,b)=>b[1]-a[1]);
+    const top=arr[0], second=arr[1];
+    const total=s.tou+s.bu+s.chi+s.sei;
+    const tierJP=total>=340?'当代屈指の傑物':total>=300?'一軍を率いるに足る器':total>=250?'頼れる一角の将':'これから武名を上げる将';
+    const tierEN=total>=340?'one of the age’s foremost figures':total>=300?'fit to command an army':total>=250?'a dependable captain':'a rising figure';
+    const roleJP=g.roleJP?('（'+g.roleJP+'）'):'';
+    const bd=GENERAL_BIRTH_DEATH[gid];
+    let lifeJP='', lifeEN='';
+    if (bd){
+      if (bd.born){ const age=st.year-bd.born; lifeJP+=bd.born+'年の生まれ、'+st.year+'年時点で'+age+'歳。'; lifeEN+='Born in '+bd.born+', aged '+age+' as of '+st.year+'. '; }
+      if (bd.died){ lifeJP+='史伝では'+bd.died+'年に没したと伝わる。'; lifeEN+='Chronicles record a death in '+bd.died+'. '; }
+    }
+    const rank=GENERAL_KANOI[gid], kaho=GENERAL_KAHO[gid];
+    const jp=[
+      g.nameJP+'（'+(g.nameEN||'')+'）は、'+daimyoJP+'に属する'+top[2]+roleJP+'。'+tierJP+'と目される。'+lifeJP,
+      '能力は統率'+s.tou+'・武勇'+s.bu+'・知略'+s.chi+'・政治'+s.sei+'。とりわけ'+({tou:'統率',bu:'武勇',chi:'知略',sei:'政治'}[top[0]])+'に長じ、次いで'+({tou:'統率',bu:'武勇',chi:'知略',sei:'政治'}[second[0]])+'を得手とする。現在の忠誠は'+gs.loyalty+'、'+homeJP+'を拠点とする。',
+      (rank?('朝廷より'+rank+'を授かる。'):'官位は未だ受けていない。')+(kaho?('家宝「'+kaho+'」を所持する。'):'')
+    ];
+    const en=[
+      (g.nameEN||g.nameJP)+' serves '+daimyoEN+' as '+top[3]+', reckoned '+tierEN+'. '+lifeEN,
+      'Ratings — Command '+s.tou+', Valor '+s.bu+', Intellect '+s.chi+', Politics '+s.sei+'. Loyalty stands at '+gs.loyalty+', based at '+homeJP+'.',
+      (rank?('Holds the court rank of '+rank+'. '):'Holds no court rank yet. ')+(kaho?('Keeps the heirloom “'+kaho+'”.'):'')
+    ];
+    return {epithetJP:top[2], epithetEN:top[3], tierJP, jp, en};
+  }
+  _drawGeneralChronicle(ctx, gid){
+    const st=this.state, g=DATA.genById[gid], gs=st.generals[gid];
+    if (!g||!gs) return;
+    const px=W/2-560, py=H/2-560, pw=1120, ph=1120;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:26, fill:'rgba(10,10,20,0.98)', stroke:'rgba(167,139,250,0.55)'});
+    T(ctx, '武将列伝 / Chronicle', px+pw/2, py+34, {size:34, weight:'bold', color:'#c4b5fd', align:'center'});
+    // 肖像＋見出し
+    const portraitSize=200, portX=px+70, portY=py+108;
+    drawGeneralPortrait(ctx, gid, portX, portY, portraitSize, {stroke:'rgba(232,192,122,0.6)', lineWidth:3});
+    const ct=this._generalChronicleText(gid);
+    T(ctx, g.nameJP, portX+portraitSize+40, portY+16, {size:48, weight:'bold', color:'#f8f0dc', shadow:true});
+    if (g.nameEN) T(ctx, g.nameEN, portX+portraitSize+42, portY+82, {size:24, color:'#94a3b8'});
+    T(ctx, '― '+ct.epithetJP+' ―', portX+portraitSize+42, portY+126, {size:26, weight:'bold', color:'#a78bfa'});
+    const dDef=gs.daimyo?daimyoDef(st,gs.daimyo):null;
+    T(ctx, (dDef?dDef.nameJP+'家':'無所属')+'　/　'+ct.tierJP, portX+portraitSize+42, portY+170, {size:22, color:'#cbd5e1'});
+    // 本文（列伝）
+    let ty=py+352;
+    const tx=px+70, tw=pw-140;
+    ct.jp.forEach(para=>{ ty=this._drawWrapped(ctx, para, tx, ty, tw, 40, {size:24, color:'#e8eefc'}); ty+=16; });
+    ty+=10;
+    // 区切り
+    ctx.save(); ctx.strokeStyle='rgba(167,139,250,0.3)'; ctx.lineWidth=1.2; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx+tw, ty); ctx.stroke(); ctx.restore();
+    ty+=24;
+    ct.en.forEach(para=>{ ty=this._drawWrapped(ctx, para, tx, ty, tw, 30, {size:18, color:'#9fb2c6'}); ty+=12; });
+    // 注記
+    T(ctx, '※能力値・人物評は史実着想のオリジナル設定です / Ratings & profile are original interpretations.', px+pw/2, py+ph-132, {size:16, color:'#7d93ab', align:'center'});
   }
 
   _drawOverlay(ctx){
@@ -6664,9 +6910,12 @@ class MapScene extends GameKit.Scene {
     else if (ov.type==='defense') this._drawDefense(ctx, ov.data);
     else if (ov.type==='allGenerals') this._drawAllGenerals(ctx);
     else if (ov.type==='generalDetail') this._drawGeneralDetail(ctx, ov.gid);
+    else if (ov.type==='generalChronicle') this._drawGeneralChronicle(ctx, ov.gid);
     else if (ov.type==='naisei') this._drawNaisei(ctx);
     else if (ov.type==='shonin') this._drawShonin(ctx);
     else if (ov.type==='bulkGov') this._drawBulkGov(ctx);
+    else if (ov.type==='trade') this._drawTrade(ctx);
+    else if (ov.type==='event') this._drawEvent(ctx);
     else if (ov.type==='ranking') this._drawRanking(ctx);
     else if (ov.type==='help') this._drawHelp(ctx);
     const btns=this._overlayButtons(); for (const b of btns){
@@ -6755,7 +7004,7 @@ class MapScene extends GameKit.Scene {
         atkSoldiers:troops, atkGenerals:gens, atkFamily:st.playerDaimyo,
         defSoldiers:dst.soldiers, defGenerals:defGens, defFamily:dst.owner||'',
         year:st.year, castleLevel:dst.castleLevel, terrain:DATA.provById[m.dstId].terrain,
-        rngFn:Math.random,
+        rngFn:Math.random, atkNaval: navalBonusFor(st, st.playerDaimyo, m.dstId),
       });
       if (r.attackerWins) wins++;
       aSum+=r.atkSurvivors; dSum+=r.defSurvivors;
@@ -6774,6 +7023,11 @@ class MapScene extends GameKit.Scene {
     T(ctx, (enemy?'出陣 / March to Battle':'増援 / Reinforce'), px+pw/2, py+45, {size:51, weight:'bold', color:'#e8c07a', align:'center'});
     T(ctx, src.nameJP+'  →  '+dst.nameJP+(dstProv.owner?'（'+daimyoDef(st,dstProv.owner).nameJP+'家）':'（空白地）'), px+pw/2, py+129, {size:33, color:'#cbd5e1', align:'center'});
     T(ctx, '敵兵力 約'+dstProv.soldiers+'人 ・ 城Lv'+dstProv.castleLevel+' ・ 地形'+terrainJP(dst.terrain), px+pw/2, py+183, {size:27, color:'#9fb2c6', align:'center'});
+    // 水軍支援（沿岸戦）の注記（OS-03）
+    const navB=navalBonusFor(st, st.playerDaimyo, m.dstId);
+    if (enemy && navB>0){
+      T(ctx, '⚓ 海戦: 従属水軍の支援で兵力 +'+Math.round(navB*100)+'% / Naval support', px+pw/2, py+205, {size:22, weight:'bold', color:'#7dd3fc', align:'center'});
+    }
     // 戦力予測（敵地への出陣時のみ・1行で簡潔に）
     if (enemy){
       const f=this._battleForecast(m);
@@ -6909,8 +7163,74 @@ class MapScene extends GameKit.Scene {
     T(ctx, '兵糧 '+Math.round(d.rice||0)+'千石　月消費 '+consume+'　備蓄 約'+months+'ヶ月分'+(riceWarn?'  ⚠兵站危機':''), px+pw/2, py+224, {size:22, weight:riceWarn?'bold':'normal', color:riceWarn?'#f87171':'#cbd5e1', align:'center'});
     // 委任ステータス（ボタン群の下）
     const on=!!st.delegateInternal;
-    T(ctx, '委任 / Delegation：'+(on?'ON（毎ターン自動で開発・徴兵・施し・兵糧補給）':'OFF'), px+pw/2, py+560, {size:23, weight:'bold', color:on?'#4ade80':'#94a3b8', align:'center'});
-    T(ctx, '※一括／委任は自国領のみ。金の続く範囲で実行されます', px+pw/2, py+600, {size:17, color:'#7d93ab', align:'center'});
+    T(ctx, '委任 / Delegation：'+(on?'ON（毎ターン自動で開発・徴兵・施し・兵糧補給）':'OFF'), px+pw/2, py+544, {size:23, weight:'bold', color:on?'#4ade80':'#94a3b8', align:'center'});
+    T(ctx, '※一括／委任は自国領のみ。金の続く範囲で実行されます', px+pw/2, py+580, {size:17, color:'#7d93ab', align:'center'});
+  }
+  // 特産品交易シーン（OS-10）
+  _drawTrade(ctx){
+    const st=this.state, d=st.daimyo[st.playerDaimyo];
+    const px=W/2-560, py=H/2-520, pw=1120, ph=1040;
+    const ts=this._tradeStats();
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:24, fill:'rgba(8,16,26,0.98)', stroke:'rgba(56,189,248,0.5)'});
+    T(ctx, '特産品交易 / Specialty Trade', px+pw/2, py+34, {size:40, weight:'bold', color:'#38bdf8', align:'center'});
+    T(ctx, '湊・鉱山・特産品を活かした交易で国庫を潤す', px+pw/2, py+92, {size:21, color:'#94a3b8', align:'center'});
+    // 概況（金・毎季加算・交易網）
+    const sumY=py+140;
+    [['国庫', d.gold+'貫', '#f6d58a'],
+     ['毎季の加算', '+'+ts.passiveIncome+'貫', '#86efac'],
+     ['交易網', ts.ports.length+'湊 / '+ts.mines.length+'鉱山 / '+ts.goods.length+'特産', '#7dd3fc']
+    ].forEach((c,i)=>{
+      const cx=px+90+i*((pw-180)/3)+((pw-180)/6);
+      T(ctx, c[0], cx, sumY, {size:20, color:'#94a3b8', align:'center'});
+      T(ctx, c[1], cx, sumY+34, {size:30, weight:'bold', color:c[2], align:'center'});
+    });
+    // 3列: 湊 / 鉱山 / 特産品
+    const colY=py+232, colH=430, colW=(pw-160)/3;
+    const cols=[
+      {title:'湊 / Ports', color:'#7dd3fc', items:ts.ports.map(p=>({jp:p.nameJP, v:'+'+p.incomeBonus}))},
+      {title:'鉱山 / Mines', color:'#fcd34d', items:ts.mines.map(m=>({jp:m.nameJP, v:'+'+m.incomeBonus}))},
+      {title:'特産品 / Goods', color:'#86efac', items:ts.goods.map(g=>({jp:g.nameJP, v:'+'+g.bonus}))},
+    ];
+    cols.forEach((col,ci)=>{
+      const cx=px+60+ci*(colW+20);
+      ctx.save(); ctx.beginPath(); ctx.roundRect(cx, colY, colW, colH, 14); ctx.fillStyle='rgba(255,255,255,0.04)'; ctx.fill(); ctx.strokeStyle='rgba(120,150,180,0.28)'; ctx.lineWidth=1.4; ctx.stroke(); ctx.restore();
+      T(ctx, col.title, cx+colW/2, colY+16, {size:23, weight:'bold', color:col.color, align:'center'});
+      if (!col.items.length){ T(ctx, '― なし ―', cx+colW/2, colY+80, {size:20, color:'#64748b', align:'center'}); }
+      else col.items.slice(0,9).forEach((it,i)=>{
+        const iy=colY+64+i*40;
+        T(ctx, it.jp, cx+18, iy, {size:21, color:'#e2e8f0'});
+        T(ctx, it.v, cx+colW-18, iy, {size:21, weight:'bold', color:col.color, align:'right'});
+      });
+    });
+    // 交易利益の説明
+    const infoY=py+ph-268;
+    T(ctx, '今季の交易利益（相場変動あり）: '+ts.tradeValue+'貫'+(ts.nanban?'　⚓南蛮交易ボーナス':''), px+pw/2, infoY, {size:24, weight:'bold', color:'#38bdf8', align:'center'});
+    T(ctx, '※交易は1季（1ターン）に1回。実施で交易拠点の民忠も僅かに向上します', px+pw/2, infoY+38, {size:17, color:'#7d93ab', align:'center'});
+  }
+  // ランダムイベント告知・選択画面（OS-04）
+  _drawEvent(ctx){
+    const ev=this.overlay&&this.overlay.ev; if(!ev) return;
+    const px=W/2-560, py=H/2-460, pw=1120, ph=920;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:26, fill:'rgba(12,12,20,0.98)', stroke:ev.color||'rgba(232,192,122,0.55)'});
+    T(ctx, (ev.icon||'⚑')+'  events / 出来事', px+pw/2, py+34, {size:24, color:'#94a3b8', align:'center'});
+    T(ctx, ev.titleJP, px+pw/2, py+84, {size:52, weight:'bold', color:'#f8f0dc', align:'center', shadow:true});
+    if (ev.titleEN) T(ctx, ev.titleEN, px+pw/2, py+154, {size:24, color:'#9fb2c6', align:'center'});
+    // 本文
+    let ty=py+220;
+    ty=this._drawWrapped(ctx, ev.descJP, px+90, ty, pw-180, 42, {size:26, color:'#e8eefc'});
+    ty+=6;
+    if (ev.descEN) this._drawWrapped(ctx, ev.descEN, px+90, ty, pw-180, 30, {size:18, color:'#8ea3ba'});
+    // 選択肢の補足（各ボタン下の効果テキストはボタンに含めているため、ここでは見出しのみ）
+    const choices=ev.choices||[];
+    const bh=104, gap=22;
+    const startY=py+ph-120-choices.length*(bh+gap);
+    T(ctx, '― いかに処するか / Choose your response ―', px+pw/2, startY-46, {size:22, color:'#c4b5fd', align:'center'});
+    // 各選択肢の効果サブテキストをボタン右側に表示
+    choices.forEach((ch,i)=>{
+      if (!ch.sub) return;
+      const by=startY+i*(bh+gap);
+      T(ctx, ch.sub, px+pw-100, by+bh/2-10, {size:18, color: ch.on===false?'#64748b':'#86efac', align:'right'});
+    });
   }
   _drawBattleResult(ctx, d){
     const st=this.state;
@@ -7289,6 +7609,9 @@ class BattleScene extends GameKit.Scene {
     // プレイヤーが操作する側（攻撃時='atk'、防衛時='def'）
     this.playerSide = c.playerSide || 'atk';
     this.aiSide = this.playerSide==='atk' ? 'def' : 'atk';
+    // 水軍ボーナス（沿岸戦のみ。プレイヤー側の全部隊に加算。OS-03）
+    this.navalBonus = (c.navalBonus!=null ? c.navalBonus : navalBonusFor(this.state, this.state.playerDaimyo, c.dstId)) || 0;
+    this.isNaval = this.navalBonus>0;
     this.t=0; this.round=1; this.maxRounds=12; this.phase='player'; this.selected=null;
     this.reach={}; this.targets={}; this.message=null; this.messageT=0;
     this.objectTargets={};
@@ -7694,9 +8017,12 @@ class BattleScene extends GameKit.Scene {
     if (atk._chargeReady){ commandAtk*=2; atk._chargeReady=false; }
     if (atk._fireArrowReady){ commandAtk*=1.35; atk._fireArrowReady=false; }
     if (atk._threeVolleyReady){ commandAtk*=1.5; atk._threeVolleyReady=false; }
-    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type)*commandAtk;
+    // 水軍支援（沿岸戦）: プレイヤー側の攻防に加算（OS-03）
+    const navAtk = (this.navalBonus && atk.side===this.playerSide) ? (1+this.navalBonus) : 1;
+    const navDef = (this.navalBonus && def.side===this.playerSide) ? (1+this.navalBonus) : 1;
+    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type)*commandAtk*navAtk;
     const commandDef=def._shieldWall?1.35:1;
-    const baseDef = def.count*ud.def*(1+def.stat.tou/200)*terrDef*castle*fort*commandDef;
+    const baseDef = def.count*ud.def*(1+def.stat.tou/200)*terrDef*castle*fort*commandDef*navDef;
     const ratio = baseAtk/Math.max(1,baseDef);
     // 致死性は中庸に。兵力・兵科相性・地形が効きつつ、技量で覆せる余地を残す
     let defLossFrac = clamp(0.13*ratio,0.03,0.5)*(0.85+Math.random()*0.3);
@@ -7827,6 +8153,7 @@ class BattleScene extends GameKit.Scene {
       atkSoldiers:aS, atkGenerals:atk.map(s=>s.gen).filter(Boolean), atkFamily:this.ctx.attacker.family,
       defSoldiers:dS, defGenerals:def.map(s=>s.gen).filter(Boolean), defFamily:this.ctx.defender.family,
       year:this.ctx.year, castleLevel:this.ctx.defender.castleLevel, terrain:this.ctx.terrain, rngFn:()=>srand(this.state),
+      atkNaval: this.playerSide==='atk'?this.navalBonus:0, defNaval: this.playerSide==='def'?this.navalBonus:0,
     });
     this._finishWithCounts(game, res.attackerWins, res.atkSurvivors, res.defSurvivors, '自動解決 / Auto');
   }
@@ -8071,6 +8398,7 @@ class BattleScene extends GameKit.Scene {
     T(ctx,this.battleType==='siege'?targetName+'\u306e\u653b\u57ce\u6226':DATA.provById[c.dstId].nameJP+'\u4ed8\u8fd1\u306e\u6226\u3044',36,42,{size:30,weight:'bold',color:'#f2c879'});
     if(this.battleType==='siege') T(ctx,'白半透明=通路  /  オレンジ枠=破壊対象  /  金枠=天守',36,218,{size:16,color:'#dbe4ee'});
     T(ctx,'\u30e9\u30a6\u30f3\u30c9 '+this.round+' / '+this.maxRounds+'  '+(this.phase==='player'?'\u81ea\u8ecd\u30bf\u30fc\u30f3':'\u6575\u8ecd\u30bf\u30fc\u30f3'),36,82,{size:22,color:'#9fb2c6'});
+    if(this.isNaval) T(ctx,'\u2693 \u6d77\u6226\u30fb\u6c34\u8ecd\u652f\u63f4 +'+Math.round(this.navalBonus*100)+'% / Naval support',W/2-180,42,{size:22,weight:'bold',color:'#7dd3fc'});
     T(ctx,daimyoDef(this.state,c.attacker.daimyo).nameJP+'  /  '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP:'\u7121\u6240\u5c5e'),36,116,{size:22,color:'#cbd5e1'});
     if(this.battleType==='siege'){
       T(ctx,castleTypeLabel(this.castleType)+'  '+castleSizeLabel(this.castleLevel),36,150,{size:20,color:'#f2c879'});
