@@ -5182,12 +5182,14 @@ class MapScene extends GameKit.Scene {
         if (prov._sabotageLevel!=null){ prov.castleLevel=prov._sabotageLevel; delete prov._sabotageLevel; delete prov._sabotageUntil; }
       }
     });
+    // 国人勢力の離反（OS-08）・寺社勢力の武力蜂起（OS-09）
+    const forceLog=[].concat(this._processKokujinDefection(st)).concat(this._processReligiousUprising(st));
     // 米相場更新（毎月変動）
     st.ricePrice=Math.round(50+srand(st)*150);
     // 年明けに寿命・下剋上／天災・ランダムイベント
     const lifeLog = (st.month===1) ? this._yearlyLifeEvents(st) : [];
     const eventLog = (st.month===1) ? this._yearlyEvents(st) : [];
-    const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
+    const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog).concat(forceLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
     // 重大イベント（プレイヤーの選択を要する）。発生すれば先に提示し、決着後に評定へ。（OS-04）
     const majorEvent=this._rollMajorEvent(st);
     if (majorEvent){
@@ -5199,6 +5201,61 @@ class MapScene extends GameKit.Scene {
     }
     this._save();
     this._checkEnd(game);
+  }
+  // 国人勢力の離反処理（OS-08）。帰属中の国人が民忠低下・本貫喪失・兵站危機で関係を落とし、閾値未満で離反する。
+  _processKokujinDefection(st){
+    const log=[]; const me=st.playerDaimyo;
+    if (!st.armedForces) return log;
+    KOKUJIN_FORCES.forEach(kf=>{
+      const af=st.armedForces[kf.id];
+      if (!af || !af.allied || af.vassalOf!==me) return;
+      const prov=st.provinces[kf.province];
+      let drop=0;
+      if (!prov || prov.owner!==me) drop+=25;              // 本貫国を喪失
+      else { const mc=prov.minchu??60; if (mc<30) drop+=8; else if (mc<50) drop+=3; }
+      if ((st.daimyo[me].rice||0)<=0) drop+=5;             // 兵糧欠乏で不満
+      if (drop>0) af.relation=Math.max(0, af.relation-drop);
+      // 離反判定: relation<40 で確率的に離反
+      if (af.relation<40 && srand(st) < (40-af.relation)/80){
+        af.allied=false; af.vassalOf=null;
+        const pn=DATA.provById[kf.province]?.nameJP||kf.province;
+        if (prov && prov.owner===me){
+          prov.soldiers=Math.max(0, prov.soldiers-Math.round(kf.soldiers*0.6));
+          prov.minchu=Math.max(0,(prov.minchu??60)-10);
+          log.push('【離反】'+kf.nameJP+'が離反した…（'+pn+'の兵力低下）  /  '+kf.nameEN+' has defected');
+        } else {
+          log.push('【離反】'+kf.nameJP+'が従属を解いた  /  '+kf.nameEN+' broke away');
+        }
+      }
+    });
+    return log;
+  }
+  // 寺社勢力の武力蜂起（OS-09）。未懐柔の一向宗系（combatBonus>0）が自国領で一揆を起こし、兵力・開発・民忠を損なう。
+  _processReligiousUprising(st){
+    const log=[]; const me=st.playerDaimyo;
+    RELIGIOUS_FORCES.forEach(rf=>{
+      const effect=RELIGIOUS_FORCE_EFFECTS[rf.id];
+      if (!effect || !(effect.combatBonus>0)) return;      // 武力を持つ一向宗系のみ蜂起
+      const af=st.armedForces && st.armedForces[rf.id];
+      const rel=af?af.relation:0;
+      if (af && (af.allied || rel>=50)) return;            // 同盟/懐柔済みなら蜂起しない
+      effect.provinces.forEach(epid=>{
+        const eprov=st.provinces[epid];
+        if (!eprov || eprov.owner!==me) return;
+        const mc=eprov.minchu??60;
+        const chance=0.03 + (rel<=0?0.04:0) + Math.max(0,(50-mc))/320 + effect.combatBonus*0.25;
+        if (srand(st) < chance){
+          const solLoss=Math.round(eprov.soldiers*(0.06+effect.combatBonus));
+          const devLoss=Math.round(4+effect.combatBonus*20);
+          eprov.soldiers=Math.max(0, eprov.soldiers-solLoss);
+          eprov.development=Math.max(0, eprov.development-devLoss);
+          eprov.minchu=Math.max(0, mc-10);
+          const pn=DATA.provById[epid]?.nameJP||epid;
+          log.push('【一向一揆】'+rf.nameJP+'が'+pn+'で蜂起！（兵-'+solLoss+'・開発-'+devLoss+'）  /  Ikko uprising at '+pn);
+        }
+      });
+    });
+    return log;
   }
   // 年次の寿命・下剋上イベント（年明けに1回）。死去・出奔を処理しログを返す
   _yearlyLifeEvents(st){
@@ -6582,7 +6639,7 @@ class MapScene extends GameKit.Scene {
     } else if (actionKind==='disrupt'){
       if (success){
         targetProv._disruptedUntil=st.turn+1;
-        this._flash(pname+'の軍勢が撹乱された！（出兵コスト2倍 1ターン）','Disrupted forces at '+pname+'!');
+        this._flash(pname+'の軍勢を撹乱！ 次の敵ターンの出兵を封じた','Disrupted '+pname+'! Its next attack is canceled');
       } else { this._flash('撹乱工作が失敗した','Disrupt failed'); }
     }
     this._save();
@@ -7413,6 +7470,12 @@ function runStrategicAI(st, d, log){
     const myStr = provinceStrength(st,pid);
     const enStr = Math.max(1, provinceStrength(st,best));
     if (myStr*aggro > enStr*1.05){
+      // 忍者の撹乱を受けた省は出兵を取りやめる（pendingMarchキャンセル相当 / OS-11）
+      if (prov._disruptedUntil && prov._disruptedUntil > st.turn){
+        prov.hasActed=true;
+        log.push(DATA.provById[pid].nameJP+'の'+d.nameJP+'勢は撹乱され、出兵を取りやめた  /  '+d.nameEN+"'s planned attack from "+DATA.provById[pid].nameEN+' was disrupted');
+        continue;
+      }
       // 出陣（自動解決）
       const send = Math.round((prov.soldiers-200)*0.8);
       if (send<300) continue;
@@ -7448,10 +7511,63 @@ function runStrategicAI(st, d, log){
       }
     }
   }
-  // AI 朝廷・幕府外交（sengoku_expansion_v1）
-  const d_dmyo=st.daimyo[d.id];
-  if (srand(st)<0.05){ const cr=d_dmyo.court_rel??10; if(cr<50&&d_dmyo.gold>500){ d_dmyo.court_rel=Math.min(100,cr+3); d_dmyo.gold-=100; d_dmyo.prestige=Math.min(300,(d_dmyo.prestige??5)+1); } }
-  if (srand(st)<0.03&&ownedProvinces(st,d.id).length>=10){ const sr=d_dmyo.shogunate_rel??10; if(sr<60&&d_dmyo.gold>500){ d_dmyo.shogunate_rel=Math.min(100,sr+4); d_dmyo.gold-=150; d_dmyo.prestige=Math.min(300,(d_dmyo.prestige??5)+2); } }
+  // AI 朝廷・幕府外交（本格意思決定 / OS-07）
+  aiCourtBakufuTurn(st, d, log);
+}
+
+/* ---- AI の朝廷・幕府外交（OS-07・本格化）: 官位/役職の実任官と征伐令 ---- */
+function aiCourtBakufuTurn(st, d, log){
+  const dm=st.daimyo[d.id]; if(!dm||!dm.alive) return;
+  const provCount=ownedProvinces(st, d.id).length;
+  const isBig=provCount>=6;
+  // --- 朝廷: 官位任官（条件を満たせば実際に任官する） ---
+  const curCourt=dm.kanoi_court ? COURT_KANOI_RANKS.findIndex(r=>r.name===dm.kanoi_court) : -1;
+  const nextCourt=COURT_KANOI_RANKS[curCourt+1];
+  if (nextCourt){
+    const cr=clamp(dm.court_rel??10,0,100), pr=clamp(dm.prestige??5,0,300);
+    if (cr>=nextCourt.courtRel && pr>=nextCourt.prestige && dm.gold>=nextCourt.cost+400){
+      if (srand(st) < (cr/100)*0.85){
+        dm.gold-=nextCourt.cost; dm.kanoi_court=nextCourt.name;
+        dm.prestige=clamp(pr+nextCourt.prestigeGain,0,300); dm.court_rel=clamp(cr+5,0,100);
+        if (isBig) log.push(d.nameJP+'家が朝廷より'+nextCourt.name+'に任官  /  '+d.nameEN+' is appointed '+nextCourt.nameEN);
+      }
+    } else if (cr<nextCourt.courtRel && dm.gold>800 && srand(st)<0.5){
+      dm.gold-=150; dm.court_rel=clamp(cr+5,0,100); dm.prestige=clamp(pr+2,0,300); // 献上して信用を高める
+    }
+  }
+  // --- 幕府: 役職申請（支配国数と信用が閾値に達したら任官） ---
+  const curShogun=dm.kanoi_shogun ? SHOGUN_ROLE_RANKS.findIndex(r=>r.name===dm.kanoi_shogun) : -1;
+  const nextRole=SHOGUN_ROLE_RANKS[curShogun+1];
+  if (nextRole){
+    const sr=clamp(dm.shogunate_rel??10,0,100), pr=clamp(dm.prestige??5,0,300);
+    if (sr>=nextRole.shogunRel && provCount>=nextRole.provinces && dm.gold>=nextRole.cost+400){
+      if (srand(st) < (sr/100)*0.9){
+        dm.gold-=nextRole.cost; dm.kanoi_shogun=nextRole.name;
+        dm.prestige=clamp(pr+nextRole.prestigeGain,0,300); dm.shogunate_rel=clamp(sr+5,0,100);
+        // 威信効果: 全大名との関係が僅かに改善
+        daimyoOf(st).forEach(o=>{ if(o.id!==d.id && st.daimyo[o.id] && st.daimyo[o.id].alive) addRel(st, d.id, o.id, 3); });
+        if (isBig) log.push(d.nameJP+'家が幕府より'+nextRole.name+'に任ぜられた  /  '+d.nameEN+' is named '+nextRole.nameEN);
+      }
+    } else if (sr<nextRole.shogunRel && provCount>=2 && dm.gold>800 && srand(st)<0.4){
+      dm.gold-=150; dm.shogunate_rel=clamp(sr+4,0,100); dm.prestige=clamp(pr+2,0,300);
+    }
+  }
+  // --- 征伐令: 大勢力かつ高威信のAIが最強のライバルへ大義名分を得る ---
+  if (isBig && clamp(dm.prestige??5,0,300)>=120 && clamp(dm.shogunate_rel??10,0,100)>=60 && dm.gold>=900 && srand(st)<0.04){
+    let target=null, tStr=-1;
+    daimyoOf(st).forEach(o=>{
+      if (o.id===d.id || !(st.daimyo[o.id]&&st.daimyo[o.id].alive)) return;
+      if (areAllied(st,d.id,o.id) || isVassalBond(st,d.id,o.id)) return;
+      const s=ownedProvinces(st,o.id).length; if (s>tStr){ tStr=s; target=o; }
+    });
+    if (target && tStr>=4){
+      dm.gold-=500; dm.prestige=clamp((dm.prestige??5)+20,0,300); dm.shogunate_rel=clamp((dm.shogunate_rel??10)+10,0,100);
+      const tdm=st.daimyo[target.id];
+      tdm.shogunate_rel=clamp((tdm.shogunate_rel??10)-20,0,100); tdm.prestige=clamp((tdm.prestige??5)-15,0,300);
+      daimyoOf(st).forEach(o=>{ if(o.id!==d.id && o.id!==target.id && st.daimyo[o.id] && st.daimyo[o.id].alive) addRel(st, o.id, target.id, -12); });
+      log.push(d.nameJP+'家が幕府に'+target.nameJP+'家への征伐令を要請（天下の大義名分）  /  '+d.nameEN+' obtains a subjugation order against '+target.nameEN);
+    }
+  }
 }
 
 /* ---- 戦闘結果を state に適用（手動・自動共通） ---- */
