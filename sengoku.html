@@ -4093,15 +4093,42 @@ class MapScene extends GameKit.Scene {
     if (!text){ this._csvNotify('siro_ichi.csv \u306e\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f'); return; }
     const rows=parseCastlePositionCsv(text);
     if (!rows.length){ this._csvNotify('\u8aad\u307f\u8fbc\u3081\u308b\u30c7\u30fc\u30bf\u304c\u3042\u308a\u307e\u305b\u3093\u3067\u3057\u305f'); return; }
-    applyCastlePositionCsvRows(rows, false);
     const st=this.state;
+    const daimyos=daimyoOf(st).filter(d=>st.daimyo[d.id]);
+    // CSVにあるが未登録の城を新規作成する（一覧の件数がCSVの件数と一致するように）
+    // これを applyCastlePositionCsvRows より前に行い、座標・種類も新規城へ反映されるようにする
+    const img=ASSETS && ASSETS.img && ASSETS.img.map;
+    const iw=img && (img.naturalWidth||img.width), ih=img && (img.naturalHeight||img.height);
+    const knownCastle={}, knownProv={};
+    (DATA.provinces||[]).forEach(p=>{
+      if (isCastleDeleted(p.id)) return;
+      knownCastle[castleNameForProvince(p)]=p.id;
+      if (!(p.nameJP in knownProv)) knownProv[p.nameJP]=p.id;
+    });
+    let created=0;
+    rows.forEach(r=>{
+      if (knownCastle[r.castleName] || knownProv[r.provinceName]) return;
+      const cname=(r.castleName||r.provinceName||'').trim();
+      if (!cname) return;
+      const dm=daimyos.find(d=>d.nameJP===r.daimyo||d.nameJP+'家'===r.daimyo);
+      const mx=iw?clamp01(r.x/iw):0.5, my=ih?clamp01(r.y/ih):0.5;
+      const world=mapImagePointToWorld(mx,my);
+      const neighborId=this._nearestProvinceByWorld(world.x, world.y);
+      const pname=(r.provinceName||cname.replace(/城$/,'')||'追加国').trim();
+      const id=customCastleId(cname);
+      const c={id, castleName:cname, provinceName:pname, daimyoId:(dm?dm.id:st.playerDaimyo), mx, my, x:Math.round(r.x), y:Math.round(r.y), neighborId, terrain:'plain', kokudaka:50};
+      CUSTOM_CASTLES.push(c); addCustomCastleToData(c); ensureCustomCastlesInState(st);
+      knownCastle[cname]=id; if (!(pname in knownProv)) knownProv[pname]=id;
+      created++;
+    });
+    if (created){ saveCustomCastles(); saveCastlePositionOverrides(); }
+    applyCastlePositionCsvRows(rows, false);
     const byCastle={}, byProv={};
     (DATA.provinces||[]).forEach(p=>{
       if (isCastleDeleted(p.id)) return;
       byCastle[castleNameForProvince(p)]=p.id;
       if (!(p.nameJP in byProv)) byProv[p.nameJP]=p.id;
     });
-    const daimyos=daimyoOf(st).filter(d=>st.daimyo[d.id]);
     let lvApplied=0;
     rows.forEach(r=>{
       const id=byCastle[r.castleName]||byProv[r.provinceName];
@@ -4131,7 +4158,7 @@ class MapScene extends GameKit.Scene {
     this.cells=computeProvinceCells();
     this._save();
     if (game && game.audio) game.audio.beep(660,0.08,'triangle');
-    this._csvNotify(rows.length+'\u57ce\u306e\u60c5\u5831\u3092\u66f4\u65b0\u3057\u307e\u3057\u305f\uff08\u57ceLv '+lvApplied+'\u4ef6\u53cd\u6620\uff09');
+    this._csvNotify(rows.length+'\u57ce\u306e\u60c5\u5831\u3092\u53cd\u6620\u3057\u307e\u3057\u305f\uff08\u65b0\u898f'+created+'\u57ce\u8ffd\u52a0 / \u57ceLv '+lvApplied+'\u4ef6\uff09');
     if (document.body.classList.contains('castle-list-open')) this._openCastleListPanel(game);
   }
   _startReligiousEdit(game){
