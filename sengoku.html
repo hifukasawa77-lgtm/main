@@ -955,22 +955,40 @@ function parseCastlePositionCsv(text){
   }
   return rows;
 }
-// CSVの座標(地図画像ピクセル)を城配置オーバーライドへ反映する
-// fillOnly=true の場合、既にオーバーライド済みの城は上書きしない（同梱シード用）
-function applyCastlePositionCsvRows(rows, fillOnly){
-  if (!Array.isArray(rows) || !rows.length) return 0;
+// CSV行→城IDの割当を計算する（rowsと同じ長さの配列を返す。未割当はnull）
+// 城名一致を最優先し、国名一致は「他の行に割当済みでない城」へのフォールバックに限定する。
+// これにより同じ国名の行が複数あっても1つの城へ潰れず、余った行は新規城として扱える。
+function assignCastleRowIds(rows){
   const byCastle={}, byProv={};
   (DATA.provinces||[]).forEach(p=>{
     if (isCastleDeleted(p.id)) return;
     byCastle[castleNameForProvince(p)]=p.id;
     if (!(p.nameJP in byProv)) byProv[p.nameJP]=p.id;
   });
+  const ids=new Array(rows.length).fill(null);
+  const claimed={};
+  rows.forEach((r,i)=>{
+    const id=byCastle[r.castleName];
+    if (id){ ids[i]=id; claimed[id]=true; }
+  });
+  rows.forEach((r,i)=>{
+    if (ids[i]) return;
+    const id=byProv[r.provinceName];
+    if (id && !claimed[id]){ ids[i]=id; claimed[id]=true; }
+  });
+  return ids;
+}
+// CSVの座標(地図画像ピクセル)を城配置オーバーライドへ反映する
+// fillOnly=true の場合、既にオーバーライド済みの城は上書きしない（同梱シード用）
+function applyCastlePositionCsvRows(rows, fillOnly){
+  if (!Array.isArray(rows) || !rows.length) return 0;
+  const ids=assignCastleRowIds(rows);
   const img=ASSETS && ASSETS.img && ASSETS.img.map;
   const iw=img && (img.naturalWidth || img.width);
   const ih=img && (img.naturalHeight || img.height);
   let applied=0, typeApplied=0;
-  rows.forEach(r=>{
-    const id = byCastle[r.castleName] || byProv[r.provinceName];
+  rows.forEach((r,i)=>{
+    const id = ids[i];
     if (!id) return;
     if (fillOnly && CASTLE_POS_OVERRIDES[id]) return; // ユーザー編集済みは温存
     const rec={x:r.x, y:r.y};
@@ -4375,17 +4393,16 @@ class MapScene extends GameKit.Scene {
     // これを applyCastlePositionCsvRows より前に行い、座標・種類も新規城へ反映されるようにする
     const img=ASSETS && ASSETS.img && ASSETS.img.map;
     const iw=img && (img.naturalWidth||img.width), ih=img && (img.naturalHeight||img.height);
-    const knownCastle={}, knownProv={};
-    (DATA.provinces||[]).forEach(p=>{
-      if (isCastleDeleted(p.id)) return;
-      knownCastle[castleNameForProvince(p)]=p.id;
-      if (!(p.nameJP in knownProv)) knownProv[p.nameJP]=p.id;
-    });
+    // 行→城の割当: 城名一致優先、国名一致は未割当の城のみ。割当てられなかった行は新規城にする
+    // （同じ国名の行が複数あっても既存1城へ潰れて上書きされないようにする）
+    const ids=assignCastleRowIds(rows);
+    const newByName={};
     let created=0;
-    rows.forEach(r=>{
-      if (knownCastle[r.castleName] || knownProv[r.provinceName]) return;
+    rows.forEach((r,i)=>{
+      if (ids[i]) return;
       const cname=(r.castleName||r.provinceName||'').trim();
       if (!cname) return;
+      if (newByName[cname]){ ids[i]=newByName[cname]; return; }
       const dm=daimyos.find(d=>d.nameJP===r.daimyo||d.nameJP+'家'===r.daimyo);
       const mx=iw?clamp01(r.x/iw):0.5, my=ih?clamp01(r.y/ih):0.5;
       const world=mapImagePointToWorld(mx,my);
@@ -4394,21 +4411,15 @@ class MapScene extends GameKit.Scene {
       const id=customCastleId(cname);
       const c={id, castleName:cname, provinceName:pname, daimyoId:(dm?dm.id:st.playerDaimyo), mx, my, x:Math.round(r.x), y:Math.round(r.y), neighborId, terrain:'plain', kokudaka:50};
       CUSTOM_CASTLES.push(c); addCustomCastleToData(c); ensureCustomCastlesInState(st);
-      knownCastle[cname]=id; if (!(pname in knownProv)) knownProv[pname]=id;
+      ids[i]=id; newByName[cname]=id;
       created++;
     });
     if (created){ saveCustomCastles(); saveCastlePositionOverrides(); }
     applyCastlePositionCsvRows(rows, false);
-    const byCastle={}, byProv={};
-    (DATA.provinces||[]).forEach(p=>{
-      if (isCastleDeleted(p.id)) return;
-      byCastle[castleNameForProvince(p)]=p.id;
-      if (!(p.nameJP in byProv)) byProv[p.nameJP]=p.id;
-    });
     let lvApplied=0, applied=0;
     const unmatched=[];
-    rows.forEach(r=>{
-      const id=byCastle[r.castleName]||byProv[r.provinceName];
+    rows.forEach((r,i)=>{
+      const id=ids[i];
       if (!id){ unmatched.push(r); return; }
       applied++;
       const p=DATA.provById[id]; const prov=st.provinces[id];
