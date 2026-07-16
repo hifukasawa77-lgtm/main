@@ -22,7 +22,11 @@ related: ["[[MOC]]", "[[second-brain-system]]", "[[0003-recursive-self-improveme
 - `CLAUDE.md` — Obsidianセクションに自己改善ループを明記
 
 ## 現在の状態
-2026-06-30: 初期構築完了。recall hook に知見インデックス追加、`/self-improve` スキル新設、ADR [[0003-recursive-self-improvement-loop]] 記録。
+- 2026-06-30: 初期構築完了。recall hook に知見インデックス追加、`/self-improve` スキル新設 → [[0003-recursive-self-improvement-loop]]
+- 2026-06-30〜07-01（1st〜10th）: ドリフト是正→監査→`harness-lint.sh` 機械化→CI強制化（`.github/workflows/harness-lint.yml`）。スキル8本→23本 → [[0004-code-generator-color-scheme-align]]〜[[0010-skills-expansion]]
+- 2026-07-09（11th）: recall hook のmtimeバグを「hook出力とVault実態の突き合わせ」で発見・修正＋lint検査#7 → [[0011-mtime-free-file-selection]]
+- 2026-07-13（12th）: Canvasパフォーマンス実証知見をスキル昇格 → [[0012-canvas-perf-patterns-promotion]] / release-check是正 → [[0013-release-check-scripts-exclusion]]
+- 2026-07-16（13th）: CSV取込マッチング・グリッド整合機械検証を昇格 → [[0014-import-matching-and-grid-verification-promotion]]。未昇格Dailyの遡り点検を実施し、それ自体をlint検査#8（警告△・非ブロッキング）へ機械化 → [[0015-unpromoted-learning-lint]]。突き合わせ・遡り点検はスキル手順1へ恒久化。**ループは「蓄積→想起→反映」に加え昇格漏れの検知まで機械化された状態**（lint検査#1〜#8）。
 
 ## 既知の課題・TODO
 - 反映は半自動（Claude判断＋ユーザー承認）。hookはLLMを呼べないため完全自動化はしない方針（暴走防止）。

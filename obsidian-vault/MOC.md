@@ -35,6 +35,8 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0011-mtime-free-file-selection]] — mtime依存のファイル選択を廃止（recall hook誤想起の修正）＋lint検査#7
 - [[0012-canvas-perf-patterns-promotion]] — Canvasパフォーマンス実証知見（メモ化/オフスクリーン合成/attribution）とOG画像知見をスキルへ昇格
 - [[0013-release-check-scripts-exclusion]] — release-check検査#2からscripts/を除外＋grep正規表現バグ2件（行頭直書き取りこぼし/BRE `\+` 量指定子）を修正
+- [[0014-import-matching-and-grid-verification-promotion]] — CSV取込マッチング（claimedチェック/一括割当）をcodingへ、グリッド×背景整合・BFS到達性の機械検証をgame-devへ昇格
+- [[0015-unpromoted-learning-lint]] — 未昇格の学びを含むDailyをharness-lint検査#8で機械検出（警告のみ・非ブロッキング）
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
