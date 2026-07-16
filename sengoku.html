@@ -601,6 +601,26 @@ function religiousForcePoint(force){
 function setReligiousForcePosition(id, x, y){
   RELIGIOUS_FORCE_POSITIONS[id] = {x:round6(x), y:round6(y)};
 }
+const RESOURCE_POS_STORE = 'sengokuResourceMarkerPositions:v1';
+function loadResourceMarkerPositions(){
+  try { const v=JSON.parse(localStorage.getItem(RESOURCE_POS_STORE)||'{}'); return v&&typeof v==='object'&&!Array.isArray(v)?v:{}; }
+  catch(_){ return {}; }
+}
+const RESOURCE_MARKER_POSITIONS = loadResourceMarkerPositions();
+function saveResourceMarkerPositions(){
+  try { localStorage.setItem(RESOURCE_POS_STORE, JSON.stringify(RESOURCE_MARKER_POSITIONS)); } catch(_){}
+}
+function resourceMarkerPoint(marker){
+  const p=RESOURCE_MARKER_POSITIONS[marker.id];
+  if (p && Number.isFinite(p.x) && Number.isFinite(p.y)){
+    const c=MAP.world||MAP.clip;
+    return [clampRange(p.x,c.x+18,c.x+c.w-18), clampRange(p.y,c.y+18,c.y+c.h-18)];
+  }
+  return geoToScreen(marker.lon, marker.lat);
+}
+function setResourceMarkerPosition(id, x, y){
+  RESOURCE_MARKER_POSITIONS[id]={x:round6(x), y:round6(y)};
+}
 const CUSTOM_CASTLE_STORE = 'sengokuCustomCastles:v1';
 function loadCustomCastles(){
   try { const v=JSON.parse(localStorage.getItem(CUSTOM_CASTLE_STORE) || '[]'); return Array.isArray(v)?v:[]; }
@@ -5105,7 +5125,7 @@ class MapScene extends GameKit.Scene {
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
-    this.showClans=false; this.selClan=null; this.ploy=null; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.dragReligious=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
+    this.showClans=false; this.selClan=null; this.ploy=null; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.dragReligious=null; this.dragResource=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
     this.diploTab='clan'; this.armedSubTab='naval'; this.selForce=null; this.ninjaAction=null;
     this.allGenPage=0; this.allGenSelected=null; this.historyEventPage=0;
     if (!Number.isFinite(this.state.month)) this.state.month = [3,6,9,12][this.state.season] || 1;
@@ -5658,12 +5678,14 @@ class MapScene extends GameKit.Scene {
     this.religiousEdit=true; this.castleEdit=false; this.castleMetaEdit=false; this.dragCastle=null; this.dragReligious=null;
     this.showClans=false; this.mode='select'; this.selected=null; this.hover=null;
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
-    this._flash('寺社勢力マーカーをドラッグして移動できます', 'Drag religious force markers to reposition them');
+    this.dragResource=null;
+    this._flash('独立勢力・施設マーカーをドラッグして移動できます', 'Drag force/facility markers to reposition');
   }
   _finishReligiousEdit(game){
-    this.religiousEdit=false; this.dragReligious=null; saveReligiousForcePositions();
+    this.religiousEdit=false; this.dragReligious=null; this.dragResource=null;
+    saveReligiousForcePositions(); saveResourceMarkerPositions();
     if (game && game.audio) game.audio.beep(880,0.08,'triangle');
-    this._flash('寺社勢力の位置を保存しました', 'Religious force positions saved');
+    this._flash('独立勢力・施設の位置を保存しました', 'Marker positions saved');
   }
   _updateReligiousEditor(game, p, btns){
     if (p.justPressed){
@@ -5673,14 +5695,20 @@ class MapScene extends GameKit.Scene {
           game.audio.beep(600,0.05,'sine'); b.action(game); return;
         }
       }
-      const hit=this._pickReligiousForce(p.x,p.y);
-      this.press={x:p.x, y:p.y, dragged:false, onBtn:false, onReligious:!!hit};
+      const hitR=this._pickReligiousForce(p.x,p.y);
+      const hitM=hitR?null:this._pickResourceMarker(p.x,p.y);
+      this.press={x:p.x, y:p.y, dragged:false, onBtn:false, onReligious:!!(hitR||hitM)};
       this.dragLast={x:p.x, y:p.y};
-      if (hit){
-        const w=this._screenToWorld(p.x,p.y), pt=religiousForcePoint(hit);
-        this.dragReligious={id:hit.id, ox:w.x-pt[0], oy:w.y-pt[1]};
-      } else {
+      if (hitR){
+        const w=this._screenToWorld(p.x,p.y), pt=religiousForcePoint(hitR);
+        this.dragReligious={id:hitR.id, ox:w.x-pt[0], oy:w.y-pt[1]};
+        this.dragResource=null;
+      } else if (hitM){
+        const w=this._screenToWorld(p.x,p.y), pt=resourceMarkerPoint(hitM);
+        this.dragResource={id:hitM.id, ox:w.x-pt[0], oy:w.y-pt[1]};
         this.dragReligious=null;
+      } else {
+        this.dragReligious=null; this.dragResource=null;
       }
     }
     if (this.press && p.isDown){
@@ -5688,6 +5716,9 @@ class MapScene extends GameKit.Scene {
       if (this.dragReligious){
         const w=this._screenToWorld(p.x,p.y), d=this.dragReligious, c=MAP.world || MAP.clip;
         setReligiousForcePosition(d.id, clamp(w.x-d.ox,c.x+18,c.x+c.w-18), clamp(w.y-d.oy,c.y+18,c.y+c.h-18));
+      } else if (this.dragResource){
+        const w=this._screenToWorld(p.x,p.y), d=this.dragResource, c=MAP.world || MAP.clip;
+        setResourceMarkerPosition(d.id, clamp(w.x-d.ox,c.x+18,c.x+c.w-18), clamp(w.y-d.oy,c.y+18,c.y+c.h-18));
       } else if (this.press.dragged && this.dragLast){
         this.cam.cx -= (p.x-this.dragLast.x)/this.cam.zoom;
         this.cam.cy -= (p.y-this.dragLast.y)/(this.cam.zoom*MAP_VERTICAL_STRETCH);
@@ -5698,6 +5729,7 @@ class MapScene extends GameKit.Scene {
     if (this.press && !p.isDown){
       const press=this.press; this.press=null; this.dragLast=null;
       if (this.dragReligious){ saveReligiousForcePositions(); this.dragReligious=null; }
+      else if (this.dragResource){ saveResourceMarkerPositions(); this.dragResource=null; }
       else if (!press.dragged) this._recordMapCoordinateFromScreen(p.x,p.y);
     }
   }
@@ -5710,6 +5742,17 @@ class MapScene extends GameKit.Scene {
       if (d<bestDist){ bestDist=d; best=force; }
     }
     return bestDist<=48 ? best : null;
+  }
+  _pickResourceMarker(x,y){
+    if (!pointInRect({x,y}, MAP.clip)) return null;
+    let best=null, bestDist=Infinity;
+    for (const marker of RESOURCE_MARKERS){
+      if (!this.cam || this.cam.zoom <= MAP_SUBCASTLE_ZOOM_THRESHOLD) continue;
+      const pt=resourceMarkerPoint(marker), screen=this._worldToScreen(pt[0],pt[1]);
+      const d=Math.hypot(x-screen.x,y-screen.y);
+      if (d<bestDist){ bestDist=d; best=marker; }
+    }
+    return bestDist<=40 ? best : null;
   }
   _updateCastleEditor(game, p, btns){
     if (p.justPressed){
@@ -7008,7 +7051,7 @@ class MapScene extends GameKit.Scene {
     bs.push({x:colX0, y:rowDev0, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'大名編集', sz:dSz2, action:g=>this._openDaimyoEditPanel(g)});
     bs.push({x:colX0, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'城編集一覧', sz:dSz2, action:g=>this._openCastleListPanel(g)});
     bs.push({x:colX0, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:dSz2, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }});
-    bs.push({x:colX1, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.religiousEdit?'完了':'寺社勢力位置編集', sz:dSz2, action:g=>{ this.religiousEdit?this._finishReligiousEdit(g):this._startReligiousEdit(g); }});
+    bs.push({x:colX1, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.religiousEdit?'完了':'勢力・施設 位置編集', sz:dSz2, action:g=>{ this.religiousEdit?this._finishReligiousEdit(g):this._startReligiousEdit(g); }});
     bs.push({x:colX2, y:rowDev2, w:dW, h:dH, skin:'topBar', label:'家宝一覧', sz:dSz2, action:()=>this._openTreasureList()});
     if (this.lastMapCoord){
       bs.push({x:W-158, y:164, w:120, h:70, skin:'topBar', label:'コピー', sz:22, action:()=>{
@@ -7379,14 +7422,18 @@ class MapScene extends GameKit.Scene {
       const s=lscale*MK;
       if (s!==1){ ctx.save(); ctx.translate(it.cx, it.cy); ctx.scale(s, s); ctx.translate(-it.cx, -it.cy); }
       drawCastleMarker(ctx, it.ddId, it.cx-5, it.cy+9, it.color);
-      drawVerticalLabelCached(ctx, it.name, it.nx, it.ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
+      // zoom 対応ラベル位置: 家紋直上に固定（lscale で拡縮後2px のギャップ）
+      const _lh=Math.max(18, Array.from(it.name).length*7+5);
+      const _eff=this.cam.zoom*lscale; // min(zoom, LABEL_ZOOM_CLAMP)
+      const _ny=it.cy+1.5-_lh-2/_eff;
+      drawVerticalLabelCached(ctx, it.name, it.nx, _ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
       if (s!==1) ctx.restore();
     }
     // 71%以上の拡大率でのみ支城・独立勢力マーカーを表示する
     if (showSubCastles){
     // 寺社勢力は領地を奪わず、史跡位置に独立勢力マーカーとして表示する。
     for (const marker of RESOURCE_MARKERS){
-      const [cx, cy] = geoToScreen(marker.lon, marker.lat);
+      const [cx, cy] = resourceMarkerPoint(marker);
       if (cx<vx0 || cx>vx1 || cy<vy0 || cy>vy1) continue;
       const labelSize = marker.nameJP.length >= 6 ? 6 : 7;
       const gap = labelSize;
