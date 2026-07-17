@@ -10138,8 +10138,8 @@ class BattleScene extends GameKit.Scene {
     const gens=(force.generals||[]).slice().sort((a,b)=>{ const ga=DATA.genById[a],gb=DATA.genById[b]; return (gb?gb.stats.tou+gb.stats.bu:0)-(ga?ga.stats.tou+ga.stats.bu:0); });
     const sized=types.map(t=>({t,n:Math.max(1,Math.round(total*comp[t]))})).sort((a,b)=>b.n-a.n);
     let gi=0; const siegeDef=isDef&&this.battleType==='siege';
-    // 守備側の布陣は戦場外(sky=地平線より上)を避け、地上の最初の2行に置く
-    const defRow0=this.fieldSkyRows||0;
+    // 守備(敵)側の前線は「地平線の稜線」ではなく開けた戦場の中に置く（_fieldDefenderFrontRow）
+    const defRow0=this.battleType==='field'?this._fieldDefenderFrontRow():(this.fieldSkyRows||0);
     const baseRow=siegeDef?6:(isDef?defRow0:HEX.rows-1), row2=siegeDef?7:(isDef?defRow0+1:HEX.rows-2);
     sized.forEach((s,idx)=>{
       const gid=gi<gens.length?gens[gi++]:null, gstat=gid?DATA.genById[gid].stats:{tou:48,bu:48,chi:48,sei:48};
@@ -10152,21 +10152,38 @@ class BattleScene extends GameKit.Scene {
     });
   }
   stackAt(col,row){ return this.stacks.find(s=>s.col===col&&s.row===row); }
-  // 野戦の初期配置: 希望地点が戦場外(sky)・水面・山・既占有なら、BFSで最寄りの空き平地/森を返す
+  // 守備(敵)前線の行を決める。トレースは「遠くの平地」と「手前の平地」を区別できないため、
+  // 空(sky)と遠景の水面/川/山の帯を飛ばし、地平線より下で"開けた地面(平地/森)"が4割以上を占める
+  // 最初の行を前線とする。さらに最低 FRONT_MIN まで下げ、駒が地平線の稜線に浮くのを防ぐ
+  // （Konodai/Tedorigawa/Keicho-Dewa 等、遠景の川岸・山並みへ敵が配置される不具合の是正）。
+  _fieldDefenderFrontRow(){
+    const sky=this.fieldSkyRows||0, FRONT_MIN=4, FRONT_MAX=7;
+    if (!this.fieldLayout) return clamp(sky, FRONT_MIN, FRONT_MAX);
+    let firstOpen=Math.max(sky, FRONT_MIN);
+    for (let r=sky;r<HEX.rows;r++){
+      let open=0, total=0;
+      for (let c=0;c<HEX.cols;c++){ const t=this.terrainMap[c+','+r]; if (t==='sky') continue; total++; if (t==='plain'||t==='forest') open++; }
+      if (total>0 && open>=total*0.4){ firstOpen=r; break; }
+    }
+    return clamp(firstOpen, FRONT_MIN, FRONT_MAX);
+  }
+  // 野戦の初期配置: 希望地点が戦場外(sky)・水面・山・既占有なら、最寄りの空き平地/森へ寄せる。
+  // 同距離の候補が複数あるときは「より手前(row大=地平線から遠い)」を優先し、上(稜線側)へ寄らないようにする。
   _fieldSpawnSpot(prefCol, prefRow){
     const ok=(c,r)=>{ const t=this.terrainMap[c+','+r]; return t!=='sky' && t!=='water' && t!=='mountain' && !this.stackAt(c,r); };
     if (ok(prefCol,prefRow)) return [prefCol,prefRow];
     const seen={}; seen[prefCol+','+prefRow]=true;
     let frontier=[[prefCol,prefRow]];
     while (frontier.length){
-      const next=[];
+      const next=[]; const ring=[];
       for (const [cc,cr] of frontier){
         for (const [nc,nr] of hexNeighbors(cc,cr)){
           const k=nc+','+nr; if (seen[k]) continue; seen[k]=true;
-          if (ok(nc,nr)) return [nc,nr];
-          next.push([nc,nr]);
+          if (ok(nc,nr)) ring.push([nc,nr]); else next.push([nc,nr]);
         }
       }
+      // 同一リング内は下方(row大)優先・次に希望列に近い順
+      if (ring.length){ ring.sort((a,b)=> (b[1]-a[1]) || (Math.abs(a[0]-prefCol)-Math.abs(b[0]-prefCol))); return ring[0]; }
       frontier=next;
     }
     return [prefCol,prefRow];
@@ -10341,7 +10358,9 @@ class BattleScene extends GameKit.Scene {
   _checkKeep(game){
     if (!this.siege || !this.keepHex || this.over) return false;
     const occ=this.stackAt(this.keepHex[0], this.keepHex[1]);
-    if (occ && occ.side===this.playerSide){ this._finish(game, true, '\u5929\u5b88\u3092\u5236\u5727 / Keep captured'); return true; }
+    // \u5929\u5b88\u306e\u5236\u5727\uff1d\u300c\u653b\u6483\u5074\u300d\u304c\u5929\u5b88\u30de\u30b9\u3092\u5360\u62e0\u3057\u305f\u3068\u304d\u3002\u5b88\u5099\u5074\u306e\u5c06\u306f\u958b\u5e55\u304b\u3089\u5929\u5b88\u306b\u5ea7\u3063\u3066\u3044\u308b\u305f\u3081\u3001
+    // playerSide \u57fa\u6e96\u306b\u3059\u308b\u3068\u9632\u885b\u6226(playerSide==='def')\u3067\u81ea\u8ecd\u306e\u5c06\u304c\u5373\u300c\u5236\u5727\u300d\u6271\u3044\u306b\u306a\u308a\u5373\u6557\u5317\u3057\u3066\u3044\u305f\u3002
+    if (occ && occ.side==='atk'){ this._finish(game, true, '\u5929\u5b88\u3092\u5236\u5727 / Keep captured'); return true; }
     return false;
   }
   _resolveMelee(atk, def){
