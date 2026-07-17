@@ -3680,6 +3680,35 @@ function drawTerrainBackdrop(ctx, mapImg, opts={}){
     ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(w.x, w.y, w.w, w.h);
   }
 }
+// 高ズーム時に地図へ重ねる微細地形グレイン（タイル可能な2オクターブ値ノイズ）。
+// 元画像(1672px幅)の解像度限界により高ズームは平滑にぼけるため、スクリーン解像度の
+// 微細テクスチャをoverlay合成して知覚的な精細感を補う（ディテールテクスチャ手法）。
+let _terrainDetailTile=null;
+function terrainDetailTile(){
+  if (_terrainDetailTile) return _terrainDetailTile;
+  const s=256;
+  const cv=document.createElement('canvas'); cv.width=s; cv.height=s;
+  const c=cv.getContext('2d'); const im=c.createImageData(s,s); const d=im.data;
+  const mk=(n)=>{ const a=new Float32Array(n*n); for(let i=0;i<n*n;i++) a[i]=Math.random(); return a; };
+  // ラップ付きバイリニア補間（256pxタイルが継ぎ目なく繰り返せる）
+  const smp=(a,n,x,y)=>{
+    const fx=x*n/s, fy=y*n/s;
+    const x0=Math.floor(fx)%n, y0=Math.floor(fy)%n, x1=(x0+1)%n, y1=(y0+1)%n;
+    const tx=fx-Math.floor(fx), ty=fy-Math.floor(fy);
+    return (a[y0*n+x0]*(1-tx)+a[y0*n+x1]*tx)*(1-ty)+(a[y1*n+x0]*(1-tx)+a[y1*n+x1]*tx)*ty;
+  };
+  // canvas(2560px)はCSSで最大1/3程度に縮小表示されるため、縮小後も潰れない粗めの粒度にする
+  // （o1: 32px / o2: 8px 周期。表示上はPC約20px/5px・スマホ約11px/2.7px）
+  const o1=mk(8), o2=mk(32);
+  for(let y=0;y<s;y++) for(let x=0;x<s;x++){
+    const v=smp(o1,8,x,y)*0.5+smp(o2,32,x,y)*0.5;
+    const g=Math.round(90+v*76);   // 90..166（overlay合成の中立値128を挟む振幅）
+    const i=(y*s+x)*4; d[i]=g; d[i+1]=g; d[i+2]=g; d[i+3]=255;
+  }
+  c.putImageData(im,0,0);
+  _terrainDetailTile=cv;
+  return cv;
+}
 function drawCoastlineGuide(ctx){
   ctx.save();
   ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
@@ -7585,6 +7614,10 @@ class MapScene extends GameKit.Scene {
         this._camApply(sc);
         drawTerrainBackdrop(sc, ASSETS.img.map, {quality:'high', sharpen:c.zoom>=2});
         sc.restore();
+        sc.save();
+        sc.translate(-MAP.clip.x, -MAP.clip.y);
+        this._drawTerrainDetail(sc);
+        sc.restore();
         this._terrScreenValid=true;
       }
       ctx.drawImage(this._terrScreenCanvas, MAP.clip.x, MAP.clip.y);
@@ -7593,8 +7626,26 @@ class MapScene extends GameKit.Scene {
       this._camApply(ctx);
       drawTerrainBackdrop(ctx, ASSETS.img.map);
       ctx.restore();
+      this._drawTerrainDetail(ctx);
       this._terrScreenKey=key; this._terrScreenValid=false;
     }
+  }
+  // 高ズーム時のみ、スクリーン解像度の微細グレインをoverlay合成で地図に重ねる。
+  // 元画像の解像度限界でのっぺりぼける拡大表示に、知覚的な精細感を足す（ディテールテクスチャ）。
+  // タイル位相はワールド原点のスクリーン座標に固定し、パン時は地図と一体で流れる。
+  _drawTerrainDetail(ctx){
+    const z=this.cam.zoom;
+    const alpha=Math.min(0.5, Math.max(0,(z-6)/6)*0.5);   // 倍率134%から漸増、269%で最大
+    if (alpha<=0.01) return;
+    const p=this._worldToScreen(MAP.world.x, MAP.world.y);
+    const ox=((p.x%256)+256)%256, oy=((p.y%256)+256)%256;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(MAP.clip.x,MAP.clip.y,MAP.clip.w,MAP.clip.h); ctx.clip();
+    ctx.globalAlpha=alpha; ctx.globalCompositeOperation='overlay';
+    ctx.translate(ox, oy);
+    ctx.fillStyle=ctx.createPattern(terrainDetailTile(),'repeat');
+    ctx.fillRect(MAP.clip.x-ox-256, MAP.clip.y-oy-256, MAP.clip.w+512, MAP.clip.h+512);
+    ctx.restore();
   }
   _drawCastleLayer(ctx){
     // 城レイヤーのラベル配置はワールド座標系（カメラ変換はctx側）で計算されるため、
