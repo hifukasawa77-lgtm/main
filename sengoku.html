@@ -360,6 +360,10 @@
 </head>
 <body>
 <canvas id="game"></canvas>
+<!-- 地形の静止時ベイクで使うアンシャープ畳み込み（drawTerrainBackdropのquality:'high'経路から参照） -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <filter id="terrainSharpen"><feConvolveMatrix order="3" kernelMatrix="0 -0.55 0 -0.55 3.2 -0.55 0 -0.55 0" preserveAlpha="true"/></filter>
+</defs></svg>
 <button id="fsToggle" class="fs-toggle" type="button" aria-label="全画面 / Fullscreen">⛶</button>
 <button id="bgmToggle" class="bgm-toggle" type="button" aria-label="BGM オン/オフ / Toggle music">♪</button>
 <button id="helpToggle" class="bgm-toggle help-toggle" type="button" aria-label="遊び方 / Help">？</button>
@@ -516,6 +520,21 @@ const treasureListPanel = document.getElementById('treasureListPanel');
 const W = 2560, H = 2080;
 const IS_TOUCH = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || ('ontouchstart' in window);
 const canvas = document.getElementById('game');
+// スマホ等の狭い画面では canvas(2560x2080固定)がCSSで画面いっぱいに引き伸ばされる際の
+// 縮小率が大きく（特に横向きスマホは縦方向が強く圧縮される）、文字が物理的に小さくなり
+// 見づらくなる。画面の短辺スケールに応じて文字サイズを底上げして補う。
+let UI_SCALE = 1;
+function computeUiScale(){
+  if (!IS_TOUCH) return 1;
+  const scaleX = window.innerWidth / W, scaleY = window.innerHeight / H;
+  const minScale = Math.min(scaleX, scaleY);
+  const TARGET_MIN_SCALE = 0.40;
+  if (minScale >= TARGET_MIN_SCALE) return 1;
+  return Math.min(1.8, TARGET_MIN_SCALE / minScale);
+}
+UI_SCALE = computeUiScale();
+window.addEventListener('resize', () => { UI_SCALE = computeUiScale(); });
+window.addEventListener('orientationchange', () => { setTimeout(() => { UI_SCALE = computeUiScale(); }, 300); });
 const MAP_PAN = { enabled:false, active:false, dragging:false, startX:0, startY:0, scrollX:0, scrollY:0 };
 const CASTLE_POS_STORE = 'sengokuCastleMapPositions:v2';
 function loadCastlePositionOverrides(){
@@ -3586,7 +3605,10 @@ function compFor(year, family){
 const clamp = GameKit.MathX.clamp;
 function T(ctx, str, x, y, opts={}){
   ctx.save();
-  ctx.font = (opts.weight?opts.weight+' ':'') + (opts.size||14) + 'px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
+  // UI_SCALEは既定では適用しない。固定座標で密に積まれた行が拡大時に重なるため、
+  // 個々に安全確認済みの箇所（drawButton内のボタンラベル等）だけが明示的にscale:trueで拾う。
+  const sz = Math.round((opts.size||14) * (opts.scale ? UI_SCALE : 1));
+  ctx.font = (opts.weight?opts.weight+' ':'') + sz + 'px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
   ctx.fillStyle = opts.color || '#e2e8f0';
   ctx.textAlign = opts.align || 'left';
   ctx.textBaseline = opts.baseline || 'top';
@@ -3635,35 +3657,28 @@ function pointInLand(x, y){
     return pointInPoly(x, y, poly);
   });
 }
-// 地形背景（海グラデ＋地図画像＋暗幕オーバーレイ）は時間非依存で毎フレーム同一。
-// 毎フレームのグラデ生成＋大判画像の高品質リサンプルを避け、ワールド解像度のオフスクリーンへ
-// 一度だけ合成してブリットする（描画結果は不変。カメラ拡縮はブリット後のctx変換が担う）。
-let _terrainBackdropCanvas=null, _terrainBackdropKey='';
-function drawTerrainBackdrop(ctx, mapImg, t=0){
+// 地形背景（海グラデ＋地図画像＋暗幕オーバーレイ）。
+// 以前はワールド解像度(約1965px幅)のオフスクリーンへ一度合成してからカメラ変換で拡大していたが、
+// 元画像(1672px幅)→中間キャンバス→画面の二重リサンプルになり、高ズーム時のぼやけを悪化させていた。
+// 元画像から直接カメラ変換込みで描く（単一リサンプル）ことで、ズーム時も元画像の解像度を最大限使う。
+// quality:'high' は静止時ベイク用（毎フレームのパン/ズーム中はデフォルト補間で軽く保つ）。
+function drawTerrainBackdrop(ctx, mapImg, opts={}){
   const w=MAP.world;
-  if (mapImg && (mapImg.naturalWidth||mapImg.width)){
-    const key=(mapImg.src||'')+'|'+Math.round(w.w)+'x'+Math.round(w.h);
-    if (!_terrainBackdropCanvas || _terrainBackdropKey!==key){
-      const cw=Math.max(1,Math.ceil(w.w)), ch=Math.max(1,Math.ceil(w.h));
-      const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
-      const c=cv.getContext('2d');
-      const sea=c.createLinearGradient(0,0,cw,ch);
-      sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
-      c.fillStyle=sea; c.fillRect(0,0,cw,ch);
-      const iw=mapImg.naturalWidth||mapImg.width, ih=mapImg.naturalHeight||mapImg.height;
-      const scale=w.w/iw, dh=ih*scale, dy=(w.h-dh)/2;   // 横幅基準contain（左右クロップなし）
-      c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high';
-      c.drawImage(mapImg, 0, 0, iw, ih, 0, dy, w.w, dh);
-      c.fillStyle='rgba(3,7,14,0.08)'; c.fillRect(0,0,cw,ch);
-      _terrainBackdropCanvas=cv; _terrainBackdropKey=key;
-    }
-    ctx.drawImage(_terrainBackdropCanvas, w.x, w.y);
-    return;
-  }
-  // 地図画像未ロード時のフォールバック（海グラデのみ）
   const sea=ctx.createLinearGradient(w.x,w.y,w.x+w.w,w.y+w.h);
   sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
   ctx.fillStyle=sea; ctx.fillRect(w.x, w.y, w.w, w.h);
+  if (mapImg && (mapImg.naturalWidth||mapImg.width)){
+    const iw=mapImg.naturalWidth||mapImg.width, ih=mapImg.naturalHeight||mapImg.height;
+    const scale=w.w/iw, dh=ih*scale, dy=(w.h-dh)/2;   // 横幅基準contain（左右クロップなし）
+    ctx.save();
+    ctx.imageSmoothingEnabled=true;
+    if (opts.quality) ctx.imageSmoothingQuality=opts.quality;
+    // 高ズームの静止時ベイクではアンシャープ畳み込みで拡大ぼけの知覚的鮮明度を補う
+    if (opts.sharpen) ctx.filter='url(#terrainSharpen)';
+    ctx.drawImage(mapImg, 0, 0, iw, ih, w.x, w.y+dy, w.w, dh);
+    ctx.restore();
+    ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(w.x, w.y, w.w, w.h);
+  }
 }
 function drawCoastlineGuide(ctx){
   ctx.save();
@@ -5064,10 +5079,14 @@ class TitleScene extends GameKit.Scene {
 
 /* Common button drawing */
 function drawButton(ctx, b, t){
+  // T()は既定でUI_SCALEを適用しないため、ここでボタン自身のサイズを先に確定する
+  // （2行ラベルの積み上げ位置計算にも確定後のサイズを使う）。b.noScale指定時は等倍のまま。
+  const uiScale = b.noScale ? 1 : UI_SCALE;
   // _infoOnly: 背景なし・テキストのみ表示（sengoku_expansion_v1）
   if (b._infoOnly){
-    T(ctx, b.jp||'', b.x+12, b.y+b.h/2-10, {size:b.sz||22, color:'#c4b5fd'});
-    if (b.en) T(ctx, b.en, b.x+12, b.y+b.h/2+20, {size:b.ensz||Math.round((b.sz||22)*0.6), color:'#8b8fa8'});
+    const sz0=Math.round((b.sz||22)*uiScale);
+    T(ctx, b.jp||'', b.x+12, b.y+b.h/2-10, {size:sz0, color:'#c4b5fd'});
+    if (b.en) T(ctx, b.en, b.x+12, b.y+b.h/2+20, {size:b.ensz?Math.round(b.ensz*uiScale):Math.round(sz0*0.6), color:'#8b8fa8'});
     return;
   }
   const enabled = b.on!==false;
@@ -5086,8 +5105,8 @@ function drawButton(ctx, b, t){
     ctx.stroke();
     ctx.fillStyle='rgba(246,213,138,0.18)'; ctx.fillRect(b.x+1, b.y+1, b.w-2, 2);
     ctx.restore();
-    const iconSz=b.iconSz||30, iconX=b.iconX!==undefined?b.iconX:32, labelX=b.labelX!==undefined?b.labelX:64;
-    const sz=b.sz||27;
+    const iconSz=Math.round((b.iconSz||30)*uiScale), iconX=b.iconX!==undefined?b.iconX:32, labelX=b.labelX!==undefined?b.labelX:64;
+    const sz=Math.round((b.sz||27)*uiScale);
     T(ctx, b.icon||'', b.x+iconX, b.y+b.h/2-iconSz*0.6, {size:iconSz, weight:'bold', color:enabled?'#d9b86c':'#70685b', align:'center'});
     if (b.en){
       // 日英併記: 日本語を上、英語を小さく下に
@@ -5106,7 +5125,8 @@ function drawButton(ctx, b, t){
     ctx.fill();
     ctx.lineWidth=1.3; ctx.strokeStyle=enabled?'rgba(190,146,65,0.68)':'rgba(255,255,255,0.12)'; ctx.stroke();
     ctx.restore();
-    T(ctx, b.label||b.jp||'', b.x+b.w/2, b.y+b.h/2-(b.sz||21)*0.52, {size:b.sz||21, weight:'bold', color:enabled?'#f8f0dc':'#756d60', align:'center'});
+    const sz=Math.round((b.sz||21)*uiScale);
+    T(ctx, b.label||b.jp||'', b.x+b.w/2, b.y+b.h/2-sz*0.52, {size:sz, weight:'bold', color:enabled?'#f8f0dc':'#756d60', align:'center'});
     return;
   }
   const radius = b.radius || Math.min(18, Math.max(10, b.h*0.18));
@@ -5121,11 +5141,26 @@ function drawButton(ctx, b, t){
   ctx.restore();
   const col = enabled? '#f8f0dc':'#5b6877';
   if (b.jp!==undefined){
-    const jpSize=b.sz||28, enSize=b.ensz||Math.max(16, Math.round(jpSize*0.55));
-    T(ctx, b.jp, b.x+b.w/2, b.y+ (b.en? b.h/2-jpSize*0.76 : b.h/2-jpSize*0.52), {size: jpSize, weight:'bold', color:col, align:'center'});
-    if (b.en) T(ctx, b.en, b.x+b.w/2, b.y+b.h/2+enSize*0.05, {size:enSize, color: enabled?'#b7c7dc':'#566372', align:'center'});
+    const jpBase=b.sz||28, enBase=b.ensz||Math.max(16, Math.round(jpBase*0.55));
+    let effScale=uiScale;
+    if (b.en){
+      // 2行分の実高さがボタン高さb.hをはみ出して次の行と重ならないよう、必要ならスケールを頭打ちにする
+      const denom=(jpBase+enBase)*1.15+4;
+      const maxScale=denom>0 ? b.h/denom : uiScale;
+      effScale=Math.min(uiScale, Math.max(1, maxScale));
+    }
+    const jpSize=Math.round(jpBase*effScale), enSize=Math.round(enBase*effScale);
+    if (b.en){
+      const lineGap=Math.max(2, Math.round(4*effScale));
+      const totalH=jpSize*1.15+enSize*1.15+lineGap;
+      const topY=b.y+Math.max(2, (b.h-totalH)/2);
+      T(ctx, b.jp, b.x+b.w/2, topY, {size: jpSize, weight:'bold', color:col, align:'center', baseline:'top'});
+      T(ctx, b.en, b.x+b.w/2, topY+jpSize*1.15+lineGap, {size:enSize, color: enabled?'#b7c7dc':'#566372', align:'center', baseline:'top'});
+    } else {
+      T(ctx, b.jp, b.x+b.w/2, b.y+b.h/2-jpSize*0.52, {size: jpSize, weight:'bold', color:col, align:'center'});
+    }
   } else if (b.label!==undefined){
-    const labelSize=b.sz||26;
+    const labelSize=Math.round((b.sz||26)*uiScale);
     T(ctx, b.label, b.x+b.w/2, b.y+b.h/2-labelSize*0.52, {size:labelSize, weight:'bold', color:col, align:'center'});
   }
 }
@@ -7153,9 +7188,9 @@ class MapScene extends GameKit.Scene {
       {jp:'地図', en:'Map', icon:'▣', action:()=>{ this.showClans=false; this.cam.zoom=this.cam.min; this._clampCam(); }},
       {jp:'武将一覧', en:'Generals', icon:'☷', action:()=>this._openGeneralsList()}
     ];
-    menu.forEach((m,i)=>bs.push({x:menuX, y:menuY+i*(menuH+gap), w:menuW, h:menuH, skin:'sengokuMenu', jp:m.jp, en:m.en, icon:m.icon, sz:menuSz, iconSz:menuIconSz, iconX:menuIconX, labelX:menuLabelX, action:m.action}));
-    bs.push({x:W-(IS_TOUCH?410:296), y:IS_TOUCH?32:18, w:IS_TOUCH?222:150, h:IS_TOUCH?78:52, skin:'topBar', label:'ターン終了', sz:IS_TOUCH?30:21, action:g=>this._endTurn(g)});
-    bs.push({x:W-(IS_TOUCH?176:132), y:IS_TOUCH?32:18, w:IS_TOUCH?150:104, h:IS_TOUCH?78:52, skin:'topBar', label:'タイトル', sz:IS_TOUCH?29:20, action:()=>game.changeScene(new TitleScene())});
+    menu.forEach((m,i)=>bs.push({x:menuX, y:menuY+i*(menuH+gap), w:menuW, h:menuH, skin:'sengokuMenu', jp:m.jp, en:m.en, icon:m.icon, sz:menuSz, iconSz:menuIconSz, iconX:menuIconX, labelX:menuLabelX, action:m.action, noScale:true}));
+    bs.push({x:W-(IS_TOUCH?410:296), y:IS_TOUCH?32:18, w:IS_TOUCH?222:150, h:IS_TOUCH?78:52, skin:'topBar', label:'ターン終了', sz:IS_TOUCH?30:21, action:g=>this._endTurn(g), noScale:true});
+    bs.push({x:W-(IS_TOUCH?176:132), y:IS_TOUCH?32:18, w:IS_TOUCH?150:104, h:IS_TOUCH?78:52, skin:'topBar', label:'タイトル', sz:IS_TOUCH?29:20, action:()=>game.changeScene(new TitleScene()), noScale:true});
     if (this.showClans){
       const L=this._diploLayout(); const me=st.playerDaimyo;
       // タブバー（4タブ）
@@ -7170,11 +7205,11 @@ class MapScene extends GameKit.Scene {
         const active=this.diploTab===tab.key;
         bs.push({x:L.px+i*tabW,y:L.py+58,w:tabW-4,h:52,jp:tab.jp,en:tab.en,sz:20,ensz:12,
           accent:active?'rgba(100,200,255,0.5)':'rgba(60,60,80,0.5)',
-          action:()=>{this.diploTab=tab.key;this.selClan=null;this.selForce=null;}});
+          action:()=>{this.diploTab=tab.key;this.selClan=null;this.selForce=null;}, noScale:true});
       });
-      // 閉じるボタン（共通）
+      // 閉じるボタン（共通）。タイトル行と隣接するため拡大しない
       bs.push({x:L.px+L.pw-152,y:L.py+22,w:128,h:54,skin:'topBar',label:'✕ 閉じる',sz:22,
-        action:()=>{this.showClans=false;this.selClan=null;this.selForce=null;}});
+        action:()=>{this.showClans=false;this.selClan=null;this.selForce=null;}, noScale:true});
       if(this.diploTab==='clan'){
         // 既存の大名外交コード
         const clans=this._diploClans();
@@ -7215,13 +7250,13 @@ class MapScene extends GameKit.Scene {
     const rowZoom=IS_TOUCH?H-466:H-426;
     const rowDev0=IS_TOUCH?H-350:H-326;
     const rowDev1=IS_TOUCH?H-234:H-218, rowDev2=IS_TOUCH?H-118:H-118;
-    bs.push({x:colX0, y:rowZoom, w:zW, h:zH, skin:'topBar', label:'＋', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }});
-    bs.push({x:colX0+zW+(IS_TOUCH?18:48), y:rowZoom, w:zW, h:zH, skin:'topBar', label:'－', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }});
-    bs.push({x:colX0, y:rowDev0, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'大名編集', sz:dSz2, action:g=>this._openDaimyoEditPanel(g)});
-    bs.push({x:colX0, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'城編集一覧', sz:dSz2, action:g=>this._openCastleListPanel(g)});
-    bs.push({x:colX0, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:dSz2, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }});
-    bs.push({x:colX1, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.religiousEdit?'完了':'勢力・施設 位置編集', sz:dSz2, action:g=>{ this.religiousEdit?this._finishReligiousEdit(g):this._startReligiousEdit(g); }});
-    bs.push({x:colX2, y:rowDev2, w:dW, h:dH, skin:'topBar', label:'家宝一覧', sz:dSz2, action:()=>this._openTreasureList()});
+    bs.push({x:colX0, y:rowZoom, w:zW, h:zH, skin:'topBar', label:'＋', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }, noScale:true});
+    bs.push({x:colX0+zW+(IS_TOUCH?18:48), y:rowZoom, w:zW, h:zH, skin:'topBar', label:'－', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }, noScale:true});
+    bs.push({x:colX0, y:rowDev0, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'大名編集', sz:dSz2, action:g=>this._openDaimyoEditPanel(g), noScale:true});
+    bs.push({x:colX0, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'城編集一覧', sz:dSz2, action:g=>this._openCastleListPanel(g), noScale:true});
+    bs.push({x:colX0, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:dSz2, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }, noScale:true});
+    bs.push({x:colX1, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.religiousEdit?'完了':'勢力・施設 位置編集', sz:dSz2, action:g=>{ this.religiousEdit?this._finishReligiousEdit(g):this._startReligiousEdit(g); }, noScale:true});
+    bs.push({x:colX2, y:rowDev2, w:dW, h:dH, skin:'topBar', label:'家宝一覧', sz:dSz2, action:()=>this._openTreasureList(), noScale:true});
     if (this.lastMapCoord){
       bs.push({x:W-158, y:164, w:120, h:70, skin:'topBar', label:'コピー', sz:22, action:()=>{
         const txt=this.lastMapCoord.x+','+this.lastMapCoord.y;
@@ -7548,7 +7583,7 @@ class MapScene extends GameKit.Scene {
         sc.clearRect(0,0,cv.width,cv.height);
         sc.translate(-MAP.clip.x, -MAP.clip.y);
         this._camApply(sc);
-        drawTerrainBackdrop(sc, ASSETS.img.map, this.t);
+        drawTerrainBackdrop(sc, ASSETS.img.map, {quality:'high', sharpen:c.zoom>=2});
         sc.restore();
         this._terrScreenValid=true;
       }
@@ -7556,7 +7591,7 @@ class MapScene extends GameKit.Scene {
     } else {
       ctx.save();
       this._camApply(ctx);
-      drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
+      drawTerrainBackdrop(ctx, ASSETS.img.map);
       ctx.restore();
       this._terrScreenKey=key; this._terrScreenValid=false;
     }
@@ -8811,7 +8846,7 @@ class MapScene extends GameKit.Scene {
     GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:22, fill:'rgba(8,14,26,0.97)', stroke:'rgba(232,192,122,0.5)'});
     T(ctx, '統治 / Governance', px+pw/2, py+36, {size:38, weight:'bold', color:'#e8c07a', align:'center'});
     T(ctx, '全国一括の内政と、家臣への委任（自動内政）', px+pw/2, py+82, {size:20, color:'#94a3b8', align:'center'});
-    // 国情サマリー
+    // 国情サマリー（ボタン列と間隔が詰まっているため元サイズを維持）
     const owned=ownedProvinces(st, st.playerDaimyo);
     let totalSol=0; owned.forEach(pid=>totalSol+=st.provinces[pid].soldiers);
     const consume=riceConsumptionOf(st, st.playerDaimyo);
