@@ -5806,6 +5806,52 @@ class MapScene extends GameKit.Scene {
     if (game && game.audio) game.audio.beep(880,0.08,'triangle');
     this._flash('独立勢力・施設の位置を保存しました', 'Marker positions saved');
   }
+  // 勢力・施設の配置を端末間で移設するためのコード書き出し/取り込み。
+  // localStorage は端末（ブラウザ）ごとに独立しているため、デスクトップで整えた配置を
+  // スマホへ反映する手段として、全マーカーの解決済みワールド座標を1つのコードにまとめる。
+  _markerLayoutCode(){
+    const r={}, m={};
+    RELIGIOUS_FORCES.forEach(f=>{ const pt=religiousForcePoint(f); r[f.id]={x:round6(pt[0]), y:round6(pt[1])}; });
+    RESOURCE_MARKERS.forEach(k=>{ const pt=resourceMarkerPoint(k); m[k.id]={x:round6(pt[0]), y:round6(pt[1])}; });
+    const json=JSON.stringify({v:1, r, m});
+    return btoa(unescape(encodeURIComponent(json)));
+  }
+  _exportMarkerLayout(game){
+    let code=null;
+    try { code=this._markerLayoutCode(); } catch(_){ this._flash('エクスポートに失敗しました', 'Export failed'); return; }
+    const shown=()=>{ try { window.prompt('配置コード（コピーして別端末で貼付） / Layout code — copy & paste on other device', code); } catch(_){} };
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(code)
+        .then(()=>this._flash('配置コードをコピーしました', 'Layout code copied to clipboard'))
+        .catch(shown);
+    } else { shown(); }
+  }
+  _importMarkerLayout(game){
+    let code=null;
+    try { code=window.prompt('配置コードを貼り付けてください / Paste layout code'); } catch(_){ code=null; }
+    if (!code) return;
+    let data=null;
+    try { data=JSON.parse(decodeURIComponent(escape(atob(String(code).trim())))); }
+    catch(_){ this._flash('コードが不正です', 'Invalid layout code'); return; }
+    const apply=(src, setter)=>{
+      let n=0;
+      if (src && typeof src==='object'){
+        for (const id in src){
+          const p=src[id];
+          if (p && Number.isFinite(p.x) && Number.isFinite(p.y)){ setter(id, p.x, p.y); n++; }
+        }
+      }
+      return n;
+    };
+    const n = apply(data.r, setReligiousForcePosition) + apply(data.m, setResourceMarkerPosition);
+    if (n>0){
+      saveReligiousForcePositions(); saveResourceMarkerPositions();
+      if (game && game.audio) game.audio.beep(880,0.08,'triangle');
+      this._flash(n+'件の配置を反映しました', 'Applied '+n+' marker positions');
+    } else {
+      this._flash('有効な配置が見つかりません', 'No valid positions found');
+    }
+  }
   _updateReligiousEditor(game, p, btns){
     if (p.justPressed){
       for (const b of btns){
@@ -7172,6 +7218,12 @@ class MapScene extends GameKit.Scene {
     bs.push({x:colX0, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:dSz2, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }});
     bs.push({x:colX1, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.religiousEdit?'完了':'勢力・施設 位置編集', sz:dSz2, action:g=>{ this.religiousEdit?this._finishReligiousEdit(g):this._startReligiousEdit(g); }});
     bs.push({x:colX2, y:rowDev2, w:dW, h:dH, skin:'topBar', label:'家宝一覧', sz:dSz2, action:()=>this._openTreasureList()});
+    // 位置編集中のみ表示: 勢力・施設の配置を端末間で移設するコピー/貼付ボタン。
+    if (this.religiousEdit){
+      const eW=IS_TOUCH?300:240, eH=IS_TOUCH?86:66, eSz=IS_TOUCH?30:26, eY=252, eGap=24;
+      bs.push({x:W/2-eW-eGap/2, y:eY, w:eW, h:eH, skin:'topBar', label:'配置をコピー', sz:eSz, action:g=>this._exportMarkerLayout(g)});
+      bs.push({x:W/2+eGap/2, y:eY, w:eW, h:eH, skin:'topBar', label:'配置を貼付', sz:eSz, action:g=>this._importMarkerLayout(g)});
+    }
     if (this.lastMapCoord){
       bs.push({x:W-158, y:164, w:120, h:70, skin:'topBar', label:'コピー', sz:22, action:()=>{
         const txt=this.lastMapCoord.x+','+this.lastMapCoord.y;
@@ -7672,8 +7724,8 @@ class MapScene extends GameKit.Scene {
   }
   _drawReligiousEditOverlay(ctx){
     GameKit.UI.glassPanel(ctx, W/2-430, 154, 860, 86, {radius:14, fill:'rgba(8,13,24,0.84)'});
-    T(ctx, '寺社勢力位置編集 / Religious Force Position Edit', W/2, 170, {size:28, weight:'bold', color:'#facc15', align:'center'});
-    T(ctx, '寺社マーカーをドラッグして移動 / Drag religious markers to move them', W/2, 204, {size:22, color:'#e2e8f0', align:'center'});
+    T(ctx, '勢力・施設 位置編集 / Force & Facility Position Edit', W/2, 170, {size:28, weight:'bold', color:'#facc15', align:'center'});
+    T(ctx, 'マーカーをドラッグして移動／「配置をコピー」で他端末へ反映 / Drag to move; use Copy Layout to sync to other devices', W/2, 204, {size:20, color:'#e2e8f0', align:'center'});
   }
   _drawCastleMetaEditOverlay(ctx){
     GameKit.UI.glassPanel(ctx, W/2-430, 250, 860, 86, {radius:14, fill:'rgba(8,13,24,0.84)'});
