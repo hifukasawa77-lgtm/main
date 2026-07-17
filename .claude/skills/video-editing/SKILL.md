@@ -1,3 +1,7 @@
+---
+name: video-editing
+description: Canvas API + MediaRecorder APIによるブラウザ上の動画録画・エフェクト実装ガイドライン。ゲーム画面のWebM録画（captureStream＋コーデックフォールバック）・Web Audio出力と合成した音声付き録画・videoフレームのCanvasエフェクト加工・フレームキャプチャとGIF/PNGシーケンス書き出し・タイムライン再生制御。「ゲームを録画したい」「プレイ動画を保存したい」「動画にエフェクトをかけたい」という依頼で使用する。
+---
 # 動画編集スキル集
 
 Canvas API + MediaRecorder API を用いたブラウザ上の動画録画・エフェクト実装ガイドライン。
