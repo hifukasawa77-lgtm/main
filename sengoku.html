@@ -10055,7 +10055,8 @@ class BattleScene extends GameKit.Scene {
     this.castleCells=this._buildCastleCells(level);
     const keep=Object.entries(this.castleCells).find(([,cell])=>cell.kind==='keep');
     this.keepHex=keep ? keep[0].split(',').map(Number) : [Math.floor(HEX.cols/2), 2];
-    this.maxRounds=16;
+    // 攻城戦は開門→侵入→天守占拠に手数がかかるため、野戦(12)より長めのラウンドを与える
+    this.maxRounds=22;
   }
   // 攻撃側は最下段(row13-14)から攻め上がる。城郭セルは背景の城グラフィックを画像解析して
   // トレースした城タイプ別レイアウト(CASTLE_HEX_LAYOUTS)を敷く。堀・石垣が画面上の水面・城壁と一致する。
@@ -10540,8 +10541,10 @@ class BattleScene extends GameKit.Scene {
       if (!s.hasMoved){
         const foes=this.stacks.filter(e=>e.side===this.aiSide && !e.dead);
         let goal=null, gd=1e9;
-        foes.forEach(e=>{ const d=hexDist(s.col,s.row,e.col,e.row); if (d<gd){ gd=d; goal=e; } });
-        if (!goal && this.siege && s.side==='atk' && this.keepHex) goal={col:this.keepHex[0], row:this.keepHex[1]};
+        // 攻城戦の攻撃側は「天守」を主目標に前進させ、城内へ funnel させる（近くの守兵ばかり追って
+        // 曲輪で足踏みし、開門後も天守を落とせず時間切れになるのを防ぐ）。射程内の敵は pickTarget で交戦する。
+        if (this.siege && s.side==='atk' && this.keepHex){ goal={col:this.keepHex[0], row:this.keepHex[1]}; }
+        else { foes.forEach(e=>{ const d=hexDist(s.col,s.row,e.col,e.row); if (d<gd){ gd=d; goal=e; } }); }
         if (goal){
           let bestHex=null, bestD=hexDist(s.col,s.row,goal.col,goal.row);
           for (const k in this.reach){
@@ -10614,7 +10617,10 @@ class BattleScene extends GameKit.Scene {
       bs.push({x:actionStart, y:actionY, w:actionW, h:96, sz:34, jp:'終了', en:'End Phase', on:!del, accent:del?'rgba(100,116,139,0.35)':'rgba(232,192,122,0.6)', action:g=>this._endPlayerPhase(g)});
       bs.push({x:actionStart+actionW+actionGap, y:actionY, w:actionW, h:96, sz:34, jp:del?'委任解除':'委任', en:del?'Delegating…':'Delegate', accent:del?'rgba(34,211,238,0.75)':'rgba(74,222,128,0.7)', action:g=>this._toggleBattleDelegate(g)});
       bs.push({x:actionStart+2*(actionW+actionGap), y:actionY, w:actionW, h:96, sz:34, jp:'自動で決着', en:'Auto', on:!del, accent:del?'rgba(100,116,139,0.35)':'rgba(251,191,36,0.6)', action:g=>this._autoFinish(g)});
-      bs.push({x:actionStart+3*(actionW+actionGap), y:actionY, w:actionW, h:96, sz:34, jp:'撤退', en:'Retreat', accent:'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
+      // 野戦(攻撃側)の「撤退」は敗北ではなく攻城戦へ移行する（城攻めに切り替える）ため、
+      // 実際の挙動に合わせてラベルを「城攻めへ / To Siege」にする。防衛戦・攻城戦は本来の撤退。
+      const fieldToSiege=this.battleType==='field' && this.playerSide==='atk';
+      bs.push({x:actionStart+3*(actionW+actionGap), y:actionY, w:actionW, h:96, sz:34, jp:fieldToSiege?'城攻めへ':'撤退', en:fieldToSiege?'To Siege':'Retreat', accent:fieldToSiege?'rgba(251,146,60,0.62)':'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
     }
     return bs;
   }
