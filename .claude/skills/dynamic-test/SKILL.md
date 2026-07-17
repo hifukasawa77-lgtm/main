@@ -29,7 +29,7 @@ bash .claude/skills/dynamic-test/run.sh --changed
 | `bodyEmpty` | `true` | bodyが空（ロード失敗） |
 | `screenshotPath` | — | `test-screenshots/` に保存。目視確認に使う |
 
-- `hasDrawing: null`（getImageData失敗）はCORS等の環境要因。FAILにはしないがスクショで目視確認する。
+- `hasDrawing: null`（getImageData失敗）はCORS等の環境要因。FAILにはしないがスクショで目視確認する。典型原因は **`file://` 配信で画像を描画したcanvasのtaint**（オリジン不一致扱いで `getImageData` が例外）。ピクセル検証が必要な場合は `python3 -m http.server` 等のHTTP配信で開くか、スクリーンショット比較で代替する。
 - canvasが無いページ（ツール系HTML）は `hasCanvas: false` でスキップ扱い（FAILではない）。
 
 ## FAIL時の差し戻しフォーマット（→ code-generator）

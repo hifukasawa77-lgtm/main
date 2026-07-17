@@ -10,7 +10,9 @@ set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}"
 cd "$ROOT" || exit 2
 FAIL=0
+WARN=0
 note_fail() { echo "  ✗ $1"; FAIL=1; }
+note_warn() { echo "  △ $1"; WARN=1; }
 ok() { echo "  ✓ $1"; }
 
 echo "== 1. スキルの SKILL.md 存在チェック =="
@@ -118,9 +120,27 @@ else
   done <<< "$MT"
 fi
 
+echo "== 8. 未昇格の学びを含むDaily（昇格漏れリマインド・警告のみ／exit codeに影響しない）=="
+# 「学び」セクションを含むDailyに 昇格済み/反映済み マーカーが無ければ警告する。
+# 学びの昇格は /self-improve の手順1〜4で行う人間+LLM作業のため、この検査は
+# 非ブロッキング（△）。手作業でやっていた「未マーカーDailyの遡り点検」の機械化（2026-07-16）。
+for f in obsidian-vault/01-Daily/*.md; do
+  [ -f "$f" ] || continue
+  grep -qE '^## 学んだこと|学び（汎用パターン）' "$f" || continue
+  if grep -qE '昇格済み|反映済み|昇格しない' "$f"; then
+    ok "$f"
+  else
+    note_warn "$f: 学びに昇格済み/反映済みマーカーなし（/self-improve で昇格要否を点検）"
+  fi
+done
+
 echo ""
 if [ "$FAIL" = 0 ]; then
-  echo "==> harness-lint: 問題なし ✅"
+  if [ "$WARN" = 0 ]; then
+    echo "==> harness-lint: 問題なし ✅"
+  else
+    echo "==> harness-lint: 問題なし ✅（△の警告あり — /self-improve の振り返りで点検）"
+  fi
 else
   echo "==> harness-lint: 問題あり ❌（上記 ✗ を /self-improve で是正）"
 fi
