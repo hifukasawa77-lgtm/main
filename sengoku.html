@@ -360,6 +360,10 @@
 </head>
 <body>
 <canvas id="game"></canvas>
+<!-- 地形の静止時ベイクで使うアンシャープ畳み込み（drawTerrainBackdropのquality:'high'経路から参照） -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <filter id="terrainSharpen"><feConvolveMatrix order="3" kernelMatrix="0 -0.55 0 -0.55 3.2 -0.55 0 -0.55 0" preserveAlpha="true"/></filter>
+</defs></svg>
 <button id="fsToggle" class="fs-toggle" type="button" aria-label="全画面 / Fullscreen">⛶</button>
 <button id="bgmToggle" class="bgm-toggle" type="button" aria-label="BGM オン/オフ / Toggle music">♪</button>
 <button id="helpToggle" class="bgm-toggle help-toggle" type="button" aria-label="遊び方 / Help">？</button>
@@ -3633,35 +3637,28 @@ function pointInLand(x, y){
     return pointInPoly(x, y, poly);
   });
 }
-// 地形背景（海グラデ＋地図画像＋暗幕オーバーレイ）は時間非依存で毎フレーム同一。
-// 毎フレームのグラデ生成＋大判画像の高品質リサンプルを避け、ワールド解像度のオフスクリーンへ
-// 一度だけ合成してブリットする（描画結果は不変。カメラ拡縮はブリット後のctx変換が担う）。
-let _terrainBackdropCanvas=null, _terrainBackdropKey='';
-function drawTerrainBackdrop(ctx, mapImg, t=0){
+// 地形背景（海グラデ＋地図画像＋暗幕オーバーレイ）。
+// 以前はワールド解像度(約1965px幅)のオフスクリーンへ一度合成してからカメラ変換で拡大していたが、
+// 元画像(1672px幅)→中間キャンバス→画面の二重リサンプルになり、高ズーム時のぼやけを悪化させていた。
+// 元画像から直接カメラ変換込みで描く（単一リサンプル）ことで、ズーム時も元画像の解像度を最大限使う。
+// quality:'high' は静止時ベイク用（毎フレームのパン/ズーム中はデフォルト補間で軽く保つ）。
+function drawTerrainBackdrop(ctx, mapImg, opts={}){
   const w=MAP.world;
-  if (mapImg && (mapImg.naturalWidth||mapImg.width)){
-    const key=(mapImg.src||'')+'|'+Math.round(w.w)+'x'+Math.round(w.h);
-    if (!_terrainBackdropCanvas || _terrainBackdropKey!==key){
-      const cw=Math.max(1,Math.ceil(w.w)), ch=Math.max(1,Math.ceil(w.h));
-      const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
-      const c=cv.getContext('2d');
-      const sea=c.createLinearGradient(0,0,cw,ch);
-      sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
-      c.fillStyle=sea; c.fillRect(0,0,cw,ch);
-      const iw=mapImg.naturalWidth||mapImg.width, ih=mapImg.naturalHeight||mapImg.height;
-      const scale=w.w/iw, dh=ih*scale, dy=(w.h-dh)/2;   // 横幅基準contain（左右クロップなし）
-      c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high';
-      c.drawImage(mapImg, 0, 0, iw, ih, 0, dy, w.w, dh);
-      c.fillStyle='rgba(3,7,14,0.08)'; c.fillRect(0,0,cw,ch);
-      _terrainBackdropCanvas=cv; _terrainBackdropKey=key;
-    }
-    ctx.drawImage(_terrainBackdropCanvas, w.x, w.y);
-    return;
-  }
-  // 地図画像未ロード時のフォールバック（海グラデのみ）
   const sea=ctx.createLinearGradient(w.x,w.y,w.x+w.w,w.y+w.h);
   sea.addColorStop(0,'#123a5c'); sea.addColorStop(0.45,'#071f38'); sea.addColorStop(1,'#03101f');
   ctx.fillStyle=sea; ctx.fillRect(w.x, w.y, w.w, w.h);
+  if (mapImg && (mapImg.naturalWidth||mapImg.width)){
+    const iw=mapImg.naturalWidth||mapImg.width, ih=mapImg.naturalHeight||mapImg.height;
+    const scale=w.w/iw, dh=ih*scale, dy=(w.h-dh)/2;   // 横幅基準contain（左右クロップなし）
+    ctx.save();
+    ctx.imageSmoothingEnabled=true;
+    if (opts.quality) ctx.imageSmoothingQuality=opts.quality;
+    // 高ズームの静止時ベイクではアンシャープ畳み込みで拡大ぼけの知覚的鮮明度を補う
+    if (opts.sharpen) ctx.filter='url(#terrainSharpen)';
+    ctx.drawImage(mapImg, 0, 0, iw, ih, w.x, w.y+dy, w.w, dh);
+    ctx.restore();
+    ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(w.x, w.y, w.w, w.h);
+  }
 }
 function drawCoastlineGuide(ctx){
   ctx.save();
@@ -7536,7 +7533,7 @@ class MapScene extends GameKit.Scene {
         sc.clearRect(0,0,cv.width,cv.height);
         sc.translate(-MAP.clip.x, -MAP.clip.y);
         this._camApply(sc);
-        drawTerrainBackdrop(sc, ASSETS.img.map, this.t);
+        drawTerrainBackdrop(sc, ASSETS.img.map, {quality:'high', sharpen:c.zoom>=2});
         sc.restore();
         this._terrScreenValid=true;
       }
@@ -7544,7 +7541,7 @@ class MapScene extends GameKit.Scene {
     } else {
       ctx.save();
       this._camApply(ctx);
-      drawTerrainBackdrop(ctx, ASSETS.img.map, this.t);
+      drawTerrainBackdrop(ctx, ASSETS.img.map);
       ctx.restore();
       this._terrScreenKey=key; this._terrScreenValid=false;
     }
