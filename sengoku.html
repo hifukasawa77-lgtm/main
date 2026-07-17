@@ -9319,11 +9319,12 @@ const FIELD_HEX_LAYOUTS = {
     '.................',
   ],
   battleForestMountain: [
+    // rows0-3は遠景の山並み・霧（地平線より上扱い）。駒が遠くの峰の上に浮いて見えるため戦場外にする
     '-----------------',
-    '.................',
-    '.................',
-    'm................',
-    'mmm.............f',
+    '-----------------',
+    '-----------------',
+    '-----------------',
+    'mmmmmmmmmmmmmffff',
     'f.mff........ffff',
     'f..mmmff.....ffff',
     'ff..mff.......fff',
@@ -9775,6 +9776,8 @@ class BattleScene extends GameKit.Scene {
     this.navalBonus = (c.navalBonus!=null ? c.navalBonus : navalBonusFor(this.state, this.state.playerDaimyo, c.dstId)) || 0;
     this.isNaval = this.navalBonus>0;
     this.t=0; this.round=1; this.maxRounds=12; this.phase='player'; this.selected=null;
+    // 委任: ONの間はAIが自軍部隊を1手ずつ自動で指揮する（敵殲滅または決着まで継続）
+    this.delegated=false; this.delegateTimer=0;
     this.reach={}; this.targets={}; this.message=null; this.messageT=0;
     this.objectTargets={};
     this.battlefieldKey = battlefieldKeyForContext(c);
@@ -9782,9 +9785,13 @@ class BattleScene extends GameKit.Scene {
     // 背景画像の森・山・川とヘックスの色枠を一致させる。トレースが無い画像のみ従来の生成地形。
     this.fieldLayout = this.battleType==='field' ? fieldLayoutTerrain(this.battlefieldKey) : null;
     this.terrainMap = this.fieldLayout || this._genTerrain(c.terrain);
-    // 戦場外(sky)行数 = 画像の地平線より上。守備側の布陣はこの直下から始める
+    // 戦場外(sky)行数 = 画像の地平線より上。守備側の布陣はこの直下から始める。
+    // 地平線が水平でない画像もあるため、行の全マスがskyの間だけ数える（列0だけでは判定しない）
     this.fieldSkyRows = 0;
-    if (this.fieldLayout){ while (this.fieldSkyRows<HEX.rows-4 && this.terrainMap['0,'+this.fieldSkyRows]==='sky') this.fieldSkyRows++; }
+    if (this.fieldLayout){
+      const rowAllSky=(r)=>{ for (let cc=0;cc<HEX.cols;cc++){ if (this.terrainMap[cc+','+r]!=='sky') return false; } return true; };
+      while (this.fieldSkyRows<HEX.rows-4 && rowAllSky(this.fieldSkyRows)) this.fieldSkyRows++;
+    }
     this.stacks = [];
     this._buildStacks('atk', c.attacker, c.year, c.attacker.family, false);
     this._buildStacks('def', c.defender, c.year, c.defender.family, true);
@@ -9795,7 +9802,9 @@ class BattleScene extends GameKit.Scene {
     // 攻城戦: プレイヤーが城Lv3以上へ攻め込む時のみ発動（城壁を破り天守を制圧する）
     this.walls={}; this.keepHex=null; this.wallTargets={}; this.castleCells={};
     this.naval = this.battleType==='naval';
-    this.siege = this.battleType==='siege' || (!this.naval && (this.playerSide==='atk') && ((c.defender.castleLevel||1) >= 3));
+    // 攻城戦かどうかは battleType のみで決める（戦闘方式選択で「野戦」を選んだ場合に
+    // 城Lvで攻城戦へ昇格させない。昇格すると野戦マップへ不可視の城壁・天守が敷かれてしまう）
+    this.siege = this.battleType==='siege';
     if (this.siege){ this._buildCastle(c.defender.castleLevel||3); this._placeSiegeDefenders(); this._deploySiegeCannon(); }
     // 戦場カメラ（スマホでヘックスが小さく見づらいため、ピンチ/ホイールで拡大・パンできる）。
     // zoom=1 が従来のフィット表示。HUD/ボタンは画面固定、戦場レイヤーのみカメラ変換で描画する。
@@ -9998,13 +10007,34 @@ class BattleScene extends GameKit.Scene {
     const baseRow=siegeDef?6:(isDef?defRow0:HEX.rows-1), row2=siegeDef?7:(isDef?defRow0+1:HEX.rows-2);
     sized.forEach((s,idx)=>{
       const gid=gi<gens.length?gens[gi++]:null, gstat=gid?DATA.genById[gid].stats:{tou:48,bu:48,chi:48,sei:48};
-      const col=2+idx*2,row=idx%2===0?baseRow:row2;
+      let col=2+idx*2,row=idx%2===0?baseRow:row2;
+      // トレース済み野戦マップでは、遠景の山や水面の上に駒が湧かないよう最寄りの平地/森へ寄せる
+      if (this.fieldLayout){ const spot=this._fieldSpawnSpot(col,row); col=spot[0]; row=spot[1]; }
       const genObj=gid?DATA.genById[gid]:null;
       const name=genObj?genObj.nameJP:(UNITS[s.t].jp+'隊');
       this.stacks.push({id:`${side}_${s.t}_${idx}`,side,type:s.t,count:s.n,count0:s.n,col,row,gen:gid,name,stat:gstat,hasMoved:false,hasAttacked:false,castle:this.castleLevel||1});
     });
   }
   stackAt(col,row){ return this.stacks.find(s=>s.col===col&&s.row===row); }
+  // 野戦の初期配置: 希望地点が戦場外(sky)・水面・山・既占有なら、BFSで最寄りの空き平地/森を返す
+  _fieldSpawnSpot(prefCol, prefRow){
+    const ok=(c,r)=>{ const t=this.terrainMap[c+','+r]; return t!=='sky' && t!=='water' && t!=='mountain' && !this.stackAt(c,r); };
+    if (ok(prefCol,prefRow)) return [prefCol,prefRow];
+    const seen={}; seen[prefCol+','+prefRow]=true;
+    let frontier=[[prefCol,prefRow]];
+    while (frontier.length){
+      const next=[];
+      for (const [cc,cr] of frontier){
+        for (const [nc,nr] of hexNeighbors(cc,cr)){
+          const k=nc+','+nr; if (seen[k]) continue; seen[k]=true;
+          if (ok(nc,nr)) return [nc,nr];
+          next.push([nc,nr]);
+        }
+      }
+      frontier=next;
+    }
+    return [prefCol,prefRow];
+  }
 
   /* ---- 入力 ---- */
   update(dt, game){
@@ -10017,11 +10047,16 @@ class BattleScene extends GameKit.Scene {
       if (p.justPressed){ for (const b of btns){ if(pointInRect(p,b)){ b.action(game); return; } } }
       return;
     }
+    // 委任中: AIが自軍部隊を一定間隔で1手ずつ動かす（進行が見えるようテンポを付ける）
+    if (this.delegated && this.phase==='player'){
+      this.delegateTimer-=dt;
+      if (this.delegateTimer<=0){ this.delegateTimer=0.4; this._delegateStep(game); }
+    }
     if (p.justPressed){
       // ピンチ/パン中（および直後）はタップを無視して、拡大操作が誤ってヘックス選択にならないようにする
       if (this.pinching || this.t < (this._suppressTapUntil||0)) return;
       for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.05,'sine'); b.action(game); return; } }
-      if (this.phase==='player') this._handleGridClick(game, p);
+      if (this.phase==='player' && !this.delegated) this._handleGridClick(game, p);
     }
   }
   _pickHex(px,py){
@@ -10127,7 +10162,9 @@ class BattleScene extends GameKit.Scene {
     atk.hasAttacked=true; atk.hasMoved=true;
     game.audio.noise(0.18,0.2);
     if (UNITS[atk.type].range>=2 && hexDist(atk.col,atk.row,def.col,def.row)>=2) game.audio.beep(900,0.05,'square');
-    this._flash(atk.name+'隊 → '+def.name+'隊  敵-'+res.defLoss+(res.atkLoss?' 自-'+res.atkLoss:''));
+    // 武将名には「隊」を付け、無名部隊（例: 弓隊）は名前が既に「〜隊」なのでそのまま
+    const unitLabel=(s)=>s.gen?s.name+'隊':s.name;
+    this._flash(unitLabel(atk)+' → '+unitLabel(def)+'  敵-'+res.defLoss+(res.atkLoss?' 自-'+res.atkLoss:''));
     this._cleanupStacks();
     this.selected=null; this.reach={}; this.targets={};
     this._checkBattleEnd(game);
@@ -10297,20 +10334,86 @@ class BattleScene extends GameKit.Scene {
     if (this.playerSide==='def') this._finish(game, true, '城を放棄した / Abandoned castle');
     else this._finish(game, false, '撤退した / Retreated');
   }
-  _delegateSiege(game){
-    if (!this.siege || this.over) return;
-    if (this.playerSide!=='atk') { this._autoFinish(game); return; }
-    const attackers=this.stacks.filter(s=>s.side==='atk');
-    const total=attackers.reduce((sum,s)=>sum+s.count,0);
-    if (!attackers.length) { this._finish(game,false,'攻撃軍を殲滅 / Attackers routed'); return; }
-    // 委任は城壁を突破し、主将を天守へ進ませるところまで一括処理する。
-    Object.entries(this.walls).forEach(([key,wall])=>{
-      wall.hp=0;
-      const tile=this.castleTiles[key]; if (tile){ tile.hp=0; tile.destroyed=true; }
-    });
-    const captain=attackers.find(s=>s.gen) || attackers[0];
-    captain.col=this.keepHex[0]; captain.row=this.keepHex[1]; captain.castlePost='keep'; captain.castleRole='assaultCaptain';
-    this._finishWithCounts(game,true,Math.max(1,Math.round(total*0.72)),0,'委任・天守陥落 / Delegated: keep captured');
+  // 委任のON/OFF。ONの間は即決着させず、AIが自軍を1部隊ずつ操作して戦闘を進める
+  _toggleBattleDelegate(game){
+    if (this.over) return;
+    this.delegated=!this.delegated;
+    if (this.delegated){
+      this.selected=null; this.reach={}; this.targets={}; this.wallTargets={};
+      this.delegateTimer=0.25;
+      this._flash('委任: AIが自軍を指揮して戦闘を進めます / Delegate: AI takes command');
+      game.audio.beep(720,0.08,'triangle');
+    } else {
+      this._flash('委任を解除しました / Delegation off');
+      game.audio.beep(360,0.08,'triangle');
+    }
+  }
+  // 委任の1ステップ: 未行動の自軍部隊を1つ選んで行動させる。全部隊が行動済みならフェイズ終了
+  _delegateStep(game){
+    if (this.over || this.phase!=='player') return;
+    const unit=this.stacks.find(s=>s.side===this.playerSide && !(s.hasMoved && s.hasAttacked));
+    if (!unit){ this._endPlayerPhase(game); return; }
+    this._aiActUnit(game, unit);
+    // 行動の余地がなくても行動済みにして、同じ部隊で無限ループしないようにする
+    unit.hasMoved=true; unit.hasAttacked=true;
+  }
+  // 委任AI: 射程内の敵を攻撃 → いなければ敵へ前進して再攻撃 → 攻城戦では天守占拠・城門/柵の破壊も行う
+  _aiActUnit(game, s){
+    const range=UNITS[s.type].range;
+    const pickTarget=()=>{
+      let best=null, bv=-1;
+      this.stacks.forEach(e=>{
+        if (e.side!==this.aiSide || e.dead) return;
+        if (hexDist(s.col,s.row,e.col,e.row)>range) return;
+        const ev=advantage(s.type,e.type)*e.count;
+        if (ev>bv){ bv=ev; best=e; }
+      });
+      return best;
+    };
+    let target=pickTarget();
+    if (!target && !s.hasMoved){
+      this._computeRange(s);
+      // 攻城戦: 天守が空いていて移動圏内なら占拠（即勝利）
+      if (this.siege && s.side==='atk' && this.keepHex){
+        const kk=this.keepHex[0]+','+this.keepHex[1];
+        if (this.reach[kk]!==undefined && !this.stackAt(this.keepHex[0],this.keepHex[1])){
+          s.col=this.keepHex[0]; s.row=this.keepHex[1]; s.hasMoved=true;
+          this.reach={}; this.targets={}; this.wallTargets={};
+          if (this._checkKeep(game)) return;
+        }
+      }
+      if (!s.hasMoved){
+        const foes=this.stacks.filter(e=>e.side===this.aiSide && !e.dead);
+        let goal=null, gd=1e9;
+        foes.forEach(e=>{ const d=hexDist(s.col,s.row,e.col,e.row); if (d<gd){ gd=d; goal=e; } });
+        if (!goal && this.siege && s.side==='atk' && this.keepHex) goal={col:this.keepHex[0], row:this.keepHex[1]};
+        if (goal){
+          let bestHex=null, bestD=hexDist(s.col,s.row,goal.col,goal.row);
+          for (const k in this.reach){
+            const [c,r]=k.split(',').map(Number);
+            const d=hexDist(c,r,goal.col,goal.row);
+            if (d<bestD){ bestD=d; bestHex=[c,r]; }
+          }
+          if (bestHex){
+            s.col=bestHex[0]; s.row=bestHex[1]; s.hasMoved=true;
+            this._applyDryMoatCross(game, s, bestHex[0], bestHex[1]);
+            if (this._checkKeep(game)) return;
+          }
+        }
+        this.reach={}; this.targets={}; this.wallTargets={};
+      }
+      target=pickTarget();
+    }
+    if (target && !s.hasAttacked){ this._attack(game, s, target); return; }
+    // 攻城戦: 攻撃できる敵がいなければ、射程内の城門・柵を壊して侵入路を開く
+    if (this.siege && s.side==='atk' && !s.hasAttacked && this.castleCells){
+      for (const k in this.castleCells){
+        const cell=this.castleCells[k];
+        if (!cell || cell.destroyed || (cell.kind!=='gate' && cell.kind!=='palisade')) continue;
+        const [bc,br]=k.split(',').map(Number);
+        if (hexDist(s.col,s.row,bc,br)<=range){ this._attackBarrier(game, s, bc, br); return; }
+      }
+    }
   }
   _autoFinish(game){
     // 残存兵力で自動解決
@@ -10352,10 +10455,11 @@ class BattleScene extends GameKit.Scene {
       }
       const actionW=300, actionGap=20, actionY=H-150;
       const actionStart=Math.max(24,Math.floor((W-(actionW*4+actionGap*3))/2));
-      bs.push({x:actionStart, y:actionY, w:actionW, h:96, sz:34, jp:'終了', en:'End Phase', accent:'rgba(232,192,122,0.6)', action:g=>this._endPlayerPhase(g)});
-      if (this.siege) bs.push({x:actionStart+actionW+actionGap, y:actionY, w:actionW, h:96, sz:34, jp:'委任', en:'Delegate', accent:'rgba(74,222,128,0.7)', action:g=>this._delegateSiege(g)});
-      bs.push({x:actionStart+(this.siege?2:1)*(actionW+actionGap), y:actionY, w:actionW, h:96, sz:34, jp:'自動で決着', en:'Auto', accent:'rgba(251,191,36,0.6)', action:g=>this._autoFinish(g)});
-      bs.push({x:actionStart+(this.siege?3:2)*(actionW+actionGap), y:actionY, w:actionW, h:96, sz:34, jp:'撤退', en:'Retreat', accent:'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
+      const del=this.delegated;
+      bs.push({x:actionStart, y:actionY, w:actionW, h:96, sz:34, jp:'終了', en:'End Phase', on:!del, accent:del?'rgba(100,116,139,0.35)':'rgba(232,192,122,0.6)', action:g=>this._endPlayerPhase(g)});
+      bs.push({x:actionStart+actionW+actionGap, y:actionY, w:actionW, h:96, sz:34, jp:del?'委任解除':'委任', en:del?'Delegating…':'Delegate', accent:del?'rgba(34,211,238,0.75)':'rgba(74,222,128,0.7)', action:g=>this._toggleBattleDelegate(g)});
+      bs.push({x:actionStart+2*(actionW+actionGap), y:actionY, w:actionW, h:96, sz:34, jp:'自動で決着', en:'Auto', on:!del, accent:del?'rgba(100,116,139,0.35)':'rgba(251,191,36,0.6)', action:g=>this._autoFinish(g)});
+      bs.push({x:actionStart+3*(actionW+actionGap), y:actionY, w:actionW, h:96, sz:34, jp:'撤退', en:'Retreat', accent:'rgba(248,113,113,0.6)', action:g=>this._retreat(g)});
     }
     return bs;
   }
@@ -10596,8 +10700,8 @@ class BattleScene extends GameKit.Scene {
     T(ctx,battleTitle,36,42,{size:30,weight:'bold',color:'#f2c879'});
      if(this.naval) T(ctx,'\u9752\u3044\u6c34\u9762= \u8239\u56e3\u306e\u79fb\u52d5\u30a8\u30ea\u30a2',36,218,{size:16,color:'#7dd3fc'});
      else if(this.battleType==='siege') T(ctx,'青=堀(通行不可)  /  白=城壁・石垣  /  門・柵=破壊可  /  金枠=天守',36,218,{size:16,color:'#dbe4ee'});
-     else if(this.fieldLayout) T(ctx,'緑=森(守備+)  /  土色=山(守備+)  /  水色=川(移動遅)  /  青=水面(通行不可)',36,218,{size:16,color:'#dbe4ee'});
-    T(ctx,'\u30e9\u30a6\u30f3\u30c9 '+this.round+' / '+this.maxRounds+'  '+(this.phase==='player'?'\u81ea\u8ecd\u30bf\u30fc\u30f3':'\u6575\u8ecd\u30bf\u30fc\u30f3'),36,82,{size:22,color:'#9fb2c6'});
+     else if(this.fieldLayout) T(ctx,'緑=森(守備+・移動遅)  /  土色=山(守備+・移動遅)  /  水色=川(移動遅)  /  青=水面(通行不可)',36,218,{size:16,color:'#dbe4ee'});
+    T(ctx,'\u30e9\u30a6\u30f3\u30c9 '+this.round+' / '+this.maxRounds+'  '+(this.phase==='player'?(this.delegated?'\u81ea\u8ecd\u30bf\u30fc\u30f3\uff08\u59d4\u4efb\u4e2d\uff09':'\u81ea\u8ecd\u30bf\u30fc\u30f3'):'\u6575\u8ecd\u30bf\u30fc\u30f3'),36,82,{size:22,color:this.delegated?'#67e8f9':'#9fb2c6'});
     if(this.isNaval) T(ctx,'\u2693 \u6d77\u6226\u30fb\u6c34\u8ecd\u652f\u63f4 +'+Math.round(this.navalBonus*100)+'% / Naval support',W/2-180,42,{size:22,weight:'bold',color:'#7dd3fc'});
     T(ctx,daimyoDef(this.state,c.attacker.daimyo).nameJP+'  /  '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP:'\u7121\u6240\u5c5e'),36,116,{size:22,color:'#cbd5e1'});
     if(this.battleType==='siege'){
