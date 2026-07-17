@@ -5192,6 +5192,8 @@ function drawButton(ctx, b, t){
     const labelSize=Math.round((b.sz||26)*uiScale);
     T(ctx, b.label, b.x+b.w/2, b.y+b.h/2-labelSize*0.52, {size:labelSize, weight:'bold', color:col, align:'center'});
   }
+  // 補助ラベル（コスト・条件）: ボタン下部に小さく表示
+  if (b.sub){ T(ctx, b.sub, b.x+b.w/2, b.y+b.h-Math.round(12*uiScale), {size:Math.round(13*uiScale), color: enabled?'rgba(203,213,225,0.82)':'rgba(120,132,148,0.7)', align:'center', baseline:'bottom'}); }
 }
 function updateButtonHot(buttons, p){ for (const b of buttons){ b._hot = pointInRect(p,b); } }
 
@@ -7042,6 +7044,57 @@ class MapScene extends GameKit.Scene {
   }
   _closeTreasureList(){ if (treasureListPanel) document.body.classList.remove('treasure-list-open'); }
 
+  /* ---- 論功行賞・家臣団（Canvasオーバーレイ） ---- */
+  _playerRetainers(){
+    const st=this.state, me=st.playerDaimyo, out=[];
+    ownedProvinces(st, me).forEach(pid=>st.provinces[pid].generals.forEach(gid=>{ const g=st.generals[gid]; if(g&&g.alive&&g.daimyo===me&&!isPlayerLord(st,gid)&&!out.includes(gid)) out.push(gid); }));
+    // 忠誠の低い順（掌握が必要な者を上に）→ 同値は戦功順
+    out.sort((a,b)=>{ const ga=st.generals[a], gb=st.generals[b]; return (ga.loyalty||60)-(gb.loyalty||60) || (retHonors(gb).merit-retHonors(ga).merit); });
+    return out;
+  }
+  _openRetainers(){ this.showClans=false; this.retainerPage=0; this.overlay={type:'retainers', page:0}; }
+  // 戦後の論功行賞を開始（勝利かつ参戦者がいれば）。after=防衛戦キューの継続要否
+  _startRewardCeremony(game, after){
+    const st=this.state, pr=st.pendingRewards;
+    if (!pr || !pr.gens || !pr.gens.length){ this.overlay=null; if(after) this._processTurnResolution(game); return; }
+    const gens=pr.gens.filter(gid=>{ const g=st.generals[gid]; return g&&g.alive&&g.daimyo===st.playerDaimyo; })
+      .sort((a,b)=>retHonors(st.generals[b]).pendingMerit-retHonors(st.generals[a]).pendingMerit).slice(0,6);
+    st.pendingRewards=null;
+    if (!gens.length){ this.overlay=null; if(after) this._processTurnResolution(game); return; }
+    this.overlay={type:'reward', gens, idx:0, after:!!after, log:[]};
+  }
+  _rewardGrant(game, kind){
+    const ov=this.overlay; if(!ov||ov.type!=='reward') return;
+    const gid=ov.gens[ov.idx];
+    const res=applyRetainerAction(this.state, gid, kind);
+    if (res && res.ok){ const gd=DATA.genById[gid]; ov.log.push((gd?gd.nameJP:gid)+'：'+res.line+(res.loy?'（忠誠+'+res.loy+'）':'')); game.audio.beep(600,0.06,'triangle'); }
+    else { game.audio.beep(240,0.08,'sine'); return; }
+    retHonors(this.state.generals[gid]).pendingMerit=0;
+    this._rewardNext(game);
+  }
+  _rewardSkip(game){
+    const ov=this.overlay; if(!ov||ov.type!=='reward') return;
+    const gid=ov.gens[ov.idx]; const g=this.state.generals[gid], h=retHonors(g);
+    // 高戦功なのに恩賞を見送ると不満（忠誠低下）
+    if (h.pendingMerit>=8){ g.loyalty=Math.max(0,(g.loyalty||60)-6); const gd=DATA.genById[gid]; ov.log.push((gd?gd.nameJP:gid)+'：恩賞なし（不満・忠誠-6）'); }
+    h.pendingMerit=0; game.audio.beep(360,0.05,'sine');
+    this._rewardNext(game);
+  }
+  _rewardNext(game){
+    const ov=this.overlay; ov.idx++;
+    if (ov.idx>=ov.gens.length){ const after=ov.after; this.overlay={type:'turnSummary', data:ov.log.length?ov.log:['論功行賞を終えた']}; this._save();
+      // turnSummaryの「了解」で防衛継続チェーンを引き継ぐため、afterを持たせる
+      if (after) this.overlay._afterDefense=true; }
+    this._save();
+  }
+  _retainerAct(game, gid, kind){
+    const res=applyRetainerAction(this.state, gid, kind);
+    if (res && res.ok){ const gd=DATA.genById[gid]; this._flash((gd?gd.nameJP:gid)+'：'+res.line, ''); game.audio.beep(600,0.06,'triangle'); this._save();
+      // 追放・切腹で家中から消えたら一覧へ戻る
+      const g=this.state.generals[gid]; if(!g.alive||g.daimyo!==this.state.playerDaimyo){ this.overlay={type:'retainers', page:this.retainerPage||0}; } }
+    else { game.audio.beep(240,0.08,'sine'); }
+  }
+
   /* ---- 武将一覧パネル（HTML） ---- */
   _openGeneralListPanel(){
     if (!generalListPanel) return;
@@ -7215,7 +7268,8 @@ class MapScene extends GameKit.Scene {
       {jp:'外交', en:'Diplomacy', icon:'⚑', action:()=>{ this.showClans=!this.showClans; this.selClan=null; }},
       {jp:'情勢', en:'Standings', icon:'⬢', action:()=>this._openRanking()},
       {jp:'地図', en:'Map', icon:'▣', action:()=>{ this.showClans=false; this.cam.zoom=this.cam.min; this._clampCam(); }},
-      {jp:'武将一覧', en:'Generals', icon:'☷', action:()=>this._openGeneralsList()}
+      {jp:'武将一覧', en:'Generals', icon:'☷', action:()=>this._openGeneralsList()},
+      {jp:'家臣団', en:'Retainers', icon:'⚑', action:()=>this._openRetainers()}
     ];
     menu.forEach((m,i)=>bs.push({x:menuX, y:menuY+i*(menuH+gap), w:menuW, h:menuH, skin:'sengokuMenu', jp:m.jp, en:m.en, icon:m.icon, sz:menuSz, iconSz:menuIconSz, iconX:menuIconX, labelX:menuLabelX, action:m.action, noScale:true}));
     bs.push({x:W-(IS_TOUCH?410:296), y:IS_TOUCH?32:18, w:IS_TOUCH?222:150, h:IS_TOUCH?78:52, skin:'topBar', label:'ターン終了', sz:IS_TOUCH?30:21, action:g=>this._endTurn(g), noScale:true});
@@ -7385,6 +7439,8 @@ class MapScene extends GameKit.Scene {
       }});
     } else if (ov.type==='battleResult' || ov.type==='turnSummary'){
       const after=ov._afterDefense;
+      // 勝利時は論功行賞へ引き継ぐ（それ以外は従来どおり閉じる/防衛継続）
+      const continueAction=g=>{ if (ov.type==='battleResult' && this.state.pendingRewards && this.state.pendingRewards.gens && this.state.pendingRewards.gens.length){ this._startRewardCeremony(g, after); } else { this.overlay=null; if(after) this._processTurnResolution(g); } };
       const caps=(ov.data && ov.data.captives)?ov.data.captives.slice(0,5):[];
       if (caps.length){
         // 捕縛武将ごとの登用ボタン（パネル座標に合わせる）
@@ -7395,10 +7451,40 @@ class MapScene extends GameKit.Scene {
         });
         const by=py+352+caps.length*76+18;
         bs.push({x:px+60, y:by, w:300, h:66, jp:'全員を登用', en:'Recruit all', sz:24, accent:'rgba(52,211,153,0.55)', action:g=>this._recruitAllCaptives(g)});
-        bs.push({x:px+pw-360, y:by, w:300, h:66, jp:'残りは解放して終了', en:'Release & continue', sz:22, accent:'rgba(232,192,122,0.6)', action:g=>{ this.overlay=null; if(after) this._processTurnResolution(g); }});
+        bs.push({x:px+pw-360, y:by, w:300, h:66, jp:'残りは解放して終了', en:'Release & continue', sz:22, accent:'rgba(232,192,122,0.6)', action:continueAction});
       } else {
-        bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:g=>{ this.overlay=null; if(after) this._processTurnResolution(g); }});
+        bs.push({x:W/2-130, y:H/2+210, w:260, h:64, jp:'了解', en:'OK', sz:28, accent:'rgba(232,192,122,0.7)', action:continueAction});
       }
+    } else if (ov.type==='reward'){
+      const ov2=ov; const gid=ov2.gens[ov2.idx];
+      const px=W/2-560, py=H/2-430, pw=1120, ph=860;
+      const kinds=['kanjo','shokin','chigyo','treasure','kani'];
+      const bw=(pw-160-4*20)/5, bh=150, sy=py+ph-260;
+      kinds.forEach((k,i)=>{ const def=RETAINER_ACTIONS[k]; const av=def.avail(this.state,gid);
+        bs.push({x:px+80+i*(bw+20), y:sy, w:bw, h:bh, jp:def.jp, en:def.en, sz:26, ensz:14, accent:def.accent, on:av.ok, _hitFirst:true, sub:av.cost, action:g=>this._rewardGrant(g,k)}); });
+      bs.push({x:px+pw/2-330, y:py+ph-86, w:320, h:64, jp:'見送る（恩賞なし）', en:'Skip', sz:24, accent:'rgba(148,163,184,0.5)', _hitFirst:true, action:g=>this._rewardSkip(g)});
+      bs.push({x:px+pw/2+30, y:py+ph-86, w:300, h:64, jp:'縁組・偏諱ほかは家臣団で', en:'More in Retainers', sz:18, ensz:13, accent:'rgba(56,189,248,0.4)', on:false});
+    } else if (ov.type==='retainers'){
+      const list=this._playerRetainers(); const per=8; const pages=Math.max(1,Math.ceil(list.length/per));
+      const page=Math.min(ov.page||0, pages-1); ov.page=page; this.retainerPage=page;
+      const px=W/2-620, py=H/2-470, pw=1240, ph=940;
+      const rows=list.slice(page*per,(page+1)*per);
+      const ry0=py+150, rh=84;
+      rows.forEach((gid,i)=>{ bs.push({x:px+60, y:ry0+i*rh, w:pw-120, h:rh-12, jp:'', en:'', _rowGid:gid, action:g=>{ this.overlay={type:'retainerAction', gid, back:page}; }}); });
+      if (page>0) bs.push({x:px+60, y:py+ph-84, w:170, h:64, jp:'← 前', en:'Prev', sz:24, action:()=>{ this.overlay={type:'retainers', page:page-1}; }});
+      if (page<pages-1) bs.push({x:px+240, y:py+ph-84, w:170, h:64, jp:'次 →', en:'Next', sz:24, action:()=>{ this.overlay={type:'retainers', page:page+1}; }});
+      bs.push({x:px+pw-230, y:py+ph-84, w:170, h:64, jp:'閉じる', en:'Close', sz:24, accent:'rgba(232,192,122,0.6)', action:()=>{ this.overlay=null; }});
+    } else if (ov.type==='retainerAction'){
+      const gid=ov.gid; const px=W/2-560, py=H/2-460, pw=1120, ph=920;
+      const rewards=['kanjo','shokin','chigyo','treasure','kani','engumi','henki','joshu','meiyo'];
+      const punish=['tsuiho','seppuku'];
+      const cols=3, bw=(pw-160-(cols-1)*20)/cols, bh=104, gy=py+300;
+      rewards.forEach((k,i)=>{ const def=RETAINER_ACTIONS[k]; const av=def.avail(this.state,gid); const r=Math.floor(i/cols), c=i%cols;
+        bs.push({x:px+80+c*(bw+20), y:gy+r*(bh+16), w:bw, h:bh, jp:def.jp, en:def.en, sz:24, ensz:13, accent:def.accent, on:av.ok, sub:av.cost, _hitFirst:true, action:g=>this._retainerAct(g,gid,k)}); });
+      const py2=gy+3*(bh+16)+34; const pbw=(pw-160-20)/2;
+      punish.forEach((k,i)=>{ const def=RETAINER_ACTIONS[k]; const av=def.avail(this.state,gid);
+        bs.push({x:px+80+i*(pbw+20), y:py2, w:pbw, h:84, jp:def.jp, en:def.en, sz:24, ensz:13, accent:def.accent, on:av.ok, sub:av.cost, _hitFirst:true, action:g=>this._retainerAct(g,gid,k)}); });
+      bs.push({x:px+pw/2-170, y:py+ph-84, w:340, h:66, jp:'← 家臣団へ戻る', en:'Back', sz:24, accent:'rgba(232,192,122,0.6)', action:()=>{ this.overlay={type:'retainers', page:ov.back||0}; }});
     } else if (ov.type==='defense'){
       const c=ov.data; const px=W/2-440, py=H/2-320, pw=880, ph=620; const by=py+ph-116;
       bs.push({x:px+60, y:by, w:340, h:84, jp:'手動で防衛', en:'Defend (Hex Battle)', sz:26, ensz:16, accent:'rgba(52,211,153,0.7)', action:g=>this._resolveDefense(g,true)});
@@ -8663,12 +8749,94 @@ class MapScene extends GameKit.Scene {
     else if (ov.type==='event') this._drawEvent(ctx);
     else if (ov.type==='ranking') this._drawRanking(ctx);
     else if (ov.type==='help') this._drawHelp(ctx);
+    else if (ov.type==='reward') this._drawReward(ctx);
+    else if (ov.type==='retainers') this._drawRetainers(ctx);
+    else if (ov.type==='retainerAction') this._drawRetainerAction(ctx);
     const btns=this._overlayButtons(); for (const b of btns){
       if (b._noRender) continue;
       if (b._gen){ drawGenToggle(ctx, b, this.march, st); }
       else if (b._ployTarget){ this._drawPloyTargetRow(ctx, b); }
+      else if (b._rowGid){ this._drawRetainerRow(ctx, b); }
       else drawButton(ctx,b,this.t);
     }
+  }
+  // 武将の栄誉サマリー文字列（家宝・官位・偏諱・縁組・城主・名誉職）
+  _honorSummary(gid){
+    const g=this.state.generals[gid]; if(!g) return ''; const h=retHonors(g); const parts=[];
+    if (h.chigyo) parts.push('知行'+h.chigyo);
+    if (h.kanjo) parts.push('感状'+h.kanjo);
+    if (h.treasures.length) parts.push('家宝'+h.treasures.length);
+    if (h.courtRank>=0 && COURT_KANOI_RANKS[h.courtRank]) parts.push(COURT_KANOI_RANKS[h.courtRank].name);
+    if (h.married) parts.push('姻戚');
+    if (h.henki) parts.push('偏諱');
+    if (h.castleLord) parts.push('城主');
+    if (h.teaMaster) parts.push('茶頭');
+    return parts.join('・');
+  }
+  _loyColor(loy){ return loy>=80?'#86efac':loy>=55?'#fde68a':loy>=40?'#fbbf24':'#fca5a5'; }
+  _drawReward(ctx){
+    const ov=this.overlay, st=this.state; const gid=ov.gens[ov.idx];
+    const g=st.generals[gid], gd=DATA.genById[gid], h=retHonors(g);
+    const px=W/2-560, py=H/2-430, pw=1120, ph=860;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:18, fill:'rgba(12,16,26,0.94)'});
+    T(ctx, '⚔ 論功行賞 / Distribution of Rewards', px+pw/2, py+34, {size:36, weight:'bold', color:'#f2c879', align:'center', shadow:true});
+    T(ctx, (DATA.provById[ov.gens.dstId]?'':'')+(ov.idx+1)+' / '+ov.gens.length+'　'+(daimyoDef(st,st.playerDaimyo)?.nameJP||'')+'家の恩賞', px+pw/2, py+86, {size:20, color:'#9fb2c6', align:'center'});
+    // 対象武将カード
+    const cardY=py+130;
+    GameKit.UI.glassPanel(ctx, px+70, cardY, pw-140, 190, {radius:14, fill:'rgba(20,28,44,0.9)'});
+    if (g.gen || gd){ try{ drawGeneralPortrait(ctx, gid, px+96, cardY+26, 130, {stroke:'rgba(242,200,121,0.7)', lineWidth:3}); }catch(_){ } }
+    const tx=px+260;
+    T(ctx, (gd?gd.nameJP:gid), tx, cardY+30, {size:34, weight:'bold', color:'#f8fafc'});
+    if (gd) T(ctx, '統'+gd.stats.tou+'  武'+gd.stats.bu+'  智'+gd.stats.chi+'  政'+gd.stats.sei, tx, cardY+80, {size:22, color:'#cbd5e1'});
+    T(ctx, 'この合戦の戦功 ', tx, cardY+120, {size:22, color:'#9fb2c6'});
+    T(ctx, '⭐'+h.pendingMerit, tx+150, cardY+118, {size:26, weight:'bold', color:'#fde68a'});
+    T(ctx, '忠誠 ', tx+300, cardY+120, {size:22, color:'#9fb2c6'});
+    T(ctx, (g.loyalty||60)+'', tx+360, cardY+118, {size:26, weight:'bold', color:this._loyColor(g.loyalty||60)});
+    const hs=this._honorSummary(gid); if (hs) T(ctx, '既得: '+hs, tx, cardY+152, {size:18, color:'#94a3b8'});
+    T(ctx, '恩賞を選んで下賜する（戦功に報いねば忠誠が下がる）', px+pw/2, py+ph-278, {size:20, color:'#e8c07a', align:'center'});
+  }
+  _drawRetainers(ctx){
+    const st=this.state; const list=this._playerRetainers();
+    const px=W/2-620, py=H/2-470, pw=1240, ph=940;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:18, fill:'rgba(12,16,26,0.95)'});
+    T(ctx, '⚑ 家臣団 / Retainers　', px+pw/2, py+34, {size:36, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    const d=st.daimyo[st.playerDaimyo];
+    T(ctx, '金 '+Math.round(d.gold)+'貫　姫 '+(d.daughters||0)+'　威信 '+(d.prestige||0)+'　朝廷 '+(d.court_rel||0)+'　家臣 '+list.length+'名', px+pw/2, py+84, {size:20, color:'#9fb2c6', align:'center'});
+    const per=8, page=Math.min(this.overlay.page||0, Math.max(0,Math.ceil(list.length/per)-1));
+    const rows=list.slice(page*per,(page+1)*per); const ry0=py+150, rh=84;
+    T(ctx, '武将（忠誠の低い順）', px+70, py+124, {size:18, color:'#7d93ab'});
+    T(ctx, '忠誠 / 戦功 / 既得の栄誉', px+pw-360, py+124, {size:18, color:'#7d93ab'});
+    if (!rows.length) T(ctx, '（配下の武将がいません）', px+pw/2, py+300, {size:24, color:'#94a3b8', align:'center'});
+  }
+  _drawRetainerRow(ctx, b){
+    const st=this.state, gid=b._rowGid, g=st.generals[gid], gd=DATA.genById[gid], h=retHonors(g);
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 10);
+    ctx.fillStyle = b._hot ? 'rgba(232,192,122,0.16)' : 'rgba(18,26,42,0.8)'; ctx.fill();
+    ctx.lineWidth=1.4; ctx.strokeStyle='rgba(120,150,180,0.3)'; ctx.stroke(); ctx.restore();
+    const loy=g.loyalty||60;
+    T(ctx, (gd?gd.nameJP:gid), b.x+24, b.y+b.h/2-18, {size:26, weight:'bold', color:'#f1f5f9'});
+    if (gd) T(ctx, '統'+gd.stats.tou+' 武'+gd.stats.bu+' 智'+gd.stats.chi+' 政'+gd.stats.sei, b.x+24, b.y+b.h/2+16, {size:17, color:'#94a3b8'});
+    const loc=g.location&&DATA.provById[g.location]?DATA.provById[g.location].nameJP:'—';
+    T(ctx, loc, b.x+340, b.y+b.h/2-8, {size:19, color:'#a7b4c4'});
+    T(ctx, '忠'+loy, b.x+b.w-330, b.y+b.h/2-8, {size:24, weight:'bold', color:this._loyColor(loy)});
+    T(ctx, '功'+h.merit, b.x+b.w-240, b.y+b.h/2-8, {size:22, color:'#fde68a'});
+    const hs=this._honorSummary(gid); if (hs) T(ctx, hs, b.x+b.w-24, b.y+b.h/2-8, {size:16, color:'#8fa3ba', align:'right'});
+    if (h.pendingMerit>0) T(ctx, '★未行賞', b.x+b.w-24, b.y+b.h/2+18, {size:15, color:'#f6d58a', align:'right'});
+  }
+  _drawRetainerAction(ctx){
+    const st=this.state, ov=this.overlay, gid=ov.gid; const g=st.generals[gid], gd=DATA.genById[gid], h=retHonors(g);
+    const px=W/2-560, py=H/2-460, pw=1120, ph=920;
+    GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:18, fill:'rgba(12,16,26,0.95)'});
+    T(ctx, (gd?gd.nameJP:gid)+' への沙汰 / Rewards & Punishments', px+pw/2, py+34, {size:32, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    if (g.gen || gd){ try{ drawGeneralPortrait(ctx, gid, px+80, py+96, 120, {stroke:'rgba(242,200,121,0.7)', lineWidth:3}); }catch(_){ } }
+    const tx=px+230; const loy=g.loyalty||60;
+    if (gd) T(ctx, '統'+gd.stats.tou+'  武'+gd.stats.bu+'  智'+gd.stats.chi+'  政'+gd.stats.sei, tx, py+104, {size:22, color:'#cbd5e1'});
+    T(ctx, '忠誠 ', tx, py+150, {size:22, color:'#9fb2c6'}); T(ctx, loy+'', tx+64, py+148, {size:26, weight:'bold', color:this._loyColor(loy)});
+    T(ctx, '通算戦功 ', tx+180, py+150, {size:22, color:'#9fb2c6'}); T(ctx, h.merit+'', tx+300, py+148, {size:26, weight:'bold', color:'#fde68a'});
+    const hs=this._honorSummary(gid); if (hs) T(ctx, '既得: '+hs, tx, py+192, {size:19, color:'#94a3b8'});
+    T(ctx, '褒賞 / Rewards', px+80, py+270, {size:20, color:'#86efac'});
+    T(ctx, '処罰 / Punishments（家中の忠誠が下がる）', px+80, py+300+3*(104+16)+8, {size:18, color:'#fca5a5'});
   }
   _drawBattleType(ctx, c){
     const px=W/2-520, py=H/2-330, pw=1040, ph=660;
@@ -9329,7 +9497,96 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
     const playerWon = defense ? !res.attackerWins : res.attackerWins;
     if (playerWon) st.battlesWon=(st.battlesWon||0)+1;
     st.pendingResult = { win:res.attackerWins, playerWon, defense, dstId:ctx.dstId, atkSurvivors:res.atkSurvivors, defSurvivors:res.defSurvivors, generalsLost, captives:playerCaptives };
+    // 論功行賞: 勝利時、参戦した自家武将に戦功(merit)を配分し、戦後に恩賞ぶるまいを促す
+    if (playerWon){
+      const parts = defense ? ctx.defender.generals : atkGens;
+      const alive = (parts||[]).filter(gid=>st.generals[gid] && st.generals[gid].alive && st.generals[gid].daimyo===st.playerDaimyo && !isPlayerLord(st,gid));
+      const enemyRouted = defense ? Math.max(0,ctx.attacker.soldiers-res.atkSurvivors) : Math.max(0,ctx.defender.soldiers-res.defSurvivors);
+      if (alive.length){
+        const kills = ctx._genKills || null; // 手動戦なら実撃破数、無ければ武・統で近似
+        const weightOf=(gid)=>{ const gd=DATA.genById[gid]; const base=gd?gd.stats.bu+gd.stats.tou:100; return kills?(kills[gid]||0)*0.5+base*0.5:base; };
+        const totW = alive.reduce((s,gid)=>s+weightOf(gid),0)||1;
+        alive.forEach(gid=>{
+          const g=st.generals[gid], h=retHonors(g);
+          let m=Math.max(1, Math.round((enemyRouted*0.03)*(weightOf(gid)/totW)));
+          if (h.henki) m=Math.round(m*1.25); // 偏諱を賜った者は以後の武功が上がりやすい
+          h.merit+=m; h.pendingMerit+=m;
+        });
+        st.pendingRewards = { dstId:ctx.dstId, defense, gens: alive.slice() };
+      }
+    }
   }
+}
+
+/* ============================ 論功行賞・家臣団 ============================
+ * 戦功に報い(知行/感状/家宝/官位/賞金/縁組/偏諱/城主/名誉職)、あるいは罰する(追放/切腹)。
+ * すべて忠誠を主軸に、資源(金/娘/prestige/court_rel)を消費して家臣を掌握する。 */
+function retHonors(g){
+  if (!g.honors) g.honors={};
+  const h=g.honors;
+  if (h.chigyo==null) h.chigyo=0;
+  if (h.kanjo==null) h.kanjo=0;
+  if (!Array.isArray(h.treasures)) h.treasures=[];
+  if (h.merit==null) h.merit=0;
+  if (h.pendingMerit==null) h.pendingMerit=0;
+  if (h.courtRank==null) h.courtRank=-1;
+  return h;
+}
+function awardableTreasure(st){
+  if (!st.awardedTreasures) st.awardedTreasures={};
+  let best=null;
+  for (const t of TREASURE_ITEMS){ if (st.awardedTreasures[t.id]) continue; if (!best || (t.loyalty||0)>(best.loyalty||0)) best=t; }
+  return best;
+}
+function genProvince(st, gid){ const g=st.generals[gid]; return g&&g.location?st.provinces[g.location]:null; }
+// 恩賞・処罰の定義。avail(st,gid)→{ok,cost} / apply(st,gid)→{line, loy}
+const RETAINER_ACTIONS = {
+  kanjo:  { jp:'感状', en:'Commendation', accent:'rgba(232,192,122,0.6)', punish:false,
+    avail:()=>({ok:true, cost:'金0'}),
+    apply:(st,gid)=>{ const g=st.generals[gid], h=retHonors(g); h.kanjo++; const d=st.daimyo[st.playerDaimyo]; d.fame=(d.fame||0)+1; return {loy:6, line:'感状を与えた'}; } },
+  shokin: { jp:'賞金', en:'Cash reward', accent:'rgba(251,191,36,0.6)', punish:false, gold:150,
+    avail:(st)=>({ok:st.daimyo[st.playerDaimyo].gold>=150, cost:'金150'}),
+    apply:(st)=>{ st.daimyo[st.playerDaimyo].gold-=150; return {loy:10, line:'賞金150貫を下賜'}; } },
+  chigyo: { jp:'知行加増', en:'Grant fief', accent:'rgba(52,211,153,0.6)', punish:false, gold:300,
+    avail:(st)=>({ok:st.daimyo[st.playerDaimyo].gold>=300, cost:'金300'}),
+    apply:(st,gid)=>{ st.daimyo[st.playerDaimyo].gold-=300; const g=st.generals[gid], h=retHonors(g); h.chigyo++; const p=genProvince(st,gid); if(p) p.minchu=Math.min(100,(p.minchu??60)+4); return {loy:16, line:'知行を加増（知行'+h.chigyo+'）'}; } },
+  treasure:{ jp:'家宝授与', en:'Bestow treasure', accent:'rgba(217,179,108,0.65)', punish:false,
+    avail:(st)=>{ const t=awardableTreasure(st); return {ok:!!t, cost:t?('家宝『'+t.nameJP+'』'):'在庫なし'}; },
+    apply:(st,gid)=>{ const t=awardableTreasure(st); if(!t) return {loy:0, line:'授ける家宝がない'}; st.awardedTreasures[t.id]=gid; const g=st.generals[gid], h=retHonors(g); h.treasures.push(t.id); return {loy:6+(t.loyalty||4), line:'家宝『'+t.nameJP+'』を授けた'}; } },
+  kani:   { jp:'官位推挙', en:'Recommend rank', accent:'rgba(167,139,250,0.6)', punish:false, gold:500,
+    avail:(st)=>{ const d=st.daimyo[st.playerDaimyo]; return {ok:d.gold>=500 && (d.court_rel||0)>=20, cost:'金500・朝廷20+'}; },
+    apply:(st,gid)=>{ const d=st.daimyo[st.playerDaimyo]; d.gold-=500; d.prestige=(d.prestige||5)+8; const g=st.generals[gid], h=retHonors(g); h.courtRank=Math.min(COURT_KANOI_RANKS.length-1,h.courtRank+1); return {loy:14, line:'官位を推挙（'+(COURT_KANOI_RANKS[h.courtRank]?COURT_KANOI_RANKS[h.courtRank].name:'叙任')+'）'}; } },
+  engumi: { jp:'縁組', en:'Marriage', accent:'rgba(244,114,182,0.6)', punish:false,
+    avail:(st)=>({ok:(st.daimyo[st.playerDaimyo].daughters||0)>=1, cost:'姫1'}),
+    apply:(st,gid)=>{ st.daimyo[st.playerDaimyo].daughters=Math.max(0,(st.daimyo[st.playerDaimyo].daughters||0)-1); const g=st.generals[gid], h=retHonors(g); h.married=true; return {loy:30, line:'姫を嫁がせ姻戚とした'}; } },
+  henki:  { jp:'偏諱', en:'Name character', accent:'rgba(56,189,248,0.6)', punish:false,
+    avail:(st,gid)=>{ const h=retHonors(st.generals[gid]); return {ok:(st.daimyo[st.playerDaimyo].prestige||0)>=20 && !h.henki, cost: h.henki?'授与済':'威信20+'}; },
+    apply:(st,gid)=>{ const g=st.generals[gid], h=retHonors(g); h.henki=true; const d=st.daimyo[st.playerDaimyo]; d.fame=(d.fame||0)+2; return {loy:18, line:'一字を与えた（偏諱・以後の武功↑）'}; } },
+  joshu:  { jp:'城主任命', en:'Castle lord', accent:'rgba(148,163,184,0.55)', punish:false,
+    avail:(st,gid)=>{ const p=genProvince(st,gid); const h=retHonors(st.generals[gid]); const loc=st.generals[gid].location; return {ok:!!p && h.castleLord!==loc, cost:p?((DATA.provById[p.id]?.nameJP||'現在地')+'の城主'):'配属なし'}; },
+    apply:(st,gid)=>{ const p=genProvince(st,gid); if(!p) return {loy:0,line:'配属がない'}; const h=retHonors(st.generals[gid]); h.castleLord=st.generals[gid].location; p.development=Math.min(100,(p.development||0)+6); return {loy:12, line:(DATA.provById[p.id]?.nameJP||'当地')+'の城主に任じた'}; } },
+  meiyo:  { jp:'名誉職', en:'Honorary post', accent:'rgba(155,193,199,0.6)', punish:false, gold:100,
+    avail:(st)=>({ok:st.daimyo[st.playerDaimyo].gold>=100, cost:'金100'}),
+    apply:(st,gid)=>{ st.daimyo[st.playerDaimyo].gold-=100; const g=st.generals[gid], h=retHonors(g); h.teaMaster=true; return {loy:8, line:'茶頭・相伴衆に列した'}; } },
+  tsuiho: { jp:'追放', en:'Banish', accent:'rgba(248,113,113,0.55)', punish:true,
+    avail:(st,gid)=>({ok:!isPlayerLord(st,gid), cost: isPlayerLord(st,gid)?'当主は不可':'家中から追放'}),
+    apply:(st,gid)=>{ const g=st.generals[gid]; removeGenFromProv(st,gid); g.location=null; g.daimyo=null; return {loy:0, line:'家中から追放した', fear:true}; } },
+  seppuku:{ jp:'切腹', en:'Order seppuku', accent:'rgba(220,38,38,0.6)', punish:true,
+    avail:(st,gid)=>({ok:!isPlayerLord(st,gid), cost: isPlayerLord(st,gid)?'当主は不可':'切腹を命じる'}),
+    apply:(st,gid)=>{ const g=st.generals[gid]; removeGenFromProv(st,gid); g.alive=false; g.location=null; g.daimyo=null; return {loy:0, line:'切腹を命じた', fear:true}; } },
+};
+function isPlayerLord(st, gid){ const d=daimyoDef(st, st.playerDaimyo); return !!(d && d.lord===gid); }
+function removeGenFromProv(st, gid){ const g=st.generals[gid]; if(g&&g.location&&st.provinces[g.location]){ const i=st.provinces[g.location].generals.indexOf(gid); if(i>=0) st.provinces[g.location].generals.splice(i,1); } }
+// 処罰は家中に恐怖・不満を波及させる（信賞必罰の副作用）
+function ripplePunish(st){ let n=0; const me=st.playerDaimyo; ownedProvinces(st,me).forEach(pid=>st.provinces[pid].generals.forEach(gid=>{ const g=st.generals[gid]; if(g&&g.alive&&g.daimyo===me){ g.loyalty=Math.max(0,(g.loyalty||60)-3); n++; } })); return n; }
+function applyRetainerAction(st, gid, kind){
+  const def=RETAINER_ACTIONS[kind]; if(!def) return null;
+  const av=def.avail(st,gid); if(!av.ok) return {line:'（条件を満たさない）', loy:0, ok:false};
+  const r=def.apply(st,gid);
+  const g=st.generals[gid];
+  if (r.loy && g) g.loyalty=Math.min(100,Math.max(0,(g.loyalty||60)+r.loy));
+  if (r.fear) ripplePunish(st);
+  return {line:r.line, loy:r.loy||0, ok:true};
 }
 
 const CASTLE_LAYOUT_RESET_STORE='sengokuCastleLayoutReset:v4';
