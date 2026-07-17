@@ -134,6 +134,38 @@ for f in obsidian-vault/01-Daily/*.md; do
   fi
 done
 
+echo "== 9. Dailyなしの作業日（直近14日・警告のみ／exit codeに影響しない）=="
+# 作業コミット（obsidian-vault/ 以外を変更した非マージコミット）がある日に
+# 対応する 01-Daily/YYYY-MM-DD.md が無ければ警告する。検査#8は「存在するDailyの
+# 昇格漏れ」しか見えず、Dailyごと書かれなかった作業日は蓄積ループから漏れる
+# （2026-07-15の大型実装5件が無記録だった実例）。記録要否の判断はLLM作業のため
+# 非ブロッキング（△）。古い作業日を延々警告しないよう直近14日に限定する。
+COMMITS=$(git log --no-merges --since='14 days ago' --date=short --pretty='%H %ad' 2>/dev/null || true)
+if [ -z "$COMMITS" ]; then
+  echo "  - 直近14日のコミットなし（スキップ）"
+else
+  WORKDAYS=""
+  while read -r h d; do
+    [ -n "$h" ] || continue
+    # obsidian-vault/ のみのコミット（Daily追記等）は「作業」に数えない。
+    # 注意: `git show | grep -q` 直結は pipefail 下で grep の早期exitが
+    # git show を SIGPIPE(141) で殺しパイプライン全体が偽になる（変更ファイル数が
+    # 多いコミットだけ落ちる）ため、先に変数へ受けてから grep する。
+    CHANGED=$(git show --pretty=format: --name-only "$h" 2>/dev/null || true)
+    if grep -qv -e '^$' -e '^obsidian-vault/' <<< "$CHANGED"; then
+      WORKDAYS="$WORKDAYS$d"$'\n'
+    fi
+  done <<< "$COMMITS"
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    if [ -f "obsidian-vault/01-Daily/$d.md" ]; then
+      ok "$d（Dailyあり）"
+    else
+      note_warn "$d: 作業コミットあり・Dailyなし（学び/決定があれば obsidian-vault/01-Daily/$d.md へ記録）"
+    fi
+  done <<< "$(printf '%s' "$WORKDAYS" | sort -u)"
+fi
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then
