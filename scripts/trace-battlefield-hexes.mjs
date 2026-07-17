@@ -130,6 +130,22 @@ const PROFILES = {
   battleNakatomigawa: 'river',   // 吉野川支流
 };
 
+/* ---------------- 空行(地平線)テーブル ----------------
+ * 戦場画像は俯瞰パースのため、画面上部は空・雲・遠景の山(=地平線の向こう)になる。
+ * その行は「戦場外(sky)」としてトレースし、ヘックス枠を描かず進入・布陣も不可にする
+ * (駒が空中に浮いて見える問題の対策)。値はデバッグ描画の目視で確定。 */
+const SKY_ROWS = {
+  battlePlainRoad: 3, battleForestMountain: 1, battleRiverMarsh: 2,
+  battleSekigahara: 2, battleKawanakajima: 2, battleNagashino: 2,
+  battleOkehazama: 1, battleMikatagahara: 2, battleYamazaki: 3,
+  battleAnegawa: 2, battleItsukushima: 2, battleKonodai: 1,
+  battleMimasePass: 1, battleImayama: 2, battleNodaFukushima: 2,
+  battleMimigawa: 1, battleTenshoIga: 1, battleSuriagehara: 2,
+  battleTedorigawa: 1, battleOkitanawate: 2, battleHitoribashi: 2,
+  battleKeichoDewa: 1, battleKawagoe: 2, battleHetsugigawa: 2,
+  battleNakatomigawa: 2,
+};
+
 /* ---------------- ピクセル分類 ----------------
  * 判定順: (海プロファイルの水) → 空/靄 → 水面 → 森 → 岩肌 → 平地。
  * kv = 露出正規化係数(夕暮れ・夜戦マップで暗部が森に化けるのを防ぐ)。 */
@@ -210,7 +226,7 @@ function classifyImage(img, mode) {
 }
 
 /* ---------------- 後処理 ---------------- */
-function postProcess(grid, meta, mode) {
+function postProcess(grid, meta, mode, skyRows) {
   const at = (c, r) => (grid[r] && grid[r][c]) || 'plain';
   // 0) 遠景の水誤検出対策: 上部(rows0-4)で完結する水域は前景の水ではなく霞んだ遠山/水平線。
   //    暗ければ山、明るければ平地(遠景)へ降格する。前景(row5以降)へ繋がる水域はそのまま。
@@ -259,19 +275,22 @@ function postProcess(grid, meta, mode) {
     const to = mode === 'none' ? 'plain' : 'river';
     for (let r = 0; r < HEX.rows; r++) for (let c = 0; c < HEX.cols; c++) if (at(c, r) === 'water') grid[r][c] = to;
   }
-  // 3) 布陣マス(攻: rows13-14 / 守: rows0-1 の偶数列)の水面は浅瀬(river)にして駒が海上に湧かないようにする
-  for (const r of [0, 1, 13, 14]) for (let c = 2; c <= 12; c += 2) {
+  // 3) 空行(地平線より上)を戦場外にする。守り手の布陣行は空行の直下2行になる
+  for (let r = 0; r < skyRows; r++) for (let c = 0; c < HEX.cols; c++) grid[r][c] = 'sky';
+  const defRows = [skyRows, skyRows + 1];
+  // 4) 布陣マス(攻: rows13-14 / 守: 空行直下2行 の偶数列)の水面は浅瀬(river)にして駒が海上に湧かないようにする
+  for (const r of [...defRows, 13, 14]) for (let c = 2; c <= 12; c += 2) {
     if (at(c, r) === 'water') grid[r][c] = 'river';
   }
-  // 4) 到達性検証: 攻め手(rows13-14)から守り手(rows0-1)へ water を避けて到達できるか(BFS)。
+  // 5) 到達性検証: 攻め手(rows13-14)から守り手の布陣行へ water/sky を避けて到達できるか(BFS)。
   //    不可なら water を高コストで許すダイクストラの最短路上の water を river(浅瀬)へ変換して渡り口を作る。
-  const passable = (c, r) => at(c, r) !== 'water';
+  const passable = (c, r) => at(c, r) !== 'water' && at(c, r) !== 'sky';
   const bfsReach = () => {
     const q = [], dist = {};
     for (const r of [13, 14]) for (let c = 0; c < HEX.cols; c++) if (passable(c, r)) { q.push([c, r]); dist[c + ',' + r] = 0; }
     for (let i = 0; i < q.length; i++) {
       const [c, r] = q[i];
-      if (r <= 1) return true;
+      if (r <= defRows[1]) return true;
       hexNeighbors(c, r).forEach(([nc, nr]) => {
         if (passable(nc, nr) && dist[nc + ',' + nr] === undefined) { dist[nc + ',' + nr] = 1; q.push([nc, nr]); }
       });
@@ -286,8 +305,9 @@ function postProcess(grid, meta, mode) {
       pq.sort((a, b) => a[0] - b[0]);
       const [d, c, r] = pq.shift();
       if (d > dist[c + ',' + r]) continue;
-      if (r <= 1) { goal = [c, r]; break; }
+      if (r <= defRows[1]) { goal = [c, r]; break; }
       for (const [nc, nr] of hexNeighbors(c, r)) {
+        if (at(nc, nr) === 'sky') continue;
         const nd = d + (at(nc, nr) === 'water' ? 8 : 1);
         if (dist[nc + ',' + nr] === undefined || nd < dist[nc + ',' + nr]) { dist[nc + ',' + nr] = nd; from[nc + ',' + nr] = c + ',' + r; pq.push([nd, nc, nr]); }
       }
@@ -317,6 +337,10 @@ const OVERRIDES = {
   battleKeichoDewa(grid) {
     for (let r = 0; r < HEX.rows; r++) for (let c = 0; c < HEX.cols; c++) if (grid[r][c] === 'forest') grid[r][c] = 'plain';
   },
+  // 地平線直下(rows2-5)の霞んだ遠山が川と紛らわしい。右端(cols14-16)を流れる川だけ残す
+  battleNagashino(grid) {
+    for (let r = 2; r <= 5; r++) for (let c = 0; c <= 13; c++) if (grid[r][c] === 'river') grid[r][c] = 'mountain';
+  },
   // 逆光の川面(太日川)が空と紛らわしく検出漏れする。画像の水面帯を直接トレース
   battleKonodai(grid) {
     for (const c of Array.from({ length: HEX.cols }, (_, i) => i)) { grid[1][c] = 'river'; grid[2][c] = 'river'; }
@@ -338,9 +362,21 @@ function debugRender(img, grid, outFile) {
     const o = (iy * img.w + ix) * img.ch, d = (y * dw + x) * 3;
     rgb[d] = img.data[o]; rgb[d + 1] = img.data[o + 1]; rgb[d + 2] = img.data[o + 2];
   }
+  // 空行(戦場外)の可視化: 暗幕 + 地平線ライン
+  const skyRows = grid.findIndex(row => row[0] !== 'sky');
+  const cutRows = skyRows < 0 ? HEX.rows : skyRows;
+  if (cutRows > 0) {
+    const yLine = Math.round((HEX.oy + HEX.size * 1.5 * cutRows - HEX.size) / 4);
+    for (let y = 0; y < Math.min(dh, yLine); y++) for (let x = 0; x < dw; x++) {
+      const d = (y * dw + x) * 3;
+      rgb[d] = rgb[d] * 0.45; rgb[d + 1] = rgb[d + 1] * 0.45; rgb[d + 2] = rgb[d + 2] * 0.45;
+    }
+    for (let x = 0; x < dw; x++) { const d = (Math.min(dh - 1, yLine) * dw + x) * 3; rgb[d] = 255; rgb[d + 1] = 60; rgb[d + 2] = 60; }
+  }
   // ヘックス着色(中心円をブレンド) + 枠点
   for (let row = 0; row < HEX.rows; row++) for (let col = 0; col < HEX.cols; col++) {
     const t = grid[row][col]; const color = DBG_COLORS[t];
+    if (t === 'sky') continue;
     const [hx, hy] = hexCenter(col, row);
     const cx = hx / 4, cy = hy / 4, R = (HEX.size * 0.82) / 4;
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
@@ -368,13 +404,13 @@ function main() {
   const entries = [...html.matchAll(/(battle\w+): '(assets\/sengoku\/gpt\/battles\/[^']+\.png)'/g)]
     .map(m => [m[1], m[2]]).filter(([k]) => k !== 'battleNaval');
 
-  const SYM = { plain: '.', forest: 'f', mountain: 'm', river: 'r', water: 'w' };
+  const SYM = { plain: '.', forest: 'f', mountain: 'm', river: 'r', water: 'w', sky: '-' };
   const lines = [];
   for (const [key, rel] of entries) {
     const img = decodePNG(fs.readFileSync(path.join(ROOT, rel)));
     const mode = PROFILES[key] || 'weak';
     const { grid, meta } = classifyImage(img, mode);
-    postProcess(grid, meta, mode);
+    postProcess(grid, meta, mode, SKY_ROWS[key] || 0);
     if (OVERRIDES[key]) OVERRIDES[key](grid);
     if (dbgDir) debugRender(img, grid, path.join(dbgDir, key + '.png'));
     const rows = grid.map(row => row.map(t => SYM[t]).join(''));
@@ -388,5 +424,23 @@ function main() {
   console.log('const FIELD_HEX_LAYOUTS = {');
   console.log(lines.join('\n'));
   console.log('};');
+
+  // 全戦場のデバッグ画像を1枚に並べたモンタージュ(目視レビュー用)
+  if (dbgDir) {
+    const cols = 4, cw = 320, ch = 260;
+    const rows = Math.ceil(entries.length / cols);
+    const mw = cols * cw, mh = rows * ch;
+    const mont = Buffer.alloc(mw * mh * 3);
+    entries.forEach(([key], i) => {
+      const img = decodePNG(fs.readFileSync(path.join(dbgDir, key + '.png')));
+      const ox = (i % cols) * cw, oy = Math.floor(i / cols) * ch;
+      for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+        const s = ((y * 2) * img.w + (x * 2)) * img.ch, d = ((oy + y) * mw + (ox + x)) * 3;
+        mont[d] = img.data[s]; mont[d + 1] = img.data[s + 1]; mont[d + 2] = img.data[s + 2];
+      }
+    });
+    fs.writeFileSync(path.join(dbgDir, '_montage.png'), encodePNG(mw, mh, mont));
+    console.error('montage order:', entries.map(([k]) => k).join(', '));
+  }
 }
 main();
