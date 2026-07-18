@@ -27,6 +27,12 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `/new-game` スキルでエージェントパイプライン一式（仕様→アセット→実装→テスト→採点）を起動できる
 - 画像生成はAPIキー不要のMCPコネクタ（Adobe / Canva / Figma）またはプロシージャル生成を使う（`.claude/agents/graphic-designer.md` 参照）
 
+## hideの案内エージェント（サイト内チャットウィジェット）
+- 実装3点セット: データ=`assets/js/agent-data.js`（GAMES/intent辞書/KB）・ロジック=`assets/js/agent.js`・AI=`cloudflare-worker/gemini-proxy.js`（SYSTEM_PROMPTは `site-knowledge.js` を `scripts/gen-agent-knowledge.mjs` で自動生成）
+- 検証: `node scripts/agent-evolve-check.mjs`（データ整合）＋ `node scripts/agent-dynamic-test.cjs`（Playwright 6シナリオ）
+- **日々自己進化**: Claude Code Remote の Routine（毎日 05:00 JST）が `/agent-evolve` を実行 → worker `/stats` で弱点発見 → `agent-data.js`/`data/agent-news.json` を小改善 → ローリングPR `claude/agent-evolve` に積み深澤が承認（mainへ直接pushしない）
+- **週次ブラッシュアップ提案**: Routine（毎週月曜 07:00 JST）が `/site-proposal` を実行 → 監査＋/stats＋トレンドからトップ3提案 → GitHub Issue（ラベル `proposal`）起票のみ。実装は深澤承認後に planner から
+
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
 - セッション開始時に `.claude/hooks/second-brain-recall.sh`（SessionStart hook）が `MOC.md`・知見クイックインデックス（`04-Knowledge/`）・直近のDaily Noteを自動でコンテキストに読み込む
