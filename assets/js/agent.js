@@ -42,7 +42,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               message: userText,
-              history: (historyTurns || []).slice(-4).map(m => ({
+              history: (historyTurns || []).slice(-6).map(m => ({
                 role: m.role,
                 text: m.text,
               })),
@@ -71,10 +71,65 @@
       }
 
       // ── Utilities ────────────────────────────────────────────
+      // 長音記号「ー」の展開先（え段→い、お段→う の慣用表記）。関数宣言なので巻き上げされ、
+      // IIFE冒頭の INTENT_DICT_NORM 生成からも安全に呼べる。
+      function longVowelOf(c) {
+        if (!longVowelOf._m) {
+          const m = {};
+          [['あぁかがさざただなはばぱまゃやらわ', 'あ'],
+           ['いぃきぎしじちぢにひびぴみり', 'い'],
+           ['うぅゔくぐすずつづぬふぶぷむゅゆる', 'う'],
+           ['えぇけげせぜてでねへべぺめれ', 'い'],
+           ['おぉこごそぞとどのほぼぽもょよろを', 'う']].forEach(([chars, v]) => {
+            for (const ch of chars) m[ch] = v;
+          });
+          longVowelOf._m = m;
+        }
+        return longVowelOf._m[c] || '';
+      }
+
+      // 正規化: 全角→半角・小文字化に加え、カタカナ→ひらがな折り畳みと
+      // 長音展開（しょーぎ→しょうぎ）で表記ゆれを吸収する。辞書側も同じ関数で
+      // 事前正規化するため、入力と辞書の表記が常に同じ土俵で比較される。
       function normalize(s) {
-        return (s || '').toLowerCase()
+        let t = (s || '').toLowerCase()
           .replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+          .replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60))
           .replace(/\s+/g, ' ').trim();
+        for (let i = 0; i < 3 && t.indexOf('ー') !== -1; i++) {
+          t = t.replace(/([ぁ-ん])ー/g, (m, p) => p + (longVowelOf(p) || ''));
+        }
+        return t.replace(/ー/g, '');
+      }
+
+      // bigram Jaccard 類似度（worker の共有学習メモリと同一ロジック）
+      function bigrams(s) {
+        const set = new Set();
+        for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
+        return set;
+      }
+      function similarity(a, b) {
+        if (!a || !b) return 0;
+        if (a === b) return 1;
+        const A = bigrams(a), B = bigrams(b);
+        if (!A.size || !B.size) return 0;
+        let inter = 0;
+        for (const g of A) if (B.has(g)) inter++;
+        return inter / (A.size + B.size - inter);
+      }
+      // 入力文 t の部分列に kw とほぼ一致する箇所があるか（タイポ耐性の第2パス用）。
+      // 完全一致パスで拾えなかったときだけ呼ぶこと（総当たりのため）。
+      function fuzzyScore(t, kw) {
+        if (kw.length < 3 || t.length < 2) return 0;
+        let best = 0;
+        for (const len of [kw.length, kw.length + 1, kw.length - 1]) {
+          if (len < 2 || len > t.length) continue;
+          for (let i = 0; i + len <= t.length; i++) {
+            const s = similarity(t.slice(i, i + len), kw);
+            if (s > best) best = s;
+          }
+        }
+        return best;
       }
 
       function escapeHtml(s) {
@@ -94,6 +149,8 @@
         history: [],
         lastIntent: null,
         paginationOffset: 0,
+        // 直前の話題スロット（「それの遊び方は？」等の指示語解決に使う）
+        slots: { game: null, stock: null, cat: null },
         load() {
           try {
             const raw = sessionStorage.getItem(STATE_KEY);
@@ -103,6 +160,9 @@
               this.history = o.history.slice(-MAX_TURNS);
               this.lastIntent = o.lastIntent || null;
               this.paginationOffset = o.paginationOffset || 0;
+              if (o.slots && typeof o.slots === 'object') {
+                this.slots = { game: o.slots.game || null, stock: o.slots.stock || null, cat: o.slots.cat || null };
+              }
             }
           } catch (e) { /* ignore */ }
         },
@@ -111,7 +171,8 @@
             sessionStorage.setItem(STATE_KEY, JSON.stringify({
               history: this.history.slice(-MAX_TURNS),
               lastIntent: this.lastIntent,
-              paginationOffset: this.paginationOffset
+              paginationOffset: this.paginationOffset,
+              slots: this.slots
             }));
           } catch (e) { /* ignore */ }
         },
@@ -124,11 +185,21 @@
           this.history = [];
           this.lastIntent = null;
           this.paginationOffset = 0;
+          this.slots = { game: null, stock: null, cat: null };
           try { sessionStorage.removeItem(STATE_KEY); } catch (e) { /* ignore */ }
         }
       };
 
       // ── Intent recognition ──────────────────────────────────
+      function pickBest(scores) {
+        let best = null, bestScore = 0, second = 0;
+        for (const k in scores) {
+          if (scores[k] > bestScore) { second = bestScore; bestScore = scores[k]; best = k; }
+          else if (scores[k] > second) { second = scores[k]; }
+        }
+        return { name: best, score: bestScore, runnerUp: second };
+      }
+
       function detectIntent(text, lang) {
         const t = normalize(text);
         if (!t) return { name: null, score: 0 };
@@ -144,25 +215,47 @@
         }
         // bonus: continuation of last intent (e.g. "more")
         if (State.lastIntent && scores[State.lastIntent]) scores[State.lastIntent] += 0.4;
-        let best = null, bestScore = 0, second = 0;
-        for (const k in scores) {
-          if (scores[k] > bestScore) { second = bestScore; bestScore = scores[k]; best = k; }
-          else if (scores[k] > second) { second = scores[k]; }
+        let result = pickBest(scores);
+        // ファジー第2パス（タイポ耐性）: 完全一致で確信が持てないときのみ。
+        // 3文字以上のキーワードに限定し、類似度0.8以上を弱め（×0.6）に加点する。
+        if (result.score < 1.0) {
+          for (const intent in dict) {
+            let s = scores[intent] || 0;
+            for (const [kw, w] of dict[intent]) {
+              if (kw && kw.length >= 3 && t.indexOf(kw) === -1 && fuzzyScore(t, kw) >= 0.8) s += w * 0.6;
+            }
+            if (s > 0) scores[intent] = s;
+          }
+          result = pickBest(scores);
         }
-        return { name: best, score: bestScore, runnerUp: second };
+        return result;
       }
+
+      // ゲームエイリアスは起動時に正規化しておく（カナ折り畳み・長音展開を辞書側にも適用）
+      const GAME_ALIAS_NORM = GAMES.map(g => ({
+        g,
+        aliases: [...(g.aliases.ja || []), ...(g.aliases.en || []), g.title.ja, g.title.en]
+          .filter(Boolean).map(a => normalize(a)).filter(a => a.length >= 2)
+      }));
 
       function detectGame(text) {
         const t = normalize(text);
         if (!t) return [];
         const hits = [];
-        for (const g of GAMES) {
-          let hit = false;
-          for (const a of (g.aliases.ja || [])) if (t.indexOf(a.toLowerCase()) !== -1) { hit = true; break; }
-          if (!hit) for (const a of (g.aliases.en || [])) if (t.indexOf(a.toLowerCase()) !== -1) { hit = true; break; }
-          if (hit) hits.push(g);
+        for (const e of GAME_ALIAS_NORM) {
+          if (e.aliases.some(a => t.indexOf(a) !== -1)) hits.push(e.g);
         }
-        return hits;
+        if (hits.length) return hits;
+        // ファジー第2パス（タイポ耐性）: 最も近い1件のみ、閾値0.78
+        let best = null, bestSim = 0;
+        for (const e of GAME_ALIAS_NORM) {
+          for (const a of e.aliases) {
+            if (a.length < 3) continue;
+            const s = fuzzyScore(t, a);
+            if (s > bestSim) { bestSim = s; best = e.g; }
+          }
+        }
+        return best && bestSim >= 0.78 ? [best] : [];
       }
 
       function detectSection(text, lang) {
@@ -172,7 +265,7 @@
         let best = null, bestLen = 0;
         for (const sec in map) {
           for (const a of map[sec]) {
-            const al = a.toLowerCase();
+            const al = normalize(a);
             if (t.indexOf(al) !== -1 && al.length > bestLen) { best = sec; bestLen = al.length; }
           }
         }
@@ -274,14 +367,21 @@
       let fab, panel, messagesEl, typingEl, formEl, inputEl, sendBtn, clearBtn, closeBtn, quickEl;
       let typingAbort = null;
 
+      let idleProactiveTimer = null;
       function setOpen(open) {
         if (!panel) return;
         panel.classList.toggle('open', open);
         panel.setAttribute('aria-hidden', open ? 'false' : 'true');
         fab.setAttribute('aria-expanded', open ? 'true' : 'false');
         fab.hidden = open; // パネルを開いたらFABを全画面サイズで非表示
+        if (idleProactiveTimer) { clearTimeout(idleProactiveTimer); idleProactiveTimer = null; }
         if (open) {
+          clearFabBadge();
           if (State.history.length === 0) welcome();
+          // 60秒無操作なら自発的にもうひと押し提案（セッション上限あり）
+          idleProactiveTimer = setTimeout(() => {
+            if (panel.classList.contains('open')) maybeProactive();
+          }, 60000);
           requestAnimationFrame(() => inputEl && inputEl.focus());
         }
       }
@@ -493,6 +593,7 @@
               ts: Date.now()
             }));
           } catch(e) {}
+          recordGamePlay(g.slug);
         });
         a.rel = 'noopener';
         const thumb = document.createElement('div');
@@ -869,6 +970,7 @@
         const gameHits = detectGame(text);
         if (gameHits.length === 1) {
           State.lastIntent = 'open_game';
+          State.slots.game = gameHits[0].slug;
           State.save();
           await botSay(State.lang === 'ja'
             ? '「' + gameHits[0].title.ja + '」ですね！下のカードから遊べます 🎮'
@@ -893,6 +995,7 @@
         const stockHit = detectStock(text);
         if (stockHit) {
           State.lastIntent = 'stock';
+          State.slots.stock = stockHit.name || null;
           State.save();
           await runStock(stockHit);
           return;
@@ -917,7 +1020,7 @@
         if (intent.name && intent.score >= 2.0) {
           State.lastIntent = intent.name;
           State.save();
-          await runIntent(intent.name);
+          await runIntent(intent.name, text);
           return;
         }
         if (intent.name && intent.score >= 1.0) {
@@ -1090,13 +1193,16 @@
         return map[intentName] || defaultChips();
       }
 
-      async function runIntent(name) {
+      async function runIntent(name, rawText) {
         recordIntentUse(name);
         switch (name) {
           case 'forex':     return runForex();
           case 'weather':   return runWeather();
           case 'recommend': return runRecommend();
-          case 'listGames': return runListGames();
+          case 'listGames': return runListGames(rawText);
+          case 'catGames':  return runCatGames(rawText);
+          case 'howto':     return runHowto();
+          case 'newGames':  return runNewGames();
           case 'free':      return runKb('free');
           case 'misato':       return runKb('misato', { chips: [{label: t('agent-quick-1'), query: t('agent-quick-1')}] });
           case 'misatoPop':    return runKb('misatoPop');
@@ -1246,17 +1352,45 @@
         ]);
       }
 
+      // よく遊ぶジャンル・未プレイ状況にもとづくパーソナライズおすすめ
       async function runRecommend() {
-        const picks = RECOMMENDS.map(slug => GAMES.find(g => g.slug === slug)).filter(Boolean);
-        const txt = State.lang === 'ja'
-          ? '今のおすすめはこの3本です 🌟 どれもブラウザですぐ遊べます！'
-          : "Today's top 3 picks 🌟 — all playable right in the browser!";
+        const isJa = State.lang === 'ja';
+        const prof = loadProfile();
+        const played = prof.playedGames || {};
+        const catCount = {};
+        for (const slug in played) {
+          const g = GAMES.find(x => x.slug === slug);
+          if (g) catCount[g.cat] = (catCount[g.cat] || 0) + (played[slug].count || 1);
+        }
+        const favCat = Object.keys(catCount).sort((a, b) => catCount[b] - catCount[a])[0] || null;
+        const unplayed = GAMES.filter(g => !played[g.slug]);
+        const picks = [];
+        if (favCat) for (const g of unplayed) { if (g.cat === favCat && picks.length < 3) picks.push(g); }
+        for (const slug of RECOMMENDS) {
+          if (picks.length >= 3) break;
+          const g = GAMES.find(x => x.slug === slug);
+          if (g && picks.indexOf(g) === -1 && !played[g.slug]) picks.push(g);
+        }
+        for (const g of unplayed) { if (picks.length >= 3) break; if (picks.indexOf(g) === -1) picks.push(g); }
+        for (const slug of RECOMMENDS) {
+          if (picks.length >= 3) break;
+          const g = GAMES.find(x => x.slug === slug);
+          if (g && picks.indexOf(g) === -1) picks.push(g);
+        }
+        const txt = favCat && picks.some(g => g.cat === favCat)
+          ? (isJa ? 'よく遊ばれているジャンルから、まだ遊んでいない3本を選びました 🌟'
+                  : "Based on what you play, here are 3 picks you haven't tried 🌟")
+          : (isJa ? '今のおすすめはこの3本です 🌟 どれもブラウザですぐ遊べます！'
+                  : "Today's top 3 picks 🌟 — all playable right in the browser!");
         await botSay(txt);
-        renderGameCards(picks);
+        renderGameCards(picks.slice(0, 3));
         renderChips(contextChips('recommend'));
       }
 
-      async function runListGames() {
+      async function runListGames(rawText) {
+        // 「アクションゲームある？」等、ジャンル指定が含まれていればフィルタ表示へ
+        const cat = detectCat(rawText || '');
+        if (cat) return runCatGames(rawText);
         State.paginationOffset = 0;
         const first = GAMES.slice(0, 5);
         const txt = State.lang === 'ja'
@@ -1269,6 +1403,75 @@
         // ページネーションの「もっと」は残しつつ文脈チップで補完
         const chips = [{ label: t('agent-more'), action: () => runMore() }, ...contextChips('listGames')];
         renderChips(chips);
+      }
+
+      // ── ジャンル別一覧（発話からカテゴリを特定してフィルタ）──
+      const CAT_KEYWORDS = {
+        action: ['アクション', 'action'],
+        puzzle: ['パズル', 'puzzle'],
+        rpg: ['ロールプレイング', 'role playing', 'rpg系'],
+        board: ['ボード', '将棋系', 'board game', 'board'],
+        card: ['トランプ', 'card game'],
+        sim: ['シミュレーション', 'シュミレーション', 'simulation', '経営', '育成'],
+      };
+      const CAT_LABELS = {
+        action: { ja: 'アクション', en: 'action' },
+        puzzle: { ja: 'パズル', en: 'puzzle' },
+        rpg:    { ja: 'RPG', en: 'RPG' },
+        board:  { ja: 'ボード', en: 'board' },
+        card:   { ja: 'カード', en: 'card' },
+        sim:    { ja: 'シミュレーション', en: 'simulation' },
+        other:  { ja: 'その他', en: 'other' },
+      };
+      function detectCat(text) {
+        const nt = normalize(text);
+        if (!nt) return null;
+        for (const cat in CAT_KEYWORDS) {
+          if (CAT_KEYWORDS[cat].some(k => nt.indexOf(normalize(k)) !== -1)) return cat;
+        }
+        return null;
+      }
+      async function runCatGames(rawText) {
+        const isJa = State.lang === 'ja';
+        const cat = detectCat(rawText || '') || State.slots.cat;
+        const hits = cat ? GAMES.filter(g => g.cat === cat) : [];
+        if (!hits.length) return runListGames();
+        State.slots.cat = cat;
+        State.save();
+        const label = (CAT_LABELS[cat] && CAT_LABELS[cat][isJa ? 'ja' : 'en']) || cat;
+        await botSay(isJa
+          ? label + '系のゲームは全' + hits.length + '本あります 🎮 まずはこちら！'
+          : 'I have ' + hits.length + ' ' + label + ' games 🎮 Here are some!');
+        renderGameCards(hits.slice(0, 5));
+        if (hits.length > 5) {
+          renderChips([{ label: isJa ? '全部見る' : 'See all games', query: isJa ? 'ゲーム一覧が見たい' : 'List all games' }]);
+        }
+      }
+
+      // ── 遊び方（直前の話題スロットで「それ」を解決）─────────
+      async function runHowto() {
+        const isJa = State.lang === 'ja';
+        const g = State.slots.game && GAMES.find(x => x.slug === State.slots.game);
+        if (!g) {
+          await botSay(isJa
+            ? 'どのゲームの遊び方が知りたいですか？🎮 ゲーム名を教えてください。'
+            : 'Which game would you like to learn? 🎮 Tell me its name.');
+          renderChips(defaultChips());
+          return;
+        }
+        await botSay(isJa
+          ? '「' + g.title.ja + '」ですね！' + (g.desc.ja || '') + '。\n詳しい操作はゲームページ内の説明をどうぞ。下のカードから開けます 👇'
+          : 'You mean ' + (g.title.en || g.title.ja) + '! ' + (g.desc.en || '') + '.\nFull controls are explained on the game page — tap below 👇');
+        renderGameCards([g]);
+      }
+
+      // ── 新作（GAMES配列は追加順のため末尾が最新）────────────
+      async function runNewGames() {
+        const isJa = State.lang === 'ja';
+        const latest = GAMES.slice(-3).reverse();
+        await botSay(isJa ? '最近追加されたのはこちらの3本です ✨' : 'Here are the 3 most recently added games ✨');
+        renderGameCards(latest);
+        renderChips(contextChips('listGames'));
       }
 
       async function runMore() {
@@ -1434,15 +1637,147 @@
         welcome();
       }
 
+      // ── 永続パーソナライズ（localStorage プロファイル）───────
+      const PROFILE_KEY = 'hide-agent-profile-v1';
+      function loadProfile() {
+        let p = null;
+        try { p = JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null'); } catch (e) { /* ignore */ }
+        if (!p || p.v !== 1) {
+          p = { v: 1, visits: 0, playedGames: {}, seenGameSlugs: [], readNewsIds: [] };
+          // 旧キー（agent-visit-count）からの移行
+          try { p.visits = parseInt(localStorage.getItem('agent-visit-count') || '0', 10) || 0; } catch (e) { /* ignore */ }
+        }
+        if (!p.playedGames || typeof p.playedGames !== 'object') p.playedGames = {};
+        if (!Array.isArray(p.seenGameSlugs)) p.seenGameSlugs = [];
+        if (!Array.isArray(p.readNewsIds)) p.readNewsIds = [];
+        return p;
+      }
+      function saveProfile(p) {
+        try { localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); } catch (e) { /* ignore */ }
+      }
+      function recordGamePlay(slug) {
+        const p = loadProfile();
+        const e = p.playedGames[slug] || { count: 0, last: 0 };
+        e.count++; e.last = Date.now();
+        p.playedGames[slug] = e;
+        saveProfile(p);
+      }
+      function markGamesSeen(prof) {
+        prof.seenGameSlugs = GAMES.map(g => g.slug);
+        saveProfile(prof);
+      }
+
+      // ── プロアクティブ提案エンジン ───────────────────────────
+      // 自発的な提案は1セッション最大2件。優先度: 未読お知らせ → 新着ゲーム → 未プレイのおすすめ。
+      const NEWS_URL = 'data/agent-news.json';
+      const PROACTIVE_MAX_PER_SESSION = 2;
+      function proactiveCount() {
+        try { return parseInt(sessionStorage.getItem('agent-proactive-count') || '0', 10) || 0; } catch (e) { return PROACTIVE_MAX_PER_SESSION; }
+      }
+      function bumpProactiveCount() {
+        try { sessionStorage.setItem('agent-proactive-count', String(proactiveCount() + 1)); } catch (e) { /* ignore */ }
+      }
+      let newsCache = null;
+      async function fetchNews() {
+        if (newsCache) return newsCache;
+        try {
+          const res = await fetchWithTimeout(NEWS_URL + '?_=' + Date.now(), { cache: 'no-store' }, 3000);
+          if (!res.ok) return [];
+          const arr = await res.json();
+          if (!Array.isArray(arr)) return [];
+          const now = Date.now();
+          newsCache = arr.filter(n => n && n.id && (n.ja || n.en) && (!n.expires || Date.parse(n.expires) > now));
+          return newsCache;
+        } catch (e) { return []; }
+      }
+      async function proactiveSay(text, opts) {
+        const bubble = await botSay(text, opts);
+        const wrap = bubble && bubble.closest ? bubble.closest('.agent-msg') : null;
+        if (wrap) wrap.classList.add('agent-proactive');
+        bumpProactiveCount();
+        return bubble;
+      }
+      async function maybeProactive() {
+        if (proactiveCount() >= PROACTIVE_MAX_PER_SESSION) return;
+        const isJa = State.lang === 'ja';
+        const prof = loadProfile();
+
+        // 1) 未読のお知らせ（data/agent-news.json — 日次自己進化が更新するフィード）
+        const news = await fetchNews();
+        const unread = news.find(n => prof.readNewsIds.indexOf(n.id) === -1);
+        if (unread) {
+          await proactiveSay('📣 ' + ((isJa ? unread.ja : unread.en) || unread.ja), { delay: 400 });
+          if (unread.href) {
+            renderChips([{ label: isJa ? '見てみる →' : 'Check it out →', action: () => window.open(unread.href, '_blank', 'noopener') }]);
+          }
+          prof.readNewsIds = prof.readNewsIds.concat(unread.id).slice(-50);
+          saveProfile(prof);
+          return;
+        }
+
+        // 2) 新着ゲーム検知（前回訪問時に存在しなかったタイトル）
+        if (prof.visits > 1 && prof.seenGameSlugs.length > 0) {
+          const fresh = GAMES.filter(g => prof.seenGameSlugs.indexOf(g.slug) === -1).slice(0, 2);
+          if (fresh.length) {
+            await proactiveSay(isJa
+              ? '✨ 前回の訪問から新しいゲームが追加されています！'
+              : '✨ New games have landed since your last visit!', { delay: 400 });
+            renderGameCards(fresh);
+            markGamesSeen(prof);
+            return;
+          }
+        }
+
+        // 3) 未プレイのおすすめ（再訪ユーザーのみ・時間帯のひとことつき）
+        if (prof.visits > 1) {
+          const unplayed = GAMES.filter(g => !prof.playedGames[g.slug]);
+          if (unplayed.length) {
+            const pick = unplayed.find(g => RECOMMENDS.indexOf(g.slug) !== -1) || unplayed[0];
+            const h = new Date().getHours();
+            const flavor = isJa
+              ? (h >= 21 || h < 5 ? '夜ふかしのおともにどうぞ 🌙' : h < 12 ? '朝のウォームアップにどうぞ ☀️' : 'ひと息つくときにどうぞ ☕')
+              : (h >= 21 || h < 5 ? 'Perfect for a late night 🌙' : h < 12 ? 'A quick morning warm-up ☀️' : 'Great for a short break ☕');
+            await proactiveSay(isJa
+              ? '🎮 まだ遊んでいないおすすめがあります。「' + pick.title.ja + '」— ' + flavor
+              : '🎮 One you haven\'t tried yet: ' + (pick.title.en || pick.title.ja) + ' — ' + flavor, { delay: 400 });
+            renderGameCards([pick]);
+          }
+        }
+        markGamesSeen(prof);
+      }
+
+      // ── FAB未読バッジ（新着お知らせ/新着ゲームがあるとき）────
+      function showFabBadge() {
+        if (!fab || fab.querySelector('.agent-fab-dot')) return;
+        const dot = document.createElement('span');
+        dot.className = 'agent-fab-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        fab.appendChild(dot);
+        fab.setAttribute('aria-label', State.lang === 'ja' ? '案内エージェントを開く（新着あり）' : 'Open the guide agent (new updates)');
+      }
+      function clearFabBadge() {
+        const dot = fab && fab.querySelector('.agent-fab-dot');
+        if (dot) dot.remove();
+      }
+      async function checkFabBadge() {
+        try {
+          const prof = loadProfile();
+          const news = await fetchNews();
+          const hasUnread = news.some(n => prof.readNewsIds.indexOf(n.id) === -1);
+          const hasFresh = prof.visits > 0 && prof.seenGameSlugs.length > 0 && GAMES.some(g => prof.seenGameSlugs.indexOf(g.slug) === -1);
+          if (hasUnread || hasFresh) showFabBadge();
+        } catch (e) { /* ignore */ }
+      }
+
       async function welcome() {
         const isJa = State.lang === 'ja';
         const h = new Date().getHours();
 
-        // 訪問回数を取得・更新
-        let visitCount = 0;
-        try { visitCount = parseInt(localStorage.getItem('agent-visit-count') || '0', 10) || 0; } catch(e) {}
-        visitCount++;
-        try { localStorage.setItem('agent-visit-count', String(visitCount)); } catch(e) {}
+        // 訪問回数を取得・更新（永続プロファイル）
+        const prof = loadProfile();
+        prof.visits = (prof.visits || 0) + 1;
+        saveProfile(prof);
+        const visitCount = prof.visits;
 
         // 挨拶文を決定
         let greeting;
@@ -1477,6 +1812,9 @@
               query: isJa ? 'ゲーム何ある？' : 'What games are here?' }
           ]);
         }
+
+        // 自発的な提案（お知らせ・新着ゲーム・未プレイのおすすめ）
+        await maybeProactive();
       }
 
       // ── Restore history on open ─────────────────────────────
@@ -1511,6 +1849,7 @@
 
         renderQuickActions();
         restoreHistory();
+        checkFabBadge(); // 新着お知らせ/新着ゲームがあればFABに未読ドットを表示
 
         fab.addEventListener('click', () => setOpen(!panel.classList.contains('open')));
         closeBtn && closeBtn.addEventListener('click', () => setOpen(false));

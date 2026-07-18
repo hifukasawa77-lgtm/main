@@ -264,7 +264,10 @@
           lang_en:   [['英語で',2.5],['in english',3],['english please',3]],
           lang_ja:   [['日本語で',2.5],['in japanese',3],['にほんごで',2.5]],
           more:      [['もっと',2.5],['他には',2],['他に',1.5],['次',1.5]],
-          stock:     [['株価',2.5],['株式',2],['株',1.5],['上場',1.5],['終値',2],['時価',1.5]]
+          stock:     [['株価',2.5],['株式',2],['株',1.5],['上場',1.5],['終値',2],['時価',1.5]],
+          howto:     [['遊び方',2.5],['あそびかた',2.5],['やり方',2.2],['やりかた',2.2],['操作方法',2.5],['操作',1.5],['ルール',2],['どうやって遊',2.2],['遊べばいい',2]],
+          newGames:  [['新作',2.5],['新しいゲーム',2.5],['最近追加',2.5],['最新ゲーム',2.5],['最近のゲーム',2.2],['新着',2.2],['できたばかり',2]],
+          catGames:  [['アクションゲーム',2.5],['パズルゲーム',2.5],['ボードゲーム',2.5],['カードゲーム',2.5],['シミュレーションゲーム',2.5],['アクション系',2.2],['パズル系',2.2],['ボード系',2.2],['シミュレーション系',2.2]]
         },
         en: {
           forex:     [['usd',2.5],['jpy',2.5],['usd/jpy',3],['forex',2.5],['exchange',2],['rate',1.5],['yen',1.5]],
@@ -287,7 +290,10 @@
           lang_en:   [['in english',3],['english please',3]],
           lang_ja:   [['in japanese',3],['日本語で',2.5]],
           more:      [['more',2.5],['next',2],['others',1.5]],
-          stock:     [['stock price',3],['stock',2.5],['share price',2.5],['share',2],['listed',1.5],['quote',1.5]]
+          stock:     [['stock price',3],['stock',2.5],['share price',2.5],['share',2],['listed',1.5],['quote',1.5]],
+          howto:     [['how to play',2.8],['how do i play',2.8],['controls',2.2],['rules',2],['tutorial',2]],
+          newGames:  [['new games',2.5],['newest',2.2],['recently added',2.5],['latest game',2.5],["what's new",2.4]],
+          catGames:  [['action game',2.5],['puzzle game',2.5],['board game',2.5],['card game',2.5],['simulation game',2.5]]
         }
       };
 
@@ -302,6 +308,8 @@
           blog:      '📝 ブログを見たい',
           hobby:     '🎯 趣味を教えて',
           contact:   '📬 連絡先を知りたい',
+          howto:     '🕹️ 遊び方を知りたい',
+          newGames:  '🆕 新作ゲームは？',
         },
         en: {
           forex:     '💴 USD/JPY rate',
@@ -313,6 +321,8 @@
           blog:      '📝 Read the blog',
           hobby:     '🎯 What are your hobbies?',
           contact:   '📬 How to contact?',
+          howto:     '🕹️ How to play',
+          newGames:  '🆕 What’s new?',
         }
       };
 
