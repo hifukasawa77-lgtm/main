@@ -58,7 +58,11 @@ researcher エージェント（Agent tool, subagent_type: researcher）に「�
 1. `mcp__github__search_issues` で既存 `label:proposal` の open Issue を確認し、重複提案を除外
 2. `mcp__github__issue_write` で Issue 起票（タイトル「🎨 サイトブラッシュアップ提案 YYYY-MM-DD」、ラベル `proposal`。ラベルが無ければ `mcp__github__get_label`→なしでも起票は続行しラベルなしで作成）
 3. 写しを `obsidian-vault/02-Projects/site-proposals/YYYY-MM-DD.md` に保存
-4. `obsidian-vault/01-Daily/YYYY-MM-DD.md` に1行記録（Issue番号つき）
+4. `obsidian-vault/01-Daily/YYYY-MM-DD.md` に1行記録
+5. Vault写し（3・4）の永続化のため、**obsidian-vault/ 配下のファイルのみ**をブランチ
+   `claude/site-proposal-vault` にコミット・プッシュしてよい（サイト本体のコード変更禁止は変わらず）
+6. **GitHub MCPツールが使えないセッションの場合**: Issue起票をスキップし、提案書全文を
+   Vault写し（上記5で永続化）と最終報告メッセージに残す。次回セッションや深澤が手動起票できる形にする（Issue番号つき）
 
 ## 役割分担
 

@@ -70,6 +70,8 @@ git push -u origin claude/agent-evolve
 - open PR がなければ `mcp__github__create_pull_request` で作成（base: main、タイトル「🤖 agent-evolve: 案内エージェントの日次改善」）。
 - PR本文には毎回追記する: 日付・/statsの要約（total/avgScore/negatives件数）・実施した改善・**提案欄**（ロジック変更が必要と判断した事項）。
 - あればそのPRに追加コミットするだけでよい（ローリングPR方式・PR乱立防止）。
+- **GitHub MCPツールが使えないセッションの場合**: ブランチのプッシュまでで終了してよい
+  （変更はブランチに永続化される。PR起票は翌回または深澤が手動で行う。その旨をDailyに記す）。
 
 ### 6. 記録
 `obsidian-vault/01-Daily/YYYY-MM-DD.md` に実施内容と学びを1〜3行で記録する
