@@ -48,3 +48,4 @@ bash .claude/skills/dynamic-test/run.sh --changed
 - スクリーンショットは `test-screenshots/` に溜まる。コミットに含めない
 - ヘッドレスでは `confirm()`/`alert()` が**自動キャンセル**される。確認ダイアログを通る正常系（保存/削除等）を検証するときは `page.on('dialog', d => d.accept())` を入れないと正常系がFAILに見える（誤検知の実例あり）
 - スクリーンショットは直前のタブ操作の**スクロール位置を引き継ぐ**。撮影前に `window.scrollTo(0,0)` を挟むこと
+- ヘッドレスでは **requestAnimationFrame が絞られる**ことがあり、シーン切替後もスクショが古いフレームのままになる。撮影前に描画メソッド（例: `sc.draw(game.ctx, game)`）を明示呼びする。シーン制ゲームは page.evaluate から状態ファクトリ＋シーン遷移を直接叩けばUI操作なしで任意シーンを検証できる（詳細: dynamic-tester エージェント定義の注意事項）
