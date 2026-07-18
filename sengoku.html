@@ -5173,6 +5173,16 @@ function drawButton(ctx, b, t){
   if (hot && enabled){ ctx.strokeStyle='rgba(255,255,255,0.26)'; ctx.lineWidth=1.2; ctx.stroke(); }
   ctx.restore();
   const col = enabled? '#f8f0dc':'#5b6877';
+  // ラベルをボタン幅に収めるための縮小率（枠から文字がはみ出すのを防ぐ）。長い日本語＋英語併記でも安全。
+  const fitToWidth=(txt, size, weight)=>{
+    if (!txt) return size;
+    const innerW=b.w-Math.round(22*uiScale);
+    ctx.save();
+    ctx.font=(weight?weight+' ':'')+Math.round(size)+'px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
+    const w=ctx.measureText(txt).width;
+    ctx.restore();
+    return w>innerW ? Math.max(10, Math.floor(size*innerW/w)) : size;
+  };
   if (b.jp!==undefined){
     const jpBase=b.sz||28, enBase=b.ensz||Math.max(16, Math.round(jpBase*0.55));
     let effScale=uiScale;
@@ -5182,7 +5192,8 @@ function drawButton(ctx, b, t){
       const maxScale=denom>0 ? b.h/denom : uiScale;
       effScale=Math.min(uiScale, Math.max(1, maxScale));
     }
-    const jpSize=Math.round(jpBase*effScale), enSize=Math.round(enBase*effScale);
+    let jpSize=fitToWidth(b.jp, Math.round(jpBase*effScale), 'bold');
+    let enSize=fitToWidth(b.en, Math.round(enBase*effScale), '');
     if (b.en){
       const lineGap=Math.max(2, Math.round(4*effScale));
       const totalH=jpSize*1.15+enSize*1.15+lineGap;
@@ -5193,7 +5204,7 @@ function drawButton(ctx, b, t){
       T(ctx, b.jp, b.x+b.w/2, b.y+b.h/2-jpSize*0.52, {size: jpSize, weight:'bold', color:col, align:'center'});
     }
   } else if (b.label!==undefined){
-    const labelSize=Math.round((b.sz||26)*uiScale);
+    const labelSize=fitToWidth(b.label, Math.round((b.sz||26)*uiScale), 'bold');
     T(ctx, b.label, b.x+b.w/2, b.y+b.h/2-labelSize*0.52, {size:labelSize, weight:'bold', color:col, align:'center'});
   }
   // 補助ラベル（コスト・条件）: ボタン下部に小さく表示
@@ -7259,8 +7270,10 @@ class MapScene extends GameKit.Scene {
   _buttons(){
     const bs=[]; const st=this.state;
     // スマホ（タッチ端末）では左メニューを一回り大きく表示して視認性を確保
-    const menuX=26, menuY=IS_TOUCH?150:126;
-    const menuW=IS_TOUCH?408:198, menuH=IS_TOUCH?142:72, gap=IS_TOUCH?20:14;
+    const menuX=26, menuY=IS_TOUCH?138:126;
+    // メニュー項目が10個になり、タッチ時に高さ×10が下部の編集ボタン(家宝一覧など)と重なっていたため
+    // タッチ時の1項目の高さ/間隔を詰めて全項目が編集ボタンの上に収まるようにする。
+    const menuW=IS_TOUCH?408:198, menuH=IS_TOUCH?126:72, gap=IS_TOUCH?16:14;
     const menuSz=IS_TOUCH?50:25, menuIconSz=IS_TOUCH?60:30;
     const menuIconX=IS_TOUCH?58:32, menuLabelX=IS_TOUCH?118:64;
     const menu=[
@@ -7290,7 +7303,7 @@ class MapScene extends GameKit.Scene {
       const tabW=Math.floor(L.pw/DIPLO_TABS.length);
       DIPLO_TABS.forEach((tab,i)=>{
         const active=this.diploTab===tab.key;
-        bs.push({x:L.px+i*tabW,y:L.py+58,w:tabW-4,h:52,jp:tab.jp,en:tab.en,sz:20,ensz:12,
+        bs.push({x:L.px+i*tabW,y:L.py+96,w:tabW-4,h:52,jp:tab.jp,en:tab.en,sz:20,ensz:12,
           accent:active?'rgba(100,200,255,0.5)':'rgba(60,60,80,0.5)',
           action:()=>{this.diploTab=tab.key;this.selClan=null;this.selForce=null;}, noScale:true});
       });
@@ -7993,7 +8006,7 @@ class MapScene extends GameKit.Scene {
     const pw=Math.min(1860, W-140), ph=Math.min(1560, H-160);
     const px=(W-pw)/2, py=(H-ph)/2;
     const rowW=740, rowH=94;
-    return { px,py,pw,ph, listX:px+48, listY:py+180, rowW, rowH, rightX:px+840, rightW:pw-880 };
+    return { px,py,pw,ph, listX:px+48, listY:py+200, rowW, rowH, rightX:px+840, rightW:pw-880 };
   }
   _diploClans(){
     // プレイヤーに隣接、または既に外交関係(同盟/停戦/関係値≠0)のある存命大名のみを表示
@@ -8516,15 +8529,16 @@ class MapScene extends GameKit.Scene {
     ctx.save();
     ctx.fillStyle='rgba(3,6,14,0.66)'; ctx.fillRect(0,0,W,H);
     GameKit.UI.glassPanel(ctx, L.px,L.py,L.pw,L.ph,{radius:26, fill:'rgba(8,12,22,0.95)', stroke:'rgba(232,192,122,0.5)'});
-    T(ctx,'外交 / Diplomacy', L.px+L.pw/2, L.py+30, {size:46, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    // ヘッダは 見出し→補足→タブ→区切り の順に縦に重ならないよう配置（旧レイアウトは題字とタブが重なっていた）
+    T(ctx,'外交 / Diplomacy', L.px+L.pw/2, L.py+22, {size:40, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
     const myDmyo=st.daimyo[me]; const myDaughters=myDmyo.daughters??1;
-    T(ctx,'所持金 '+myDmyo.gold+' 貫 ・ 未婚の姫 '+myDaughters+'人 ・ 隣接／関係のある勢力のみ表示', L.px+L.pw/2, L.py+100, {size:22, color:'#9fb2c6', align:'center'});
-    T(ctx,'― 勢力 / Clans ―', L.listX+L.rowW/2, L.py+146, {size:22, color:'#a78bfa', align:'center'});
+    T(ctx,'所持金 '+myDmyo.gold+' 貫 ・ 未婚の姫 '+myDaughters+'人 ・ 隣接／関係のある勢力のみ表示', L.px+L.pw/2, L.py+68, {size:22, color:'#9fb2c6', align:'center'});
+    T(ctx,'― 勢力 / Clans ―', L.listX+L.rowW/2, L.py+166, {size:22, color:'#a78bfa', align:'center'});
     const clans=this._diploClans();
     if (!clans.length) T(ctx,'現在、外交対象の勢力はありません', L.listX+L.rowW/2, L.listY+80, {size:24, color:'#7d93ab', align:'center'});
     // 右ペイン: 選択勢力の詳細
     const rid=this.selClan;
-    T(ctx,'― 交渉 / Negotiate ―', L.rightX+L.rightW/2, L.py+146, {size:22, color:'#e8c07a', align:'center'});
+    T(ctx,'― 交渉 / Negotiate ―', L.rightX+L.rightW/2, L.py+166, {size:22, color:'#e8c07a', align:'center'});
     if (rid && st.daimyo[rid] && st.daimyo[rid].alive && rid!==me){
       const d=daimyoDef(st,rid), dip=getDip(st,me,rid), stat=this._diploStatus(rid);
       T(ctx, d.nameJP+'家 / '+(d.nameEN||''), L.rightX+L.rightW/2, L.py+210, {size:32, weight:'bold', color:'#f1e6cf', align:'center'});
