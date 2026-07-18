@@ -149,6 +149,8 @@ node /tmp/dynamic-test.cjs /home/user/main/<対象ファイル>.html
 ## 注意事項
 
 - Playwright の require パスは `/opt/node22/lib/node_modules/playwright` を使用する
+- **シーン直起動でスモークテストを超えた検証ができる**: シーン制ゲームは `page.evaluate` から状態ファクトリ＋シーン遷移（例: `buildGameState()` → `game.changeScene(new BattleScene(state))`）を直接叩くと、UI操作なしで任意のシーン・任意の状態を検証できる（トップレベル `const` は後続の evaluate から参照可能）。内部状態の機械抽出（座標×地形等）とスクリーンショットを併用する（sengoku.html 全26戦場の検証で実証）
+- **ヘッドレスでは requestAnimationFrame が絞られる**ことがあり、シーン切替後もスクリーンショットが古いフレームのままになる → 撮影前に描画メソッド（例: `sc.draw(game.ctx, game)`）を明示呼びして最新フレームを描かせる
 - Canvas の `getImageData` は `file://` プロトコルでセキュリティエラーになる場合がある → エラーは `hasDrawing: null` として記録し、FAILにはしない
 - `test-screenshots/` ディレクトリは `.gitignore` 対象（コミット不要）
 - 複数HTMLが変更された場合はすべてに対してテストを実行する
