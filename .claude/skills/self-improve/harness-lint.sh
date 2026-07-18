@@ -136,10 +136,18 @@ for f in obsidian-vault/01-Daily/*.md; do
   fi
   # 見出し型（## 学んだこと）に加え inline 太字型（**学び（…）**）も学びとして検出する
   grep -qE '^## 学んだこと|学び（' "$f" || continue
-  if grep -qE '昇格済み|反映済み|昇格しない' "$f"; then
-    ok "$f"
-  else
+  # マーカーの「存在」だけでは、昇格済みマーカーの後ろに新しい学びセクションが
+  # 追記されたDailyを見逃す（2026-07-17で実例: マージで末尾に未マーカーの学び2件が
+  # 追記されたが存在チェックは✓）。最後の学び行と最後のマーカー行の位置を比べ、
+  # 学びが後ろなら未昇格分ありとして警告する。
+  LAST_LEARN=$(grep -nE '^## 学んだこと|学び（' "$f" | tail -1 | cut -d: -f1)
+  LAST_MARK=$(grep -nE '昇格済み|反映済み|昇格しない' "$f" | tail -1 | cut -d: -f1)
+  if [ -z "$LAST_MARK" ]; then
     note_warn "$f: 学びに昇格済み/反映済みマーカーなし（/self-improve で昇格要否を点検）"
+  elif [ "$LAST_LEARN" -gt "$LAST_MARK" ]; then
+    note_warn "$f: 最後のマーカー(${LAST_MARK}行)より後ろに学び(${LAST_LEARN}行)が追記されている（/self-improve で昇格要否を点検）"
+  else
+    ok "$f"
   fi
 done
 
