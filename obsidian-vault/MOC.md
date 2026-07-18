@@ -40,6 +40,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0016-daily-coverage-lint]] — Dailyなしの作業日をharness-lint検査#9で機械検出（直近14日・警告のみ）
 - [[0017-legacy-agents-tree-removal]] — レガシー.agents/skills/を削除しvideo-editingを正式スキルへ救出
 - [[0018-battle-verification-patterns-promotion]] — 合戦バグ群の学び（陣営の絶対基準/縦位置補正/reason別計測/シーン直起動検証）をgame-dev・dynamic-testerへ昇格＋lint検査#8の未昇格マーカー取りこぼし修正
+- [[0019-fixed-canvas-mobile-ui-promotion]] — 固定CanvasのモバイルUI対策（パネル拡大＋入力逆変換/ラベル幅フィット）をgame-devへ昇格＋lint検査#8を位置ベース検査へ強化
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
