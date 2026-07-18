@@ -20,6 +20,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 ## 📌 進行中プロジェクト
 - [[second-brain-system]] — このセカンドブレイン基盤自体
 - [[recursive-self-improvement]] — 学び→反映の閉ループ（自己改善基盤）
+- [[guide-agent-evolution]] — 案内エージェントの日次自己進化＋週次サイト提案基盤
 
 ## 📚 意思決定ログ
 - [[0001-second-brain-vault-structure]]

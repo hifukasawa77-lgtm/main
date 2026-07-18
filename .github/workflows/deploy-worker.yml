@@ -10,6 +10,8 @@ on:
     branches: [main]
     paths:
       - 'cloudflare-worker/**'
+      - 'assets/js/agent-data.js'
+      - 'scripts/gen-agent-knowledge.mjs'
       - '.github/workflows/deploy-worker.yml'
   workflow_dispatch:
 
@@ -57,6 +59,12 @@ jobs:
           echo "KV namespace id: $ID"
           echo "id=$ID" >> "$GITHUB_OUTPUT"
 
+      - name: Generate site knowledge (SYSTEM_PROMPT source)
+        run: |
+          node scripts/gen-agent-knowledge.mjs
+          # 生成結果がコミット済みと乖離していないか（乖離してもデプロイは最新生成物で行う）
+          node scripts/gen-agent-knowledge.mjs --check || echo "::warning::site-knowledge.js がコミットと乖離していました（生成し直してデプロイします）"
+
       - name: Deploy
         working-directory: cloudflare-worker
         env:
@@ -79,3 +87,7 @@ jobs:
             -d '{"message":"こんにちは","history":[]}')
           echo "response: $RES"
           echo "$RES" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);if(!d.text){console.error('no text in response');process.exit(1)};console.log('OK source='+d.source)})"
+          # /stats（公開集計エンドポイント）の死活確認
+          STATS_CODE=$(curl -s -m 30 -o /dev/null -w '%{http_code}' 'https://ai-proxy.hi-fukasawa77.workers.dev/stats')
+          echo "/stats http_code: $STATS_CODE"
+          [ "$STATS_CODE" = "200" ] || { echo "::error::/stats が 200 を返しません"; exit 1; }

@@ -183,6 +183,17 @@ else
   done <<< "$(printf '%s' "$WORKDAYS" | sort -u)"
 fi
 
+echo "== 10. 案内エージェント知識のdrift（agent-data.js ⇄ worker site-knowledge.js）=="
+if [ -f scripts/gen-agent-knowledge.mjs ] && command -v node >/dev/null 2>&1; then
+  if node scripts/gen-agent-knowledge.mjs --check >/dev/null 2>&1; then
+    ok "site-knowledge.js は agent-data.js と一致"
+  else
+    note_fail "site-knowledge.js が乖離。実行: node scripts/gen-agent-knowledge.mjs"
+  fi
+else
+  ok "スキップ（生成スクリプトなし or node なし）"
+fi
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then
