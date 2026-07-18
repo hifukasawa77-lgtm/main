@@ -13,6 +13,7 @@
  *
  * 設定方法: README.md を参照
  */
+import { buildSystemPrompt } from './site-knowledge.js';
 
 const ALLOWED_ORIGINS = [
   'https://hifukasawa77-lgtm.github.io',
@@ -27,11 +28,9 @@ const MODELS = [
   '@cf/meta/llama-3.1-8b-instruct',
 ];
 
-const SYSTEM_PROMPT = `あなたは「ヒデのポートフォリオサイト」の案内エージェントです。
-サイトオーナーの名前は「ヒデ」です。絶対に「ハイド」と呼ばないでください。「hide」と書かれていても必ず「ヒデ」と読んでください。
-ヒデは埼玉県三郷市在住のシステムエンジニアで、Claude AIと共同で23本のブラウザゲーム・AIツールを開発しています。
-このサイトではゲーム紹介・三郷市情報・AI開発の話題を扱っています。
-返答は日本語で2〜3文以内に簡潔にまとめてください。雑談や一般的な質問にも気軽に答えてください。ゲームの遊び方・おすすめ・AIについての質問が多いです。`;
+// SYSTEM_PROMPT はサイト実データから自動生成される（site-knowledge.js）。
+// ゲーム本数等の更新は assets/js/agent-data.js → node scripts/gen-agent-knowledge.mjs で反映する。
+const SYSTEM_PROMPT = buildSystemPrompt();
 
 // ── 共有学習メモリ（KV） ─────────────────────────────────
 const LEARN_INDEX_KEY = 'learn:index';
@@ -388,6 +387,12 @@ export default {
       return handleAdmin(request, env, url);
     }
 
+    // ── 公開統計（集計のみ・回答個票は返さない）──
+    // 日次自己進化（/agent-evolve）が弱点発見の入力に使う。Origin制限なし（curl可）。
+    if (url.pathname === '/stats' && request.method === 'GET') {
+      return handleStats(env, isAllowed ? origin : '');
+    }
+
     if (!isAllowed) return new Response('Forbidden', { status: 403 });
     if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 });
 
@@ -442,7 +447,7 @@ export default {
 
     // ② AIで回答生成
     const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
-    for (const m of (Array.isArray(history) ? history : []).slice(-4)) {
+    for (const m of (Array.isArray(history) ? history : []).slice(-6)) {
       if (m.role && typeof m.text === 'string') {
         messages.push({
           role: m.role === 'user' ? 'user' : 'assistant',
@@ -468,6 +473,26 @@ export default {
 };
 
 // ── 管理API: 学習エントリの閲覧・削除（ADMIN_TOKEN必須） ──
+// ── 公開統計エンドポイント ─────────────────────────────────
+// 共有学習メモリの「集計」だけを返す。回答本文・質問全文は返さない（プライバシー/汚染対策）。
+// negatives = 👎が積み重なった質問（辞書/KBの穴の発見に使う）。
+async function handleStats(env, origin) {
+  const now = new Date().toISOString();
+  if (!env.KV) {
+    return jsonResponseWithHeaders({ total: 0, avgScore: 0, negatives: [], topHits: [], updatedAt: now }, corsHeaders(origin), 200);
+  }
+  const index = await loadIndex(env);
+  const total = index.length;
+  const sum = index.reduce((a, e) => a + (e.score || 0), 0);
+  const avgScore = total ? Math.round((sum / total) * 100) / 100 : 0;
+  const brief = (e) => ({ q: String(e.q || '').slice(0, 40), score: e.score || 0, hits: e.hits || 0 });
+  const negatives = index.filter(e => (e.score || 0) < 0)
+    .sort((a, b) => (a.score || 0) - (b.score || 0)).slice(0, 10).map(brief);
+  const topHits = index.slice()
+    .sort((a, b) => (b.hits || 0) - (a.hits || 0)).slice(0, 10).map(brief);
+  return jsonResponseWithHeaders({ total, avgScore, negatives, topHits, updatedAt: now }, corsHeaders(origin), 200);
+}
+
 async function handleAdmin(request, env, url) {
   if (!env.ADMIN_TOKEN) return new Response('Not Found', { status: 404 });
   const token = request.headers.get('X-Admin-Token') || url.searchParams.get('token') || '';
