@@ -4509,43 +4509,36 @@ function drawCastleIcon(ctx, x, y, size, color, shadow=null){
   ctx.strokeStyle='rgba(2,6,23,0.7)'; ctx.lineWidth=1; ctx.strokeRect(-size*0.34,-size*0.04,size*0.68,size*0.38);
   ctx.restore();
 }
-// 城マーカーのスプライト（Cycle 8→拡大率で表示切替）: clanId×色×mode でキー化して1枚に焼き込む。
-// mode='kamon'（299%以下）= 家紋マークのみ / mode='castle'（300%以上）= アセットの城グラフィックのみ。
-// 以前は城アイコン＋家紋を常に重畳していたが、深澤要望で拡大率に応じて排他表示する。
+// 城マーカーのスプライト（Cycle 8）: 家紋（299%以下）を clanId×色 でキー化して1枚に焼き込む。
+// 300%以上のアセット城グラフィックは家紋の2.5倍（世界32.5px）と大きく、この216px焼き込み
+// キャンバスに収まらないため drawCastleMarker 側で単一 drawImage の直接描画に切り替える
+// （高ズーム時はビューフラスタムカリングで可視城数が少なく、焼き込み不要でも軽量）。
 const MARKER_SPRITE = { cache:new Map() };
-function castleMarkerSprite(clanId, color, mode){
-  const key = clanId + '|' + color + '|' + mode;
+// 城グラフィック（300%以上表示）の世界サイズ。家紋基準13pxの2.5倍（深澤要望 2026-07-19）。
+const CASTLE_GRAPHIC_WORLD = 13 * 2.5;
+function castleMarkerSprite(clanId, color){
+  const key = clanId + '|' + color;
   const hit = MARKER_SPRITE.cache.get(key);
   if (hit) return hit;
-  const S = KAMON_SPRITE.size, P = KAMON_SPRITE.pad, k = S/15;  // 家紋世界15px基準のスケール
-  if (mode !== 'castle'){  // 家紋モードはアトラス遅延ロード完了まで生成しない
-    const slot = kamonSlotFor(clanId);
-    const img = slot ? ASSETS.img[slot.img || 'kamon'] : null;
-    if (slot && !(img && (img.naturalWidth || img.width))) return null;
-  }
+  const slot = kamonSlotFor(clanId);
+  const img = slot ? ASSETS.img[slot.img || 'kamon'] : null;
+  if (slot && !(img && (img.naturalWidth || img.width))) return null;  // アトラス遅延ロード中は生成しない
+  const S = KAMON_SPRITE.size, P = KAMON_SPRITE.pad;
   const cv = document.createElement('canvas');
   cv.width = cv.height = S + P*2;
-  const c = cv.getContext('2d');
-  const ctr = P + S/2;  // アイコン中心＝家紋中心
-  if (mode === 'castle'){  // 300%以上: アセットの城グラフィックのみ（未ロード時は手描き城アイコンにフォールバック）
-    if (!drawMapSiteImage(c, 'mapSiteCastle', ctr, ctr, 13*k, 1.0)) drawCastleIcon(c, ctr, ctr, 13*k, color, {blur:5*k/2.4, offsetY:3*k/2.4});  // 影は既定ズーム2.4相当へ比例換算
-  } else {  // 299%以下: 家紋マークのみ
-    drawKamon(c, clanId, P, P, S, color, {blur:16, offsetY:8});
-  }
+  drawKamon(cv.getContext('2d'), clanId, P, P, S, color, {blur:16, offsetY:8});
   MARKER_SPRITE.cache.set(key, cv);
   return cv;
 }
 function drawCastleMarker(ctx, clanId, x, y, color, showCastle){  // (x,y)=アイコン中心（ワールド座標）。showCastle=true で城グラフィック、false で家紋
-  const mode = showCastle ? 'castle' : 'kamon';
-  const spr = castleMarkerSprite(clanId, color, mode);
-  if (!spr){  // ロード待ちの間はライブ描画（拡大率に応じて城アイコン or 家紋）
-    if (showCastle) drawCastleIcon(ctx, x, y, 13, color);
-    else drawKamonMap(ctx, clanId, x-7.5, y-7.5, 15, color);
+  if (showCastle){  // 300%以上: アセットの城グラフィックを直接描画（未ロード時は手描き城アイコンにフォールバック）
+    if (!drawMapSiteImage(ctx, 'mapSiteCastle', x, y, CASTLE_GRAPHIC_WORLD, 1.0)) drawCastleIcon(ctx, x, y, CASTLE_GRAPHIC_WORLD, color);
     return;
   }
+  const spr = castleMarkerSprite(clanId, color);  // 299%以下: 家紋スプライト
+  if (!spr){ drawKamonMap(ctx, clanId, x-7.5, y-7.5, 15, color); return; }  // ロード待ちの間はライブ描画
   const kk = 15/KAMON_SPRITE.size;
-  const off = (KAMON_SPRITE.pad + KAMON_SPRITE.size/2) * kk;
-  ctx.drawImage(spr, x-off, y-off, spr.width*kk, spr.height*kk);
+  ctx.drawImage(spr, x - spr.width*kk/2, y - spr.height*kk/2, spr.width*kk, spr.height*kk);
 }
 // 縦書きラベルのスプライトキャッシュ（Cycle 8）: drawVerticalLabel は影を使わない
 // （ずらし重ね描きのみ）＝純粋に変換スケールで再現できるため、テキスト×スタイルごとに
@@ -7814,7 +7807,7 @@ class MapScene extends GameKit.Scene {
       const labelH = Math.max(18, Array.from(marker.nameJP).length*gap+6);
       const s=lscale*MK;
       if (s!==1){ ctx.save(); ctx.translate(cx,cy); ctx.scale(s,s); ctx.translate(-cx,-cy); }
-      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:13});  // 施設グラフィックを一回り大きく（10→13, 深澤要望）
+      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5});  // 施設グラフィックを拡大（13→19.5=1.5倍, 深澤要望 2026-07-19）
       if (s!==1) ctx.restore();
     }
     for (const force of RELIGIOUS_FORCES){
