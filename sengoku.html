@@ -363,6 +363,8 @@
 <!-- 地形の静止時ベイクで使うアンシャープ畳み込み（drawTerrainBackdropのquality:'high'経路から参照） -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
   <filter id="terrainSharpen"><feConvolveMatrix order="3" kernelMatrix="0 -0.55 0 -0.55 3.2 -0.55 0 -0.55 0" preserveAlpha="true"/></filter>
+  <!-- 300%以上の高ズーム用の強めのアンシャープ（元画像1672pxの拡大ぼけを知覚的に補う） -->
+  <filter id="terrainSharpenStrong"><feConvolveMatrix order="3" kernelMatrix="0 -0.85 0 -0.85 4.4 -0.85 0 -0.85 0" preserveAlpha="true"/></filter>
 </defs></svg>
 <button id="fsToggle" class="fs-toggle" type="button" aria-label="全画面 / Fullscreen">⛶</button>
 <button id="bgmToggle" class="bgm-toggle" type="button" aria-label="BGM オン/オフ / Toggle music">♪</button>
@@ -3680,7 +3682,8 @@ function drawTerrainBackdrop(ctx, mapImg, opts={}){
     ctx.imageSmoothingEnabled=true;
     if (opts.quality) ctx.imageSmoothingQuality=opts.quality;
     // 高ズームの静止時ベイクではアンシャープ畳み込みで拡大ぼけの知覚的鮮明度を補う
-    if (opts.sharpen) ctx.filter='url(#terrainSharpen)';
+    // （300%以上ではより強いカーネルへ切替え、粗さを軽減する）
+    if (opts.sharpen) ctx.filter = opts.sharpen==='strong' ? 'url(#terrainSharpenStrong)' : 'url(#terrainSharpen)';
     ctx.drawImage(mapImg, 0, 0, iw, ih, w.x, w.y+dy, w.w, dh);
     ctx.restore();
     ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(w.x, w.y, w.w, w.h);
@@ -7699,6 +7702,7 @@ class MapScene extends GameKit.Scene {
     ctx.save();
     ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
     this._drawTerrainScreenCached(ctx);
+    this._drawRoads(ctx);   // 地形の上・城レイヤーの下に街道（城同士をつなぐ道）を描く
     ctx.save();
     this._camApply(ctx);
     this._drawCastleLayer(ctx);
@@ -7725,7 +7729,7 @@ class MapScene extends GameKit.Scene {
         sc.clearRect(0,0,cv.width,cv.height);
         sc.translate(-MAP.clip.x, -MAP.clip.y);
         this._camApply(sc);
-        drawTerrainBackdrop(sc, ASSETS.img.map, {quality:'high', sharpen:c.zoom>=2});
+        drawTerrainBackdrop(sc, ASSETS.img.map, {quality:'high', sharpen: c.zoom>=MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD ? 'strong' : (c.zoom>=2)});
         sc.restore();
         sc.save();
         sc.translate(-MAP.clip.x, -MAP.clip.y);
@@ -7748,7 +7752,9 @@ class MapScene extends GameKit.Scene {
   // タイル位相はワールド原点のスクリーン座標に固定し、パン時は地図と一体で流れる。
   _drawTerrainDetail(ctx){
     const z=this.cam.zoom;
-    const alpha=Math.min(0.5, Math.max(0,(z-6)/6)*0.5);   // 倍率134%から漸増、269%で最大
+    let alpha=Math.min(0.5, Math.max(0,(z-6)/6)*0.5);   // 倍率134%から漸増、269%で最大
+    // 300%以上ではさらに微細グレインを強め、拡大時の「のっぺり感／粗さ」を補う
+    if (z>=MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD) alpha=Math.min(0.62, alpha+(z-MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD)/24*0.12);
     if (alpha<=0.01) return;
     const p=this._worldToScreen(MAP.world.x, MAP.world.y);
     const ox=((p.x%256)+256)%256, oy=((p.y%256)+256)%256;
@@ -7758,6 +7764,68 @@ class MapScene extends GameKit.Scene {
     ctx.translate(ox, oy);
     ctx.fillStyle=ctx.createPattern(terrainDetailTile(),'repeat');
     ctx.fillRect(MAP.clip.x-ox-256, MAP.clip.y-oy-256, MAP.clip.w+512, MAP.clip.h+512);
+    ctx.restore();
+  }
+  // 街道（城同士をつなぐ道）: 令制国の隣接関係（neighbors）に沿って隣接する城のあいだを結ぶ。
+  // 海路（中間が大きく海を跨ぐ隣接）は陸の街道として描かないよう間引く。位置は城座標に依存する
+  // ため、カスタム城数・編集対象・地図ロード状態が変わったときだけ再計算してキャッシュする。
+  _roadSegments(){
+    const editing = this.castleEdit || this.castleMetaEdit || this.dragCastle;
+    const customCount = (typeof CUSTOM_CASTLES!=='undefined' && CUSTOM_CASTLES) ? CUSTOM_CASTLES.length : 0;
+    const mapReady = (ASSETS.img.map && (ASSETS.img.map.naturalWidth||ASSETS.img.map.width)) ? 1 : 0;
+    const key = customCount+'|'+(this.editCastleId||'')+'|'+mapReady;
+    if (!editing && this._roadCache && this._roadCache.key===key) return this._roadCache.segs;
+    const segs=this._computeRoads();
+    if (!editing) this._roadCache={key, segs};
+    return segs;
+  }
+  _computeRoads(){
+    const pt={};
+    for (const p of DATA.provinces) pt[p.id]=provinceScreenPoint(p);
+    const segs=[]; const seen=new Set();
+    for (const p of DATA.provinces){
+      const a=pt[p.id]; if (!a) continue;
+      for (const nbId of (p.neighbors||[])){
+        const b=pt[nbId]; if (!b) continue;
+        const ek = p.id<nbId ? p.id+'|'+nbId : nbId+'|'+p.id;
+        if (seen.has(ek)) continue; seen.add(ek);
+        // 中間点をサンプルし、過半が海なら海路とみなして街道からは除外する
+        const N=6; let seaHits=0;
+        for (let i=1;i<N;i++){ const t=i/N; if (!isLandWorld(a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t)) seaHits++; }
+        if (seaHits>2) continue;
+        segs.push([a[0],a[1],b[0],b[1]]);
+      }
+    }
+    return segs;
+  }
+  _drawRoads(ctx){
+    const segs=this._roadSegments();
+    if (!segs.length) return;
+    const clip=MAP.clip; const z=this.cam.zoom;
+    // 画面座標へ変換し、画面外セグメントは簡易カリング
+    const lines=[];
+    for (const s of segs){
+      const a=this._worldToScreen(s[0],s[1]);
+      const b=this._worldToScreen(s[2],s[3]);
+      if ((a.x<clip.x&&b.x<clip.x)||(a.x>clip.x+clip.w&&b.x>clip.x+clip.w)||
+          (a.y<clip.y&&b.y<clip.y)||(a.y>clip.y+clip.h&&b.y>clip.y+clip.h)) continue;
+      lines.push([a,b]);
+    }
+    if (!lines.length) return;
+    const base=clamp(z*0.42, 1.4, 6);   // 街道の太さ（画面px, ズームで緩やかに増加）
+    ctx.save();
+    ctx.beginPath(); ctx.rect(clip.x,clip.y,clip.w,clip.h); ctx.clip();
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    const path=()=>{ ctx.beginPath(); for (const [a,b] of lines){ ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); } };
+    // 下地（濃い縁取り）→ 路面（明るい土色）の二層で立体感を出す
+    ctx.strokeStyle='rgba(58,42,24,0.50)'; ctx.lineWidth=base+1.8; path(); ctx.stroke();
+    ctx.strokeStyle='rgba(212,182,128,0.58)'; ctx.lineWidth=base; path(); ctx.stroke();
+    // 高ズームでは中央に破線を重ね、街道らしい質感にする
+    if (z>=6){
+      ctx.strokeStyle='rgba(120,92,54,0.55)';
+      ctx.lineWidth=Math.max(1, base*0.28);
+      ctx.setLineDash([base*1.6, base*1.4]); path(); ctx.stroke(); ctx.setLineDash([]);
+    }
     ctx.restore();
   }
   _drawCastleLayer(ctx){
