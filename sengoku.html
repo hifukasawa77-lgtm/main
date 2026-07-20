@@ -7766,65 +7766,105 @@ class MapScene extends GameKit.Scene {
     ctx.fillRect(MAP.clip.x-ox-256, MAP.clip.y-oy-256, MAP.clip.w+512, MAP.clip.h+512);
     ctx.restore();
   }
-  // 街道（城同士をつなぐ道）: 令制国の隣接関係（neighbors）に沿って隣接する城のあいだを結ぶ。
-  // 海路（中間が大きく海を跨ぐ隣接）は陸の街道として描かないよう間引く。位置は城座標に依存する
-  // ため、カスタム城数・編集対象・地図ロード状態が変わったときだけ再計算してキャッシュする。
+  // 街道（城同士をつなぐ道）: 隣接する城を機械的に一直線で結ぶのではなく、史実の主要街道
+  // （中山道・東海道・奥州街道・日光街道・三国街道）の経路に沿って、その宿場にあたる城／国を
+  // 順につなぐ。昔の街道は一直線ではないため、各区間をゆるやかに蛇行させて描く。
+  // 経路は各城の座標に依存するため、城数・編集対象・地図ロード状態が変わったときだけ再計算。
   _roadSegments(){
     const editing = this.castleEdit || this.castleMetaEdit || this.dragCastle;
     const customCount = (typeof CUSTOM_CASTLES!=='undefined' && CUSTOM_CASTLES) ? CUSTOM_CASTLES.length : 0;
     const mapReady = (ASSETS.img.map && (ASSETS.img.map.naturalWidth||ASSETS.img.map.width)) ? 1 : 0;
     const key = customCount+'|'+(this.editCastleId||'')+'|'+mapReady;
-    if (!editing && this._roadCache && this._roadCache.key===key) return this._roadCache.segs;
-    const segs=this._computeRoads();
-    if (!editing) this._roadCache={key, segs};
-    return segs;
+    if (!editing && this._roadCache && this._roadCache.key===key) return this._roadCache.routes;
+    const routes=this._computeRoads();
+    if (!editing) this._roadCache={key, routes};
+    return routes;
   }
   _computeRoads(){
-    const pt={};
-    for (const p of DATA.provinces) pt[p.id]=provinceScreenPoint(p);
-    const segs=[]; const seen=new Set();
-    for (const p of DATA.provinces){
-      const a=pt[p.id]; if (!a) continue;
-      for (const nbId of (p.neighbors||[])){
-        const b=pt[nbId]; if (!b) continue;
-        const ek = p.id<nbId ? p.id+'|'+nbId : nbId+'|'+p.id;
-        if (seen.has(ek)) continue; seen.add(ek);
-        // 中間点をサンプルし、過半が海なら海路とみなして街道からは除外する
-        const N=6; let seaHits=0;
-        for (let i=1;i<N;i++){ const t=i/N; if (!isLandWorld(a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t)) seaHits++; }
-        if (seaHits>2) continue;
-        segs.push([a[0],a[1],b[0],b[1]]);
+    // 各街道の経路（宿場にあたる城／国のIDを順に列挙）。文字列=令制国ID、
+    // {rel,dx,dy}=指定国の城位置からのワールド相対点（宿場が独立の城として無い日光など）。
+    const KAIDO=[
+      // 東海道: 江戸→（相模・駿河・遠江・三河・尾張）→伊勢→近江→京（山城）
+      ['musashi','sagami','suruga','totomi','mikawa','owari','ise','omi','yamashiro'],
+      // 中山道: 江戸→上野→（北信濃・南信濃）→美濃→近江→京
+      ['musashi','kozuke','shinano','minami_shinano','mino','omi','yamashiro'],
+      // 奥州街道: 江戸→宇都宮（下野）→白河/須賀川→岩代→仙台（陸前）→盛岡（陸中）→三戸→津軽
+      ['musashi','shimotsuke','sukagawa_iwaki','iwashiro','rikuzen','rikuchu','sannohe_mutsu','tsugaru'],
+      // 日光街道: 江戸→宇都宮（下野）→日光（宇都宮の北西・独立宿場のため相対点で表現）
+      ['musashi','shimotsuke',{rel:'shimotsuke',dx:-72,dy:-58}],
+      // 三国街道: 中山道の高崎（上野）から分岐→三国峠→越後
+      ['kozuke','echigo'],
+    ];
+    const P=(id)=>{ const p=DATA.provById[id]; return p?provinceScreenPoint(p):null; };
+    const resolve=(n)=>{ if (typeof n==='string') return P(n); const b=P(n.rel); return b?[b[0]+n.dx, b[1]+n.dy]:null; };
+    const routes=[];
+    for (const route of KAIDO){
+      const nodes=[];
+      for (const n of route){ const w=resolve(n); if (w) nodes.push(w); }
+      if (nodes.length>=2) routes.push(this._meanderRoute(nodes));
+    }
+    return routes;
+  }
+  // 直線区間を避けるため、各区間に2つの膨らみ点を挿入してS字状に蛇行させる（宿場＝城の位置は不動）。
+  _meanderRoute(nodes){
+    const pts=[];
+    for (let i=0;i<nodes.length;i++){
+      pts.push(nodes[i]);
+      if (i<nodes.length-1){
+        const a=nodes[i], b=nodes[i+1];
+        const dx=b[0]-a[0], dy=b[1]-a[1]; const len=Math.hypot(dx,dy)||1;
+        const px=-dy/len, py=dx/len;   // 進行方向に垂直な単位ベクトル
+        for (const f of [0.34, 0.66]){
+          const mx=a[0]+dx*f, my=a[1]+dy*f;
+          // 端点座標から決定的な擬似乱数を作り、揺らぎの大きさに使う（毎回同じ形になる）
+          const h=Math.sin(a[0]*12.9898+a[1]*78.233+b[0]*39.42+b[1]*11.7+f*97.1)*43758.5453;
+          const rr=h-Math.floor(h);
+          const amp=Math.min(16, len*0.10)*(0.45+0.55*rr)*(f===0.34?1:-1); // 前半＋/後半−でS字
+          pts.push([mx+px*amp, my+py*amp]);
+        }
       }
     }
-    return segs;
+    return pts;
+  }
+  // Catmull-Rom スプラインを Path2D にベジェで追加（点列をなめらかな曲線でつなぐ）
+  _catmullPath(path, pts){
+    if (pts.length<2) return;
+    path.moveTo(pts[0][0], pts[0][1]);
+    if (pts.length===2){ path.lineTo(pts[1][0], pts[1][1]); return; }
+    for (let i=0;i<pts.length-1;i++){
+      const p0=pts[i-1]||pts[i], p1=pts[i], p2=pts[i+1], p3=pts[i+2]||pts[i+1];
+      const c1x=p1[0]+(p2[0]-p0[0])/6, c1y=p1[1]+(p2[1]-p0[1])/6;
+      const c2x=p2[0]-(p3[0]-p1[0])/6, c2y=p2[1]-(p3[1]-p1[1])/6;
+      path.bezierCurveTo(c1x,c1y,c2x,c2y,p2[0],p2[1]);
+    }
   }
   _drawRoads(ctx){
-    const segs=this._roadSegments();
-    if (!segs.length) return;
+    const routes=this._roadSegments();
+    if (!routes.length) return;
     const clip=MAP.clip; const z=this.cam.zoom;
-    // 画面座標へ変換し、画面外セグメントは簡易カリング
-    const lines=[];
-    for (const s of segs){
-      const a=this._worldToScreen(s[0],s[1]);
-      const b=this._worldToScreen(s[2],s[3]);
-      if ((a.x<clip.x&&b.x<clip.x)||(a.x>clip.x+clip.w&&b.x>clip.x+clip.w)||
-          (a.y<clip.y&&b.y<clip.y)||(a.y>clip.y+clip.h&&b.y>clip.y+clip.h)) continue;
-      lines.push([a,b]);
+    // 全街道を1つの Path2D にまとめ、レイヤーごとに1回の stroke で描く
+    // （重なり区間で半透明が濃くならないよう、合成は1回に抑える）
+    const path=new Path2D(); let any=false;
+    for (const wpts of routes){
+      const sp=wpts.map(p=>{ const s=this._worldToScreen(p[0],p[1]); return [s.x,s.y]; });
+      let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+      for (const p of sp){ if(p[0]<minx)minx=p[0]; if(p[0]>maxx)maxx=p[0]; if(p[1]<miny)miny=p[1]; if(p[1]>maxy)maxy=p[1]; }
+      if (maxx<clip.x||minx>clip.x+clip.w||maxy<clip.y||miny>clip.y+clip.h) continue; // 画面外はカリング
+      this._catmullPath(path, sp); any=true;
     }
-    if (!lines.length) return;
+    if (!any) return;
     const base=clamp(z*0.42, 1.4, 6);   // 街道の太さ（画面px, ズームで緩やかに増加）
     ctx.save();
     ctx.beginPath(); ctx.rect(clip.x,clip.y,clip.w,clip.h); ctx.clip();
     ctx.lineCap='round'; ctx.lineJoin='round';
-    const path=()=>{ ctx.beginPath(); for (const [a,b] of lines){ ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); } };
     // 下地（濃い縁取り）→ 路面（明るい土色）の二層で立体感を出す
-    ctx.strokeStyle='rgba(58,42,24,0.50)'; ctx.lineWidth=base+1.8; path(); ctx.stroke();
-    ctx.strokeStyle='rgba(212,182,128,0.58)'; ctx.lineWidth=base; path(); ctx.stroke();
+    ctx.strokeStyle='rgba(58,42,24,0.50)'; ctx.lineWidth=base+1.8; ctx.stroke(path);
+    ctx.strokeStyle='rgba(212,182,128,0.60)'; ctx.lineWidth=base; ctx.stroke(path);
     // 高ズームでは中央に破線を重ね、街道らしい質感にする
     if (z>=6){
       ctx.strokeStyle='rgba(120,92,54,0.55)';
       ctx.lineWidth=Math.max(1, base*0.28);
-      ctx.setLineDash([base*1.6, base*1.4]); path(); ctx.stroke(); ctx.setLineDash([]);
+      ctx.setLineDash([base*1.6, base*1.4]); ctx.stroke(path); ctx.setLineDash([]);
     }
     ctx.restore();
   }
