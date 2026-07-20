@@ -192,6 +192,13 @@
   }
   .castle-list-actions button.primary { background:rgba(180,100,0,0.85); border-color:rgba(251,191,36,0.65); }
   .castle-list-actions button:hover { filter:brightness(1.14); }
+  /* ---- 勢力・施設編集一覧パネル（城編集一覧の .castle-list-* / .cl-* スタイルを再利用） ---- */
+  .force-list-panel {
+    position:fixed; inset:0; z-index:90;
+    display:none; align-items:flex-start; justify-content:center;
+    padding:20px; overflow:hidden; background:rgba(0,0,0,0.78);
+  }
+  body.force-list-open .force-list-panel { display:flex; }
   /* ---- 武将一覧パネル ---- */
   /* ---- 家宝名鑑パネル ---- */
   .treasure-list-panel { position:fixed; inset:0; z-index:94; display:none; align-items:center; justify-content:center; padding:16px; overflow:hidden; background:rgba(0,0,0,0.82); }
@@ -421,6 +428,32 @@
     </div>
   </div>
 </div>
+<div id="forceListPanel" class="force-list-panel" aria-label="勢力・施設編集一覧パネル">
+  <div class="castle-list-inner">
+    <div class="castle-list-header">
+      <div class="castle-list-title">勢力・施設編集一覧</div>
+      <div id="forceListCount" class="castle-list-count"></div>
+    </div>
+    <div class="castle-list-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:26%">勢力・施設名称</th>
+            <th style="width:18%">支配大名</th>
+            <th style="width:24%">配置位置座標</th>
+            <th style="width:22%">近くの城</th>
+            <th style="width:10%">削除</th>
+          </tr>
+        </thead>
+        <tbody id="forceListBody"></tbody>
+      </table>
+    </div>
+    <div class="castle-list-actions">
+      <button id="forceListCancel" type="button">閉じる</button>
+      <button id="forceListConfirm" class="primary" type="button">確定</button>
+    </div>
+  </div>
+</div>
 <div id="generalListPanel" class="general-list-panel" aria-label="武将一覧パネル">
   <div class="general-list-inner">
     <div class="general-list-header">
@@ -517,6 +550,7 @@
 
 const castleAddPanel = document.getElementById('castleAddPanel');
 const castleListPanel = document.getElementById('castleListPanel');
+const forceListPanel = document.getElementById('forceListPanel');
 const generalListPanel = document.getElementById('generalListPanel');
 const treasureListPanel = document.getElementById('treasureListPanel');
 const W = 2560, H = 2080;
@@ -641,6 +675,25 @@ function resourceMarkerPoint(marker){
 }
 function setResourceMarkerPosition(id, x, y){
   RESOURCE_MARKER_POSITIONS[id]={x:round6(x), y:round6(y)};
+}
+/* ---- 勢力・施設マーカーのメタ上書き（名称・支配大名・削除フラグ）: 城メタ上書きと同型 ---- */
+const MARKER_META_STORE = 'sengokuMarkerMetaOverrides:v1';
+function loadMarkerMetaOverrides(){
+  try { const v=JSON.parse(localStorage.getItem(MARKER_META_STORE)||'{}'); return v&&typeof v==='object'&&!Array.isArray(v)?v:{}; }
+  catch(_){ return {}; }
+}
+const MARKER_META_OVERRIDES = loadMarkerMetaOverrides();
+function saveMarkerMetaOverrides(){
+  try { localStorage.setItem(MARKER_META_STORE, JSON.stringify(MARKER_META_OVERRIDES)); } catch(_){}
+}
+function isMarkerDeleted(id){ return !!(MARKER_META_OVERRIDES[id] && MARKER_META_OVERRIDES[id].deleted); }
+function markerNameOf(marker){ const o=MARKER_META_OVERRIDES[marker.id]; return (o&&o.name)?o.name:marker.nameJP; }
+function markerDaimyoOf(id){ const o=MARKER_META_OVERRIDES[id]; return (o&&o.daimyo)?o.daimyo:''; }
+function setMarkerMetaOverride(id, patch){
+  if (!id) return;
+  const next=Object.assign({}, MARKER_META_OVERRIDES[id]||{}, patch||{});
+  Object.keys(next).forEach(k=>{ if (next[k]===undefined||next[k]===null||next[k]==='') delete next[k]; });
+  if (Object.keys(next).length) MARKER_META_OVERRIDES[id]=next; else delete MARKER_META_OVERRIDES[id];
 }
 const CUSTOM_CASTLE_STORE = 'sengokuCustomCastles:v1';
 function loadCustomCastles(){
@@ -2389,6 +2442,14 @@ const RESOURCE_MARKERS = [
   {id:'yoshida_yakata', nameJP:'吉田館', nameEN:'Yoshida Yakata', kind:'yakata', lon:137.400, lat:35.250},
   {id:'yamadera_pagoda', nameJP:'山寺五重塔', nameEN:'Yamadera Pagoda', kind:'pagoda', lon:140.430, lat:38.320}
 ];
+// 保存済みの名称上書きをマーカー実体へ反映（描画・ラベル計算は marker.nameJP を参照するため）。
+// 元の既定名は MARKER_ORIGINAL_NAMES に退避し、確定時に「既定と異なる場合のみ」上書き保存する。
+const MARKER_ORIGINAL_NAMES={};
+[...RESOURCE_MARKERS, ...RELIGIOUS_FORCES].forEach(m=>{
+  MARKER_ORIGINAL_NAMES[m.id]=m.nameJP;
+  const o=MARKER_META_OVERRIDES[m.id];
+  if (o && o.name) m.nameJP=o.name;
+});
 const NAVAL_FORCES = [
   { id:'noshima',     nameJP:'能島水軍',   nameEN:'Noshima Navy',   province:'iyo',      lordName:'村上武吉',  hireCost:500, combat:85, vassalBonus:0.30 },
   { id:'innoshima',   nameJP:'因島水軍',   nameEN:'Innoshima Navy', province:'bingo',    lordName:'村上吉充',  hireCost:400, combat:75, vassalBonus:0.25 },
@@ -5622,6 +5683,104 @@ class MapScene extends GameKit.Scene {
   _closeCastleListPanel(){
     if (castleListPanel) document.body.classList.remove('castle-list-open');
   }
+  /* ---- 勢力・施設編集一覧パネル ----
+   * スマホではドラッグ移動が地図パンと競合して動かしづらいため、城編集一覧と同型の
+   * 一覧UIから 名称／支配大名／配置座標(X,Y)／近くの城／削除 を編集できるようにする。 */
+  _nearestCastleId(x,y){
+    let best=null, bd=Infinity;
+    DATA.provinces.forEach(p=>{
+      if (isCastleDeleted(p.id)) return;
+      const c=provinceScreenPoint(p);
+      const d=Math.hypot(x-c[0], y-c[1]);
+      if (d<bd){ bd=d; best=p.id; }
+    });
+    return best;
+  }
+  _markerJitter(id){
+    let h=0; for (let i=0;i<id.length;i++) h=(h*31+id.charCodeAt(i))>>>0;
+    const ang=(h%360)*Math.PI/180, r=22+(h%12);
+    return {dx:Math.cos(ang)*r, dy:Math.sin(ang)*r};
+  }
+  _openForceListPanel(game){
+    if (!forceListPanel) return;
+    if (game) this._listGame=game;
+    const st=this.state;
+    const body=document.getElementById('forceListBody');
+    const countEl=document.getElementById('forceListCount');
+    if (!body) return;
+    const esc=(s)=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    // 大名ドロップダウン（現存する大名のみ）
+    const daimyos=daimyoOf(st).filter(d=>st.daimyo[d.id]);
+    // 近くの城ドロップダウン（未削除の城）
+    const castleList=DATA.provinces.filter(p=>!isCastleDeleted(p.id)).map(p=>({id:p.id, name:castleNameForProvince(p)}));
+    const castleOptsFor=(selId)=>castleList.map(c=>`<option value="${esc(c.id)}"${c.id===selId?' selected':''}>${esc(c.name)}</option>`).join('');
+    // 対象: 未削除の 資源/史跡マーカー(res) と 寺社勢力(rel)
+    const entries=[];
+    RESOURCE_MARKERS.forEach(m=>{ if (!isMarkerDeleted(m.id)) entries.push({type:'res', m}); });
+    RELIGIOUS_FORCES.forEach(m=>{ if (!isMarkerDeleted(m.id)) entries.push({type:'rel', m}); });
+    body.innerHTML='';
+    entries.forEach(({type,m})=>{
+      const pt=type==='rel'?religiousForcePoint(m):resourceMarkerPoint(m);
+      const px=Math.round(pt[0]), py=Math.round(pt[1]);
+      const owner=markerDaimyoOf(m.id);
+      const nearId=this._nearestCastleId(pt[0],pt[1]) || '';
+      const daimyoOpts='<option value="">－</option>'+daimyos.map(d=>`<option value="${d.id}"${d.id===owner?' selected':''}>${esc(d.nameJP)}家</option>`).join('');
+      const tr=document.createElement('tr');
+      tr.dataset.id=m.id; tr.dataset.type=type; tr.dataset.orig=nearId;
+      tr.innerHTML=`<td><input type="text" class="cl-name" value="${esc(m.nameJP)}" maxlength="24"></td>`+
+        `<td><select class="cl-daimyo">${daimyoOpts}</select></td>`+
+        `<td><div class="cl-coord-wrap"><span>X</span><input type="number" class="cl-cx" value="${px}" step="1"><span>Y</span><input type="number" class="cl-cy" value="${py}" step="1"></div></td>`+
+        `<td><select class="cl-near">${castleOptsFor(nearId)}</select></td>`+
+        `<td class="castle-list-del-cell"><input type="checkbox" class="cl-del"></td>`;
+      body.appendChild(tr);
+    });
+    if (countEl) countEl.textContent='全'+entries.length+'件';
+    document.getElementById('forceListConfirm').onclick=()=>this._confirmForceListPanel();
+    document.getElementById('forceListCancel').onclick=()=>this._closeForceListPanel();
+    // 他の編集モードを終了してから一覧を開く
+    this.religiousEdit=false; this.dragReligious=null; this.dragResource=null;
+    this.castleEdit=false; this.castleMetaEdit=false; this._hideCastleAddPanel();
+    document.body.classList.add('force-list-open');
+  }
+  _closeForceListPanel(){
+    if (forceListPanel) document.body.classList.remove('force-list-open');
+  }
+  _confirmForceListPanel(){
+    const body=document.getElementById('forceListBody'); if (!body) return;
+    let delCount=0;
+    body.querySelectorAll('tr[data-id]').forEach(row=>{
+      const id=row.dataset.id, type=row.dataset.type; if (!id) return;
+      if (row.querySelector('.cl-del').checked){ setMarkerMetaOverride(id,{deleted:true}); delCount++; return; }
+      const name=(row.querySelector('.cl-name').value||'').trim();
+      const daimyo=row.querySelector('.cl-daimyo').value||'';
+      const nearSel=row.querySelector('.cl-near').value||'';
+      const orig=row.dataset.orig||'';
+      const cxVal=(row.querySelector('.cl-cx').value||'').trim();
+      const cyVal=(row.querySelector('.cl-cy').value||'').trim();
+      const marker=(type==='rel'?RELIGIOUS_FORCES:RESOURCE_MARKERS).find(o=>o.id===id);
+      // 名称: 実体へ即時反映＋既定と異なる場合のみ上書き保存
+      if (name && marker) marker.nameJP=name;
+      const nameOverride=(name && name!==MARKER_ORIGINAL_NAMES[id]) ? name : null;
+      setMarkerMetaOverride(id,{name:nameOverride, daimyo:daimyo||null, deleted:false});
+      // 配置: 「近くの城」を変更した場合はその城の近くへ、そうでなければ X,Y をそのまま採用
+      if (nearSel && nearSel!==orig){
+        const p=DATA.provById[nearSel];
+        if (p){ const c=provinceScreenPoint(p), j=this._markerJitter(id);
+          if (type==='rel') setReligiousForcePosition(id, c[0]+j.dx, c[1]+j.dy);
+          else setResourceMarkerPosition(id, c[0]+j.dx, c[1]+j.dy);
+        }
+      } else if (cxVal!==''&&cyVal!==''){
+        const nx=parseInt(cxVal,10), ny=parseInt(cyVal,10);
+        if (Number.isFinite(nx)&&Number.isFinite(ny)){
+          if (type==='rel') setReligiousForcePosition(id,nx,ny);
+          else setResourceMarkerPosition(id,nx,ny);
+        }
+      }
+    });
+    saveResourceMarkerPositions(); saveReligiousForcePositions(); saveMarkerMetaOverrides();
+    this._closeForceListPanel(); this._save();
+    this._flash('勢力・施設情報を更新しました（'+delCount+'件削除）');
+  }
   /* ---- 大名編集パネル ---- */
   _openDaimyoEditPanel(){
     const st=this.state;
@@ -5993,6 +6152,7 @@ class MapScene extends GameKit.Scene {
     if (!pointInRect({x,y}, MAP.clip)) return null;
     let best=null, bestDist=Infinity;
     for (const force of RELIGIOUS_FORCES){
+      if (isMarkerDeleted(force.id)) continue;
       const pt=religiousForcePoint(force), screen=this._worldToScreen(pt[0],pt[1]);
       const d=Math.hypot(x-screen.x,y-screen.y);
       if (d<bestDist){ bestDist=d; best=force; }
@@ -6004,6 +6164,7 @@ class MapScene extends GameKit.Scene {
     let best=null, bestDist=Infinity;
     for (const marker of RESOURCE_MARKERS){
       if (!this.cam || this.cam.zoom <= MAP_SUBCASTLE_ZOOM_THRESHOLD) continue;
+      if (isMarkerDeleted(marker.id)) continue;
       const pt=resourceMarkerPoint(marker), screen=this._worldToScreen(pt[0],pt[1]);
       const d=Math.hypot(x-screen.x,y-screen.y);
       if (d<bestDist){ bestDist=d; best=marker; }
@@ -7363,6 +7524,7 @@ class MapScene extends GameKit.Scene {
     bs.push({x:colX0+zW+(IS_TOUCH?18:48), y:rowZoom, w:zW, h:zH, skin:'topBar', label:'－', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }, noScale:true});
     bs.push({x:colX0, y:rowDev0, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'大名編集', sz:dSz2, action:g=>this._openDaimyoEditPanel(g), noScale:true});
     bs.push({x:colX0, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'城編集一覧', sz:dSz2, action:g=>this._openCastleListPanel(g), noScale:true});
+    bs.push({x:colX2, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'勢力・施設編集一覧', sz:dSz2, action:g=>this._openForceListPanel(g), noScale:true});
     bs.push({x:colX0, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:dSz2, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }, noScale:true});
     bs.push({x:colX1, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.religiousEdit?'完了':'勢力・施設 位置編集', sz:dSz2, action:g=>{ this.religiousEdit?this._finishReligiousEdit(g):this._startReligiousEdit(g); }, noScale:true});
     bs.push({x:colX2, y:rowDev2, w:dW, h:dH, skin:'topBar', label:'家宝一覧', sz:dSz2, action:()=>this._openTreasureList(), noScale:true});
@@ -7912,6 +8074,7 @@ class MapScene extends GameKit.Scene {
     if (showSubCastles){
     // 寺社勢力は領地を奪わず、史跡位置に独立勢力マーカーとして表示する。
     for (const marker of RESOURCE_MARKERS){
+      if (isMarkerDeleted(marker.id)) continue;
       const [cx, cy] = resourceMarkerPoint(marker);
       if (cx<vx0 || cx>vx1 || cy<vy0 || cy>vy1) continue;
       const labelSize = marker.nameJP.length >= 6 ? 6 : 7;
@@ -7923,6 +8086,7 @@ class MapScene extends GameKit.Scene {
       if (s!==1) ctx.restore();
     }
     for (const force of RELIGIOUS_FORCES){
+      if (isMarkerDeleted(force.id)) continue;
       const [cx, cy] = religiousForcePoint(force);
       const crestId = force.id;
       const size = 28;
@@ -8051,10 +8215,12 @@ class MapScene extends GameKit.Scene {
       ctx.beginPath(); ctx.arc(cx, cy, (active?34:27)/z, 0, Math.PI*2); ctx.fill(); ctx.stroke();
     };
     for (const force of RELIGIOUS_FORCES){
+      if (isMarkerDeleted(force.id)) continue;
       const [cx,cy]=religiousForcePoint(force);
       ring(cx, cy, !!(this.dragReligious && this.dragReligious.id===force.id));
     }
     for (const marker of RESOURCE_MARKERS){
+      if (isMarkerDeleted(marker.id)) continue;
       const [cx,cy]=resourceMarkerPoint(marker);
       ring(cx, cy, !!(this.dragResource && this.dragResource.id===marker.id));
     }
