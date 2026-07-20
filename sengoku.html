@@ -4838,6 +4838,25 @@ function deriveProvinceStats(kok, isCapital){
   const soldiers = Math.round(clamp(kok * 2.0 * (isCapital?1.35:1.0), 200, 6500));
   return { development, castleLevel, soldiers, minchu: 60 };
 }
+/* ---- 野心(ambition) & 下剋上（sengoku_gekokujo_v1 / Phase 1）----
+ * 各武将に恒常特性 ambition(5..95) を持たせ、低忠誠×高野心×好機で
+ * 出奔・寝返り・謀叛（本能寺型）が創発的に発生する。史実の梟雄は上書きで高値。 */
+const AMBITION_OVERRIDES = {
+  '松永久秀':95,'斎藤道三':90,'宇喜多直家':92,'明智光秀':72,'荒木村重':80,'別所長治':70,
+  '陶晴賢':85,'松永久通':82,'三好長慶':60,'尼子経久':78,'長尾為景':80,'浦上宗景':74,
+  '津軽為信':82,'蒲生氏郷':30,'直江兼続':18,'本多忠勝':12,'山内一豊':25,'鳥居元忠':8,
+  '前田利家':35,'竹中半兵衛':28,'黒田官兵衛':55,'藤堂高虎':68,'小早川秀秋':70,'石田三成':30,
+};
+function deriveAmbition(gd){
+  if (!gd) return 45;
+  if (AMBITION_OVERRIDES[gd.nameJP]!=null) return AMBITION_OVERRIDES[gd.nameJP];
+  const s=gd.stats||{bu:55,chi:55,sei:55};
+  // 武勇・知略が高く政治が低いほど野心的。±の微小な個体差を id ハッシュで決定論的に付与
+  let h=0; const key=gd.id||gd.nameJP||''; for (let i=0;i<key.length;i++) h=(h*31+key.charCodeAt(i))>>>0;
+  const jitter=((h%13)-6); // -6..+6
+  const amb = 40 + (s.bu-60)*0.3 + (s.chi-60)*0.22 - (s.sei-60)*0.42 + jitter;
+  return Math.max(5, Math.min(95, Math.round(amb)));
+}
 function buildGameState(scenarioId, playerDaimyo, difficulty){
   const scn = DATA.scenarios.find(s=>s.id===scenarioId);
   const dById = {}; scn.daimyo.forEach(d=>dById[d.id]=d);
@@ -4877,7 +4896,7 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
         if (alive && bd.died && bd.died < scn.year)  alive = false;
       }
     }
-    state.generals[g.id] = {loyalty:0, alive, location:null, daimyo:null};
+    state.generals[g.id] = {loyalty:0, alive, location:null, daimyo:null, ambition: deriveAmbition(g)};
   });
   // provinces
   DATA.provinces.forEach(p=>{
@@ -4982,7 +5001,26 @@ function getAF(st, forceId){
 /* ===================================================================
  * 戦闘モデル（手動・自動共通の評価関数）
  * =================================================================== */
-function armyQuality(generals, year, family, defender, castleLevel, terrain, navalBonus){
+/* ---- 陣形（sengoku_formation_v1 / Phase 2）----
+ * 開戦前に陣形を選ぶ。攻守の補正に加え、相性（じゃんけん）で有利を取ると加勢。
+ * 魚鱗>鶴翼>長蛇>方円>魚鱗 の循環。雁行は無難な均衡陣。 */
+const FORMATIONS = {
+  gyorin:  {jp:'魚鱗', en:'Fish-scale', atk:1.15, def:0.95, beats:'kakuyoku'},
+  kakuyoku:{jp:'鶴翼', en:'Crane-wing', atk:1.05, def:1.05, beats:'choda'},
+  choda:   {jp:'長蛇', en:'Long-line',  atk:1.10, def:0.98, beats:'hoen'},
+  hoen:    {jp:'方円', en:'Circle',     atk:0.92, def:1.20, beats:'gyorin'},
+  gankou:  {jp:'雁行', en:'Wild-goose', atk:1.02, def:1.02, beats:null},
+};
+const FORMATION_ORDER=['gankou','gyorin','kakuyoku','choda','hoen'];
+// AI の陣形選択（性格・攻守で決定論寄りに）
+function aiFormationFor(st, did, isAttacker){
+  const d=st.daimyo&&st.daimyo[did];
+  const def=daimyoDef(st, did);
+  const persona=(def&&def.ai)||'opportunist';
+  if (isAttacker) return persona==='aggressive'?'gyorin':(persona==='defensive'?'gankou':'choda');
+  return persona==='defensive'?'hoen':(persona==='aggressive'?'kakuyoku':'gankou');
+}
+function armyQuality(generals, year, family, defender, castleLevel, terrain, navalBonus, formation){
   let bu=50, tou=50;
   if (generals && generals.length){
     let mb=0, mt=0;
@@ -5001,6 +5039,9 @@ function armyQuality(generals, year, family, defender, castleLevel, terrain, nav
   }
   // 水軍ボーナス（海戦・沿岸戦。従属水軍の vassalBonus 合計。OS-03/sengoku_expansion_v1）
   if (navalBonus) q *= (1 + navalBonus);
+  // 陣形補正（攻撃側は atk、守備側は def を適用）
+  const fm=formation&&FORMATIONS[formation];
+  if (fm) q *= (defender ? fm.def : fm.atk);
   return q;
 }
 // 沿岸戦での水軍ボーナス。didが従属させた水軍の vassalBonus 合計（terrain='coast'の洲でのみ有効・上限0.5）
@@ -5016,6 +5057,77 @@ function navalBonusFor(st, did, provId){
   });
   return Math.min(0.5, sum);
 }
+/* ===================================================================
+ * 支配範囲(ZoC) & 反応（sengoku_zoc_v1 / Phase 0）
+ *   城・独立勢力に「圏」を持たせ、敵対軍が圏へ侵入すると
+ *   攪乱・海上迎撃・一向一揆・国人抵抗・城の出撃で反応する。
+ *   → 軍勢が自由に動けず「土地が反応する」＝信長の野望との差別化の背骨。
+ * =================================================================== */
+// 城の支配圏: 自省＋隣接。castleLevel>=4（大城）は2ホップまで及ぶ。
+function castleZone(pid, castleLevel){
+  const z = new Set([pid]);
+  neighborsOf(pid).forEach(n=>z.add(n));
+  if ((castleLevel||1) >= 4){ neighborsOf(pid).forEach(n=>neighborsOf(n).forEach(m=>z.add(m))); }
+  return z;
+}
+// 独立勢力の支配圏: アンカー洲＋隣接。寺社は effect.provinces をそのまま圏とする。
+function forceZone(force, kind){
+  if (kind==='religious'){ const eff=RELIGIOUS_FORCE_EFFECTS[force.id]; return new Set(eff?eff.provinces:[]); }
+  const z=new Set([force.province]); neighborsOf(force.province).forEach(n=>z.add(n)); return z;
+}
+// 惣無事令による静謐（Phase 3 で有効化）。静謐下の洲では圏反応を抑止する。
+function isZonePacified(st, pid){
+  return !!(st.sobuji && st.sobuji.active && st.sobuji.provinces && st.sobuji.provinces[pid]);
+}
+// 敵対勢力の支配圏へ侵入した行軍への反応を集計する。
+// 戻り値 {lost:<途上損耗>, disrupt:<行軍攪乱>, notes:[{jp,en}]}
+function computeZoneReactions(st, attackerId, srcId, dstId, soldiers){
+  const res={lost:0, disrupt:false, notes:[]};
+  if (!soldiers || soldiers<=0) return res;
+  const R=()=>srand(st);
+  const marched=[srcId, dstId].filter(Boolean);
+  const inZone=(zone)=> marched.some(p=>zone.has(p));
+  const coastal = marched.some(p=>DATA.provById[p] && DATA.provById[p].terrain==='coast');
+  // 惣無事令下（行軍経路が全て静謐）は反応なし
+  if (marched.length && marched.every(p=>isZonePacified(st,p))) return res;
+  const cap = Math.round(soldiers*0.32); // 途上損耗は最大32%まで
+  // 攻撃側に帰属済み（雇用/同盟/従属/懇意）の勢力は反応しない
+  const friendlyTo=(fid)=>{ const af=st.armedForces&&st.armedForces[fid]; return !!(af && (af.allied || af.hired || af.vassalOf===attackerId || af.relation>=60)); };
+  const nameEN=(o)=> o.nameEN||o.nameJP;
+  // 忍者: 行軍を攪乱（skill が高いほど成功しやすい）
+  NINJA_GROUPS.forEach(ng=>{
+    if (friendlyTo(ng.id) || !inZone(forceZone(ng,'ninja'))) return;
+    if (R() < ng.skill/300){ res.disrupt=true; res.notes.push({jp:ng.nameJP+'が行軍を攪乱', en:nameEN(ng)+' disrupt the march'}); }
+  });
+  // 水軍: 沿岸行軍を海上迎撃
+  if (coastal) NAVAL_FORCES.forEach(nf=>{
+    if (friendlyTo(nf.id) || !inZone(forceZone(nf,'naval'))) return;
+    if (R() < 0.5){ const l=Math.round(soldiers*Math.min(0.14, nf.combat/900)); if(l>0){ res.lost+=l; res.notes.push({jp:nf.nameJP+'が海上で迎撃（兵-'+l+'）', en:nameEN(nf)+' intercept at sea (-'+l+')'}); } }
+  });
+  // 一向宗・武力寺社: 一揆で行く手を阻む
+  RELIGIOUS_FORCES.forEach(rf=>{
+    const eff=RELIGIOUS_FORCE_EFFECTS[rf.id]; if(!eff||!(eff.combatBonus>0)) return;
+    if (friendlyTo(rf.id) || !inZone(forceZone(rf,'religious'))) return;
+    if (R() < 0.4+eff.combatBonus){ const l=Math.round(soldiers*(0.05+eff.combatBonus)); if(l>0){ res.lost+=l; res.notes.push({jp:rf.nameJP+'の一揆が行く手を阻む（兵-'+l+'）', en:nameEN(rf)+' ikko-ikki block the road (-'+l+')'}); } }
+  });
+  // 国人衆: 地侍の抵抗
+  KOKUJIN_FORCES.forEach(kf=>{
+    if (friendlyTo(kf.id) || !inZone(forceZone(kf,'kokujin'))) return;
+    if (R() < 0.45){ const l=Math.round(Math.min(soldiers*0.12, (kf.soldiers||800)*0.15)); if(l>0){ res.lost+=l; res.notes.push({jp:kf.nameJP+'が抵抗（兵-'+l+'）', en:nameEN(kf)+' resist (-'+l+')'}); } }
+  });
+  // 第三勢力の城の出撃迎撃（攻守いずれでもない大名の堅城 Lv3+ が侵入先を扼す）
+  const defOwner = st.provinces[dstId] ? st.provinces[dstId].owner : null;
+  DATA.provinces.forEach(p=>{
+    const cp=st.provinces[p.id]; if(!cp||!cp.owner) return;
+    const o=cp.owner;
+    if (o===attackerId || o===defOwner || (cp.castleLevel||1)<3 || cp.soldiers<500) return;
+    if (areAllied(st,o,attackerId) || inTruce(st,o,attackerId) || isVassalBond(st,o,attackerId)) return;
+    if (!castleZone(p.id, cp.castleLevel).has(dstId)) return;
+    if (R() < 0.35){ const l=Math.round(Math.min(soldiers*0.10, cp.soldiers*0.12)); if(l>0){ res.lost+=l; res.notes.push({jp:(DATA.provById[p.id]?.nameJP||p.id)+'の城が出撃迎撃（兵-'+l+'）', en:'Castle at '+(DATA.provById[p.id]?.nameEN||p.id)+' sallies out (-'+l+')'}); } }
+  });
+  res.lost=Math.min(res.lost, cap);
+  return res;
+}
 /* 自動解決（ヘッドレス・集約攻防） */
 function autoResolveBattle(opts){
   // opts: {atkSoldiers, atkGenerals, atkFamily, defSoldiers, defGenerals, defFamily, year, castleLevel, terrain, rngFn}
@@ -5023,8 +5135,11 @@ function autoResolveBattle(opts){
   let an = opts.atkSoldiers, dn = opts.defSoldiers;
   const a0=an, d0=dn;
   // 戦ごとの士気・運（±10%）で番狂わせの余地を残す
-  const aq = armyQuality(opts.atkGenerals, opts.year, opts.atkFamily, false, 0, null, opts.atkNaval||0) * (0.9+rnd()*0.2);
-  const dq = armyQuality(opts.defGenerals, opts.year, opts.defFamily, true, opts.castleLevel, opts.terrain, opts.defNaval||0) * (0.9+rnd()*0.2);
+  let aq = armyQuality(opts.atkGenerals, opts.year, opts.atkFamily, false, 0, null, opts.atkNaval||0, opts.atkFormation) * (0.9+rnd()*0.2);
+  let dq = armyQuality(opts.defGenerals, opts.year, opts.defFamily, true, opts.castleLevel, opts.terrain, opts.defNaval||0, opts.defFormation) * (0.9+rnd()*0.2);
+  // 陣形相性（じゃんけん）: 有利を取った側に+8%
+  const fA=FORMATIONS[opts.atkFormation], fD=FORMATIONS[opts.defFormation];
+  if (fA && fD){ if (fA.beats===opts.defFormation) aq*=1.08; else if (fD.beats===opts.atkFormation) dq*=1.08; }
   let round=0;
   while (round<24 && an>a0*0.16 && dn>d0*0.16){
     const aDmg = an*aq*0.105*(0.85+rnd()*0.3);
@@ -5134,6 +5249,28 @@ class BootScene extends GameKit.Scene {
 /* ===================================================================
  * TitleScene
  * =================================================================== */
+/* ---- シナリオ共有（sengoku_share_v1 / Phase 5）----
+ * 進行中の陣容（セーブ状態）をUTF-8安全なbase64コードに符号化し、
+ * URLハッシュ(#scn=)／クリップボード／貼り付けで端末間共有する。サーバ不要・CSP順守。 */
+function b64EncodeUtf8(str){
+  const bytes=new TextEncoder().encode(str); let bin='';
+  for (let i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function b64DecodeUtf8(b64){
+  const bin=atob(b64); const bytes=Uint8Array.from(bin, c=>c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+function decodeShareState(input){
+  try{
+    let c=(input||'').trim(); if(!c) return null;
+    const i=c.indexOf('scn='); if(i>=0) c=c.slice(i+4);
+    c=c.split('&')[0].trim();
+    const st=JSON.parse(b64DecodeUtf8(c));
+    if(!st || typeof st!=='object' || st.version!==SAVE_VERSION) return null;
+    return st;
+  }catch(_){ return null; }
+}
 class TitleScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
@@ -5141,6 +5278,9 @@ class TitleScene extends GameKit.Scene {
     this.particles = new GameKit.Particles(W, H, {count:60, colors:['#e8c07a','#a78bfa','#22d3ee']});
     this.t=0;
     this.hasSave = !!save.get('autosave', null);
+    // URLハッシュに共有陣容(#scn=)があれば読込候補として保持
+    this.sharedState=null;
+    try{ if (location.hash && location.hash.indexOf('scn=')>=0) this.sharedState=decodeShareState(location.hash); }catch(_){}
     this.buttons = this._layout();
   }
   _layout(){
@@ -5150,7 +5290,37 @@ class TitleScene extends GameKit.Scene {
       const st = save.get('autosave', null);
       if (st && st.version===SAVE_VERSION){ game.changeScene(new MapScene(st)); }
     }});
+    // シナリオ共有（Phase 5）
+    bs.push({x:cx-360, y:cy+572, w:350, h:110, jp:'陣容を共有', en:'Share Code', sz:32, ensz:18, on:this.hasSave, action:()=>this._shareState()});
+    bs.push({x:cx+10, y:cy+572, w:350, h:110, jp:'コードで再現', en:'Load Code', sz:32, ensz:18, action:()=>this._loadShared()});
+    if (this.sharedState){
+      bs.push({x:cx-360, y:cy+700, w:720, h:110, jp:'共有された陣容で始める', en:'Start Shared Setup', sz:34, ensz:20, accent:'rgba(120,200,160,0.7)', action:()=>{
+        save.set('autosave', this.sharedState); game.changeScene(new MapScene(this.sharedState));
+      }});
+    }
     return bs;
+  }
+  // 現在の陣容を共有コード/URLに符号化して提示（クリップボード＋URLハッシュ＋貼付用ダイアログ）
+  _shareState(){
+    const st=save.get('autosave', null);
+    if(!st){ try{alert('共有できるセーブがありません / No save to share');}catch(_){}; return; }
+    let url;
+    try{
+      const code=b64EncodeUtf8(JSON.stringify(st));
+      url=location.origin+location.pathname+'#scn='+code;
+      try{ location.hash='scn='+code; }catch(_){}
+      try{ if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(url); }catch(_){}
+    }catch(e){ try{alert('共有コードの生成に失敗しました / Failed to build share code');}catch(_){}; return; }
+    try{ window.prompt('この陣容コード/URLを共有できます（相手は「コードで再現」に貼付）\nShare this code / URL:', url); }catch(_){}
+  }
+  // 共有コード/URLを貼り付けて陣容を再現
+  _loadShared(){
+    let inp=null; try{ inp=window.prompt('共有された陣容コードまたはURLを貼り付け / Paste shared code or URL:', ''); }catch(_){ return; }
+    if(!inp) return;
+    const st=decodeShareState(inp);
+    if(!st){ try{alert('コードを読み込めませんでした（バージョン不一致の可能性）/ Could not load code');}catch(_){}; return; }
+    save.set('autosave', st);
+    game.changeScene(new MapScene(st));
   }
   update(dt, game){
     this.t+=dt; this.particles.update(dt);
@@ -6309,8 +6479,16 @@ class MapScene extends GameKit.Scene {
       game.audio.beep(520,0.1,'sine'); this._flash('増援を送りました', 'Reinforcements sent'); this._save();
       return;
     }
-    // 攻撃
-    const ctx = this._buildBattleContext(m.srcId, m.dstId, troops, gens);
+    // 攻撃 — 支配圏の反応（途上の攪乱/海上迎撃/一向一揆/国人抵抗/城の出撃）
+    const zr = computeZoneReactions(st, st.playerDaimyo, m.srcId, m.dstId, troops);
+    let arrive = troops;
+    if (zr.disrupt) arrive = Math.round(arrive*0.7);
+    arrive = Math.max(100, arrive - zr.lost);
+    if (zr.notes.length){
+      const extra = zr.disrupt ? '（行軍乱れる）' : '';
+      this._flash(zr.notes.map(n=>n.jp).join(' / ')+extra, zr.notes.map(n=>n.en).join(' / '));
+    }
+    const ctx = this._buildBattleContext(m.srcId, m.dstId, arrive, gens);
     this.overlay=null; this.march=null;
     if (auto){
       ctx.battleType='field';
@@ -6336,6 +6514,8 @@ class MapScene extends GameKit.Scene {
   }
   _startBattleFromChoice(game, ctx, battleType){
     ctx.battleType=battleType;
+    ctx.atkFormation = ctx.atkFormation||'gankou';
+    ctx.defFormation = ctx.defFormation || (ctx.defender && ctx.defender.daimyo ? aiFormationFor(this.state, ctx.defender.daimyo, false) : 'gankou');
     this.state.pendingBattle=ctx;
     this.overlay=null;
     game.changeScene(new BattleScene(this.state));
@@ -6347,6 +6527,8 @@ class MapScene extends GameKit.Scene {
       defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
       year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
       atkNaval: navalBonusFor(st, st.playerDaimyo, ctx.dstId),
+      atkFormation: ctx.atkFormation||'gankou',
+      defFormation: (ctx.defender && ctx.defender.daimyo) ? aiFormationFor(st, ctx.defender.daimyo, false) : 'gankou',
     });
     applyBattleResult(st, ctx, res);
     if (res.attackerWins && navalBonusFor(st, st.playerDaimyo, ctx.dstId)>0) this._flash('水軍の支援で海路を制した', 'Naval support secured the coast');
@@ -6868,6 +7050,8 @@ class MapScene extends GameKit.Scene {
       defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
       year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
       defNaval: navalBonusFor(st, st.playerDaimyo, ctx.dstId), // 守備側=プレイヤーの水軍支援（沿岸のみ）
+      atkFormation: (ctx.attacker && ctx.attacker.daimyo) ? aiFormationFor(st, ctx.attacker.daimyo, true) : 'gankou',
+      defFormation: 'gankou', // 守備側=プレイヤー（自動解決時は均衡陣）
     });
     applyBattleResult(st, ctx, res);
     game.audio.jingle(res.attackerWins?[{f:392,d:0.12},{f:262,d:0.2}]:[{f:523,d:0.1},{f:784,d:0.16}]);
@@ -6886,6 +7070,7 @@ class MapScene extends GameKit.Scene {
     st.turn++;
     this.selected=null; this.mode='select';
     this._updateDaimyoAlive();
+    this._refreshPacified(st);
     st.peakProvinces=Math.max(st.peakProvinces||0, ownedProvinces(st, st.playerDaimyo).length);
     // 民忠低下 & 一揆チェック
     const ikkiLog=[];
@@ -6926,8 +7111,8 @@ class MapScene extends GameKit.Scene {
         if (prov._sabotageLevel!=null){ prov.castleLevel=prov._sabotageLevel; delete prov._sabotageLevel; delete prov._sabotageUntil; }
       }
     });
-    // 国人勢力の離反（OS-08）・寺社勢力の武力蜂起（OS-09）
-    const forceLog=[].concat(this._processKokujinDefection(st)).concat(this._processReligiousUprising(st));
+    // 国人勢力の離反（OS-08）・寺社勢力の武力蜂起（OS-09）・下剋上（Phase 1）
+    const forceLog=[].concat(this._processKokujinDefection(st)).concat(this._processReligiousUprising(st)).concat(this._processAmbitionBetrayal(st));
     // 米相場更新（毎月変動）
     st.ricePrice=Math.round(50+srand(st)*150);
     // 年明けに寿命・下剋上／天災・ランダムイベント
@@ -7007,6 +7192,64 @@ class MapScene extends GameKit.Scene {
           log.push('【一向一揆】'+rf.nameJP+'が'+pn+'で蜂起！（兵-'+solLoss+'・開発-'+devLoss+'）  /  Ikko uprising at '+pn);
         }
       });
+    });
+    return log;
+  }
+  // 下剋上（sengoku_gekokujo_v1 / Phase 1）。低忠誠×高野心×好機で
+  // 出奔／寝返り（洲ごと隣接敵へ）／謀叛（本能寺型・当主暗殺）が創発的に発生する。
+  _processAmbitionBetrayal(st){
+    const log=[]; const me=st.playerDaimyo;
+    const lordSet=new Set(daimyoOf(st).map(d=>d.lord).filter(Boolean));
+    const removeFromProv=(gid,g)=>{ const loc=g.location; if(loc&&st.provinces[loc]){ const i=st.provinces[loc].generals.indexOf(gid); if(i>=0) st.provinces[loc].generals.splice(i,1);} };
+    Object.keys(st.generals).forEach(gid=>{
+      const g=st.generals[gid]; if(!g||!g.alive) return;
+      const owner=g.daimyo; if(!owner||lordSet.has(gid)) return;   // 当主自身は対象外
+      const gd=DATA.genById[gid]; if(!gd) return;
+      const amb=(g.ambition!=null)?g.ambition:deriveAmbition(gd);
+      const loy=(g.loyalty!=null)?g.loyalty:60;
+      if (amb<50 && loy>=45) return;                               // 野心も不満も無ければ安泰
+      // 好機: 主家の弱体（領国が僅少／本城喪失）
+      const ownerProvs=ownedProvinces(st, owner);
+      const cap=daimyoDef(st, owner)?.capital;
+      let opportunity=0;
+      if (ownerProvs.length<=2) opportunity+=15;
+      if (cap && st.provinces[cap] && st.provinces[cap].owner!==owner) opportunity+=20;
+      // 謀叛リスク = f(低忠誠, 高野心, 好機) を 0..1 に正規化
+      const risk=Math.max(0, ((amb-45)*0.6 + (55-loy)*0.5 + opportunity))/100;
+      if (risk<=0) return;
+      const rate = (owner===me ? 0.05 : 0.07) * risk;              // 自家はやや起きにくい
+      if (srand(st) >= rate) return;
+      const loc=g.location; const prov=loc?st.provinces[loc]:null; if(!prov) return;
+      const notable=(gd.stats.tou+gd.stats.bu+gd.stats.chi)>=210;
+      const gn=gd.nameJP, gnEN=gd.nameEN||gd.nameJP;
+      // 本能寺型: 当主と同城・野心>=80・好機ありで暗殺
+      const lordId=prov.generals.find(x=>lordSet.has(x) && st.generals[x] && st.generals[x].daimyo===owner && st.generals[x].alive);
+      if (lordId && amb>=80 && opportunity>=15 && (owner!==me || loy<40) && srand(st)<0.5){
+        const ld=st.generals[lordId]; removeFromProv(lordId, ld); ld.alive=false; ld.location=null; ld.daimyo=null;
+        prov.minchu=Math.max(0,(prov.minchu??60)-20); prov.soldiers=Math.round(prov.soldiers*0.85);
+        g.loyalty=100;                                             // 家中を掌握
+        const ldn=DATA.genById[lordId]?DATA.genById[lordId].nameJP:'主君';
+        log.push('【謀叛】'+gn+'が主君'+ldn+'を討った！（'+(DATA.provById[loc]?.nameJP||loc)+'）  /  '+gnEN+' turns on their lord!');
+        return;
+      }
+      // 寝返り: 隣接に非同盟の敵大名領があれば、その洲ごと献じる（自家は loy<40 のみ）
+      let enemy=null;
+      if (owner!==me || loy<40){
+        neighborsOf(loc).forEach(nb=>{ const np=st.provinces[nb]; if(!enemy && np && np.owner && np.owner!==owner && !areAllied(st,owner,np.owner) && !isVassalBond(st,owner,np.owner)) enemy=np.owner; });
+      }
+      if (enemy){
+        prov.owner=enemy; g.daimyo=enemy;
+        prov.generals.slice().forEach(x=>{ if(x===gid) return; const og=st.generals[x]; if(og){ removeFromProv(x,og); og.location=null; og.daimyo=null; } });
+        if(!prov.generals.includes(gid)) prov.generals.push(gid);
+        prov.minchu=Math.max(0,(prov.minchu??60)-8);
+        const enemyName=daimyoDef(st,enemy)?.nameJP||enemy;
+        const enemyEN=daimyoDef(st,enemy)?.nameEN||enemy;
+        log.push('【寝返り】'+gn+'が'+(DATA.provById[loc]?.nameJP||loc)+'を'+enemyName+'家へ献じ寝返った  /  '+gnEN+' defects to '+enemyEN);
+        return;
+      }
+      // 出奔（浪人化）
+      removeFromProv(gid,g); g.location=null; g.daimyo=null;
+      if (owner===me || notable) log.push('【出奔】'+gn+'が去った（野心'+Math.round(amb)+'・忠誠'+Math.round(loy)+'）  /  '+gnEN+' abandons their lord');
     });
     return log;
   }
@@ -7156,11 +7399,28 @@ class MapScene extends GameKit.Scene {
     // 主家が滅んだ従属国は独立に戻す
     daimyoOf(st).forEach(d=>{ const suz=st.daimyo[d.id].vassalOf; if (suz && (!st.daimyo[suz] || !st.daimyo[suz].alive)) st.daimyo[d.id].vassalOf=null; });
   }
+  // 惣無事令の静謐領を再計算（Phase 3 → Phase 0 の isZonePacified を活性化）。
+  // 天下人（プレイヤー）の直轄領＋従属大名領を「静謐」として ZoC 反応を抑止する。
+  _refreshPacified(st){
+    const me=st.playerDaimyo;
+    if (!st.daimyo[me] || !st.daimyo[me].tenka){ st.sobuji={active:false, provinces:{}}; return; }
+    const prov={};
+    ownedProvinces(st, me).forEach(pid=>prov[pid]=true);
+    daimyoOf(st).forEach(d=>{ if(d.id!==me && suzerainOf(st,d.id)===me){ ownedProvinces(st,d.id).forEach(pid=>prov[pid]=true); } });
+    st.sobuji={active:true, provinces:prov};
+  }
   _checkEnd(game){
     const st=this.state;
-    const mine=ownedProvinces(st, st.playerDaimyo).length;
-    if (mine===0){ this.overlay={type:'gameover', win:false}; }
-    else if (mine===DATA.provinces.length){ this.overlay={type:'gameover', win:true}; }
+    const me=st.playerDaimyo;
+    const mine=ownedProvinces(st, me).length;
+    if (mine===0){ this.overlay={type:'gameover', win:false}; return; }
+    if (mine===DATA.provinces.length){ this.overlay={type:'gameover', win:true}; return; }
+    // 天下静謐（権威勝利・Phase 3）: 征夷大将軍として、全洲の8割以上が自領＋従属下にある
+    if (st.daimyo[me] && st.daimyo[me].tenka){
+      let controlled=mine;
+      daimyoOf(st).forEach(d=>{ if(d.id!==me && st.daimyo[d.id] && st.daimyo[d.id].alive && suzerainOf(st,d.id)===me){ controlled+=ownedProvinces(st,d.id).length; } });
+      if (controlled >= Math.ceil(DATA.provinces.length*0.8)){ this.overlay={type:'gameover', win:true, seihitsu:true}; }
+    }
   }
 
   /* ---- ボタン定義 ---- */
@@ -7594,6 +7854,16 @@ class MapScene extends GameKit.Scene {
     } else if (ov.type==='battleType'){
       const c=ov.ctx; const px=W/2-520, py=H/2-330, pw=1040, ph=660;
       const by=py+448;
+      // 陣形選択（Phase 2）: 相性 魚鱗>鶴翼>長蛇>方円>魚鱗、雁行は均衡
+      c.atkFormation = c.atkFormation || 'gankou';
+      bs.push({x:px+60, y:py+300, w:900, h:40, _infoOnly:true, jp:'陣形（相性: 魚鱗▶鶴翼▶長蛇▶方円▶魚鱗）', en:'Formation (RPS cycle)', sz:20, ensz:12});
+      const fw=180, fgap=6;
+      FORMATION_ORDER.forEach((key,i)=>{
+        const f=FORMATIONS[key]; const sel=c.atkFormation===key;
+        bs.push({x:px+60+i*(fw+fgap), y:py+346, w:fw, h:78, jp:f.jp, en:f.en, sz:26, ensz:13,
+          accent: sel?'rgba(232,192,122,0.9)':'rgba(90,90,120,0.4)',
+          action:()=>{ c.atkFormation=key; }});
+      });
       const navalEligible = c.terrain==='coast' || c.terrain==='river' || c.terrain==='water';
       if (navalEligible){
         bs.push({x:px+60, y:by, w:214, h:92, jp:'\u91ce\u6226', en:'Field', sz:30, accent:'rgba(52,211,153,0.7)', action:g=>this._startBattleFromChoice(g,c,'field')});
@@ -8415,7 +8685,25 @@ class MapScene extends GameKit.Scene {
       sz:22, ensz:14, accent:'rgba(200,80,80,0.6)',
       on: dmyo.gold>=500 && !acted && shogunRel>=60 && prestige>=80 && this.selClan!=null,
       action:g=>this._shogunPropose(g,'seibatsu')
-    });
+    }); by+=106;
+    // 天下人ルート（Phase 3）: 副将軍・管領を経て征夷大将軍へ。就任後は惣無事令で天下静謐を布く。
+    if (!dmyo.tenka){
+      const isFuku = dmyo.kanoi_shogun==='副将軍' || dmyo.kanoi_shogun==='管領';
+      const provNeed=Math.ceil(DATA.provinces.length*0.45);
+      bs.push({x:bx, y:by, w:bw, h:92,
+        jp:'征夷大将軍宣下（5000貫・威信220/'+provNeed+'国）', en:'Claim Shogun (5000)',
+        sz:18, ensz:13, accent:'rgba(232,192,122,0.75)',
+        on: isFuku && dmyo.gold>=5000 && !acted && shogunRel>=90 && prestige>=220 && provCount>=provNeed,
+        action:g=>this._shogunPropose(g,'tenka')
+      });
+    } else {
+      bs.push({x:bx, y:by, w:bw, h:92,
+        jp:'惣無事令を発する（諸大名に服属を促す）', en:'Issue Sobuji Decree',
+        sz:19, ensz:13, accent:'rgba(120,200,160,0.75)',
+        on: dmyo._sobujiTurn!==st.turn,
+        action:g=>this._shogunPropose(g,'sobuji')
+      });
+    }
   }
   // ===== 武装勢力タブ: ボタン定義 =====
   _buildArmedForceButtons(bs, st, L){
@@ -8588,7 +8876,8 @@ class MapScene extends GameKit.Scene {
   _shogunPropose(game, kind){
     const st=this.state, me=st.playerDaimyo, dmyo=st.daimyo[me];
     const shogunRel=dmyo.shogunate_rel??10, prestige=dmyo.prestige??5;
-    if (dmyo._shogunActedTurn===st.turn){ this._flash('今季はすでに幕府と交渉しました','Already acted with the Bakufu'); return; }
+    // 惣無事令は天下人の政令であり、通常の幕府交渉枠（_shogunActedTurn）とは別枠（_sobujiTurn で管理）
+    if (kind!=='sobuji' && dmyo._shogunActedTurn===st.turn){ this._flash('今季はすでに幕府と交渉しました','Already acted with the Bakufu'); return; }
     if (kind==='request_role'){
       const kanoi=dmyo.kanoi_shogun??null;
       const currentRank=kanoi?SHOGUN_ROLE_RANKS.findIndex(r=>r.name===kanoi):-1;
@@ -8628,6 +8917,41 @@ class MapScene extends GameKit.Scene {
       const tname=daimyoDef(st,rid)?.nameJP||rid;
       game.audio.beep(300,0.18,'sawtooth');
       this._flash(tname+'家への征伐令が発出された（天下の大義名分）','Seibatsu decree issued against '+tname);
+    } else if (kind==='tenka'){
+      // 征夷大将軍宣下（Phase 3）: 副将軍・管領を経て、高威信・大版図で天下人となる
+      if (dmyo.tenka){ this._flash('既に征夷大将軍です','Already the Shogun'); return; }
+      const isFuku = dmyo.kanoi_shogun==='副将軍' || dmyo.kanoi_shogun==='管領';
+      if (!isFuku){ this._flash('まず管領・副将軍に昇る必要があります','Must first reach Kanrei / Deputy Shogun'); return; }
+      const provCount=ownedProvinces(st,me).length;
+      const provNeed=Math.ceil(DATA.provinces.length*0.45);
+      if (dmyo.gold<5000){ this._flash('金が足りません（5000貫）','Not enough gold (5000)'); return; }
+      if (prestige<220||provCount<provNeed||shogunRel<90){ this._flash('威信・支配国数・幕府信用が不足しています','Prestige / provinces / bakufu rel too low'); return; }
+      dmyo.gold-=5000; dmyo._shogunActedTurn=st.turn;
+      dmyo.tenka='shogun'; dmyo.kanoi_shogun='征夷大将軍';
+      dmyo.prestige=Math.min(300,(prestige+40));
+      game.audio.jingle([{f:392,d:0.12},{f:523,d:0.12},{f:659,d:0.22}]);
+      this._flash('征夷大将軍に宣下された！惣無事令で天下静謐を布く道が拓けた','Proclaimed Shogun! You may now issue the Sobuji decree');
+    } else if (kind==='sobuji'){
+      // 惣無事令（Phase 3）: 弱小・低威信の大名を服属させ、抗命者には征伐の大義名分を得る
+      if (!dmyo.tenka){ this._flash('征夷大将軍のみ発せます','Only the Shogun may issue this'); return; }
+      if (dmyo._sobujiTurn===st.turn){ this._flash('今季はすでに発令しました','Already issued this season'); return; }
+      dmyo._sobujiTurn=st.turn;
+      const myProv=ownedProvinces(st,me).length;
+      let submitted=0, defied=0;
+      daimyoOf(st).forEach(d=>{
+        if (d.id===me || !st.daimyo[d.id] || !st.daimyo[d.id].alive) return;
+        if (suzerainOf(st,d.id)===me) return; // 既に従属
+        const tp=st.daimyo[d.id];
+        const theirProv=ownedProvinces(st,d.id).length;
+        const submitChance=0.5 + (myProv-theirProv)*0.02 + ((dmyo.prestige??5)-(tp.prestige||5))*0.002 - theirProv*0.03;
+        if (srand(st) < submitChance){ tp.vassalOf=me; addRel(st,me,d.id,20); submitted++; }
+        else { tp.prestige=Math.max(0,(tp.prestige||5)-10); addRel(st,me,d.id,-10); tp.shogunate_rel=Math.max(0,(tp.shogunate_rel||10)-15); defied++; }
+      });
+      this._refreshPacified(st);
+      dmyo.prestige=Math.min(300,(dmyo.prestige??5)+10);
+      game.audio.jingle([{f:523,d:0.1},{f:659,d:0.14},{f:784,d:0.2}]);
+      this._flash('惣無事令を発令：'+submitted+'家が服属、'+defied+'家が抗命（静謐領で騒擾が鎮まる）','Sobuji issued: '+submitted+' submit, '+defied+' defy');
+      this._checkEnd(game);
     }
     this._save();
   }
@@ -8958,8 +9282,8 @@ class MapScene extends GameKit.Scene {
     });
     // 能力値
     const statY=infoY+110;
-    const statItems=[['統率',g.stats.tou],['武勇',g.stats.bu],['知略',g.stats.chi],['政治',g.stats.sei],['忠誠',gs.loyalty]];
-    const statColW=(pw-80)/5;
+    const statItems=[['統率',g.stats.tou],['武勇',g.stats.bu],['知略',g.stats.chi],['政治',g.stats.sei],['忠誠',gs.loyalty],['野心',(gs.ambition!=null?gs.ambition:deriveAmbition(g))]];
+    const statColW=(pw-80)/statItems.length;
     statItems.forEach((s,i)=>{
       const sx=px+40+i*statColW;
       T(ctx, s[0], sx+statColW/2, statY, {size:26, color:'#b7a06a', align:'center'});
@@ -9094,7 +9418,7 @@ class MapScene extends GameKit.Scene {
     else if (ov.type==='historicalEvents') this._drawHistoricalEvents(ctx, ov.page||0);
     else if (ov.type==='historicalEvent') this._drawHistoricalEvent(ctx, ov.event);
     else if (ov.type==='turnSummary') this._drawTurnSummary(ctx, ov.data);
-    else if (ov.type==='gameover') this._drawGameOver(ctx, ov.win);
+    else if (ov.type==='gameover') this._drawGameOver(ctx, ov.win, ov.seihitsu);
     else if (ov.type==='ploy') this._drawPloy(ctx);
     else if (ov.type==='defense') this._drawDefense(ctx, ov.data);
     else if (ov.type==='allGenerals') this._drawAllGenerals(ctx);
@@ -9555,15 +9879,20 @@ class MapScene extends GameKit.Scene {
       if (log.length>9) T(ctx, '…他 '+(log.length-9)+' 件', px+50, py+130+9*42, {size:18, color:'#7d93ab'});
     }
   }
-  _drawGameOver(ctx, win){
+  _drawGameOver(ctx, win, seihitsu){
     const st=this.state;
     const px=W/2-420, py=H/2-360, pw=840, ph=720;
     GameKit.UI.glassPanel(ctx, px, py, pw, ph, {radius:24, fill:'rgba(12,18,32,0.98)', stroke: win?'rgba(232,192,122,0.65)':'rgba(248,113,113,0.55)'});
-    T(ctx, win?'天下統一！':'落 城', px+pw/2, py+64, {size:64, weight:'bold', color: win?'#e8c07a':'#f87171', align:'center', shadow:true});
-    T(ctx, win?'Unification of the Realm':'Castle Fallen', px+pw/2, py+140, {size:24, weight:'bold', color: win?'rgba(232,192,122,0.8)':'rgba(248,113,113,0.8)', align:'center'});
+    const winTitleJP = seihitsu?'天下静謐！':'天下統一！';
+    const winTitleEN = seihitsu?'The Realm at Peace':'Unification of the Realm';
+    T(ctx, win?winTitleJP:'落 城', px+pw/2, py+64, {size:64, weight:'bold', color: win?'#e8c07a':'#f87171', align:'center', shadow:true});
+    T(ctx, win?winTitleEN:'Castle Fallen', px+pw/2, py+140, {size:24, weight:'bold', color: win?'rgba(232,192,122,0.8)':'rgba(248,113,113,0.8)', align:'center'});
     const pd=daimyoDef(st, st.playerDaimyo);
     const clan=(pd?pd.nameJP:'')+'家';
-    T(ctx, win? (clan+'が乱世を制した！ / '+clan+' conquered the realm!') : (clan+'は滅亡した… / '+clan+' has fallen.'), px+pw/2, py+190, {size:23, color:'#cbd5e1', align:'center'});
+    const winMsg = seihitsu
+      ? (clan+'が征夷大将軍として天下を静謐に導いた！ / '+clan+' pacified the realm as Shogun!')
+      : (clan+'が乱世を制した！ / '+clan+' conquered the realm!');
+    T(ctx, win? winMsg : (clan+'は滅亡した… / '+clan+' has fallen.'), px+pw/2, py+190, {size:22, color:'#cbd5e1', align:'center'});
     // 戦績サマリー
     const startYear=(DATA.scenarios.find(s=>s.id===st.scenarioId)||{}).year || st.year;
     const owned=ownedProvinces(st, st.playerDaimyo).length;
@@ -9698,8 +10027,16 @@ function runStrategicAI(st, d, log){
         continue;
       }
       // 出陣（自動解決）
-      const send = Math.round((prov.soldiers-200)*0.8);
-      if (send<300) continue;
+      const send0 = Math.round((prov.soldiers-200)*0.8);
+      if (send0<300) continue;
+      // 支配圏の反応（攪乱で出兵中止 / 途上損耗）
+      const zr = computeZoneReactions(st, d.id, pid, best, send0);
+      if (zr.disrupt){
+        prov.hasActed=true;
+        log.push(DATA.provById[pid].nameJP+'の'+d.nameJP+'勢は'+(zr.notes[0]?zr.notes[0].jp:'攪乱され')+'、出兵を取りやめた  /  '+d.nameEN+"'s march from "+DATA.provById[pid].nameEN+' was disrupted');
+        continue;
+      }
+      const send = Math.max(300, send0 - zr.lost);
       const gens = prov.generals.filter(g=>st.generals[g].alive).slice();
       const tp=st.provinces[best];
       const ctx={
@@ -9708,7 +10045,8 @@ function runStrategicAI(st, d, log){
         defender:{daimyo:tp.owner, family:tp.owner||'', soldiers:tp.soldiers, generals:tp.generals.filter(g=>st.generals[g].alive).slice(), castleLevel:tp.castleLevel},
         terrain:DATA.provById[best].terrain,
       };
-      prov.soldiers-=send; prov.hasActed=true;
+      prov.soldiers-=send0; prov.hasActed=true;
+      if (zr.lost>0 && zr.notes.length) log.push(DATA.provById[best].nameJP+'へ向かう'+d.nameJP+'勢を'+zr.notes.map(n=>n.jp).join('、')+'  /  '+zr.notes.map(n=>n.en).join('; '));
       gens.forEach(g=>{ const i=prov.generals.indexOf(g); if(i>=0) prov.generals.splice(i,1); });
       attacks++;
       // 標的がプレイヤーの洲なら即時解決せず、防衛戦キューへ退避（プレイヤーが手動/自動を選ぶ）
@@ -9722,6 +10060,8 @@ function runStrategicAI(st, d, log){
         atkSoldiers:send, atkGenerals:gens, atkFamily:d.id,
         defSoldiers:tp.soldiers, defGenerals:ctx.defender.generals, defFamily:tp.owner||'',
         year:st.year, castleLevel:tp.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
+        atkFormation: aiFormationFor(st, d.id, true),
+        defFormation: tp.owner ? aiFormationFor(st, tp.owner, false) : 'gankou',
       });
       const defDef = tp.owner?daimyoDef(st,tp.owner):null;
       const defenderName = defDef?defDef.nameJP:'空白';
@@ -10526,6 +10866,9 @@ class BattleScene extends GameKit.Scene {
     // プレイヤーが操作する側（攻撃時='atk'、防衛時='def'）
     this.playerSide = c.playerSide || 'atk';
     this.aiSide = this.playerSide==='atk' ? 'def' : 'atk';
+    // 陣形（Phase 2）: 攻守それぞれの陣形。守備側がAIなら性格から選定。
+    this.atkFormation = c.atkFormation || 'gankou';
+    this.defFormation = c.defFormation || (c.defender && c.defender.daimyo ? aiFormationFor(this.state, c.defender.daimyo, false) : 'gankou');
     // 水軍ボーナス（沿岸戦のみ。プレイヤー側の全部隊に加算。OS-03）
     this.navalBonus = (c.navalBonus!=null ? c.navalBonus : navalBonusFor(this.state, this.state.playerDaimyo, c.dstId)) || 0;
     this.isNaval = this.navalBonus>0;
@@ -10998,9 +11341,13 @@ class BattleScene extends GameKit.Scene {
     // 水軍支援（沿岸戦）: プレイヤー側の攻防に加算（OS-03）
     const navAtk = (this.navalBonus && atk.side===this.playerSide) ? (1+this.navalBonus) : 1;
     const navDef = (this.navalBonus && def.side===this.playerSide) ? (1+this.navalBonus) : 1;
-    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type)*commandAtk*navAtk;
+    // 陣形補正（Phase 2）: 攻撃する側の atk、受ける側の def を適用
+    const fmA=FORMATIONS[atk.side==='atk'?this.atkFormation:this.defFormation];
+    const fmD=FORMATIONS[def.side==='atk'?this.atkFormation:this.defFormation];
+    const formAtk=fmA?fmA.atk:1, formDef=fmD?fmD.def:1;
+    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type)*commandAtk*navAtk*formAtk;
     const commandDef=def._shieldWall?1.35:1;
-    const baseDef = def.count*ud.def*(1+def.stat.tou/200)*terrDef*castle*fort*commandDef*navDef;
+    const baseDef = def.count*ud.def*(1+def.stat.tou/200)*terrDef*castle*fort*commandDef*navDef*formDef;
     const ratio = baseAtk/Math.max(1,baseDef);
     // 致死性は中庸に。兵力・兵科相性・地形が効きつつ、技量で覆せる余地を残す
     let defLossFrac = clamp(0.13*ratio,0.03,0.5)*(0.85+Math.random()*0.3);
@@ -11200,6 +11547,7 @@ class BattleScene extends GameKit.Scene {
       defSoldiers:dS, defGenerals:def.map(s=>s.gen).filter(Boolean), defFamily:this.ctx.defender.family,
       year:this.ctx.year, castleLevel:this.ctx.defender.castleLevel, terrain:this.ctx.terrain, rngFn:()=>srand(this.state),
       atkNaval: this.playerSide==='atk'?this.navalBonus:0, defNaval: this.playerSide==='def'?this.navalBonus:0,
+      atkFormation: this.atkFormation, defFormation: this.defFormation,
     });
     this._finishWithCounts(game, res.attackerWins, res.atkSurvivors, res.defSurvivors, '自動解決 / Auto');
   }
