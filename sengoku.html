@@ -4354,6 +4354,10 @@ function applySengokuExpansions(){
     activeDaimyoDefs.forEach(d=>{ const cur=scn.daimyo.find(x=>x.id===d.id); if(cur) Object.assign(cur,d); else scn.daimyo.push({...d}); });
     scn.own = scn.own || {}; Object.assign(scn.own, owners);
     if (scn.id===1574) scn.own.nishi_tosa='chosokabe';
+    // シナリオ別の史実補正: 共通owners適用後に城主を上書き（滅亡大名の領国を征服者へ移す）
+    if (scn.ownFinal) Object.assign(scn.own, scn.ownFinal);
+    // 領国を1つも持たない大名（当該シナリオで既に滅亡/未成立）を除外する
+    { const _owned=new Set(Object.values(scn.own)); scn.daimyo = scn.daimyo.filter(d=>_owned.has(d.id)); }
     scn.place = scn.place || {};
     Object.keys(places).forEach(pid=>{ scn.place[pid] = places[pid].slice(); });
     placeClanRetainers(scn, clanExtraRetainers);
@@ -4368,6 +4372,22 @@ function applySengokuExpansions(){
       if(!list.includes(g.id)) list.push(g.id);
     });
   });
+  // シナリオ別の城名称上書き（例: 1582 観音寺城→安土城）の基準スナップショット
+  BASE_CASTLE_NAMES = Object.assign({}, CASTLE_NAMES);
+}
+// シナリオごとの城名称をCASTLE_NAMESへ反映する（未指定キーはベース名へ戻す）
+let BASE_CASTLE_NAMES = null;
+function applyScenarioCastleNames(scenarioId){
+  if (!BASE_CASTLE_NAMES) return;
+  (DATA.scenarios||[]).forEach(s=>{
+    if (!s.castleNames) return;
+    Object.keys(s.castleNames).forEach(pid=>{
+      if (BASE_CASTLE_NAMES[pid]!==undefined) CASTLE_NAMES[pid]=BASE_CASTLE_NAMES[pid];
+      else delete CASTLE_NAMES[pid];
+    });
+  });
+  const scn=(DATA.scenarios||[]).find(s=>s.id===scenarioId);
+  if (scn && scn.castleNames) Object.assign(CASTLE_NAMES, scn.castleNames);
 }
 function drawGeneralPortrait(ctx, gid, x, y, size, opts={}){
   const slot = ASSETS.portraitSlots[gid];
@@ -4939,11 +4959,14 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
     }
     state.provinces[p.id] = prov;
   });
-  // place lords at capitals
+  // place lords at capitals（居城を領有していない場合は領有する洲へ配置）
   scn.daimyo.forEach(d=>{
     const g = state.generals[d.lord];
-    if (g){ g.loyalty=100; g.location=d.capital; g.daimyo=d.id;
-      if (state.provinces[d.capital]) state.provinces[d.capital].generals.push(d.lord); }
+    if (!g) return;
+    let cap = d.capital;
+    if (scn.own[cap]!==d.id){ cap = Object.keys(scn.own).find(pid=>scn.own[pid]===d.id) || cap; }
+    g.loyalty=100; g.location=cap; g.daimyo=d.id;
+    if (state.provinces[cap]) state.provinces[cap].generals.push(d.lord);
   });
   // place retainers
   for (const pid in scn.place){
@@ -5631,7 +5654,7 @@ class ScenarioSelectScene extends GameKit.Scene {
  * MapScene — 戦略マップ（ハブ）
  * =================================================================== */
 class MapScene extends GameKit.Scene {
-  constructor(state){ super(); this.state=state; }
+  constructor(state){ super(); this.state=state; applyScenarioCastleNames(state.scenarioId); }
   enter(game){
     setCanvasViewportMode('fit');
     BGM.setMood('map'); BGM.start();
