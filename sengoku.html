@@ -11352,7 +11352,11 @@ class BattleScene extends GameKit.Scene {
       this._select(s);
     }
   }
-  _select(s){ this.selected=s; this._computeRange(s); }
+  _select(s){
+    // 忍者潜入で撹乱された自軍隊はそのラウンド行動不能（選択不可）
+    if (s && s.side===this.playerSide && s._stunT>0){ this._flash('この隊は忍びに撹乱され行動不能 / Unit disrupted by infiltration'); this.selected=null; this.reach={}; this.targets={}; return; }
+    this.selected=s; this._computeRange(s);
+  }
   _computeRange(s){
     this.reach={}; this.targets={}; this.wallTargets={}; this.objectTargets={};
     // 攻撃対象（射程内の敵）
@@ -11484,6 +11488,8 @@ class BattleScene extends GameKit.Scene {
     if (atk._ambushStrike){ commandAtk*=1.6; atk._ambushStrike=false; }
     // 混乱（偽情報・夜襲・霧隠れ等の謀略）を受けた寄手は攻撃力が鈍る
     if (atk._confusedT>0) commandAtk*=0.7;
+    // 士気鼓舞（太鼓・法螺貝）を受けた守備隊は攻撃力上昇
+    if (atk.side==='def' && this._defRallyT>0) commandAtk*=1.2;
     // 水軍支援（沿岸戦）: プレイヤー側の攻防に加算（OS-03）
     const navAtk = (this.navalBonus && atk.side===this.playerSide) ? (1+this.navalBonus) : 1;
     const navDef = (this.navalBonus && def.side===this.playerSide) ? (1+this.navalBonus) : 1;
@@ -11602,6 +11608,12 @@ class BattleScene extends GameKit.Scene {
       {id:'odawara',    match:'小田原', jp:'小田原城「総構え」',     en:'Odawara: Great outer rampart',    defBuff:1.22, signaturePloy:null},
       {id:'gassan',     match:'月山富田', jp:'月山富田城「難攻不落」', en:'Gassan-Tomita: Impregnable',      defBuff:1.25, signaturePloy:null},
       {id:'iwamura',    match:'岩村',    jp:'岩村城「霧隠れ」',       en:'Iwamura: Veiled in mist',         defBuff:1.08, signaturePloy:'mist'},
+      {id:'osaka',      match:'大坂',    jp:'大坂城「難攻不落の巨城」', en:'Osaka: The great impregnable keep', defBuff:1.28, signaturePloy:null},
+      {id:'osaka2',     match:'大阪',    jp:'大坂城「難攻不落の巨城」', en:'Osaka: The great impregnable keep', defBuff:1.28, signaturePloy:null},
+      {id:'gifu',       match:'岐阜',    jp:'岐阜城「金華山の要害」',   en:'Gifu: The Kinkazan stronghold',    defBuff:1.16, signaturePloy:'logs'},
+      {id:'azuchi',     match:'安土',    jp:'安土城「天下の名城」',     en:'Azuchi: Castle of the realm',      defBuff:1.18, signaturePloy:null},
+      {id:'nanao',      match:'七尾',    jp:'七尾城「能登の堅城」',     en:'Nanao: Noto’s fastness',           defBuff:1.15, signaturePloy:null},
+      {id:'himeji',     match:'姫路',    jp:'姫路城「白鷺の堅城」',     en:'Himeji: The White Heron fortress', defBuff:1.17, signaturePloy:null},
     ];
     const sig=S.find(s=>name.indexOf(s.match)>=0);
     if (!sig) return;
@@ -11755,27 +11767,67 @@ class BattleScene extends GameKit.Scene {
       atkers.slice().sort((a,b)=>b.count-a.count).slice(0,2).forEach(a=>{ a._confusedT=2; this._spawnConfuse(a); });
       this._flash('「援軍到来」の偽報！ 寄手混乱 / Disinformation: enemy in disorder'); game.audio.beep(240,0.14,'sawtooth'); fire('disinfo',3); return;
     }
-    // ⑤ 鉄砲一斉射撃（櫓の鉄砲が射程内の寄手を停止・繰り返し）
+    // ⑤ 忍者潜入（round>=2・1回・武将持ちの寄手1隊を撹乱して行動不能に）
+    if (!this._ploysUsed.ninja && this.round>=2){
+      const tgt=atkers.filter(a=>a.gen).sort((a,b)=>b.count-a.count)[0] || atkers.slice().sort((a,b)=>b.count-a.count)[0];
+      if (tgt){ tgt._stunT=1; tgt._confusedT=Math.max(tgt._confusedT||0,1); this._spawnConfuse(tgt);
+        const nm=(tgt.gen && !/隊$/.test(tgt.name))?tgt.name+'隊':tgt.name;
+        this._flash('忍者潜入！ '+nm+'を撹乱し行動不能 / Ninja infiltration: unit disrupted');
+        game.audio.beep(180,0.16,'sawtooth'); fire('ninja',3); return; }
+    }
+    // ⑥ 火矢一斉射撃（城門周辺に群がる寄手を炎上させる・1回）
+    if (!this._ploysUsed.fireArrow && this.weather!=='rain'){
+      let gc=null,gr=null,grp=null;
+      for (const k in this.castleCells){ if (this.castleCells[k].kind!=='gate') continue; const [c,r]=k.split(',').map(Number); const g=near(c,r,2); if (g.length && (!grp||g.length>grp.length)){ grp=g; gc=c; gr=r; } }
+      if (grp && grp.length){
+        this._flash('火矢一斉射撃！ 城門周辺を炎上 / Fire-arrow volley!');
+        // 城門セルと周囲を炎上表示
+        [[gc,gr],...hexNeighbors(gc,gr)].forEach(([c,r])=>{ const cell=this.castleCells[c+','+r]; if (cell) cell.flameT=2.6; });
+        grp.forEach(a=>this._ployHit(game,a,0.12,true,true)); game.audio.noise(0.22,0.3); this._cleanupStacks(); fire('fireArrow',3); return;
+      }
+    }
+    // ⑦ 城兵の士気鼓舞（太鼓・法螺貝で自軍鼓舞＋寄手威圧・round>=2・繰り返し）
+    if (this.round>=2 && !(this._defRallyT>0)){
+      this._defRallyT=2; // このラウンドの適用分＋次の自軍ターンに残す
+      if (advanced){ advanced._confusedT=Math.max(advanced._confusedT||0,1); this._spawnConfuse(advanced); }
+      this._flash('太鼓・法螺貝で士気鼓舞！ 城兵奮い立つ / War drums: garrison rallies'); game.audio.beep(160,0.2,'triangle'); fire('rally',3); return;
+    }
+    // ⑧ 内応工作（round>=4・1回・寄手1隊に寝返りを誘い兵を離反させる）
+    if (!this._ploysUsed.naiou && this.round>=4){
+      const tgt=atkers.slice().sort((a,b)=>a.count-b.count)[0]; // 兵の少ない（動揺しやすい）隊
+      if (tgt){ const loss=Math.max(1,Math.round(tgt.count*0.15)); tgt.count=Math.max(1,tgt.count-loss); tgt._confusedT=Math.max(tgt._confusedT||0,1);
+        this._spawnHitFx(tgt,loss,false); this._spawnConfuse(tgt);
+        this._flash('内応工作…寄手に寝返り 兵-'+loss+' / Defection sown among the enemy'); this._cleanupStacks(); fire('naiou',4); return; }
+    }
+    // ⑨ 丸太落とし（山城・要害城のみ・坂を登る寄手へ範囲攻撃・繰り返し）
+    if (this.castleType==='yamajiro' || sigPloy==='logs'){
+      const slope=atkers.filter(a=>hexNeighbors(a.col,a.row).some(([nc,nr])=>{ const cc=this.castleCells[nc+','+nr]; return cc&&(cc.kind==='stonewall'||cc.kind==='palisade'||cc.kind==='gate'); }));
+      if (slope.length){ this._flash('丸太落とし！ 坂の寄手へ / Rolling logs down the slope!'); slope.forEach(a=>this._ployHit(game,a,0.11,false)); game.audio.noise(0.24,0.32); this._cleanupStacks(); fire('logs',2); return; }
+    }
+    // ⑩ 鉄砲一斉射撃（櫓の鉄砲が射程内の寄手を停止・繰り返し）
     if (gunCount>0){
       const tgt=atkers.filter(a=>this.yaguraPosts.some(([pc,pr])=>hexDist(a.col,a.row,pc,pr)<=3)).sort((a,b)=>b.count-a.count)[0];
       if (tgt){ this._flash('櫓より鉄砲一斉射撃！ 突撃を阻む / Volley from the towers!'); this._ployHit(game,tgt,0.08+0.02*gunCount,true); game.audio.beep(900,0.06,'square'); this._cleanupStacks(); fire('volley',2); return; }
     }
-    // ⑥ 城固有: 霧隠れ（岩村・繰り返し・寄手を混乱させ視界を奪う）
+    // ⑪ 城固有: 霧隠れ（岩村・繰り返し・寄手を混乱させ視界を奪う）
     if (sigPloy==='mist' && advanced){
       advanced._confusedT=Math.max(advanced._confusedT||0,1); this._spawnConfuse(advanced);
       this._flash('霧隠れ…寄手の目を眩ます / Veiled in mist'); fire('mist',2); return;
     }
   }
-  _ployHit(game, target, frac, confuse){
+  _ployHit(game, target, frac, confuse, fire){
     if (!target) return;
     const loss=Math.max(1,Math.round(target.count*frac)); target.count=Math.max(0,target.count-loss);
     if (confuse) target._confusedT=Math.max(target._confusedT||0,1);
     this._spawnHitFx(target, loss, true);
+    if (fire){ const [x,y]=hexCenter(target.col,target.row); for(let i=0;i<8;i++){ const a=Math.random()*Math.PI*2, sp=50+Math.random()*130; this.sparks.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-30,life:0.35+Math.random()*0.3,color:Math.random()<0.5?'#f97316':'#fde047',r:2+Math.random()*3}); } }
   }
   _spawnConfuse(a){ const [x,y]=hexCenter(a.col,a.row); this.floaters.push({x,y:y-HEX.size*0.5,vy:-40,life:1.3,text:'混乱',color:'#c4b5fd',size:26}); }
   _runEnemyPhase(game){
-    // 混乱の残存ターンを1減らす（謀略適用の前に行い、この局面で新たに付与した混乱は次の自軍ターンまで残す）
-    this.stacks.forEach(s=>{ if (s._confusedT>0) s._confusedT--; });
+    // 状態異常の残存ターンを1減らす（謀略適用の前に行い、この局面で新たに付与した効果は次の自軍ターンまで残す）
+    this.stacks.forEach(s=>{ if (s._confusedT>0) s._confusedT--; if (s._stunT>0) s._stunT--; });
+    if (this._defRallyT>0) this._defRallyT--; // 士気鼓舞の残存
+
     // 攻城戦の守備AI: ユニット行動の前に「謀略」を1つ仕掛ける（夜襲・偽情報・偽降伏・鉄砲一斉射撃・城固有能力）
     if (this.siege && this.aiSide==='def') this._siegePloyTurn(game);
     // AI側（プレイヤーが攻撃なら守備AI、プレイヤーが防衛なら攻撃AI）greedy
@@ -11869,7 +11921,7 @@ class BattleScene extends GameKit.Scene {
   // 委任の1ステップ: 未行動の自軍部隊を1つ選んで行動させる。全部隊が行動済みならフェイズ終了
   _delegateStep(game){
     if (this.over || this.phase!=='player') return;
-    const unit=this.stacks.find(s=>s.side===this.playerSide && !(s.hasMoved && s.hasAttacked));
+    const unit=this.stacks.find(s=>s.side===this.playerSide && !(s.hasMoved && s.hasAttacked) && !(s._stunT>0));
     if (!unit){ this._endPlayerPhase(game); return; }
     this._aiActUnit(game, unit);
     // 行動の余地がなくても行動済みにして、同じ部隊で無限ループしないようにする
@@ -12244,8 +12296,9 @@ class BattleScene extends GameKit.Scene {
       T(ctx, s.count+'', x, y+HEX.size*0.20, {size:24, color:'#e8eef6', align:'center', baseline:'middle'});
       // 武将名
       T(ctx, s.name, x, y+HEX.size*0.80, {size:20, color: s.side==='atk'?'#9ec3ff':'#ffb3b3', align:'center', baseline:'middle'});
-      // 混乱（謀略を受けた寄手）マーカー
-      if (s._confusedT>0) T(ctx,'混乱',x,y-HEX.size*0.52,{size:16,weight:'bold',color:'#c4b5fd',align:'center',baseline:'middle',shadow:true});
+      // 状態異常マーカー（行動不能＞混乱の優先で1つ表示）
+      if (s._stunT>0) T(ctx,'撹乱',x,y-HEX.size*0.52,{size:16,weight:'bold',color:'#fca5a5',align:'center',baseline:'middle',shadow:true});
+      else if (s._confusedT>0) T(ctx,'混乱',x,y-HEX.size*0.52,{size:16,weight:'bold',color:'#c4b5fd',align:'center',baseline:'middle',shadow:true});
     });
   }
   _drawHUD(ctx){
