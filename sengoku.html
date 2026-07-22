@@ -11395,6 +11395,7 @@ class BattleScene extends GameKit.Scene {
         if (terr==='sky') return; // 戦場外(地平線より上)は進入不可
         if (terr==='water' && !this.naval) return;
         let cost=1; if (terr==='forest'||terr==='mountain') cost=2; if (terr==='river') cost=2;
+        if (this.floodCells && this.floodCells[nc+','+nr]) cost=Math.max(cost,3); // 水攻めの浸水マスは足を取られる
         const nd=cd+cost;
         if (nd<=mp && (dist[nc+','+nr]===undefined || nd<dist[nc+','+nr])){ dist[nc+','+nr]=nd; pq.push([nd,nc,nr]); }
       });
@@ -11543,7 +11544,7 @@ class BattleScene extends GameKit.Scene {
      ⑤ 逆襲: 城内へ誘い込んだ寄手へ足軽/騎馬が出撃（誘い込み戦法）
      真田家の武将が守将にいれば①〜⑤を増強する。 */
   _setupSiegeDefense(){
-    this.yaguraPosts=[]; this.pitTraps={}; this.sanadaGuile=false; this._perimeter=3;
+    this.yaguraPosts=[]; this.pitTraps={}; this.floodCells={}; this.sanadaGuile=false; this._perimeter=3;
     this._castleDefBuff=1; this.castleSignature=null; this._ployLog=[];
     if (!this.siege || !this.keepHex) return;
     const defenders=this.stacks.filter(s=>s.side==='def');
@@ -11584,15 +11585,27 @@ class BattleScene extends GameKit.Scene {
       const occ=this.stackAt(pc,pr); if (occ&&occ!==s){ occ.col=s.col; occ.row=s.row; }
       s.col=pc; s.row=pr; s.castlePost='yagura';
     });
-    // ③ 石落とし: 城門・城壁に隣接した足軽/騎馬を highGround に（隣接した寄手へ毎ラウンド落石）
-    melee.forEach(s=>{
-      if (s.castlePost) return;
+    // ③ 石落とし: 城門・城壁際の高所へ足軽/騎馬を確実に配置（隣接した寄手へ毎ラウンド落石）。
+    //   1隊は伏兵用に温存し、残りを城門隣接の内側マス（wallPosts）へ登らせて highGround にする。
+    const wallPosts=this._designateWallPosts();
+    const freeMelee=melee.filter(s=>!s.castlePost);
+    // 石落としを優先確保。伏兵は足軽/騎馬に余剰がある時（2隊以上）だけ温存する。
+    const ambusher = freeMelee.length>=2 ? (freeMelee.find(s=>s.type==='spear') || freeMelee[0]) : null;
+    let wpI=0;
+    freeMelee.forEach(s=>{
+      if (s===ambusher) return;
+      if (wpI>=wallPosts.length) return;
+      const [pc,pr]=wallPosts[wpI++];
+      const occ=this.stackAt(pc,pr); if (occ&&occ!==s){ occ.col=s.col; occ.row=s.row; }
+      s.col=pc; s.row=pr; s.highGround=true; s.castlePost='wall';
+    });
+    // 保険: 既に城壁隣接に湧いた残りの足軽/騎馬も highGround に
+    melee.forEach(s=>{ if (s.castlePost) return;
       const nearWall=hexNeighbors(s.col,s.row).some(([nc,nr])=>{ const cc=this.castleCells&&this.castleCells[nc+','+nr]; return cc&&(cc.kind==='wall'||cc.kind==='stonewall'||cc.kind==='gate'); });
       if (nearWall){ s.highGround=true; s.castlePost='wall'; }
     });
     // ④ 伏兵: 足軽1隊を寄手の進路に潜ませる（露見まで描画を隠す）
-    const ambusher = melee.find(s=>!s.castlePost && s.type==='spear') || melee.find(s=>!s.castlePost);
-    if (ambusher){ const spot=this._findAmbushSpot(); if (spot){ ambusher.col=spot[0]; ambusher.row=spot[1]; ambusher.ambush=true; ambusher.castlePost='ambush'; } }
+    if (ambusher && !ambusher.castlePost){ const spot=this._findAmbushSpot(); if (spot){ ambusher.col=spot[0]; ambusher.row=spot[1]; ambusher.ambush=true; ambusher.castlePost='ambush'; } }
     // ⑤ 落とし穴: 寄手の進軍路に隠し穴を仕掛ける（真田家・霧隠れの城では増設）
     const extraPit=(this.castleSignature&&this.castleSignature.id==='iwamura')?1:0;
     this._placePitTraps((this.sanadaGuile?3:2)+extraPit);
@@ -11668,6 +11681,28 @@ class BattleScene extends GameKit.Scene {
   _isInsideCastle(c,r){
     if (!this.siege || !this.keepHex) return false;
     return hexDist(c,r,this.keepHex[0],this.keepHex[1]) <= (this._perimeter||3);
+  }
+  // 石落とし要員を置く「城門/城壁際の内側マス」。城門隣接を優先し、櫓と重複しないものを選ぶ。
+  _designateWallPosts(){
+    const yset={}; (this.yaguraPosts||[]).forEach(([c,r])=>{ yset[c+','+r]=1; });
+    const seen={}; const gatePosts=[], wallPosts=[];
+    for (const k in this.castleCells){
+      const cell=this.castleCells[k]; if (!cell) continue;
+      const isGate=cell.kind==='gate', isWall=(cell.kind==='wall'||cell.kind==='stonewall');
+      if (!isGate && !isWall) continue;
+      const [wc,wr]=k.split(',').map(Number);
+      hexNeighbors(wc,wr).forEach(([nc,nr])=>{
+        const key=nc+','+nr; if (seen[key]||yset[key]) return; seen[key]=1;
+        if (nc<0||nc>=HEX.cols||nr<0||nr>=HEX.rows) return;
+        if (this._cellObstructs(nc,nr)) return;
+        const t=this.terrainMap[key]; if (t==='sky'||t==='water') return;
+        if (nc===this.keepHex[0]&&nr===this.keepHex[1]) return;
+        (isGate?gatePosts:wallPosts).push([nc,nr]);
+      });
+    }
+    // 城門際を優先、次に城壁際。寄手に面した前方（row大）を優先（外郭の高所ほど落石が効く）。
+    const byFront=(a,b)=>(b[1]-a[1]) || (hexDist(a[0],a[1],this.keepHex[0],this.keepHex[1])-hexDist(b[0],b[1],this.keepHex[0],this.keepHex[1]));
+    return gatePosts.sort(byFront).concat(wallPosts.sort(byFront)).slice(0,3);
   }
   _nearestFreeYagura(e){
     let best=null, bd=1e9;
@@ -11786,11 +11821,25 @@ class BattleScene extends GameKit.Scene {
         grp.forEach(a=>this._ployHit(game,a,0.12,true,true)); game.audio.noise(0.22,0.3); this._cleanupStacks(); fire('fireArrow',3); return;
       }
     }
-    // ⑦ 城兵の士気鼓舞（太鼓・法螺貝で自軍鼓舞＋寄手威圧・round>=2・繰り返し）
-    if (this.round>=2 && !(this._defRallyT>0)){
-      this._defRallyT=2; // このラウンドの適用分＋次の自軍ターンに残す
-      if (advanced){ advanced._confusedT=Math.max(advanced._confusedT||0,1); this._spawnConfuse(advanced); }
-      this._flash('太鼓・法螺貝で士気鼓舞！ 城兵奮い立つ / War drums: garrison rallies'); game.audio.beep(160,0.2,'triangle'); fire('rally',3); return;
+    // ⑦ 水攻め（堤防決壊・round>=3・1回・寄手が最も密集する前面一帯を浸水させ足を奪う）
+    if (!this._ploysUsed.flood && this.round>=3){
+      const rowCount={}; atkers.forEach(a=>{ rowCount[a.row]=(rowCount[a.row]||0)+1; });
+      let fr=null,mx=0; for (const r in rowCount){ if (rowCount[r]>mx){ mx=rowCount[r]; fr=+r; } }
+      if (fr!=null){
+        let n=0;
+        for (let c=0;c<HEX.cols;c++) for (const rr of [fr,fr-1,fr+1]){
+          if (rr<0||rr>=HEX.rows) continue;
+          if (this.castleCells[c+','+rr]) continue;               // 城郭セルは浸水させない
+          const t=this.terrainMap[c+','+rr]; if (t!=='plain'&&t!=='forest') continue;
+          if (Math.abs(c-this.keepHex[0])<=0 && Math.abs(rr-this.keepHex[1])<=1) continue;
+          this.floodCells[c+','+rr]={t:3}; n++;
+        }
+        if (n>0){
+          this._flash('堤防決壊・水攻め！ 寄手の足を奪う / Flood: the enemy is mired!');
+          atkers.forEach(a=>{ if (this.floodCells[a.col+','+a.row]) this._ployHit(game,a,0.08,true); });
+          game.audio.noise(0.3,0.42); this._cleanupStacks(); fire('flood',4); return;
+        }
+      }
     }
     // ⑧ 内応工作（round>=4・1回・寄手1隊に寝返りを誘い兵を離反させる）
     if (!this._ploysUsed.naiou && this.round>=4){
@@ -11799,17 +11848,23 @@ class BattleScene extends GameKit.Scene {
         this._spawnHitFx(tgt,loss,false); this._spawnConfuse(tgt);
         this._flash('内応工作…寄手に寝返り 兵-'+loss+' / Defection sown among the enemy'); this._cleanupStacks(); fire('naiou',4); return; }
     }
-    // ⑨ 丸太落とし（山城・要害城のみ・坂を登る寄手へ範囲攻撃・繰り返し）
+    // ⑨ 城兵の士気鼓舞（太鼓・法螺貝で自軍鼓舞＋寄手威圧・round>=2・繰り返し。一度きりの謀略の後に回す）
+    if (this.round>=2 && !(this._defRallyT>0)){
+      this._defRallyT=2; // このラウンドの適用分＋次の自軍ターンに残す
+      if (advanced){ advanced._confusedT=Math.max(advanced._confusedT||0,1); this._spawnConfuse(advanced); }
+      this._flash('太鼓・法螺貝で士気鼓舞！ 城兵奮い立つ / War drums: garrison rallies'); game.audio.beep(160,0.2,'triangle'); fire('rally',3); return;
+    }
+    // ⑩ 丸太落とし（山城・要害城のみ・坂を登る寄手へ範囲攻撃・繰り返し）
     if (this.castleType==='yamajiro' || sigPloy==='logs'){
       const slope=atkers.filter(a=>hexNeighbors(a.col,a.row).some(([nc,nr])=>{ const cc=this.castleCells[nc+','+nr]; return cc&&(cc.kind==='stonewall'||cc.kind==='palisade'||cc.kind==='gate'); }));
       if (slope.length){ this._flash('丸太落とし！ 坂の寄手へ / Rolling logs down the slope!'); slope.forEach(a=>this._ployHit(game,a,0.11,false)); game.audio.noise(0.24,0.32); this._cleanupStacks(); fire('logs',2); return; }
     }
-    // ⑩ 鉄砲一斉射撃（櫓の鉄砲が射程内の寄手を停止・繰り返し）
+    // ⑪ 鉄砲一斉射撃（櫓の鉄砲が射程内の寄手を停止・繰り返し）
     if (gunCount>0){
       const tgt=atkers.filter(a=>this.yaguraPosts.some(([pc,pr])=>hexDist(a.col,a.row,pc,pr)<=3)).sort((a,b)=>b.count-a.count)[0];
       if (tgt){ this._flash('櫓より鉄砲一斉射撃！ 突撃を阻む / Volley from the towers!'); this._ployHit(game,tgt,0.08+0.02*gunCount,true); game.audio.beep(900,0.06,'square'); this._cleanupStacks(); fire('volley',2); return; }
     }
-    // ⑪ 城固有: 霧隠れ（岩村・繰り返し・寄手を混乱させ視界を奪う）
+    // ⑫ 城固有: 霧隠れ（岩村・繰り返し・寄手を混乱させ視界を奪う）
     if (sigPloy==='mist' && advanced){
       advanced._confusedT=Math.max(advanced._confusedT||0,1); this._spawnConfuse(advanced);
       this._flash('霧隠れ…寄手の目を眩ます / Veiled in mist'); fire('mist',2); return;
@@ -11823,13 +11878,24 @@ class BattleScene extends GameKit.Scene {
     if (fire){ const [x,y]=hexCenter(target.col,target.row); for(let i=0;i<8;i++){ const a=Math.random()*Math.PI*2, sp=50+Math.random()*130; this.sparks.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-30,life:0.35+Math.random()*0.3,color:Math.random()<0.5?'#f97316':'#fde047',r:2+Math.random()*3}); } }
   }
   _spawnConfuse(a){ const [x,y]=hexCenter(a.col,a.row); this.floaters.push({x,y:y-HEX.size*0.5,vy:-40,life:1.3,text:'混乱',color:'#c4b5fd',size:26}); }
+  // 浸水セルを1ラウンド経過させる。水に取り残された寄手は毎ラウンド損害を受け、期限切れで水が引く。
+  _tickFlood(game){
+    if (!this.floodCells) return;
+    for (const k in this.floodCells){
+      const f=this.floodCells[k]; f.t--;
+      const [c,r]=k.split(',').map(Number); const a=this.stackAt(c,r);
+      if (a && a.side==='atk'){ const loss=Math.max(1,Math.round(a.count*0.05)); a.count=Math.max(1,a.count-loss); this._spawnHitFx(a,loss,false); }
+      if (f.t<=0) delete this.floodCells[k];
+    }
+    this._cleanupStacks();
+  }
   _runEnemyPhase(game){
     // 状態異常の残存ターンを1減らす（謀略適用の前に行い、この局面で新たに付与した効果は次の自軍ターンまで残す）
     this.stacks.forEach(s=>{ if (s._confusedT>0) s._confusedT--; if (s._stunT>0) s._stunT--; });
     if (this._defRallyT>0) this._defRallyT--; // 士気鼓舞の残存
 
     // 攻城戦の守備AI: ユニット行動の前に「謀略」を1つ仕掛ける（夜襲・偽情報・偽降伏・鉄砲一斉射撃・城固有能力）
-    if (this.siege && this.aiSide==='def') this._siegePloyTurn(game);
+    if (this.siege && this.aiSide==='def'){ this._tickFlood(game); this._siegePloyTurn(game); }
     // AI側（プレイヤーが攻撃なら守備AI、プレイヤーが防衛なら攻撃AI）greedy
     const enemies=this.stacks.filter(s=>s.side===this.aiSide);
     enemies.forEach(e=>{
@@ -12251,6 +12317,14 @@ class BattleScene extends GameKit.Scene {
   // 攻城戦の守備演出（櫓・発動済み落とし穴）を城グラフィックの手前・兵の奥に控えめに描く
   _drawSiegeDefense(ctx){
     if (!this.siege) return;
+    // 水攻めの浸水マス（櫓・落とし穴の下に敷く）
+    for (const k in (this.floodCells||{})){
+      const [c,r]=k.split(',').map(Number); const [x,y]=hexCenter(c,r);
+      ctx.save(); this._hexPath(ctx,x,y);
+      const pulse=0.5+Math.sin(this.t*3+c*0.7+r)*0.06;
+      ctx.fillStyle='rgba(30,96,150,'+pulse.toFixed(3)+')'; ctx.fill();
+      ctx.lineWidth=2.2; ctx.strokeStyle='rgba(120,190,235,0.7)'; ctx.stroke(); ctx.restore();
+    }
     (this.yaguraPosts||[]).forEach(([c,r])=>{
       const [x,y]=hexCenter(c,r);
       const w=HEX.size*0.52, h=HEX.size*0.40, ty=y-HEX.size*0.10;
