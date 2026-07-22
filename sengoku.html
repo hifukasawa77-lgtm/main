@@ -6675,6 +6675,41 @@ class MapScene extends GameKit.Scene {
     this.overlay={type:'battleResult', data: st.pendingResult}; st.pendingResult=null;
     this.selected=null; this.mode='select'; this._save();
   }
+  // 兵糧攻め: 城を包囲して干す。血みどろの強襲を避け、寄手はほぼ無傷で城を落とせるが、
+  // 城の兵糧備蓄（開発度・城規模）・水運補給（沿岸/河川）・包囲力（兵力比・知略）に大きく左右される。
+  // 干殺しに失敗すれば城は落ちないが、城兵は飢えで激減し民忠も下がる（次の攻略が楽になる）。
+  _startStarvationSiege(game, c){
+    const st=this.state; const dst=st.provinces[c.dstId];
+    const atk=c.attacker.soldiers, def=Math.max(1,c.defender.soldiers);
+    const castleLv=c.defender.castleLevel||1, dev=dst.development||40;
+    const coastal = c.terrain==='coast'||c.terrain==='river'||c.terrain==='water';
+    // 攻め手の知略平均（調略・兵站の巧拙）
+    const gens=c.attacker.generals||[]; let chi=50;
+    if (gens.length) chi=gens.reduce((a,g)=>a+((DATA.genById[g]&&DATA.genById[g].stats.chi)||50),0)/gens.length;
+    // 籠城の持久力（備蓄×水運）と 包囲圧（兵力比×知略）の比で干殺しの成否を判定
+    const hold = (dev/50) * (1+(castleLv-1)*0.28) * (coastal?1.7:1.0) * (0.8+def/8000);
+    const pressure = (atk/Math.max(200,def)) * (1+(chi-50)/200);
+    const ratio = pressure/Math.max(0.4, hold);
+    const rng = srand(st);
+    const fall = ratio > (1.15 + rng*0.5);
+    let res;
+    if (fall){
+      // 干殺し成功: 寄手はほぼ無傷で入城、城兵は離散・投降で激減
+      res={attackerWins:true, atkSurvivors:Math.round(atk*(0.90+rng*0.06)), defSurvivors:Math.round(def*(0.04+rng*0.05))};
+      this._flash('兵糧攻めが実り、'+ (DATA.provById[c.dstId]?DATA.provById[c.dstId].nameJP:'城') +'は干殺しの末に開城した', 'The castle is starved into surrender');
+    } else {
+      // 干殺し失敗: 城は落ちないが城兵は飢えで激減、民忠も低下。寄手も長陣で疲弊し撤収。
+      const defSurv=Math.round(def*clamp(0.78-ratio*0.22,0.35,0.85));
+      const atkSurv=Math.round(atk*(0.82+rng*0.08));
+      dst.minchu=Math.max(0,(dst.minchu||60)-Math.round(10+ratio*10));
+      res={attackerWins:false, atkSurvivors:atkSurv, defSurvivors:defSurv};
+      this._flash((coastal?'水運の補給が城を支え、':'城の兵糧備えが尽きず、')+'干殺しは成らず。城兵は飢えで大きく損じた', 'The siege fails, but the garrison is gravely weakened');
+    }
+    applyBattleResult(st, c, res);
+    game.audio.jingle(res.attackerWins?[{f:523,d:0.12},{f:659,d:0.12},{f:784,d:0.2}]:[{f:392,d:0.14},{f:294,d:0.22}]);
+    this.overlay={type:'battleResult', data: st.pendingResult}; st.pendingResult=null;
+    this.selected=null; this.mode='select'; this._save();
+  }
 
   /* ---- コマンド: 内政/徴兵 ---- */
   _develop(game){
@@ -8004,16 +8039,16 @@ class MapScene extends GameKit.Scene {
           action:()=>{ c.atkFormation=key; }});
       });
       const navalEligible = c.terrain==='coast' || c.terrain==='river' || c.terrain==='water';
-      if (navalEligible){
-        bs.push({x:px+60, y:by, w:214, h:92, jp:'\u91ce\u6226', en:'Field', sz:30, accent:'rgba(52,211,153,0.7)', action:g=>this._startBattleFromChoice(g,c,'field')});
-        bs.push({x:px+292, y:by, w:214, h:92, jp:'\u6d77\u6226', en:'Naval Battle', sz:30, accent:'rgba(56,189,248,0.8)', action:g=>this._startBattleFromChoice(g,c,'naval')});
-        bs.push({x:px+524, y:by, w:214, h:92, jp:'\u653b\u57ce\u6226', en:'Siege', sz:30, accent:'rgba(248,113,113,0.75)', action:g=>this._startBattleFromChoice(g,c,'siege')});
-        bs.push({x:px+756, y:by, w:224, h:92, jp:'\u53d6\u6d88\u3057', en:'Cancel', sz:26, action:()=>{ this.overlay=null; }});
-      } else {
-        bs.push({x:px+60, y:by, w:286, h:92, jp:'\u91ce\u6226', en:'Field Battle', sz:32, accent:'rgba(52,211,153,0.7)', action:g=>this._startBattleFromChoice(g,c,'field')});
-        bs.push({x:px+377, y:by, w:286, h:92, jp:'\u653b\u57ce\u6226', en:'Siege Battle', sz:32, accent:'rgba(248,113,113,0.75)', action:g=>this._startBattleFromChoice(g,c,'siege')});
-        bs.push({x:px+694, y:by, w:286, h:92, jp:'\u53d6\u6d88\u3057', en:'Cancel', sz:28, action:()=>{ this.overlay=null; }});
-      }
+      // \u5175\u7ce7\u653b\u3081: \u57ceLv2\u4ee5\u4e0a\uff08\u7c60\u57ce\u306b\u8db3\u308b\u57ce\uff09\u3067\u9078\u3079\u308b\u3002\u8840\u3092\u6d41\u3055\u305a\u57ce\u3092\u5e72\u3059\u304c\u6642\u9593\u3068\u5305\u56f2\u529b\u306b\u5de6\u53f3\u3055\u308c\u308b\u3002
+      const canStarve = (c.defender.castleLevel||1) >= 2;
+      const opts=[];
+      opts.push({jp:'\u91ce\u6226', en:'Field', ac:'rgba(52,211,153,0.7)', act:g=>this._startBattleFromChoice(g,c,'field')});
+      if (navalEligible) opts.push({jp:'\u6d77\u6226', en:'Naval', ac:'rgba(56,189,248,0.8)', act:g=>this._startBattleFromChoice(g,c,'naval')});
+      opts.push({jp:'\u653b\u57ce\u6226', en:'Siege', ac:'rgba(248,113,113,0.75)', act:g=>this._startBattleFromChoice(g,c,'siege')});
+      if (canStarve) opts.push({jp:'\u5175\u7ce7\u653b\u3081', en:'Starve Out', ac:'rgba(202,138,4,0.8)', act:g=>this._startStarvationSiege(g,c)});
+      const n=opts.length, gap=18, bw=Math.floor((pw-120-gap*(n-1))/n);
+      opts.forEach((o,i)=>{ bs.push({x:px+60+i*(bw+gap), y:by, w:bw, h:92, jp:o.jp, en:o.en, sz:n>=4?26:30, accent:o.ac, action:o.act}); });
+      bs.push({x:px+pw/2-150, y:by+112, w:300, h:76, jp:'\u53d6\u6d88\u3057', en:'Cancel', sz:26, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='provinceInfo'){
       const px=W/2-820, py=H/2-610, pw=1640, ph=1220;
       bs.push({x:px+pw-286, y:py+42, w:240, h:78, jp:'閉じる', en:'Close', sz:30, ensz:17, action:()=>{ this.overlay=null; }});
@@ -9677,7 +9712,7 @@ class MapScene extends GameKit.Scene {
      }
     T(ctx, 'Field: fight outside the castle and rely on mobility.', px+pw/2, py+310, {size:17, color:'#71839a', align:'center'});
     T(ctx, '\u653b\u57ce\u6226: \u57ce\u58c1\u30fb\u578b\u30fb\u898f\u6a21\u304c\u6226\u5834\u306b\u53cd\u6620', px+pw/2, py+356, {size:22, color:'#f2c879', align:'center'});
-    T(ctx, 'Siege: the castle type and scale shape the battlefield.', px+pw/2, py+392, {size:17, color:'#9b8663', align:'center'});
+    T(ctx, 'Siege: the castle type and scale shape the battlefield.  /  \u5175\u7ce7\u653b\u3081: \u57ce\u3092\u56f2\u307f\u5e72\u3059\uff08\u640d\u5bb3\u5c11\u30fb\u5305\u56f2\u529b\u3068\u5175\u7ce7\u5099\u84c4\u30fb\u6c34\u904b\u6b21\u7b2c\uff09', px+pw/2, py+392, {size:17, color:'#9b8663', align:'center'});
   }
   _drawPloy(ctx){
     const st=this.state, pl=this.ploy;
