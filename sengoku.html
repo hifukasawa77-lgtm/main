@@ -4350,6 +4350,78 @@ function applySengokuExpansions(){
 
   const additionalRetainersByFamily = {};
   ADDITIONAL_RETAINER_GENERALS.forEach(g=>{ (additionalRetainersByFamily[g.family] ||= []).push(g.id); });
+  // 史実の在番城（城代・支城主）マップ。武将の家が当該シナリオでその城を領有している場合のみ適用し、
+  // 当主居城への一極集中を史実準拠で解消する。未領有ならフォールバックして従来どおり居城へ集約される。
+  const GENERAL_HOME_CASTLE = {
+    // 北条（本城=小田原/sagami）
+    hojo_ujiteru:'hachioji',       // 北条氏照 — 滝山・八王子城
+    hojo_ujinori:'izu',            // 北条氏規 — 韮山城
+    toyama_tsunakage:'musashi',    // 遠山綱景 — 江戸城代
+    tominaga_naokatsu:'musashi',   // 富永直勝 — 江戸衆
+    // 武田（本城=躑躅ヶ崎/kai）
+    kosaka_masanobu:'shinano',     // 高坂昌信 — 海津城代（北信濃）
+    baba_nobuharu:'shinano',       // 馬場信春 — 牧之島城代（信濃）
+    naito_masatoyo:'kozuke',       // 内藤昌豊 — 箕輪城代（上野）
+    itagaki_nobukata:'shinano',    // 板垣信方 — 諏訪郡代（信濃）
+    akiyama_nobutomo:'minami_shinano', // 秋山虎繁 — 伊那・高遠
+    anayama_baisetsu:'suruga',     // 穴山信君 — 江尻城（駿河）
+    sanada_masayuki:'kozuke',      // 真田昌幸 — 上野（沼田・岩櫃）
+    sanada_yukitaka:'kozuke',      // 真田幸隆 — 上野吾妻
+    // 今川（本城=駿府/suruga）
+    asahina_yasutomo:'totomi',     // 朝比奈泰朝 — 掛川城（遠江）
+    okabe_motonobu:'totomi',       // 岡部元信 — 遠江方面
+    // 毛利（本城=吉田郡山/aki）
+    kikkawa_motoharu:'izumo',      // 吉川元春 — 出雲方面（月山富田）
+    kobayakawa_takakage:'bingo',   // 小早川隆景 — 備後三原
+    // 大友（本城=府内/bungo）
+    tachibana_dosetsu:'chikuzen',  // 立花道雪 — 筑前立花山城
+    takahashi_joun:'chikuzen',     // 高橋紹運 — 筑前岩屋・宝満城
+    tachibana_muneshige:'chikuzen',// 立花宗茂 — 筑前立花山城
+    // 島津（本城=内城/satsuma）
+    shimazu_yoshihiro:'osumi',     // 島津義弘 — 大隅（栗野・飯野方面）
+    shimazu_toshihisa:'osumi',     // 島津歳久 — 大隅方面
+    niiro_tadamoto:'osumi',        // 新納忠元 — 大隅（横川）
+    shimazu_iehisa:'hyuga',        // 島津家久 — 日向（佐土原）
+    yamada_arinobu:'hyuga',        // 山田有信 — 日向（高城）
+    // 長宗我部（本城=岡豊/tosa）
+    kira_chikasada:'nishi_tosa',   // 吉良親貞 — 幡多（西土佐）
+    kosokabe_chikayasu:'awa_shikoku', // 香宗我部親泰 — 阿波方面
+    // 織田（拡大後の方面軍団長。未領有シナリオでは居城へフォールバック）
+    shibata_katsuie:'echizen',     // 柴田勝家 — 北ノ庄（越前）
+    hashiba_hideyoshi:'harima',    // 羽柴秀吉 — 姫路（中国方面）
+    akechi_mitsuhide:'tanba',      // 明智光秀 — 丹波（亀山・福知山）
+    maeda_toshiie:'noto',          // 前田利家 — 七尾（能登）
+    sassa_narimasa:'etchu',        // 佐々成政 — 富山（越中）
+    takigawa_kazumasu:'kozuke',    // 滝川一益 — 上野（関東方面）
+    niwa_nagahide:'wakasa',        // 丹羽長秀 — 若狭
+  };
+  // シナリオの配置を史実の在番城へ正規化する（同一武将の重複除去＋居城への一極集中を緩和）
+  const applyHistoricalCastleHomes = (scn)=>{
+    const activeDaimyo = new Set(Object.values(scn.own));
+    // その家がその城を当該シナリオで領有している場合のみ史実在番城を採用
+    const homeOf = {};
+    Object.entries(GENERAL_HOME_CASTLE).forEach(([gid,pid])=>{
+      const g = DATA.genById[gid]; if(!g) return;
+      const clan = g.family; if(!clan || !activeDaimyo.has(clan)) return;
+      if(scn.own[pid]===clan) homeOf[gid]=pid;
+    });
+    const seen = new Set();
+    // 既存配置を走査: 在番城が決まっている武将はその城のみ残し他洲から除去、それ以外は重複を除き最初の1箇所を残す
+    Object.keys(scn.place).forEach(pid=>{
+      scn.place[pid] = scn.place[pid].filter(gid=>{
+        if(homeOf[gid]!==undefined){ if(pid===homeOf[gid]){ seen.add(gid); return true; } return false; }
+        if(seen.has(gid)) return false;
+        seen.add(gid); return true;
+      });
+    });
+    // 在番城にまだ配置されていない武将を追加
+    Object.entries(homeOf).forEach(([gid,pid])=>{
+      if(seen.has(gid)) return;
+      const list = scn.place[pid] = (scn.place[pid]||[]);
+      if(!list.includes(gid)) list.push(gid);
+      seen.add(gid);
+    });
+  };
   DATA.scenarios.forEach(scn=>{
     const activeDaimyoDefs = scn.id===1574 ? daimyoDefs.filter(d=>d.id!=='ichijo') : daimyoDefs;
     activeDaimyoDefs.forEach(d=>{ const cur=scn.daimyo.find(x=>x.id===d.id); if(cur) Object.assign(cur,d); else scn.daimyo.push({...d}); });
@@ -4372,6 +4444,7 @@ function applySengokuExpansions(){
       const list=scn.place[g.homeProvince]=(scn.place[g.homeProvince]||[]).slice();
       if(!list.includes(g.id)) list.push(g.id);
     });
+    applyHistoricalCastleHomes(scn);
   });
   // シナリオ別の城名称上書き（例: 1582 観音寺城→安土城）の基準スナップショット
   BASE_CASTLE_NAMES = Object.assign({}, CASTLE_NAMES);
@@ -5537,11 +5610,18 @@ class ScenarioSelectScene extends GameKit.Scene {
     this.buttons=[];
     const cx=W/2;
     if (this.step==='scenario'){
-      const cardW=1760, cardH=220, gap=54, startY=440;
+      // カード群は「戻る」ボタンの手前で収まるよう枚数に応じて高さ/間隔を自動調整する（多シナリオで下端がはみ出さないように）
+      const cardW=1760, n=DATA.scenarios.length;
+      const backH=92, backY=H-150;            // 戻るボタン（画面下部・H内に収める）
+      const bandTop=430, bandBottom=backY-46; // カードを配置できる縦帯（ボタンの手前で止める）
+      const avail=bandBottom-bandTop;
+      const gap=Math.min(54, Math.max(24, Math.round(avail*0.05)));
+      const cardH=Math.min(220, Math.max(178, Math.floor((avail-(n-1)*gap)/n)));
+      const startY=bandTop;
       DATA.scenarios.forEach((s,i)=>{
         this.buttons.push({x:cx-cardW/2, y:startY+i*(cardH+gap), w:cardW, h:cardH, scn:s, action:()=>{ this.scn=s; this.step='difficulty'; this._rebuild(); }});
       });
-      this.buttons.push({x:cx-220, y:H-185, w:440, h:92, label:'← 戻る Back', sz:31, action:()=>game.changeScene(new TitleScene())});
+      this.buttons.push({x:cx-220, y:backY, w:440, h:backH, label:'← 戻る Back', sz:31, action:()=>game.changeScene(new TitleScene())});
     } else if (this.step==='difficulty'){
       const keys=['easy','normal','hard'];
       const cardW=1440, cardH=210, gap=54, startY=470;
@@ -5592,7 +5672,12 @@ class ScenarioSelectScene extends GameKit.Scene {
           ctx.strokeStyle='rgba(232,192,122,0.46)'; ctx.lineWidth=2.4; ctx.stroke(); ctx.restore();
           T(ctx, b.scn.year+'年  '+b.scn.nameJP, b.x+46, b.y+34, {size:46, weight:'bold', color:'#f1e6cf'});
           T(ctx, b.scn.nameEN, b.x+48, b.y+96, {size:25, color:'#a78bfa'});
-          T(ctx, b.scn.descJP, b.x+48, b.y+142, {size:26, color:'#cbd5e1'});
+          // 長文の説明は札の横幅に収まるようフォントを縮小して横はみ出しを防ぐ
+          const _descMaxW=b.w-96;
+          ctx.save(); ctx.font='26px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
+          const _descW=ctx.measureText(b.scn.descJP).width; ctx.restore();
+          const _descSize=_descW>_descMaxW ? Math.max(20, Math.floor(26*_descMaxW/_descW)) : 26;
+          T(ctx, b.scn.descJP, b.x+48, b.y+142, {size:_descSize, color:'#cbd5e1'});
         } else { drawButton(ctx, b, this.t); }
       }
     } else if (this.step==='difficulty'){
