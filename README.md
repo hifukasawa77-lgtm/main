@@ -1,4 +1,4 @@
-﻿# hide_0001
+# hide_0001
 
 日本の民間伝承をテーマにしたインタラクティブなゲームコレクション
 
@@ -37,6 +37,15 @@
   - レスポンシブデザイン
 - **技術**: HTML5、CSS3、Vanilla JavaScript
 
+
+### **FamicomEmulatorWin/** - ファミコン/NESエミュレータ Windows版
+- **概要**: ファミコン/NES とディスクシステム対応を目指す WPF デスクトップアプリ
+- **機能**:
+  - .nes / .fds のローカル読み込みとヘッダー解析
+  - 6502 CPU ミニコアの Step / Run デモ
+  - 256×240 PPU プレビューと FDS 実装ロードマップ
+- **技術**: .NET 8 + WPF
+
 ### **SakuraLikeEditor/** - Windows向けテキストエディター（サクラエディター風）
 - **概要**: Windows 11対応のWPFテキストエディター
 - **機能**:
@@ -51,6 +60,7 @@
 2. `game.html` をブラウザで開く（ダンジョンゲーム）
 3. `shogi_rpg_enhanced.jsx` は React環境で実行
 4. `SakuraLikeEditor/` は `dotnet run --project SakuraLikeEditor/SakuraLikeEditor.csproj` で起動
+5. `FamicomEmulatorWin/` は `dotnet run --project FamicomEmulatorWin/FamicomEmulatorWin.csproj` で起動
 
 ## ? 技術スタック
 
