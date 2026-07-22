@@ -3776,7 +3776,11 @@ function pointInLand(x, y){
 // 以前はワールド解像度(約1965px幅)のオフスクリーンへ一度合成してからカメラ変換で拡大していたが、
 // 元画像(1672px幅)→中間キャンバス→画面の二重リサンプルになり、高ズーム時のぼやけを悪化させていた。
 // 元画像から直接カメラ変換込みで描く（単一リサンプル）ことで、ズーム時も元画像の解像度を最大限使う。
-// quality:'high' は静止時ベイク用（毎フレームのパン/ズーム中はデフォルト補間で軽く保つ）。
+// 地図のアンシャープマスク（feConvolveMatrix畳み込み）は非常に高コストで、静止時ベイクの
+// たびにclip全域（約2500×2000px）へ適用すると1フレームで2秒級のスパイクになっていた
+// （パン/ズームを止める・マップ画面へ入るたびにフリーズ）。鮮明化はロード時に一度だけ
+// ネイティブ解像度へ焼いた mapSharp（buildSharpenedMap）を使い、以降は等倍ビットマップの
+// drawImageのみにする。見た目（鮮明化済みの地図）は維持したまま、ベイクの畳み込みを廃止する。
 function drawTerrainBackdrop(ctx, mapImg, opts={}){
   const w=MAP.world;
   const sea=ctx.createLinearGradient(w.x,w.y,w.x+w.w,w.y+w.h);
@@ -3785,16 +3789,34 @@ function drawTerrainBackdrop(ctx, mapImg, opts={}){
   if (mapImg && (mapImg.naturalWidth||mapImg.width)){
     const iw=mapImg.naturalWidth||mapImg.width, ih=mapImg.naturalHeight||mapImg.height;
     const scale=w.w/iw, dh=ih*scale, dy=(w.h-dh)/2;   // 横幅基準contain（左右クロップなし）
+    // 静止ベイク時は鮮明化済みビットマップ（一度だけ生成・キャッシュ）を使う。ネイティブ解像度
+    // 同寸なので描画パラメータは元画像と同一。未生成なら初回のみここで生成する（以降キャッシュ）。
+    const src = opts.sharpen ? (ASSETS.img.mapSharp || buildSharpenedMap() || mapImg) : mapImg;
     ctx.save();
     ctx.imageSmoothingEnabled=true;
     if (opts.quality) ctx.imageSmoothingQuality=opts.quality;
-    // 高ズームの静止時ベイクではアンシャープ畳み込みで拡大ぼけの知覚的鮮明度を補う
-    // （300%以上ではより強いカーネルへ切替え、粗さを軽減する）
-    if (opts.sharpen) ctx.filter = opts.sharpen==='strong' ? 'url(#terrainSharpenStrong)' : 'url(#terrainSharpen)';
-    ctx.drawImage(mapImg, 0, 0, iw, ih, w.x, w.y+dy, w.w, dh);
+    ctx.drawImage(src, 0, 0, iw, ih, w.x, w.y+dy, w.w, dh);
     ctx.restore();
     ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(w.x, w.y, w.w, w.h);
   }
+}
+// 地図のアンシャープマスクをネイティブ解像度へ一度だけ焼く（結果をASSETS.img.mapSharpへキャッシュ）。
+// 高コストなfeConvolveMatrix畳み込みはここ1回だけに閉じ込め、毎ベイクの適用を無くす。
+function buildSharpenedMap(){
+  const img = ASSETS.img.map;
+  if (!img || !(img.naturalWidth||img.width)) return null;
+  if (ASSETS.img.mapSharp && ASSETS.img._mapSharpSrc===img) return ASSETS.img.mapSharp;
+  const iw=img.naturalWidth||img.width, ih=img.naturalHeight||img.height;
+  try {
+    const cv=document.createElement('canvas'); cv.width=iw; cv.height=ih;
+    const c=cv.getContext('2d');
+    c.imageSmoothingEnabled=true;
+    c.filter='url(#terrainSharpen)';
+    c.drawImage(img, 0, 0);
+    c.filter='none';
+    ASSETS.img.mapSharp=cv; ASSETS.img._mapSharpSrc=img;
+    return cv;
+  } catch(_){ return null; }
 }
 // 高ズーム時に地図へ重ねる微細地形グレイン（タイル可能な2オクターブ値ノイズ）。
 // 元画像(1672px幅)の解像度限界により高ズームは平滑にぼけるため、スクリーン解像度の
@@ -5386,6 +5408,7 @@ class BootScene extends GameKit.Scene {
       DATA.generals = gen.generals;
       DATA.generals.forEach(g=>DATA.genById[g.id]=g);
       Object.assign(ASSETS.img, imgs);
+      buildSharpenedMap();   // 鮮明化ビットマップをロード時に一度だけ焼く（マップ描画のベイク軽量化）
       DATA.scenarios = scn.scenarios;
       applySengokuExpansions();
       applyCustomCastlesToData();
@@ -8356,34 +8379,17 @@ class MapScene extends GameKit.Scene {
   _drawTerrainScreenCached(ctx){
     const c=this.cam;
     const mapReady=(ASSETS.img.map && (ASSETS.img.map.naturalWidth||ASSETS.img.map.width))?1:0;
-    const key=c.zoom+'|'+c.cx+'|'+c.cy+'|'+mapReady;
-    if (key===this._terrScreenKey){
-      if (!this._terrScreenValid){
-        const cv=this._terrScreenCanvas || (this._terrScreenCanvas=document.createElement('canvas'));
-        const w=Math.ceil(MAP.clip.w), h=Math.ceil(MAP.clip.h);
-        if (cv.width!==w || cv.height!==h){ cv.width=w; cv.height=h; }
-        const sc=cv.getContext('2d');
-        sc.save();
-        sc.clearRect(0,0,cv.width,cv.height);
-        sc.translate(-MAP.clip.x, -MAP.clip.y);
-        this._camApply(sc);
-        drawTerrainBackdrop(sc, ASSETS.img.map, {quality:'high', sharpen: c.zoom>=MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD ? 'strong' : (c.zoom>=2)});
-        sc.restore();
-        sc.save();
-        sc.translate(-MAP.clip.x, -MAP.clip.y);
-        this._drawTerrainDetail(sc);
-        sc.restore();
-        this._terrScreenValid=true;
-      }
-      ctx.drawImage(this._terrScreenCanvas, MAP.clip.x, MAP.clip.y);
-    } else {
-      ctx.save();
-      this._camApply(ctx);
-      drawTerrainBackdrop(ctx, ASSETS.img.map);
-      ctx.restore();
-      this._drawTerrainDetail(ctx);
-      this._terrScreenKey=key; this._terrScreenValid=false;
-    }
+    // 以前はカメラ静止時にclip解像度のオフスクリーンcanvasへ地形をベイクしてキャッシュしていたが、
+    // このオフスクリーンcanvasはソフトウェアラスタライズされ、静止直後の1フレームで数百ms〜2秒級の
+    // スパイク（パン/ズームを止める・マップ画面へ入るたびのフリーズ）を生んでいた（体感の「重さ」の主因）。
+    // 可視canvasへ直接描くライブ経路はGPU合成で約10ms/フレームと十分軽いため、ベイクを廃止して常時
+    // ライブ描画にする。地図の鮮明化はロード時に一度だけ焼いたmapSharp（buildSharpenedMap）で担保する。
+    void mapReady;
+    ctx.save();
+    this._camApply(ctx);
+    drawTerrainBackdrop(ctx, ASSETS.img.map, {sharpen: c.zoom>=2});
+    ctx.restore();
+    this._drawTerrainDetail(ctx);
   }
   // 高ズーム時のみ、スクリーン解像度の微細グレインをoverlay合成で地図に重ねる。
   // 元画像の解像度限界でのっぺりぼける拡大表示に、知覚的な精細感を足す（ディテールテクスチャ）。
