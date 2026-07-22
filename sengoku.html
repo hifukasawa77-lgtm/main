@@ -11000,6 +11000,7 @@ class BattleScene extends GameKit.Scene {
     this.battleType=c.battleType || (c.playerSide==='def' ? 'siege' : 'field');
     this.castleLevel=c.defender.castleLevel||1;
     this.castleType=c.castleType || castleTypeForProvince(c.dstId, this.state.provinces[c.dstId]);
+    this.castleName=(DATA.provById[c.dstId]?castleNameForProvince(DATA.provById[c.dstId]):'');
     this.castleLayout=Array.isArray(c.castleLayout)?c.castleLayout:[];
     this.weather=c.weather || ((((this.state.rng||1) ^ (c.dstId?c.dstId.length:0)) % 5)===0 ? 'rain' : 'clear');
     this.castleTiles=this._buildCastleTiles();
@@ -11042,7 +11043,7 @@ class BattleScene extends GameKit.Scene {
     // 攻城戦かどうかは battleType のみで決める（戦闘方式選択で「野戦」を選んだ場合に
     // 城Lvで攻城戦へ昇格させない。昇格すると野戦マップへ不可視の城壁・天守が敷かれてしまう）
     this.siege = this.battleType==='siege';
-    if (this.siege){ this._buildCastle(c.defender.castleLevel||3); this._placeSiegeDefenders(); this._deploySiegeCannon(); }
+    if (this.siege){ this._buildCastle(c.defender.castleLevel||3); this._placeSiegeDefenders(); this._deploySiegeCannon(); this._setupSiegeDefense(); }
     // 戦場カメラ（スマホでヘックスが小さく見づらいため、ピンチ/ホイールで拡大・パンできる）。
     // zoom=1 が従来のフィット表示。HUD/ボタンは画面固定、戦場レイヤーのみカメラ変換で描画する。
     this.cam = {zoom:1, min:1, max:3, cx:W/2, cy:H/2};
@@ -11339,6 +11340,7 @@ class BattleScene extends GameKit.Scene {
         sel.col=c; sel.row=r; sel.hasMoved=true;
         game.audio.beep(420,0.05,'sine');
         this._applyDryMoatCross(game, sel, c, r); // 空堀を渡ると兵数減
+        this._springPitTrap(game, sel);           // 落とし穴（守備の謀略）
         if (this._checkKeep(game)) return; // 天守を制圧したら決着
         this._computeRange(sel);
         return;
@@ -11478,6 +11480,10 @@ class BattleScene extends GameKit.Scene {
     if (atk._chargeReady){ commandAtk*=2; atk._chargeReady=false; }
     if (atk._fireArrowReady){ commandAtk*=1.35; atk._fireArrowReady=false; }
     if (atk._threeVolleyReady){ commandAtk*=1.5; atk._threeVolleyReady=false; }
+    // 守備の伏兵が露見直後に放つ強襲（+60%）
+    if (atk._ambushStrike){ commandAtk*=1.6; atk._ambushStrike=false; }
+    // 混乱（偽情報・夜襲・霧隠れ等の謀略）を受けた寄手は攻撃力が鈍る
+    if (atk._confusedT>0) commandAtk*=0.7;
     // 水軍支援（沿岸戦）: プレイヤー側の攻防に加算（OS-03）
     const navAtk = (this.navalBonus && atk.side===this.playerSide) ? (1+this.navalBonus) : 1;
     const navDef = (this.navalBonus && def.side===this.playerSide) ? (1+this.navalBonus) : 1;
@@ -11486,7 +11492,9 @@ class BattleScene extends GameKit.Scene {
     const fmD=FORMATIONS[def.side==='atk'?this.atkFormation:this.defFormation];
     const formAtk=fmA?fmA.atk:1, formDef=fmD?fmD.def:1;
     const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type)*commandAtk*navAtk*formAtk;
-    const commandDef=def._shieldWall?1.35:1;
+    let commandDef=def._shieldWall?1.35:1;
+    // 城固有の守備補正（総構え・難攻不落など）＋櫓上の守兵は高所有利
+    if (this.siege && def.side==='def'){ commandDef*=(this._castleDefBuff||1); if (def.castlePost==='yagura'||def.castlePost==='wall') commandDef*=1.12; }
     const baseDef = def.count*ud.def*(1+def.stat.tou/200)*terrDef*castle*fort*commandDef*navDef*formDef;
     const ratio = baseAtk/Math.max(1,baseDef);
     // 致死性は中庸に。兵力・兵科相性・地形が効きつつ、技量で覆せる余地を残す
@@ -11520,7 +11528,256 @@ class BattleScene extends GameKit.Scene {
     this._flash((def.castlePost==='highGround'?'\u77f3\u843d\u3068\u3057':'\u6728\u6750\u843d\u3068\u3057')+' / -'+dmg);
     game.audio.noise(0.18,0.24); this._cleanupStacks();
   }
+  /* ══ 攻城戦・守備側強化（真田昌幸の智略）══
+     城グラフィックには手を入れず、ヘックス戦術レイヤーの上で「守備兵が動き、多彩な策を打つ」を実現する。
+     ① 櫓（やぐら）: 弓/鉄砲を城壁隣接の高所へ登らせ射程3で城外の寄手を先制射撃
+     ② 石落とし: 城門・城壁際の足軽/騎馬が隣接した寄手へ毎ラウンド投石・落石
+     ③ 落とし穴: 寄手の進軍路に隠し穴。踏むと兵数減＋そのターン行動不能
+     ④ 伏兵: 足軽1隊を進路に潜ませ、寄手が近づくと露見して強襲
+     ⑤ 逆襲: 城内へ誘い込んだ寄手へ足軽/騎馬が出撃（誘い込み戦法）
+     真田家の武将が守将にいれば①〜⑤を増強する。 */
+  _setupSiegeDefense(){
+    this.yaguraPosts=[]; this.pitTraps={}; this.sanadaGuile=false; this._perimeter=3;
+    this._castleDefBuff=1; this.castleSignature=null; this._ployLog=[];
+    if (!this.siege || !this.keepHex) return;
+    const defenders=this.stacks.filter(s=>s.side==='def');
+    if (!defenders.length) return;
+    // 真田家の武将（sanada_*）が守将にいれば「智略」を増強
+    this.sanadaGuile = defenders.some(s=>s.gen && /^sanada_/.test(s.gen));
+    // 城固有の守備能力（名城ごとの signature）。名前で判定し防御補正＋固有謀略を付与。
+    this._setCastleSignature();
+    const [kc,kr]=this.keepHex;
+    // 外周（守備線）の半径: 城門から天守までの最大距離。寄手がこの内側へ入れば逆襲対象＝「城内侵入」。
+    let gateMax=0;
+    for (const k in this.castleCells){ if (this.castleCells[k].kind!=='gate') continue; const [gc,gr]=k.split(',').map(Number); gateMax=Math.max(gateMax, hexDist(gc,gr,kc,kr)); }
+    this._perimeter=Math.max(gateMax,3);
+    // ① 櫓候補: 城壁/石垣/門/土塁に隣接する通行可能マス。寄手に面した前方（row大）を優先し最大4基。
+    const wallKinds={wall:1,stonewall:1,gate:1,earthwork:1};
+    const postSet={};
+    for (const k in this.castleCells){
+      const cell=this.castleCells[k]; if (!cell || !wallKinds[cell.kind]) continue;
+      const [wc,wr]=k.split(',').map(Number);
+      hexNeighbors(wc,wr).forEach(([nc,nr])=>{
+        const key=nc+','+nr;
+        if (postSet[key]) return;
+        if (nc<0||nc>=HEX.cols||nr<0||nr>=HEX.rows) return;
+        if (this._cellObstructs(nc,nr)) return;          // 壁・堀の上には建てない
+        const terr=this.terrainMap[key]; if (terr==='sky'||terr==='water') return;
+        if (nc===kc&&nr===kr) return;                    // 天守マスは除外
+        postSet[key]=true;
+      });
+    }
+    this.yaguraPosts=Object.keys(postSet).map(k=>k.split(',').map(Number)).sort((a,b)=>b[1]-a[1]).slice(0,4);
+    // ② 弓・鉄砲の守兵を櫓へ配置（射程3＝城外の寄手を先制射撃）
+    const ranged=defenders.filter(s=>s.type==='bow'||s.type==='gun');
+    const melee=defenders.filter(s=>s.type==='spear'||s.type==='cavalry');
+    let pi=0;
+    ranged.forEach(s=>{
+      if (pi>=this.yaguraPosts.length) return;
+      const [pc,pr]=this.yaguraPosts[pi++];
+      const occ=this.stackAt(pc,pr); if (occ&&occ!==s){ occ.col=s.col; occ.row=s.row; }
+      s.col=pc; s.row=pr; s.castlePost='yagura';
+    });
+    // ③ 石落とし: 城門・城壁に隣接した足軽/騎馬を highGround に（隣接した寄手へ毎ラウンド落石）
+    melee.forEach(s=>{
+      if (s.castlePost) return;
+      const nearWall=hexNeighbors(s.col,s.row).some(([nc,nr])=>{ const cc=this.castleCells&&this.castleCells[nc+','+nr]; return cc&&(cc.kind==='wall'||cc.kind==='stonewall'||cc.kind==='gate'); });
+      if (nearWall){ s.highGround=true; s.castlePost='wall'; }
+    });
+    // ④ 伏兵: 足軽1隊を寄手の進路に潜ませる（露見まで描画を隠す）
+    const ambusher = melee.find(s=>!s.castlePost && s.type==='spear') || melee.find(s=>!s.castlePost);
+    if (ambusher){ const spot=this._findAmbushSpot(); if (spot){ ambusher.col=spot[0]; ambusher.row=spot[1]; ambusher.ambush=true; ambusher.castlePost='ambush'; } }
+    // ⑤ 落とし穴: 寄手の進軍路に隠し穴を仕掛ける（真田家・霧隠れの城では増設）
+    const extraPit=(this.castleSignature&&this.castleSignature.id==='iwamura')?1:0;
+    this._placePitTraps((this.sanadaGuile?3:2)+extraPit);
+    // 開幕の智略アナウンス（城固有 > 真田）
+    if (this.castleSignature) this._flash(this.castleSignature.jp+' / '+this.castleSignature.en);
+    else if (this.sanadaGuile) this._flash('真田の智略：落とし穴・伏兵・櫓の鉄砲が寄手を阻む / Sanada’s cunning');
+  }
+  // 名城ごとの固有守備能力（防御補正＋固有謀略フラグ）。城名で判定する。
+  _setCastleSignature(){
+    const name=this.castleName||'';
+    const S=[
+      {id:'kasugayama', match:'春日山', jp:'春日山城「車懸り迎撃」', en:'Kasugayama: Wheel-charge counter', defBuff:1.10, signaturePloy:'kurumagakari'},
+      {id:'odawara',    match:'小田原', jp:'小田原城「総構え」',     en:'Odawara: Great outer rampart',    defBuff:1.22, signaturePloy:null},
+      {id:'gassan',     match:'月山富田', jp:'月山富田城「難攻不落」', en:'Gassan-Tomita: Impregnable',      defBuff:1.25, signaturePloy:null},
+      {id:'iwamura',    match:'岩村',    jp:'岩村城「霧隠れ」',       en:'Iwamura: Veiled in mist',         defBuff:1.08, signaturePloy:'mist'},
+    ];
+    const sig=S.find(s=>name.indexOf(s.match)>=0);
+    if (!sig) return;
+    this.castleSignature=sig; this._castleDefBuff=sig.defBuff;
+  }
+  _findAmbushSpot(){
+    // 外郭の少し手前（rows8-11）で通行可能・空きの平地/森を選ぶ。門の真上は避ける（唯一の侵入路を塞がない）。
+    for (let r=11;r>=8;r--) for (let c=2;c<HEX.cols-2;c++){
+      if (this.stackAt(c,r)) continue;
+      if (this._cellObstructs(c,r)) continue;
+      const t=this.terrainMap[c+','+r]; if (t==='sky'||t==='water') continue;
+      return [c,r];
+    }
+    return null;
+  }
+  _placePitTraps(n){
+    const rng=GameKit.Gen.rng((this.state.rng||1) ^ 0x5a11ada ^ (this.ctx.dstId?this.ctx.dstId.length*131:3));
+    const cand=[];
+    for (let r=12;r>=7;r--) for (let c=1;c<HEX.cols-1;c++){
+      if (this._cellObstructs(c,r)) continue;
+      if (this.castleCells && this.castleCells[c+','+r]) continue; // 城郭セル上は避ける
+      const t=this.terrainMap[c+','+r]; if (t!=='plain'&&t!=='forest') continue;
+      if (this.stackAt(c,r)) continue;
+      if (Math.abs(c-this.keepHex[0])<=1 && Math.abs(r-this.keepHex[1])<=1) continue;
+      cand.push([c,r]);
+    }
+    for (let i=cand.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [cand[i],cand[j]]=[cand[j],cand[i]]; }
+    const chosen=[];
+    for (const [c,r] of cand){
+      if (chosen.length>=n) break;
+      if (chosen.some(([pc,pr])=>hexDist(pc,pr,c,r)<2)) continue; // 密集を避ける
+      chosen.push([c,r]); this.pitTraps[c+','+r]={sprung:false};
+    }
+  }
+  // 寄手が落とし穴マスへ入った時の発動（兵数減＋その手を消費）。攻撃側の移動確定後に呼ぶ。
+  _springPitTrap(game, s){
+    if (!this.siege || s.side!=='atk') return false;
+    const key=s.col+','+s.row; const trap=this.pitTraps&&this.pitTraps[key];
+    if (!trap || trap.sprung) return false;
+    trap.sprung=true;
+    const loss=Math.max(1, Math.round(s.count*(this.sanadaGuile?0.16:0.12)));
+    s.count=Math.max(1, s.count-loss);
+    s.hasMoved=true; s.hasAttacked=true;
+    const [x,y]=hexCenter(s.col,s.row);
+    this.floaters.push({x, y:y-HEX.size*0.3, vy:-58, life:1.1, text:'-'+loss, color:'#fca5a5', size:32});
+    for (let i=0;i<14;i++){ const a=Math.random()*Math.PI*2, sp=60+Math.random()*160; this.sparks.push({x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-20, life:0.3+Math.random()*0.3, color:Math.random()<0.5?'#7c5a2e':'#4b3a22', r:2+Math.random()*3}); }
+    this._flash('落とし穴！ 兵-'+loss+' / Pit trap!');
+    if (game&&game.audio) game.audio.noise(0.22,0.3);
+    this._cleanupStacks();
+    return true;
+  }
+  _isInsideCastle(c,r){
+    if (!this.siege || !this.keepHex) return false;
+    return hexDist(c,r,this.keepHex[0],this.keepHex[1]) <= (this._perimeter||3);
+  }
+  _nearestFreeYagura(e){
+    let best=null, bd=1e9;
+    for (const [pc,pr] of (this.yaguraPosts||[])){
+      const occ=this.stackAt(pc,pr); if (occ && occ!==e) continue;
+      const d=hexDist(e.col,e.row,pc,pr); if (d<bd){ bd=d; best=[pc,pr]; }
+    }
+    return best;
+  }
+  _nearestGuardSpot(e){
+    // 未破壊の城門の内側（天守寄り）の空きマスを固守位置に選ぶ
+    let best=null, bd=1e9;
+    for (const k in this.castleCells){
+      const cell=this.castleCells[k]; if (cell.kind!=='gate') continue;
+      const [gc,gr]=k.split(',').map(Number);
+      hexNeighbors(gc,gr).forEach(([nc,nr])=>{
+        if (this._cellObstructs(nc,nr)) return; if (this.stackAt(nc,nr)) return;
+        const t=this.terrainMap[nc+','+nr]; if (t==='sky'||t==='water') return;
+        const d=hexDist(nc,nr,this.keepHex[0],this.keepHex[1]) + hexDist(e.col,e.row,nc,nr)*0.1;
+        if (d<bd){ bd=d; best=[nc,nr]; }
+      });
+    }
+    return best;
+  }
+  _siegeStepToward(e, gc, gr){
+    // 城内の通行可能マスを辿って目標へ1手近づく（壁・堀は越えない＝城内に留まる）
+    const mp=UNITS[e.type].move;
+    let bestHex=null, bestD=hexDist(e.col,e.row,gc,gr);
+    let frontier=[[e.col,e.row,0]]; const seen={}; seen[e.col+','+e.row]=true;
+    while (frontier.length){
+      const [cc,cr,cd]=frontier.shift(); if (cd>=mp) continue;
+      hexNeighbors(cc,cr).forEach(([nc,nr])=>{
+        const key=nc+','+nr; if (seen[key]) return; seen[key]=true;
+        if (this.stackAt(nc,nr)) return; if (this.isCastleBlocked(nc,nr)) return;
+        const terr=this.terrainMap[key]; if (terr==='sky') return; if (terr==='water'&&!this.naval) return;
+        const d=hexDist(nc,nr,gc,gr);
+        if (d<bestD){ bestD=d; bestHex=[nc,nr]; }
+        frontier.push([nc,nr,cd+1]);
+      });
+    }
+    if (bestHex){ e.col=bestHex[0]; e.row=bestHex[1]; }
+  }
+  // 射程内に敵がいない守兵の再配置・策動（enemyPhaseの攻撃判定の後に呼ばれる）
+  _siegeDefenderMove(game, e){
+    // 伏兵の露見: 寄手が2マス以内に来たら姿を現し、次の攻撃に強襲補正
+    if (e.ambush){
+      const near=this.stacks.some(a=>a.side==='atk' && hexDist(e.col,e.row,a.col,a.row)<=2);
+      if (near){ e.ambush=false; e._ambushStrike=true; this._flash('伏兵あらわる！ / Ambush!'); if(game&&game.audio) game.audio.beep(300,0.12,'sawtooth'); }
+      return;
+    }
+    // 弓・鉄砲: 空いた最寄りの櫓へ登る（既に櫓上なら待機して射線を維持）
+    if (e.type==='bow'||e.type==='gun'){
+      if (e.castlePost==='yagura') return;
+      const post=this._nearestFreeYagura(e);
+      if (post){ this._siegeStepToward(e, post[0], post[1]); if (e.col===post[0]&&e.row===post[1]) e.castlePost='yagura'; }
+      return;
+    }
+    // 足軽・騎馬: 城内へ侵入した寄手がいれば逆襲（誘い込み戦法）。無ければ最寄りの城門内側を固守。
+    const intruders=this.stacks.filter(a=>a.side==='atk' && this._isInsideCastle(a.col,a.row));
+    if (intruders.length){
+      // 天守に最も近い（＝最も奥へ入り込んだ）寄手を迎撃
+      intruders.sort((a,b)=>hexDist(a.col,a.row,this.keepHex[0],this.keepHex[1])-hexDist(b.col,b.row,this.keepHex[0],this.keepHex[1]));
+      this._siegeStepToward(e, intruders[0].col, intruders[0].row); return;
+    }
+    const spot=this._nearestGuardSpot(e);
+    if (spot) this._siegeStepToward(e, spot[0], spot[1]);
+  }
+  // 守備側の謀略（1ラウンドに最大1つ）。夜襲・偽情報・偽降伏・鉄砲一斉射撃・城固有能力。
+  _siegePloyTurn(game){
+    if (!this.pitTraps) return;
+    this._ployCD=(this._ployCD||0); this._ploysUsed=this._ploysUsed||{};
+    if (this._ployCD>0){ this._ployCD--; return; }
+    const atkers=this.stacks.filter(s=>s.side==='atk'); if (!atkers.length) return;
+    const near=(c,r,d)=>atkers.filter(a=>hexDist(a.col,a.row,c,r)<=d);
+    const gunCount=this.stacks.filter(s=>s.side==='def'&&(s.type==='gun'||s.type==='bow')&&s.castlePost==='yagura').length;
+    const advanced=atkers.slice().sort((a,b)=>hexDist(a.col,a.row,this.keepHex[0],this.keepHex[1])-hexDist(b.col,b.row,this.keepHex[0],this.keepHex[1]))[0];
+    // 城門付近に群がる寄手（偽降伏の対象）
+    let gateCluster=null;
+    for (const k in this.castleCells){ if (this.castleCells[k].kind!=='gate') continue; const [gc,gr]=k.split(',').map(Number); const grp=near(gc,gr,2); if (grp.length>=2 && (!gateCluster||grp.length>gateCluster.length)) gateCluster=grp; }
+    const fire=(id,cd)=>{ this._ploysUsed[id]=true; this._ployCD=cd; };
+    const sigPloy=this.castleSignature?this.castleSignature.signaturePloy:null;
+    // ① 偽降伏（城門に寄手が密集で発動・1回）
+    if (!this._ploysUsed.fakeSurrender && gateCluster){
+      this._flash('偽りの降伏…城門にて伏兵一斉攻撃！ / Feigned surrender ambush!');
+      gateCluster.forEach(a=>this._ployHit(game,a,0.16,true)); game.audio.noise(0.24,0.3); this._cleanupStacks(); fire('fakeSurrender',2); return;
+    }
+    // ② 城固有: 車懸り迎撃（春日山・round>=2・1回）
+    if (sigPloy==='kurumagakari' && !this._ploysUsed.kuruma && this.round>=2 && advanced){
+      this._flash('車懸りの迎撃！ 寄手を分断 / Kurumagakari counter!'); this._ployHit(game,advanced,0.18,true); this._cleanupStacks(); fire('kuruma',3); return;
+    }
+    // ③ 夜襲（round>=3・1回・最も深入りした寄手を撹乱）
+    if (!this._ploysUsed.nightRaid && this.round>=3 && advanced){
+      this._flash('夜襲！ 寄手の本陣を撹乱 / Night raid!'); this._ployHit(game,advanced,0.15,true); game.audio.noise(0.2,0.26); this._cleanupStacks(); fire('nightRaid',3); return;
+    }
+    // ④ 偽情報・偽援軍（round>=2・1回・強兵2隊を混乱）
+    if (!this._ploysUsed.disinfo && this.round>=2){
+      atkers.slice().sort((a,b)=>b.count-a.count).slice(0,2).forEach(a=>{ a._confusedT=2; this._spawnConfuse(a); });
+      this._flash('「援軍到来」の偽報！ 寄手混乱 / Disinformation: enemy in disorder'); game.audio.beep(240,0.14,'sawtooth'); fire('disinfo',3); return;
+    }
+    // ⑤ 鉄砲一斉射撃（櫓の鉄砲が射程内の寄手を停止・繰り返し）
+    if (gunCount>0){
+      const tgt=atkers.filter(a=>this.yaguraPosts.some(([pc,pr])=>hexDist(a.col,a.row,pc,pr)<=3)).sort((a,b)=>b.count-a.count)[0];
+      if (tgt){ this._flash('櫓より鉄砲一斉射撃！ 突撃を阻む / Volley from the towers!'); this._ployHit(game,tgt,0.08+0.02*gunCount,true); game.audio.beep(900,0.06,'square'); this._cleanupStacks(); fire('volley',2); return; }
+    }
+    // ⑥ 城固有: 霧隠れ（岩村・繰り返し・寄手を混乱させ視界を奪う）
+    if (sigPloy==='mist' && advanced){
+      advanced._confusedT=Math.max(advanced._confusedT||0,1); this._spawnConfuse(advanced);
+      this._flash('霧隠れ…寄手の目を眩ます / Veiled in mist'); fire('mist',2); return;
+    }
+  }
+  _ployHit(game, target, frac, confuse){
+    if (!target) return;
+    const loss=Math.max(1,Math.round(target.count*frac)); target.count=Math.max(0,target.count-loss);
+    if (confuse) target._confusedT=Math.max(target._confusedT||0,1);
+    this._spawnHitFx(target, loss, true);
+  }
+  _spawnConfuse(a){ const [x,y]=hexCenter(a.col,a.row); this.floaters.push({x,y:y-HEX.size*0.5,vy:-40,life:1.3,text:'混乱',color:'#c4b5fd',size:26}); }
   _runEnemyPhase(game){
+    // 混乱の残存ターンを1減らす（謀略適用の前に行い、この局面で新たに付与した混乱は次の自軍ターンまで残す）
+    this.stacks.forEach(s=>{ if (s._confusedT>0) s._confusedT--; });
+    // 攻城戦の守備AI: ユニット行動の前に「謀略」を1つ仕掛ける（夜襲・偽情報・偽降伏・鉄砲一斉射撃・城固有能力）
+    if (this.siege && this.aiSide==='def') this._siegePloyTurn(game);
     // AI側（プレイヤーが攻撃なら守備AI、プレイヤーが防衛なら攻撃AI）greedy
     const enemies=this.stacks.filter(s=>s.side===this.aiSide);
     enemies.forEach(e=>{
@@ -11541,7 +11798,7 @@ class BattleScene extends GameKit.Scene {
       if (target){ this._resolveMelee(e, target); game.audio.noise(0.12,0.12); this._cleanupStacks(); return; }
       // AIが守備側のときのみ地の利で固守（攻撃側AIは前進し続ける）
       if (this.aiSide==='def'){
-        if (this.siege) return; // 攻城戦の守備側は城内に籠って動かない
+        if (this.siege){ this._siegeDefenderMove(game, e); return; } // 攻城戦の守備は再配置・策動する
         const here=this.terrainMap[e.col+','+e.row];
         if (here==='mountain'||here==='forest'||here==='river') return;
         // 鉄砲・弓は射程を活かすためむやみに突出しない（半数の確率で待機）
@@ -11660,6 +11917,7 @@ class BattleScene extends GameKit.Scene {
           if (bestHex){
             s.col=bestHex[0]; s.row=bestHex[1]; s.hasMoved=true;
             this._applyDryMoatCross(game, s, bestHex[0], bestHex[1]);
+            this._springPitTrap(game, s);
             if (this._checkKeep(game)) return;
           }
         }
@@ -11754,6 +12012,7 @@ class BattleScene extends GameKit.Scene {
     this.particles.draw(ctx);
     this._drawGrid(ctx);
     this._drawCastle(ctx);
+    this._drawSiegeDefense(ctx);
     this._drawStacks(ctx);
     this._drawFx(ctx);
     ctx.restore();
@@ -11937,10 +12196,38 @@ class BattleScene extends GameKit.Scene {
     this._hexPath(ctx,x,y); ctx.save(); ctx.fillStyle='rgba(180,140,60,0.34)'; ctx.fill(); ctx.lineWidth=3.5; ctx.strokeStyle='#e8c07a'; ctx.stroke(); ctx.restore();
     T(ctx,'天守',x,y-HEX.size*0.66,{size:22,weight:'bold',color:'#f6d58a',align:'center',baseline:'middle',shadow:true});
   }
+  // 攻城戦の守備演出（櫓・発動済み落とし穴）を城グラフィックの手前・兵の奥に控えめに描く
+  _drawSiegeDefense(ctx){
+    if (!this.siege) return;
+    (this.yaguraPosts||[]).forEach(([c,r])=>{
+      const [x,y]=hexCenter(c,r);
+      const w=HEX.size*0.52, h=HEX.size*0.40, ty=y-HEX.size*0.10;
+      ctx.save(); ctx.globalAlpha=0.92; ctx.lineWidth=2.4; ctx.strokeStyle='rgba(214,170,110,0.85)';
+      ctx.fillStyle='rgba(58,42,24,0.5)';
+      ctx.beginPath(); ctx.moveTo(x-w*0.5,ty+h); ctx.lineTo(x-w*0.34,ty); ctx.lineTo(x+w*0.34,ty); ctx.lineTo(x+w*0.5,ty+h); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle='rgba(150,110,70,0.72)'; ctx.beginPath(); ctx.moveTo(x-w*0.54,ty); ctx.lineTo(x,ty-h*0.55); ctx.lineTo(x+w*0.54,ty); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.restore();
+      T(ctx,'櫓',x,y+HEX.size*0.46,{size:15,weight:'bold',color:'#e8c07a',align:'center',baseline:'middle',shadow:true});
+    });
+    for (const k in (this.pitTraps||{})){
+      if (!this.pitTraps[k].sprung) continue;
+      const [c,r]=k.split(',').map(Number); const [x,y]=hexCenter(c,r);
+      ctx.save(); this._hexPath(ctx,x,y); ctx.fillStyle='rgba(10,8,6,0.55)'; ctx.fill();
+      ctx.setLineDash([4,4]); ctx.lineWidth=2; ctx.strokeStyle='rgba(120,90,50,0.8)'; ctx.stroke(); ctx.setLineDash([]); ctx.restore();
+      T(ctx,'落',x,y,{size:18,weight:'bold',color:'#caa76a',align:'center',baseline:'middle',shadow:true});
+    }
+  }
   _drawStacks(ctx){
     this.stacks.forEach(s=>{
       const [x,y]=hexCenter(s.col,s.row);
       const sel=this.selected===s;
+      // 伏兵は正体を隠す（草むらに潜伏）。露見（ambush解除）まで正規の駒を描かない。
+      if (s.ambush){
+        ctx.save(); ctx.globalAlpha=0.5; ctx.fillStyle='rgba(40,70,40,0.6)';
+        ctx.beginPath(); ctx.ellipse(x,y+HEX.size*0.08,HEX.size*0.5,HEX.size*0.3,0,0,Math.PI*2); ctx.fill(); ctx.restore();
+        T(ctx,'？',x,y,{size:22,weight:'bold',color:'rgba(200,220,200,0.55)',align:'center',baseline:'middle'});
+        return;
+      }
       // 駒
       ctx.save();
       ctx.beginPath(); ctx.arc(x,y,HEX.size*0.62,0,Math.PI*2);
@@ -11957,6 +12244,8 @@ class BattleScene extends GameKit.Scene {
       T(ctx, s.count+'', x, y+HEX.size*0.20, {size:24, color:'#e8eef6', align:'center', baseline:'middle'});
       // 武将名
       T(ctx, s.name, x, y+HEX.size*0.80, {size:20, color: s.side==='atk'?'#9ec3ff':'#ffb3b3', align:'center', baseline:'middle'});
+      // 混乱（謀略を受けた寄手）マーカー
+      if (s._confusedT>0) T(ctx,'混乱',x,y-HEX.size*0.52,{size:16,weight:'bold',color:'#c4b5fd',align:'center',baseline:'middle',shadow:true});
     });
   }
   _drawHUD(ctx){
@@ -11966,7 +12255,7 @@ class BattleScene extends GameKit.Scene {
     const battleTitle=this.battleType==='siege'?targetName+'\u306e\u653b\u57ce\u6226':(this.naval?DATA.provById[c.dstId].nameJP+'\u6c96\u306e\u6d77\u6226':DATA.provById[c.dstId].nameJP+'\u4ed8\u8fd1\u306e\u6226\u3044');
     T(ctx,battleTitle,36,42,{size:30,weight:'bold',color:'#f2c879'});
      if(this.naval) T(ctx,'\u9752\u3044\u6c34\u9762= \u8239\u56e3\u306e\u79fb\u52d5\u30a8\u30ea\u30a2',36,218,{size:16,color:'#7dd3fc'});
-     else if(this.battleType==='siege') T(ctx,'青=堀(通行不可)  /  白=城壁・石垣  /  門・柵=破壊可  /  金枠=天守',36,218,{size:16,color:'#dbe4ee'});
+     else if(this.battleType==='siege') T(ctx,'青=堀  /  白=城壁  /  門・柵=破壊可  /  金枠=天守  /  櫓=守備の射撃拠点  /  守備は謀略（落とし穴・伏兵・夜襲等）で反撃',36,218,{size:15,color:'#dbe4ee'});
      else if(this.fieldLayout) T(ctx,'緑=森(守備+・移動遅)  /  土色=山(守備+・移動遅)  /  水色=川(移動遅)  /  青=水面(通行不可)',36,218,{size:16,color:'#dbe4ee'});
     T(ctx,'\u30e9\u30a6\u30f3\u30c9 '+this.round+' / '+this.maxRounds+'  '+(this.phase==='player'?(this.delegated?'\u81ea\u8ecd\u30bf\u30fc\u30f3\uff08\u59d4\u4efb\u4e2d\uff09':'\u81ea\u8ecd\u30bf\u30fc\u30f3'):'\u6575\u8ecd\u30bf\u30fc\u30f3'),36,82,{size:22,color:this.delegated?'#67e8f9':'#9fb2c6'});
     if(this.isNaval) T(ctx,'\u2693 \u6d77\u6226\u30fb\u6c34\u8ecd\u652f\u63f4 +'+Math.round(this.navalBonus*100)+'% / Naval support',W/2-180,42,{size:22,weight:'bold',color:'#7dd3fc'});
