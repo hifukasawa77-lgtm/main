@@ -11360,11 +11360,17 @@ class BattleScene extends GameKit.Scene {
     if (s && s.side===this.playerSide && s._stunT>0){ this._flash('この隊は忍びに撹乱され行動不能 / Unit disrupted by infiltration'); this.selected=null; this.reach={}; this.targets={}; return; }
     this.selected=s; this._computeRange(s);
   }
+  // 実効射程: 弓・鉄砲は「櫓（守備）」または「攻城櫓（寄手）」に拠れば射程3。
+  _unitRange(s){
+    const base=UNITS[s.type].range;
+    if ((s.type==='bow'||s.type==='gun') && (s.castlePost==='yagura' || s._siegeTower)) return Math.max(base,3);
+    return base;
+  }
   _computeRange(s){
     this.reach={}; this.targets={}; this.wallTargets={}; this.objectTargets={};
     // 攻撃対象（射程内の敵）
     if (!s.hasAttacked){
-      const range=UNITS[s.type].range;
+      const range=this._unitRange(s);
       this.stacks.filter(e=>e.side!==s.side).forEach(e=>{
         if (hexDist(s.col,s.row,e.col,e.row)<=range) this.targets[e.col+','+e.row]=true;
       });
@@ -11433,13 +11439,19 @@ class BattleScene extends GameKit.Scene {
     const rng=UNITS[s.type].range;
     const barrierInRange=(kinds,r)=>{ for(const k in this.castleCells){ const c=this.castleCells[k]; if(c.destroyed||!kinds.includes(c.kind))continue; const [bc,br]=k.split(',').map(Number); if(hexDist(s.col,s.row,bc,br)<=r) return true; } return false; };
     const wallAdj=hexNeighbors(s.col,s.row).some(([c,r])=>{ const cc=this.castleCells[c+','+r]; return cc&&!cc.destroyed&&(cc.kind==='wall'||cc.kind==='stonewall'||cc.kind==='earthwork'); });
-    out.push({id:'scout', jp:'物見', en:'Scout', on:!this._attackerPloys.scout});
-    out.push({id:'takezoku', jp:'竹束', en:'Bamboo Shield', on:!s.commandUsed && !s._takezoku});
-    if (s.type==='gun') out.push({id:'suppress', jp:'制圧射撃', en:'Suppress', on:!s.commandUsed});
-    if (barrierInRange(['gate','palisade'], rng)) out.push({id:'fire', jp:'火攻め', en:'Fire Attack', on:!s.commandUsed && this.weather!=='rain'});
+    const defNear=this.stacks.some(d=>d.side==='def'&&hexDist(s.col,s.row,d.col,d.row)<=3);
+    const ranged=(s.type==='bow'||s.type==='gun');
+    // 一度きりの謀略（物見・夜襲・調略）は未使用の時だけ表示してボタンの氾濫を防ぐ
+    if (!this._attackerPloys.scout) out.push({id:'scout', jp:'物見', en:'Scout', on:true});
+    if (!this._attackerPloys.nightraid) out.push({id:'nightraid', jp:'夜襲', en:'Night Raid', on:true});
     if (wallAdj) out.push({id:'mine', jp:'坑道', en:'Mine Wall', on:!s.commandUsed});
-    if (barrierInRange(['gate'],3)) out.push({id:'bribe', jp:'調略', en:'Bribe Gate', on:!this._attackerPloys.bribe});
-    return out;
+    if (barrierInRange(['gate','palisade'], rng)) out.push({id:'fire', jp:'火攻め', en:'Fire Attack', on:!s.commandUsed && this.weather!=='rain'});
+    if (!this._attackerPloys.bribe && barrierInRange(['gate'],3)) out.push({id:'bribe', jp:'調略', en:'Bribe Gate', on:true});
+    if (defNear) out.push({id:'lure', jp:'釣り野伏せ', en:'Feint & Lure', on:!s.commandUsed});
+    if (s.type==='gun') out.push({id:'suppress', jp:'制圧射撃', en:'Suppress', on:!s.commandUsed});
+    if (ranged) out.push({id:'tower', jp:'攻城櫓', en:'Siege Tower', on:!s.commandUsed && !s._siegeTower});
+    out.push({id:'takezoku', jp:'竹束', en:'Bamboo Shield', on:!s.commandUsed && !s._takezoku});
+    return out.slice(0,6); // 縦積みが画面外へ溢れないよう最大6つ
   }
   _useSiegePloy(game, id){
     const s=this.selected; if (!s || s.side!==this.playerSide || s.side!=='atk' || !this.siege) return;
@@ -11487,6 +11499,28 @@ class BattleScene extends GameKit.Scene {
       this._attackerPloys.bribe=true; const [bc,br,cell]=tgt; cell.destroyed=true; cell.flameT=0;
       game.audio.jingle([{f:392,d:0.1},{f:523,d:0.14}]); this._flash('調略成功！ 内応の兵が城門を開いた / Bribery: gate opened from within');
       this._computeRange(s); return;
+    }
+    if (id==='tower'){
+      if (s.commandUsed || s._siegeTower || !(s.type==='bow'||s.type==='gun')) return;
+      s.commandUsed=true; s._siegeTower=true;
+      this._flash('攻城櫓・井楼: 射程が延び高所から射撃 / Siege tower: extended range'); game.audio.beep(500,0.1,'triangle'); this._computeRange(s); return;
+    }
+    if (id==='nightraid'){
+      if (this._attackerPloys.nightraid) return;
+      const tgt=this.stacks.filter(d=>d.side==='def').sort((a,b)=>hexDist(a.col,a.row,this.keepHex[0],this.keepHex[1])-hexDist(b.col,b.row,this.keepHex[0],this.keepHex[1]))[0];
+      if (!tgt){ this._flash('夜襲の対象となる守兵がいません'); return; }
+      this._attackerPloys.nightraid=true;
+      const loss=Math.max(1,Math.round(tgt.count*0.2)); tgt.count=Math.max(0,tgt.count-loss); tgt._confusedT=Math.max(tgt._confusedT||0,2);
+      this._spawnHitFx(tgt,loss,false); this._spawnConfuse(tgt);
+      game.audio.noise(0.24,0.34); this._flash('夜襲・奇襲！ 守兵を撹乱 敵-'+loss+' / Night raid & surprise assault!');
+      this._cleanupStacks(); this._checkBattleEnd(game); return;
+    }
+    if (id==='lure'){
+      if (s.commandUsed) return;
+      const tgt=this.stacks.filter(d=>d.side==='def'&&hexDist(s.col,s.row,d.col,d.row)<=3).sort((a,b)=>hexDist(s.col,s.row,a.col,a.row)-hexDist(s.col,s.row,b.col,b.row))[0];
+      if (!tgt){ this._flash('釣り出す守兵が近くにいません'); return; }
+      s.commandUsed=true; tgt._lured=true; tgt.castlePost=null; tgt.highGround=false; s._ambushStrike=true;
+      this._flash('偽退却・釣り野伏せ！ 守兵を城外へ誘い出す / Feigned retreat lures a defender out'); game.audio.beep(520,0.08,'triangle'); this._computeRange(s); return;
     }
   }
   _attack(game, atk, def){
@@ -11821,6 +11855,12 @@ class BattleScene extends GameKit.Scene {
   }
   // 射程内に敵がいない守兵の再配置・策動（enemyPhaseの攻撃判定の後に呼ばれる）
   _siegeDefenderMove(game, e){
+    // 釣り野伏せ: 誘い出された守兵は持ち場を捨てて最寄りの寄手へ前進する（城外へ釣り出される）
+    if (e._lured){
+      const bait=this.stacks.filter(a=>a.side==='atk').sort((a,b)=>hexDist(e.col,e.row,a.col,a.row)-hexDist(e.col,e.row,b.col,b.row))[0];
+      if (bait) this._siegeStepToward(e, bait.col, bait.row);
+      e._lured=false; return;
+    }
     // 伏兵の露見: 寄手が2マス以内に来たら姿を現し、次の攻撃に強襲補正
     if (e.ambush){
       const near=this.stacks.some(a=>a.side==='atk' && hexDist(e.col,e.row,a.col,a.row)<=2);
@@ -11981,7 +12021,7 @@ class BattleScene extends GameKit.Scene {
       }
       // 射程内の敵を探す
       let target=null, bestEval=-1;
-      const attackRange=(this.siege && e.side==='def' && e.castlePost==='yagura' && (e.type==='bow'||e.type==='gun')) ? 3 : UNITS[e.type].range;
+      const attackRange=this._unitRange(e);
       this.stacks.filter(s=>s.side===this.playerSide).forEach(a=>{
         if (hexDist(e.col,e.row,a.col,a.row)<=attackRange){
           const ev=advantage(e.type,a.type)*a.count;
