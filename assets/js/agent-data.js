@@ -146,6 +146,18 @@
           title:{ja:'ウォールチェイス',en:'Wall Chase'}, emoji:'🧱',
           desc:{ja:'壁を置いて相手の進路を封鎖する戦略ボードゲーム',en:'Block your opponent\'s path with walls'},
           aliases:{ja:['ウォールチェイス','コリドール','ころりどー','壁','通路','戦略ゲーム'],en:['wall chase','corridor','wall','path','strategy']} },
+        { slug:'sengoku', href:'sengoku.html', cat:'sim',
+          title:{ja:'戦国風雲記',en:'Sengoku Fuunki'}, emoji:'⚔️',
+          desc:{ja:'全国64洲を攻め取る戦国SLG。城・忍者・水軍の支配圏、謀叛の下剋上、陣形の合戦',en:'Conquer 64 provinces — a Sengoku strategy sim with castles, ninja and naval forces'},
+          aliases:{ja:['戦国風雲記','戦国','せんごく','戦国シミュレーション','天下統一','信長','武将'],en:['sengoku','sengoku fuunki','warring states','samurai strategy']} },
+        { slug:'sanguo', href:'sanguo.html', cat:'sim',
+          title:{ja:'三国志・天下三分',en:'Three Kingdoms'}, emoji:'🐉',
+          desc:{ja:'190年反董卓連合が起点の三国志戦略SLG。6勢力で内政・武将登用・攻城',en:'A Three Kingdoms strategy sim — pick one of six factions and vie for China'},
+          aliases:{ja:['三国志','天下三分','さんごく','三国','魏蜀呉','三国志ゲーム','曹操','劉備'],en:['three kingdoms','sanguo','romance of the three kingdoms']} },
+        { slug:'kage-shura', href:'kage_shura_den.html', cat:'action', thumb:'assets/kage-shura-gpt/kage-shura-thumb.png',
+          title:{ja:'影修羅伝',en:'Kage Shura Den'}, emoji:'🥷',
+          desc:{ja:'忍者が戦国の街道を駆ける和風2Dアクション。斬撃・必殺技3種・全2ステージ＋ボス戦',en:'A Japanese period 2D action game — a ninja races through bamboo and a snowy shrine'},
+          aliases:{ja:['影修羅伝','影シュラ伝','かげしゅら','忍者アクション','和風アクション','忍者'],en:['kage shura den','kage shura','ninja action']} },
       ];
       const RECOMMENDS = ['zelda','shogi','mahjong'];
 
