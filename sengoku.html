@@ -1545,12 +1545,15 @@ const GPT_ASSETS = {
   mapSiteResidence: 'assets/sengoku/gpt/map-sites/samurai-residence.png',
   mapSiteYakata: 'assets/sengoku/gpt/map-sites/yakata.png',
   mapSitePagoda: 'assets/sengoku/gpt/map-sites/pagoda.png',
+  facilityFort: 'assets/sengoku/gpt/map-sites/castle.png',
+  facilityPasture: 'assets/sengoku/gpt/map-sites/village.png',
+  facilitySeaCastle: 'assets/sengoku/gpt/map-sites/port-town.png',
 };
 const ASSETS = { img:{}, portraitSlots:{}, portraitCols:6, portraitRows:6, kamonCols:5, kamonRows:5, extraKamonCols:4, extraKamonRows:2 };
 // 初回ロード高速化: タイトル/マップ表示に必要な最小限だけを先読みし、残りは背景で遅延読み込みする。
 // 描画側は未ロード画像を安全にフォールバックするため、遅延分は読み込み完了次第そのまま反映される。
 // CRITICAL = タイトル画像 + 日本地図 + 家紋アトラス（マップ上の家紋表示に必要）。約10MB。
-const CRITICAL_ASSET_KEYS = ['title','map','resourceMarkerAtlas','pirateMarker','horsefarmMarker','kamon','kamonExtra','kamonExtraWest','kamonExtraCentral','kamonRegional','kamonRedraw','kamonRedrawSix','religiousTempleKamon','religiousShrineKamon','templeKamonHieizan','templeKamonKoyasan','templeKamonKofukuji','templeKamonZuisenji','templeKamonHonshoji','templeKamonGanshoji','templeKamonYoshizaki','templeKamonNegoro','mapSiteCastle','mapSiteTown','mapSiteVillage','mapSiteFishingVillage','mapSitePortTown','mapSiteMine','mapSiteOnsen','mapSiteShrine','mapSiteTaisha','mapSiteTemple','mapSiteResidence','mapSiteYakata','mapSitePagoda'];
+const CRITICAL_ASSET_KEYS = ['title','map','resourceMarkerAtlas','pirateMarker','horsefarmMarker','kamon','kamonExtra','kamonExtraWest','kamonExtraCentral','kamonRegional','kamonRedraw','kamonRedrawSix','religiousTempleKamon','religiousShrineKamon','templeKamonHieizan','templeKamonKoyasan','templeKamonKofukuji','templeKamonZuisenji','templeKamonHonshoji','templeKamonGanshoji','templeKamonYoshizaki','templeKamonNegoro','mapSiteCastle','mapSiteTown','mapSiteVillage','mapSiteFishingVillage','mapSitePortTown','mapSiteMine','mapSiteOnsen','mapSiteShrine','mapSiteTaisha','mapSiteTemple','mapSiteResidence','mapSiteYakata','mapSitePagoda','facilityFort','facilityPasture','facilitySeaCastle'];
 // 遅延分の読み込み優先度: まもなく使う（大名選択の顔画像・野戦）→ 後で使う（攻城戦の城・城郭タイル）の順。
 const DEFERRED_ASSET_PRIORITY = ['portrait','unit','battle','historicalEvents'];
 function splitAssetsByPriority(){
@@ -4573,12 +4576,19 @@ const RESOURCE_MARKER_ATLAS_CELLS = {
 };
 const RESOURCE_MARKER_ATLAS_KIND = {
   port:'port', tsu:'port', onsen:'onsen', gold:'mine', silver:'mine', copper:'mine',
-  temple:'temple', in:'temple', shrine:'shrine', kunijin:'kunijin', church:'church', nanban:'nanban'
+  temple:'temple', in:'temple', shrine:'shrine', kunijin:'kunijin', church:'church', nanban:'church'
 };
 const RESOURCE_MARKER_SINGLE_ASSETS = {
   pirate:['pirateMarker',[80,80,1094,1094]],
   horsefarm:['horsefarmMarker',[80,80,1094,1094]],
   kunijin:['kunijinMarker',[39,39,1176,1176]]
+};
+// 勢力施設は固有アイコンではなく、意味に対応する GPT-image2 アセットを表示する。
+// 砦=山城、牧場=馬牧、海城=海城。画像が未ロードの間は既存のマーカーへフォールバックする。
+const FORCE_FACILITY_GRAPHICS = {
+  kunijin: {assetKey:'facilityFort'},
+  horsefarm: {assetKey:'facilityPasture'},
+  pirate: {assetKey:'facilitySeaCastle'}
 };
 const MAP_SITE_MARKER_ASSET_KEYS = {
   town:'mapSiteTown', village:'mapSiteVillage', fishing_village:'mapSiteFishingVillage',
@@ -4605,7 +4615,27 @@ function drawMapSiteImage(ctx, assetKey, x, y, size, ratio=1.8){
   ctx.restore();
   return true;
 }
+function drawFacilityGraphic(ctx, spec, x, y, size){
+  const img=ASSETS.img[spec.assetKey];
+  if (!img || !(img.naturalWidth||img.width)) return false;
+  const d=Math.max(11,size*1.8);
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality='high';
+  if (spec.crop){
+    const c=spec.crop;
+    ctx.drawImage(img,c[0],c[1],c[2],c[3],-d/2,-d/2,d,d);
+  } else {
+    const w=spec.aspect==='wide' ? d*1.26 : d;
+    const h=spec.aspect==='wide' ? d*0.71 : d;
+    ctx.drawImage(img,-w/2,-h/2,w,h);
+  }
+  ctx.restore();
+  return true;
+}
 function drawResourceAtlasIcon(ctx, kind, x, y, size){
+  const facility=FORCE_FACILITY_GRAPHICS[kind];
+  if (facility && drawFacilityGraphic(ctx, facility, x, y, size)) return true;
   const siteKey=mapSiteAssetKey({kind});
   if (siteKey && drawMapSiteImage(ctx, siteKey, x, y, size)) return true;
   const single=RESOURCE_MARKER_SINGLE_ASSETS[kind];
@@ -4679,7 +4709,7 @@ function drawResourceMarker(ctx, marker, x, y, opts={}){
   const style=RESOURCE_MARKER_STYLE[marker.kind] || RESOURCE_MARKER_STYLE.port;
   const labelSize=opts.labelSize || 7, gap=opts.gap || 7;
   const labelH=Math.max(18, Array.from(marker.nameJP||'').length*gap+6);
-  drawVerticalLabelCached(ctx, marker.nameJP, x, y, {size:labelSize, gap, fill:'rgba(0,0,0,0)', stroke:'rgba(0,0,0,0)', color:'#fff7ed'});
+  drawVerticalLabelCached(ctx, marker.nameJP, x, y, {size:labelSize, gap, fill:'rgba(8,12,18,0.82)', stroke:'rgba(255,255,255,0.22)', color:'#fff7ed'});
   if (opts.showIcon !== false){
     const iconKind = TAISHA_MARKER_IDS.has(marker.id) ? 'taisha' : marker.kind;
     drawResourceIcon(ctx, iconKind, x, y+labelH+7, opts.iconSize || 10, style.color);
@@ -8538,9 +8568,11 @@ class MapScene extends GameKit.Scene {
       const labelH=Math.max(18, Array.from(force.nameJP).length*lgap+6);
       const s=lscale*MK;
       if (s!==1){ ctx.save(); ctx.translate(cx, cy); ctx.scale(s, s); ctx.translate(-cx, -cy); }
-      drawVerticalLabelCached(ctx, force.nameJP, cx, cy-size/2-labelH-3, {size:lsz, gap:lgap, fill:'rgba(0,0,0,0)', stroke:'rgba(0,0,0,0)', color:'#fff7ed'});
+      // グラフィックを先に描き、施設名称を最後に重ねて常に読めるようにする。
+
       // 寺社勢力: 300%超でアセットの家紋グラフィックを表示、299%以下は寺社名称のみ（深澤要望）。
-      if (this.cam.zoom > MAP_SITE_GRAPHIC_ZOOM_THRESHOLD) drawKamonMap(ctx, crestId, cx-size/2, cy-size/2, size, force.color);
+      if (this.cam.zoom > MAP_SITE_GRAPHIC_ZOOM_THRESHOLD) drawKamonMap(ctx, crestId, cx-size/2, cy-size/2+4, size, force.color);
+      drawVerticalLabelCached(ctx, force.nameJP, cx, cy-size/2-labelH-3, {size:lsz, gap:lgap, fill:'rgba(8,12,18,0.82)', stroke:'rgba(255,255,255,0.22)', color:'#fff7ed'});
       if (s!==1) ctx.restore();
     }
     } // end if (showSubCastles)
