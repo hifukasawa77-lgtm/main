@@ -3776,11 +3776,11 @@ function pointInLand(x, y){
 // 以前はワールド解像度(約1965px幅)のオフスクリーンへ一度合成してからカメラ変換で拡大していたが、
 // 元画像(1672px幅)→中間キャンバス→画面の二重リサンプルになり、高ズーム時のぼやけを悪化させていた。
 // 元画像から直接カメラ変換込みで描く（単一リサンプル）ことで、ズーム時も元画像の解像度を最大限使う。
-// 地図のアンシャープマスク（feConvolveMatrix畳み込み）は非常に高コストで、静止時ベイクの
-// たびにclip全域（約2500×2000px）へ適用すると1フレームで2秒級のスパイクになっていた
-// （パン/ズームを止める・マップ画面へ入るたびにフリーズ）。鮮明化はロード時に一度だけ
-// ネイティブ解像度へ焼いた mapSharp（buildSharpenedMap）を使い、以降は等倍ビットマップの
-// drawImageのみにする。見た目（鮮明化済みの地図）は維持したまま、ベイクの畳み込みを廃止する。
+// 以前は静止時に、clip全域（約2500×2000px）へ高品質拡大＋アンシャープ畳み込みを毎回焼いていたが、
+// 1フレームで2秒級のスパイク（パン/ズームを止める・マップ画面へ入るたびにフリーズ）を生んでいた。
+// 代わりにロード時に一度だけ高品質2倍拡大した mapSharp（buildSharpenedMap）を作り、以降はその高解像度
+// ソースから毎フレーム軽く拡大するだけにする。静止時の滑らかさを保ったまま、毎フレームの畳み込み/
+// 高品質拡大コストをゼロにできる。
 function drawTerrainBackdrop(ctx, mapImg, opts={}){
   const w=MAP.world;
   const sea=ctx.createLinearGradient(w.x,w.y,w.x+w.w,w.y+w.h);
@@ -3789,31 +3789,38 @@ function drawTerrainBackdrop(ctx, mapImg, opts={}){
   if (mapImg && (mapImg.naturalWidth||mapImg.width)){
     const iw=mapImg.naturalWidth||mapImg.width, ih=mapImg.naturalHeight||mapImg.height;
     const scale=w.w/iw, dh=ih*scale, dy=(w.h-dh)/2;   // 横幅基準contain（左右クロップなし）
-    // 静止ベイク時は鮮明化済みビットマップ（一度だけ生成・キャッシュ）を使う。ネイティブ解像度
-    // 同寸なので描画パラメータは元画像と同一。未生成なら初回のみここで生成する（以降キャッシュ）。
+    // 高解像度化した中間ビットマップ（一度だけ生成・キャッシュ）を使う。mapSharpは元画像の整数倍
+    // （アスペクト比同一）なので配置（dh/dy）は元画像基準のまま、ソース矩形だけmapSharpの実寸を
+    // 指定する。未生成なら初回のみここで生成（以降キャッシュ）。
     const src = opts.sharpen ? (ASSETS.img.mapSharp || buildSharpenedMap() || mapImg) : mapImg;
+    const sw = src.width || src.naturalWidth || iw, sh = src.height || src.naturalHeight || ih;
     ctx.save();
     ctx.imageSmoothingEnabled=true;
     if (opts.quality) ctx.imageSmoothingQuality=opts.quality;
-    ctx.drawImage(src, 0, 0, iw, ih, w.x, w.y+dy, w.w, dh);
+    ctx.drawImage(src, 0, 0, sw, sh, w.x, w.y+dy, w.w, dh);
     ctx.restore();
     ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(w.x, w.y, w.w, w.h);
   }
 }
-// 地図のアンシャープマスクをネイティブ解像度へ一度だけ焼く（結果をASSETS.img.mapSharpへキャッシュ）。
-// 高コストなfeConvolveMatrix畳み込みはここ1回だけに閉じ込め、毎ベイクの適用を無くす。
+// 地図を「高品質補間で2倍拡大」した中間解像度ビットマップをロード時に一度だけ作る。
+// 元画像(約1672px)を高ズームで大きく拡大すると毎フレームの既定補間ではブロック状に粗くなるが、
+// この高解像度ソースから拡大すれば、元のquality:'high'ベイク相当の滑らかさを毎フレーム描画コスト
+// ほぼゼロ（GPU等倍〜軽拡大のみ）で再現できる。高品質拡大のコストはこの1回だけに閉じ込める。
+// 注: 以前はここでアンシャープ（feConvolveMatrix畳み込み）も焼いていたが、畳み込みは2倍解像度で
+// 約1.2秒かかりロードを止めるうえ、高ズームで既定補間拡大するとエッジが硬化して逆に粗く見えるため
+// 廃止した。高品質2倍拡大のみ（約35ms）で滑らかさは十分再現できる。
+// SCALE=2（約3344×1882, 約25MB）。3倍はさらに精細だがメモリ増（約57MB）のため2倍を既定にする。
 function buildSharpenedMap(){
   const img = ASSETS.img.map;
   if (!img || !(img.naturalWidth||img.width)) return null;
   if (ASSETS.img.mapSharp && ASSETS.img._mapSharpSrc===img) return ASSETS.img.mapSharp;
   const iw=img.naturalWidth||img.width, ih=img.naturalHeight||img.height;
+  const SCALE=2;
   try {
-    const cv=document.createElement('canvas'); cv.width=iw; cv.height=ih;
+    const cv=document.createElement('canvas'); cv.width=Math.round(iw*SCALE); cv.height=Math.round(ih*SCALE);
     const c=cv.getContext('2d');
-    c.imageSmoothingEnabled=true;
-    c.filter='url(#terrainSharpen)';
-    c.drawImage(img, 0, 0);
-    c.filter='none';
+    c.imageSmoothingEnabled=true; c.imageSmoothingQuality='high';
+    c.drawImage(img, 0, 0, cv.width, cv.height);
     ASSETS.img.mapSharp=cv; ASSETS.img._mapSharpSrc=img;
     return cv;
   } catch(_){ return null; }
