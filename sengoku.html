@@ -7923,8 +7923,12 @@ class MapScene extends GameKit.Scene {
     ];
     // 外交モーダル表示中は、背面の左メニューを描かない（パネルと文字が重なるため）
     if (!this.showClans) menu.forEach((m,i)=>bs.push({x:menuX, y:menuY+i*(menuH+gap), w:menuW, h:menuH, skin:'sengokuMenu', jp:m.jp, en:m.en, icon:m.icon, sz:menuSz, iconSz:menuIconSz, iconX:menuIconX, labelX:menuLabelX, action:m.action, noScale:true}));
-    bs.push({x:W-(IS_TOUCH?410:296), y:IS_TOUCH?32:18, w:IS_TOUCH?222:150, h:IS_TOUCH?78:52, skin:'topBar', label:'ターン終了', sz:IS_TOUCH?30:21, action:g=>this._endTurn(g), noScale:true});
-    bs.push({x:W-(IS_TOUCH?176:132), y:IS_TOUCH?32:18, w:IS_TOUCH?150:104, h:IS_TOUCH?78:52, skin:'topBar', label:'タイトル', sz:IS_TOUCH?29:20, action:()=>game.changeScene(new TitleScene()), noScale:true});
+    // 外交モーダル表示中は、右上のグローバル操作（ターン終了・タイトル）を隠す。
+    // パネルのヘッダ／✕閉じるボタンと重なって「ごちゃごちゃ」する原因になっていたため。
+    if (!this.showClans){
+      bs.push({x:W-(IS_TOUCH?410:296), y:IS_TOUCH?32:18, w:IS_TOUCH?222:150, h:IS_TOUCH?78:52, skin:'topBar', label:'ターン終了', sz:IS_TOUCH?30:21, action:g=>this._endTurn(g), noScale:true});
+      bs.push({x:W-(IS_TOUCH?176:132), y:IS_TOUCH?32:18, w:IS_TOUCH?150:104, h:IS_TOUCH?78:52, skin:'topBar', label:'タイトル', sz:IS_TOUCH?29:20, action:()=>game.changeScene(new TitleScene()), noScale:true});
+    }
     if (this.showClans){
       const L=this._diploLayout(); const me=st.playerDaimyo;
       // タブバー（4タブ）
@@ -7934,11 +7938,13 @@ class MapScene extends GameKit.Scene {
         {key:'shogun',jp:'幕府',     en:'Bakufu'},
         {key:'armed', jp:'武装勢力', en:'Forces'},
       ];
-      const tabW=Math.floor(L.pw/DIPLO_TABS.length);
+      const tabGap=L.big?10:8;
+      const tabW=Math.floor((L.pw-(L.big?60:40)-tabGap*(DIPLO_TABS.length-1))/DIPLO_TABS.length);
+      const tabX0=L.px+(L.big?30:20);
       DIPLO_TABS.forEach((tab,i)=>{
         const active=this.diploTab===tab.key;
-        bs.push({x:L.px+i*tabW,y:L.py+(L.big?116:96),w:tabW-4,h:L.big?60:52,jp:tab.jp,en:tab.en,sz:L.big?26:20,ensz:L.big?15:12,
-          accent:active?'rgba(100,200,255,0.5)':'rgba(60,60,80,0.5)',
+        bs.push({x:tabX0+i*(tabW+tabGap),y:L.py+(L.big?116:96),w:tabW,h:L.big?76:60,jp:tab.jp,en:tab.en,sz:L.big?30:22,ensz:L.big?16:12,
+          _diploTab:tab.key, _active:active,
           action:()=>{this.diploTab=tab.key;this.selClan=null;this.selForce=null;}, noScale:true});
       });
       // 閉じるボタン（共通）。タイトル行と隣接するため拡大しない
@@ -8319,7 +8325,7 @@ class MapScene extends GameKit.Scene {
     if (this.religiousEdit) this._drawReligiousEditOverlay(ctx);
     if (this.castleMetaEdit) this._drawCastleMetaEditOverlay(ctx);
     // ボタン（一覧オーバーレイより前面に出して操作可能に）
-    if (!this.overlay){ const btns=this._buttons(); for (const b of btns){ if (b._diploClan){ this._drawDiploRow(ctx,b); } else drawButton(ctx,b,this.t); } }
+    if (!this.overlay){ const btns=this._buttons(); for (const b of btns){ if (b._diploClan){ this._drawDiploRow(ctx,b); } else if (b._diploTab){ this._drawDiploTab(ctx,b); } else drawButton(ctx,b,this.t); } }
     // メッセージトースト
     if (this.messageT>0){
       const a=Math.min(1,this.messageT);
@@ -8775,7 +8781,9 @@ class MapScene extends GameKit.Scene {
     const px=(W-pw)/2, py=(H-ph)/2;
     const rowW=big?920:740, rowH=big?120:94;
     return { px,py,pw,ph, big,
-      listX:px+(big?60:48), listY:py+(big?236:200), rowW, rowH,
+      listX:px+(big?60:48), listY:py+(big?248:206), rowW, rowH,
+      // タブバー（py+116〜）とセクション見出しの下から各ペインの内容を始める共通トップ
+      paneTop:py+(big?248:200),
       rightX:px+(big?1080:840), rightW:pw-(big?1140:880) };
   }
   _diploClans(){
@@ -8806,7 +8814,7 @@ class MapScene extends GameKit.Scene {
     const currentRank=kanoi?COURT_KANOI_RANKS.findIndex(r=>r.name===kanoi):-1;
     const nextRank=COURT_KANOI_RANKS[currentRank+1]||null;
     const acted=(dmyo._courtActedTurn===st.turn);
-    const bx=L.rightX, bw=L.rightW; let by=L.py+130;
+    const bx=L.rightX, bw=L.rightW; let by=L.paneTop;
     bs.push({x:bx, y:by, w:bw, h:72, _infoOnly:true,
       jp:'現在の官位: '+(kanoi||'無位'), en:'Rank: '+(kanoi||'None'), sz:22}); by+=86;
     bs.push({x:bx, y:by, w:bw, h:72, _infoOnly:true,
@@ -8841,7 +8849,7 @@ class MapScene extends GameKit.Scene {
     const nextRole=SHOGUN_ROLE_RANKS[currentRank+1]||null;
     const acted=(dmyo._shogunActedTurn===st.turn);
     const provCount=ownedProvinces(st,me).length;
-    const bx=L.rightX, bw=L.rightW; let by=L.py+130;
+    const bx=L.rightX, bw=L.rightW; let by=L.paneTop;
     bs.push({x:bx, y:by, w:bw, h:72, _infoOnly:true,
       jp:'現在の役職: '+(kanoi||'無役'), en:'Role: '+(kanoi||'None'), sz:22}); by+=86;
     bs.push({x:bx, y:by, w:bw, h:72, _infoOnly:true,
@@ -8892,7 +8900,7 @@ class MapScene extends GameKit.Scene {
     const stW=Math.floor(L.pw/SUB_TABS.length);
     SUB_TABS.forEach((st2,i)=>{
       bs.push({
-        x:L.px+i*stW, y:L.py+116, w:stW-4, h:46,
+        x:L.px+i*stW, y:L.py+(L.big?200:160), w:stW-4, h:L.big?52:44,
         jp:st2.jp, en:st2.en, sz:20, ensz:12,
         accent:this.armedSubTab===st2.key?'rgba(80,200,180,0.5)':'rgba(50,50,70,0.5)',
         action:()=>{ this.armedSubTab=st2.key; this.selForce=null; }
@@ -8918,7 +8926,7 @@ class MapScene extends GameKit.Scene {
       const force=forces.find(f=>f.id===sid);
       if (!force) return;
       const af=getAF(st,sid);
-      const bx=L.rightX, bw=L.rightW; let by=L.py+130;
+      const bx=L.rightX, bw=L.rightW; let by=L.paneTop;
       if (this.armedSubTab==='naval'){
         bs.push({x:bx, y:by, w:bw, h:92,
           jp:'贈物（100貫）', en:'Gift (relation +15)',
@@ -9331,25 +9339,83 @@ class MapScene extends GameKit.Scene {
     const st=this.state, rid=b._diploClan, d=daimyoDef(st,rid);
     const sel=this.selClan===rid; const dip=getDip(st,st.playerDaimyo,rid); const stat=this._diploStatus(rid);
     const big=IS_TOUCH;
+    // カード
     ctx.save();
-    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 12);
-    ctx.fillStyle = sel?'rgba(232,192,122,0.20)':(b._hot?'rgba(255,255,255,0.09)':'rgba(255,255,255,0.045)'); ctx.fill();
-    ctx.lineWidth=sel?2.6:1.3; ctx.strokeStyle=sel?'rgba(246,213,138,0.9)':'rgba(148,163,184,0.28)'; ctx.stroke();
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, big?16:12);
+    ctx.fillStyle = sel?'rgba(232,192,122,0.18)':(b._hot?'rgba(255,255,255,0.09)':'rgba(255,255,255,0.045)'); ctx.fill();
+    ctx.lineWidth=sel?3:1.3; ctx.strokeStyle=sel?'rgba(246,213,138,0.95)':'rgba(148,163,184,0.26)'; ctx.stroke();
     ctx.restore();
-    const chip=big?56:44;
-    ctx.fillStyle=d.color; ctx.beginPath(); ctx.roundRect(b.x+16, b.y+b.h/2-chip/2, chip, chip, 8); ctx.fill();
-    ctx.strokeStyle='rgba(255,255,255,0.3)'; ctx.lineWidth=1.6; ctx.stroke();
-    const nameX=b.x+(big?92:78);
-    T(ctx, d.nameJP+'家', nameX, b.y+(big?20:16), {size:big?40:32, weight:'bold', color:'#eef2f7'});
-    T(ctx, ownedProvinces(st,rid).length+' 洲', nameX, b.y+(big?74:58), {size:big?24:20, color:'#9fb2c6'});
-    // 関係バー
-    const barX=b.x+(big?360:300), barW=big?320:280, barY=b.y+b.h/2-6, rel=dip.relation;
-    ctx.fillStyle='rgba(255,255,255,0.10)'; ctx.beginPath(); ctx.roundRect(barX, barY, barW, 12, 6); ctx.fill();
-    const cxc=barX+barW/2; const frac=clamp(rel/100,-1,1);
-    ctx.fillStyle= rel>=0?'rgba(52,211,153,0.85)':'rgba(248,113,113,0.85)';
-    ctx.beginPath(); ctx.roundRect(Math.min(cxc,cxc+frac*(barW/2)), barY, Math.abs(frac)*(barW/2), 12, 6); ctx.fill();
-    T(ctx, '関係 '+rel, barX+barW/2, b.y+b.h/2-(big?46:40), {size:big?22:18, color:'#cbd5e1', align:'center'});
-    T(ctx, stat.jp+' / '+stat.en, b.x+b.w-20, b.y+b.h/2-(big?16:13), {size:big?30:24, weight:'bold', color:stat.color, align:'right'});
+    // 勢力カラーの左アクセント帯（識別性を高める）
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(b.x+(big?10:8), b.y+(big?12:9), big?8:6, b.h-(big?24:18), 4);
+    ctx.fillStyle=d.color; ctx.fill(); ctx.restore();
+    // カラーチップ
+    const chip=big?66:50, chipX=b.x+(big?30:22), chipY=b.y+b.h/2-chip/2;
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(chipX, chipY, chip, chip, big?12:9);
+    ctx.fillStyle=d.color; ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1.6; ctx.stroke(); ctx.restore();
+    // 家名 + 領国
+    const nameX=chipX+chip+(big?24:18);
+    T(ctx, d.nameJP+'家', nameX, b.y+(big?24:18), {size:big?40:32, weight:'bold', color:'#eef2f7'});
+    T(ctx, ownedProvinces(st,rid).length+' 洲', nameX, b.y+(big?78:60), {size:big?24:19, color:'#9fb2c6'});
+    // ステータス・ピル（右端）: 見やすさ優先で日本語のみを中央に大きく
+    const pillW=big?188:146, pillH=big?60:48, pillX=b.x+b.w-pillW-(big?20:14), pillY=b.y+b.h/2-pillH/2;
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(pillX, pillY, pillW, pillH, pillH/2);
+    ctx.fillStyle=this._rgbaFrom(stat.color, 0.18); ctx.fill();
+    ctx.strokeStyle=this._rgbaFrom(stat.color, 0.9); ctx.lineWidth=1.8; ctx.stroke(); ctx.restore();
+    T(ctx, stat.jp, pillX+pillW/2, pillY+pillH/2-(big?17:13), {size:big?30:23, weight:'bold', color:stat.color, align:'center'});
+    // 関係ゲージ（家名ブロックとピルの間に集約）
+    const gaugeX=nameX+(big?250:200), gaugeR=pillX-(big?28:20), barW=Math.max(60, gaugeR-gaugeX);
+    const rel=dip.relation, barY=b.y+b.h/2+(big?8:6), barH=big?14:11;
+    T(ctx, '関係 '+rel, gaugeX+barW/2, b.y+b.h/2-(big?30:24), {size:big?22:18, color:'#cbd5e1', align:'center'});
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(gaugeX, barY, barW, barH, barH/2); ctx.fillStyle='rgba(255,255,255,0.10)'; ctx.fill();
+    const cxc=gaugeX+barW/2, frac=clamp(rel/100,-1,1);
+    ctx.beginPath(); ctx.roundRect(Math.min(cxc,cxc+frac*(barW/2)), barY, Math.abs(frac)*(barW/2), barH, barH/2);
+    ctx.fillStyle= rel>=0?'rgba(52,211,153,0.9)':'rgba(248,113,113,0.9)'; ctx.fill();
+    // 中央マーカー
+    ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillRect(cxc-1, barY-2, 2, barH+4);
+    ctx.restore();
+  }
+  // status.color の 'rgb(...)'/'#hex'/'rgba(...)' を任意アルファの rgba へ
+  _rgbaFrom(color, alpha){
+    if (!color) return 'rgba(148,163,184,'+alpha+')';
+    if (color[0]==='#'){
+      const h=color.slice(1);
+      const n=h.length===3 ? h.split('').map(c=>c+c).join('') : h;
+      const r=parseInt(n.slice(0,2),16), g=parseInt(n.slice(2,4),16), b=parseInt(n.slice(4,6),16);
+      return 'rgba('+r+','+g+','+b+','+alpha+')';
+    }
+    const m=color.match(/\d+/g);
+    if (m && m.length>=3) return 'rgba('+m[0]+','+m[1]+','+m[2]+','+alpha+')';
+    return color;
+  }
+  _drawDiploTab(ctx, b){
+    const big=IS_TOUCH, active=b._active, hot=b._hot;
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, big?14:10);
+    if (active){
+      const g=ctx.createLinearGradient(b.x, b.y, b.x, b.y+b.h);
+      g.addColorStop(0,'rgba(56,120,168,0.55)'); g.addColorStop(1,'rgba(40,86,128,0.75)');
+      ctx.fillStyle=g;
+    } else {
+      ctx.fillStyle= hot ? 'rgba(40,48,66,0.85)' : 'rgba(22,28,42,0.7)';
+    }
+    ctx.fill();
+    ctx.lineWidth= active?2.4:1.2;
+    ctx.strokeStyle= active?'rgba(140,210,255,0.95)':'rgba(120,140,170,0.35)';
+    ctx.stroke();
+    ctx.restore();
+    const col= active?'#f2f9ff':(hot?'#dbe7f5':'#8ea3ba');
+    T(ctx, b.jp, b.x+b.w/2, b.y+b.h/2-(big?24:18), {size:big?30:22, weight:'bold', color:col, align:'center'});
+    T(ctx, b.en, b.x+b.w/2, b.y+b.h/2+(big?4:3), {size:big?16:12, color: active?'rgba(200,228,255,0.85)':'rgba(140,163,186,0.7)', align:'center'});
+    if (active){
+      ctx.save(); ctx.beginPath();
+      ctx.roundRect(b.x+b.w*0.2, b.y+b.h-(big?7:5), b.w*0.6, big?5:4, 3);
+      ctx.fillStyle='rgba(150,215,255,0.95)'; ctx.fill(); ctx.restore();
+    }
   }
   _drawClansOverlay(ctx){
     const st=this.state, me=st.playerDaimyo, L=this._diploLayout(); const big=L.big;
@@ -9357,31 +9423,78 @@ class MapScene extends GameKit.Scene {
     // 背景をしっかり暗転させ、後ろの地図ラベルがパネルと重なって見えないようにする
     ctx.fillStyle='rgba(3,6,14,0.9)'; ctx.fillRect(0,0,W,H);
     GameKit.UI.glassPanel(ctx, L.px,L.py,L.pw,L.ph,{radius:26, fill:'rgba(8,12,22,0.98)', stroke:'rgba(232,192,122,0.5)'});
-    // ヘッダは 見出し→補足→タブ→区切り の順に縦に重ならないよう配置（旧レイアウトは題字とタブが重なっていた）
-    T(ctx,'外交 / Diplomacy', L.px+L.pw/2, L.py+22, {size:big?52:40, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    // ---- ヘッダ（全タブ共通）: 題字は左寄せ、所持金・姫は右上にまとめる ----
+    T(ctx,'外交 / Diplomacy', L.listX, L.py+(big?26:20), {size:big?48:38, weight:'bold', color:'#e8c07a', shadow:true});
+    // 題字下のアクセント下線
+    ctx.save(); ctx.beginPath();
+    ctx.roundRect(L.listX, L.py+(big?92:74), big?300:220, big?5:4, 3);
+    ctx.fillStyle='rgba(232,192,122,0.7)'; ctx.fill(); ctx.restore();
     const myDmyo=st.daimyo[me]; const myDaughters=myDmyo.daughters??1;
-    T(ctx,'所持金 '+myDmyo.gold+' 貫 ・ 未婚の姫 '+myDaughters+'人 ・ 隣接／関係のある勢力のみ表示', L.px+L.pw/2, L.py+(big?76:68), {size:big?27:22, color:'#9fb2c6', align:'center'});
-    T(ctx,'― 勢力 / Clans ―', L.listX+L.rowW/2, L.py+(big?184:166), {size:big?28:22, color:'#a78bfa', align:'center'});
+    const infoRX=L.px+L.pw-(big?220:176);
+    T(ctx,'所持金 '+myDmyo.gold.toLocaleString()+' 貫', infoRX, L.py+(big?30:22), {size:big?28:22, weight:'bold', color:'#f1d9a0', align:'right'});
+    T(ctx,'未婚の姫 '+myDaughters+' 人', infoRX, L.py+(big?70:56), {size:big?24:18, color:'#9fb2c6', align:'right'});
+    // ---- 大名外交タブのみ: 勢力一覧＋交渉ラベル＋詳細/空状態 ----
+    if (this.diploTab!=='clan'){ ctx.restore(); return; }
+    const labelY=L.py+(big?222:196);
+    // セクション見出し＋下線ディバイダ
+    T(ctx,'勢力 / Clans', L.listX, labelY, {size:big?28:22, weight:'bold', color:'#a78bfa'});
+    T(ctx,'隣接・関係のある勢力のみ', L.listX+(big?230:170), labelY+(big?6:5), {size:big?18:14, color:'#6b7d92'});
+    T(ctx,'交渉 / Negotiate', L.rightX, labelY, {size:big?28:22, weight:'bold', color:'#e8c07a'});
+    ctx.save(); ctx.strokeStyle='rgba(148,163,184,0.22)'; ctx.lineWidth=1.4;
+    const divY=labelY+(big?30:24);
+    ctx.beginPath(); ctx.moveTo(L.listX, divY); ctx.lineTo(L.listX+L.rowW, divY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(L.rightX, divY); ctx.lineTo(L.rightX+L.rightW, divY); ctx.stroke();
+    ctx.restore();
     const clans=this._diploClans();
     if (!clans.length) T(ctx,'現在、外交対象の勢力はありません', L.listX+L.rowW/2, L.listY+80, {size:big?30:24, color:'#7d93ab', align:'center'});
-    // 右ペイン: 選択勢力の詳細
+    // 右ペイン: 選択勢力の詳細 / 未選択時は凡例＋現在の外交状況
     const rid=this.selClan;
-    T(ctx,'― 交渉 / Negotiate ―', L.rightX+L.rightW/2, L.py+(big?184:166), {size:big?28:22, color:'#e8c07a', align:'center'});
     if (rid && st.daimyo[rid] && st.daimyo[rid].alive && rid!==me){
       const d=daimyoDef(st,rid), dip=getDip(st,me,rid), stat=this._diploStatus(rid);
-      T(ctx, d.nameJP+'家 / '+(d.nameEN||''), L.rightX+L.rightW/2, L.py+(big?238:210), {size:big?40:32, weight:'bold', color:'#f1e6cf', align:'center'});
-      T(ctx, '状態：'+stat.jp+'（'+stat.en+'）  関係：'+dip.relation+'  領国：'+ownedProvinces(st,rid).length+'洲', L.rightX+L.rightW/2, L.py+(big?290:256), {size:big?26:20, color:stat.color, align:'center'});
+      const cx=L.rightX+L.rightW/2;
+      T(ctx, d.nameJP+'家 / '+(d.nameEN||''), cx, L.py+(big?258:226), {size:big?40:32, weight:'bold', color:'#f1e6cf', align:'center'});
+      T(ctx, '状態：'+stat.jp+'（'+stat.en+'）  関係：'+dip.relation+'  領国：'+ownedProvinces(st,rid).length+'洲', cx, L.py+(big?310:270), {size:big?26:20, color:stat.color, align:'center'});
       const extraInfo=[];
       if (st.daimyo[rid].vassalOf===me) extraInfo.push('従属国（毎季貢納・併合可能）👑');
       if (dip.married) extraInfo.push('婚姻同盟成立済み 💐');
       if ((dip.vassalUntil||0) > st.turn) extraInfo.push('従属中（停戦'+Math.max(0,dip.truceUntil-st.turn)+'ターン残）');
       if (dip.actedTurn===st.turn) extraInfo.push('※今季は交渉済み');
-      if (extraInfo.length) T(ctx, extraInfo.join(' ・ '), L.rightX+L.rightW/2, L.py+(big?338:300), {size:big?22:18, color:'#7d93ab', align:'center'});
+      if (extraInfo.length) T(ctx, extraInfo.join(' ・ '), cx, L.py+(big?354:312), {size:big?22:18, color:'#7d93ab', align:'center'});
     } else {
-      T(ctx, '左の勢力を選んでください', L.rightX+L.rightW/2, L.py+(big?300:240), {size:big?32:24, color:'#8ea3ba', align:'center'});
-      T(ctx, 'Select a clan on the left', L.rightX+L.rightW/2, L.py+(big?344:276), {size:big?22:17, color:'#6b7d92', align:'center'});
+      this._drawDiploEmptyPane(ctx, L, clans);
     }
     ctx.restore();
+  }
+  // 未選択時の右ペイン: 操作ヒント＋凡例＋現在の外交状況（余白を情報で埋める）
+  _drawDiploEmptyPane(ctx, L, clans){
+    const big=L.big, cx=L.rightX+L.rightW/2;
+    let y=L.py+(big?300:250);
+    T(ctx,'← 左の勢力をタップして交渉', cx, y, {size:big?30:23, weight:'bold', color:'#cbd5e1', align:'center'});
+    T(ctx,'Tap a clan on the left to negotiate', cx, y+(big?40:30), {size:big?18:14, color:'#6b7d92', align:'center'});
+    // 凡例
+    y+=big?120:92;
+    T(ctx,'関係ステータス / Legend', L.rightX, y, {size:big?22:17, weight:'bold', color:'#9fb2c6'});
+    y+=big?44:34;
+    const legend=[
+      {jp:'同盟',  color:'#a78bfa'}, {jp:'婚姻同盟', color:'#f472b6'},
+      {jp:'従属国', color:'#fbbf24'}, {jp:'停戦中',  color:'#eab308'},
+      {jp:'中立',  color:'#94a3b8'}, {jp:'敵対',    color:'#f87171'},
+    ];
+    const colW=L.rightW/2, sw=big?26:20;
+    legend.forEach((lg,i)=>{
+      const lx=L.rightX+(i%2)*colW, ly=y+Math.floor(i/2)*(big?54:42);
+      ctx.save(); ctx.beginPath(); ctx.roundRect(lx, ly-sw/2, sw, sw, 5);
+      ctx.fillStyle=this._rgbaFrom(lg.color,0.9); ctx.fill(); ctx.restore();
+      T(ctx, lg.jp, lx+sw+(big?14:10), ly-(big?15:12), {size:big?23:18, color:'#dbe4ee'});
+    });
+    // 現在の外交状況サマリー
+    y+=big?54*3+30 : 42*3+22;
+    const counts={};
+    clans.forEach(c=>{ const s=this._diploStatus(c.id).jp; counts[s]=(counts[s]||0)+1; });
+    const order=['従属国','婚姻同盟','同盟','従属中','停戦中','敵対','中立','主家'];
+    const parts=order.filter(k=>counts[k]).map(k=>k+' '+counts[k]);
+    T(ctx,'現在の外交状況 / Standing', L.rightX, y, {size:big?22:17, weight:'bold', color:'#9fb2c6'});
+    T(ctx, parts.length?parts.join('　・　'):'（対象勢力なし）', L.rightX, y+(big?42:32), {size:big?24:19, color:'#e8c07a'});
   }
   _drawAllGenerals(ctx){
     const st=this.state;
