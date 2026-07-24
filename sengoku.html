@@ -6701,6 +6701,9 @@ class MapScene extends GameKit.Scene {
       }
     });
     this.cells=computeProvinceCells();
+    // 城レイヤー/街道のレイアウトキャッシュを明示的に破棄し、取込結果を即座に再描画へ反映する
+    // （従来はキャッシュキー変化か0.5秒TTL任せで、条件次第で「押しても反映しない」ように見えていた）。
+    this._castleLayout=null; this._roadCache=null;
     this._save();
     if (game && game.audio) game.audio.beep(660,0.08,'triangle');
     this._csvNotify(applied+'城に反映しました（新規'+created+'城追加 / 城Lv '+lvApplied+'件）');
@@ -8887,6 +8890,13 @@ class MapScene extends GameKit.Scene {
       return {p, prov, dd, capital, hot, priority:(hot?10000:0)+(capital?5000:0)+p.kokudaka};
     }).filter(e=>e.dd).sort((a,b)=>b.priority-a.priority);
     const out=[];
+    // タッチ端末は _drawCastleLayer で城アイコン・家紋・城名を MK 倍（アンカー基準の ctx.scale）で描画する。
+    // 衝突回避レイアウトを1倍サイズのまま計算していたため、モバイルでは描画時に1.3倍へ膨らんだ家紋/ラベルが
+    // 隣接城に重なり「城の配置がめちゃくちゃ」に見えていた。占有矩形をアンカー(cx,cy)基準で MK 倍に拡大して
+    // 予約し、重なり判定を実際の描画寸法に合わせる。nx は等倍のまま保持し、描画側の ctx.scale が MK を反映する
+    // （lscale≤1 で高ズーム時はさらに縮むため、MK 予約が最悪ケースの上限になる）。PCは MK=1 で従来と完全に同一。
+    const MK = IS_TOUCH ? 1.3 : 1;
+    const inflate=(r,ax,ay)=>MK===1?r:({x:ax+(r.x-ax)*MK, y:ay+(r.y-ay)*MK, w:r.w*MK, h:r.h*MK});
     for (const e of entries){
       const p=e.p, dd=e.dd;
       const [cx, cy]=provinceScreenPoint(p);
@@ -8897,9 +8907,9 @@ class MapScene extends GameKit.Scene {
       const labelH=Math.max(18, Array.from(name).length*gap+5);
       const labelW=labelSize+7;
       const crestSize=15;
-      const icx=cx-5, icy=cy+9;              // 城アイコンの中心
-      const crestX=icx-crestSize/2, crestY=icy-crestSize/2;   // アイコン中心に重ねる
-      occupied.push({x:crestX, y:crestY, w:crestSize, h:crestSize});  // 家紋の占有（他の城名が重ならないように）
+      const icx=cx-5, icy=cy+9;              // 城アイコンの中心（等倍。描画は cx-5,cy+9 を使う）
+      const crestX=icx-crestSize/2, crestY=icy-crestSize/2;   // アイコン中心に重ねる（等倍）
+      occupied.push(inflate({x:crestX, y:crestY, w:crestSize, h:crestSize}, cx, cy));  // 家紋の占有（MK倍で予約）
       // ラベルが海へはみ出さないよう陸地率を見る（既存ロジック踏襲）
       const seaFracRect=(r)=>{ let s=0,n=0; const stepX=Math.max(6,r.w/3);
         for (let sx=r.x+4; sx<=r.x+r.w-2; sx+=stepX) for (let sy=r.y+4; sy<=r.y+r.h-2; sy+=12){ n++; if (!isLandWorld(sx,sy)) s++; }
@@ -8910,14 +8920,15 @@ class MapScene extends GameKit.Scene {
       let pick=null, best=null;
       for (const [dx,dy] of cand){
         const r=nameRect(dx,dy);
-        const collide=occupied.some(o=>overlaps(r,o));
-        const sea=seaFracRect(r);
+        const rc=inflate(r, cx, cy);                 // 衝突・海判定は描画実寸（MK倍）で行う
+        const collide=occupied.some(o=>overlaps(rc,o));
+        const sea=seaFracRect(rc);
         if (!collide && sea<=0.4){ pick=r; break; }   // 衝突なし＆海が40%以下：採用
         const score=(collide?2:0)+sea+(Math.abs(dx)*0.02+Math.abs(dy)*0.004);  // 横ずれを強くペナルティ
         if (!best || score<best.score) best={r,score};
       }
       const nrect = pick || (best?best.r:nameRect(0,0));
-      occupied.push(nrect);
+      occupied.push(inflate(nrect, cx, cy));          // 予約は MK倍で（nx は等倍のまま保持）
       // 描画に必要な確定値のみを保持（drawKamon/drawVerticalLabel/drawCastleIcon 用）
       out.push({ id:p.id, cx, cy, ddId:dd.id, color:dd.color, crestX, crestY, crestSize, name, force, nx:nrect.x+nrect.w/2, ny:nrect.y });
     }
