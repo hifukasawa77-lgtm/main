@@ -6036,6 +6036,7 @@ class MapScene extends GameKit.Scene {
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
     this.showClans=false; this.showTools=false; this.selClan=null; this.ploy=null; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.dragReligious=null; this.dragResource=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
     this.diploTab='clan'; this.armedSubTab='naval'; this.selForce=null; this.ninjaAction=null;
+    this.diploClanPage=0; // 大名一覧は6件/ページで下スクロール（次の6大名）
     this.allGenPage=0; this.allGenSelected=null; this.historyEventPage=0;
     if (!Number.isFinite(this.state.month)) this.state.month = [3,6,9,12][this.state.season] || 1;
     this.particles = new GameKit.Particles(W, H, {count:24, colors:['#1e3a5f','#2a2150']});
@@ -8245,12 +8246,8 @@ class MapScene extends GameKit.Scene {
       bs.push({x:L.px+L.pw-(L.big?190:152),y:L.py+22,w:L.big?162:128,h:L.big?62:54,skin:'topBar',label:'✕ 閉じる',sz:L.big?26:22,
         action:()=>{this.showClans=false;this.selClan=null;this.selForce=null;}, noScale:true});
       if(this.diploTab==='clan'){
-        // 既存の大名外交コード
-        const clans=this._diploClans();
-        const maxRows=Math.max(1, Math.floor((L.ph-210)/(L.rowH+10)));
-        clans.slice(0,maxRows).forEach((d,i)=>{
-          bs.push({x:L.listX, y:L.listY+i*(L.rowH+10), w:L.rowW, h:L.rowH, _diploClan:d.id, action:()=>{ this.selClan=d.id; }});
-        });
+        // 既存の大名外交コード（一覧は6大名/ページ・下スクロールで次の6へ）
+        this._pushClanListRows(bs, L, this._diploClans());
         const rid=this.selClan;
         if (rid && st.daimyo[rid] && st.daimyo[rid].alive && rid!==me){
           const dip=getDip(st,me,rid); const acted=dip.actedTurn===st.turn; const gold=st.daimyo[me].gold;
@@ -8627,7 +8624,7 @@ class MapScene extends GameKit.Scene {
     // タッチ時は左のコマンドメニューが2列に折り返るため、地図が透けて雑然と見える。
     // ボタン群の背後に一枚のパネルを敷いて“ひとまとまりの操作面”として見せ、違和感を抑える。
     if (!this.overlay && !this.showClans && IS_TOUCH && (!this.castleEdit && !this.castleMetaEdit && !this.religiousEdit)) this._drawTouchMenuBacking(ctx);
-    if (!this.overlay){ const btns=this._buttons(); for (const b of btns){ if (b._diploClan){ this._drawDiploRow(ctx,b); } else if (b._diploTab){ this._drawDiploTab(ctx,b); } else drawButton(ctx,b,this.t); } }
+    if (!this.overlay){ const btns=this._buttons(); for (const b of btns){ if (b._diploClan){ this._drawDiploRow(ctx,b); } else if (b._diploTab){ this._drawDiploTab(ctx,b); } else if (b._armedForce){ this._drawArmedRow(ctx,b); } else drawButton(ctx,b,this.t); } }
     // メッセージトースト
     if (this.messageT>0){
       const a=Math.min(1,this.messageT);
@@ -9139,11 +9136,32 @@ class MapScene extends GameKit.Scene {
   // 朝廷/幕府タブの左側に、仲介・推挙・征伐の「対象大名」を選ぶ一覧を積む。
   // 大名外交タブと同じ勢力リスト（_diploClans）を再利用し、行の描画はボタンループ側（_drawDiploRow）に任せる。
   _pushDiploTargetRows(bs, L){
-    const clans=this._diploClans();
-    const maxRows=Math.max(1, Math.floor((L.ph-210)/(L.rowH+10)));
-    clans.slice(0,maxRows).forEach((d,i)=>{
+    this._pushClanListRows(bs, L, this._diploClans());
+  }
+  // 大名一覧のページ情報（1ページ6大名）。大名外交／朝廷／幕府タブで共用。
+  _clanPageInfo(total){
+    const n = (total==null) ? this._diploClans().length : total;
+    const pages=Math.max(1, Math.ceil(n/6));
+    const page=Math.min(Math.max(0, this.diploClanPage), pages-1);
+    return { pages, page, total:n };
+  }
+  // 大名一覧を6件ずつ描画し、6件を超える分は下部の「次の6大名」で送る（canvasには
+  // ネイティブスクロールがないため、ページ送りで“下スクロールして次の6大名”を実現する）。
+  _pushClanListRows(bs, L, clans){
+    const PAGE=6;
+    const { pages, page } = this._clanPageInfo(clans.length);
+    this.diploClanPage=page; // クランプ結果を反映
+    clans.slice(page*PAGE, page*PAGE+PAGE).forEach((d,i)=>{
       bs.push({x:L.listX, y:L.listY+i*(L.rowH+10), w:L.rowW, h:L.rowH, _diploClan:d.id, action:()=>{ this.selClan=d.id; }});
     });
+    if (pages>1){
+      const navY=L.listY+PAGE*(L.rowH+10)+(L.big?8:6);
+      const navH=L.big?74:56, navGap=L.big?20:14, navW=(L.rowW-navGap)/2;
+      bs.push({x:L.listX, y:navY, w:navW, h:navH, jp:'▲ 前の6大名', en:'Prev 6', sz:L.big?26:19, ensz:L.big?14:11,
+        on:page>0, action:()=>{ if(this.diploClanPage>0) this.diploClanPage--; }});
+      bs.push({x:L.listX+navW+navGap, y:navY, w:navW, h:navH, jp:'次の6大名 ▼', en:'Next 6', sz:L.big?26:19, ensz:L.big?14:11,
+        on:page<pages-1, action:()=>{ if(this.diploClanPage<pages-1) this.diploClanPage++; }});
+    }
   }
   // ===== 朝廷タブ: ボタン定義 =====
   _buildCourtButtons(bs, st, L){
@@ -9159,10 +9177,13 @@ class MapScene extends GameKit.Scene {
     bs.push({x:bx, y:by, w:bw, h:72, _infoOnly:true,
       jp:'朝廷信用: '+courtRel+' / 威信: '+prestige, en:'Court: '+courtRel+' / Prestige: '+prestige, sz:20}); by+=86;
     if (nextRank){
+      // 献上は官位条件を満たさなくても行え、朝廷信用・威信を高められる（任官は条件達成時に抽選）。
+      const meetsRank = courtRel>=nextRank.courtRel && prestige>=nextRank.prestige;
       bs.push({x:bx, y:by, w:bw, h:92,
         jp:'献上品（'+nextRank.cost+'貫）→ '+nextRank.name, en:'Offering → '+nextRank.nameEN,
         sz:22, ensz:14, accent:'rgba(200,170,80,0.6)',
-        on: dmyo.gold>=nextRank.cost && !acted && courtRel>=nextRank.courtRel && prestige>=nextRank.prestige,
+        sub: meetsRank ? '任官条件を満たす（信用+5）' : '任官条件 信用'+nextRank.courtRel+'・威信'+nextRank.prestige+'（献上で信用+5）',
+        on: dmyo.gold>=nextRank.cost && !acted,
         action:g=>this._courtPropose(g,'offering')
       }); by+=106;
     }
@@ -9194,11 +9215,13 @@ class MapScene extends GameKit.Scene {
     bs.push({x:bx, y:by, w:bw, h:72, _infoOnly:true,
       jp:'幕府信用: '+shogunRel+' / 支配国: '+provCount+'国', en:'Bakufu: '+shogunRel+' / Provinces: '+provCount, sz:20}); by+=86;
     if (nextRole){
-      const canApply=dmyo.gold>=nextRole.cost && shogunRel>=nextRole.shogunRel && provCount>=nextRole.provinces && !acted;
+      // 申請は任官条件を満たさなくても行え、幕府信用を高められる（任官は条件達成時に抽選）。
+      const meetsRole = shogunRel>=nextRole.shogunRel && provCount>=nextRole.provinces;
       bs.push({x:bx, y:by, w:bw, h:92,
         jp:'役職申請（'+nextRole.cost+'貫）→ '+nextRole.name, en:'Request → '+nextRole.nameEN,
         sz:20, ensz:13, accent:'rgba(180,150,60,0.6)',
-        on:canApply,
+        sub: meetsRole ? '任官条件を満たす（信用+5）' : '任官条件 信用'+nextRole.shogunRel+'・'+nextRole.provinces+'国（申請で信用+5）',
+        on:dmyo.gold>=nextRole.cost && !acted,
         action:g=>this._shogunPropose(g,'request_role')
       }); by+=106;
     }
@@ -9266,6 +9289,11 @@ class MapScene extends GameKit.Scene {
       if (!force) return;
       const af=getAF(st,sid);
       const bx=L.rightX, bw=L.rightW; let by=L.paneTop;
+      // 現在の友好度・状態を明示（施し／贈物／布施で友好度が上がることを可視化）
+      const _stJp = af.allied?'従属':af.hired?'雇用':(af.relation>0?'交流中':'中立');
+      bs.push({x:bx, y:by, w:bw, h:64, _infoOnly:true,
+        jp:'友好度: '+af.relation+' / 100 （'+_stJp+'）',
+        en:'Relation: '+af.relation+' / 100', sz:22}); by+=76;
       if (this.armedSubTab==='naval'){
         bs.push({x:bx, y:by, w:bw, h:92,
           jp:'贈物（100貫）', en:'Gift (relation +15)',
@@ -9313,11 +9341,10 @@ class MapScene extends GameKit.Scene {
             on:dmyo.gold>=effect.offeringCost && af.actedTurn!==st.turn,
             action:g=>this._religiousPropose(g,sid,'offering')
           }); by+=106;
-          if (af.allied || af.relation>=60){
-            bs.push({x:bx, y:by, w:bw, h:72, _infoOnly:true,
-              jp:'民忠ボーナス: '+effect.provinces.join('/'),
-              en:'Minchu bonus: '+effect.provinces.join('/'), sz:18});
-          }
+          const minchuActive = af.allied || af.relation>=60;
+          bs.push({x:bx, y:by, w:bw, h:72, _infoOnly:true,
+            jp:'民忠+'+effect.minchuBonus+'（'+effect.provinces.join('/')+'）'+(minchuActive?' ※発動中':' ※友好度60/従属で発動'),
+            en:'Minchu +'+effect.minchuBonus+(minchuActive?' (active)':' (needs relation 60)'), sz:18});
         }
       } else if (this.armedSubTab==='kokujin'){
         bs.push({x:bx, y:by, w:bw, h:92,
@@ -9348,17 +9375,21 @@ class MapScene extends GameKit.Scene {
       const nextRank=COURT_KANOI_RANKS[currentRank+1];
       if (!nextRank){ this._flash('これ以上の官位はありません','Max rank reached'); return; }
       if (dmyo.gold<nextRank.cost){ this._flash('金が足りません','Not enough gold'); return; }
-      if (courtRel<nextRank.courtRel||prestige<nextRank.prestige){ this._flash('朝廷信用か威信が不足しています','Court rel or prestige too low'); return; }
+      // 官位条件を満たしていなくても献上自体は可能。献上で朝廷信用・威信を積み上げ、
+      // 条件（信用・威信）を満たしている場合のみ任官抽選を行う。
+      const meetsReq = courtRel>=nextRank.courtRel && prestige>=nextRank.prestige;
       dmyo.gold-=nextRank.cost;
       dmyo.court_rel=Math.min(100,(courtRel+5));
       dmyo.prestige=Math.min(300,(prestige+3));
       dmyo._courtActedTurn=st.turn;
       const chance=(dmyo.court_rel/100)*0.8;
-      if (srand(st)<chance){
+      if (meetsReq && srand(st)<chance){
         dmyo.kanoi_court=nextRank.name;
         dmyo.prestige=Math.min(300,(dmyo.prestige??5)+nextRank.prestigeGain);
         game.audio.jingle([{f:523,d:0.09},{f:698,d:0.13},{f:880,d:0.2}]);
         this._flash(nextRank.name+'に任官！（威信+'+nextRank.prestigeGain+'）','Appointed: '+nextRank.nameEN);
+      } else if (!meetsReq){
+        this._flash('献上して朝廷信用を高めた（信用+5・威信+3）。任官には信用'+nextRank.courtRel+'・威信'+nextRank.prestige+'が必要','Offering made (court +5). Rank needs court '+nextRank.courtRel+'/prestige '+nextRank.prestige);
       } else {
         this._flash('朝廷に献上したが官位は得られなかった（朝廷信用+5）','Offering accepted but rank not granted');
       }
@@ -9407,18 +9438,22 @@ class MapScene extends GameKit.Scene {
       if (!nextRole){ this._flash('これ以上の役職はありません','Max role reached'); return; }
       if (dmyo.gold<nextRole.cost){ this._flash('金が足りません','Not enough gold'); return; }
       const provCount=ownedProvinces(st,me).length;
-      if (shogunRel<nextRole.shogunRel||provCount<nextRole.provinces){ this._flash('幕府信用か支配国数が不足しています','Bakufu rel or provinces too low'); return; }
+      // 任官条件を満たしていなくても申請自体は可能。申請で幕府信用・威信を積み上げ、
+      // 条件（信用・支配国数）を満たしている場合のみ任官抽選を行う。
+      const meetsReq = shogunRel>=nextRole.shogunRel && provCount>=nextRole.provinces;
       dmyo.gold-=nextRole.cost;
       dmyo.shogunate_rel=Math.min(100,(shogunRel+5));
       dmyo.prestige=Math.min(300,(prestige+3));
       dmyo._shogunActedTurn=st.turn;
       const chance=(dmyo.shogunate_rel/100)*0.85;
-      if (srand(st)<chance){
+      if (meetsReq && srand(st)<chance){
         dmyo.kanoi_shogun=nextRole.name;
         dmyo.prestige=Math.min(300,(dmyo.prestige??5)+nextRole.prestigeGain);
         daimyoOf(st).forEach(d=>{ if(d.id!==me) addRel(st,me,d.id,5); });
         game.audio.jingle([{f:440,d:0.09},{f:587,d:0.13},{f:698,d:0.2}]);
         this._flash(nextRole.name+'に任ぜられた！（威信+'+nextRole.prestigeGain+'）','Appointed: '+nextRole.nameEN);
+      } else if (!meetsReq){
+        this._flash('幕府に献じて信用を高めた（信用+5・威信+3）。任官には信用'+nextRole.shogunRel+'・'+nextRole.provinces+'国が必要','Petition made (bakufu +5). Role needs rel '+nextRole.shogunRel+'/'+nextRole.provinces+' provinces');
       } else {
         this._flash('幕府に役職を申請したが見送られた（幕府信用+5）','Role request denied (bakufu rel +5)');
       }
@@ -9718,6 +9753,36 @@ class MapScene extends GameKit.Scene {
     ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillRect(cxc-1, barY-2, 2, barH+4);
     ctx.restore();
   }
+  // 武装勢力の一覧行: 名称＋状態ピル＋友好度ゲージを描く（施し/贈物/布施で友好度が
+  // 上がることを一覧上でも確認できるようにする）。
+  _drawArmedRow(ctx, b){
+    const st=this.state, af=getAF(st,b._armedForce);
+    const sel=this.selForce===b._armedForce; const big=IS_TOUCH;
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, big?16:12);
+    ctx.fillStyle = sel?'rgba(232,192,122,0.16)':(b._hot?'rgba(255,255,255,0.09)':'rgba(255,255,255,0.045)'); ctx.fill();
+    ctx.lineWidth=sel?3:1.3; ctx.strokeStyle=sel?'rgba(246,213,138,0.95)':'rgba(148,163,184,0.26)'; ctx.stroke();
+    ctx.restore();
+    // 名称（日英）
+    const nameX=b.x+(big?30:22);
+    T(ctx, b.jp||'', nameX, b.y+(big?18:13), {size:big?34:26, weight:'bold', color:'#eef2f7'});
+    if (b.en) T(ctx, b.en, nameX, b.y+(big?66:50), {size:big?20:15, color:'#9fb2c6'});
+    // 状態ピル（右上）
+    const stat = af.allied?{jp:'従属',c:'#34d399'}:(af.hired?{jp:'雇用',c:'#a78bfa'}:(af.relation>0?{jp:'交流中',c:'#60a5fa'}:{jp:'未接触',c:'#94a3b8'}));
+    const pillW=big?150:118, pillH=big?52:42, pillX=b.x+b.w-pillW-(big?18:12), pillY=b.y+(big?16:11);
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(pillX, pillY, pillW, pillH, pillH/2);
+    ctx.fillStyle=this._rgbaFrom(stat.c,0.18); ctx.fill();
+    ctx.strokeStyle=this._rgbaFrom(stat.c,0.9); ctx.lineWidth=1.8; ctx.stroke(); ctx.restore();
+    T(ctx, stat.jp, pillX+pillW/2, pillY+pillH/2-(big?15:12), {size:big?26:20, weight:'bold', color:stat.c, align:'center'});
+    // 友好度ゲージ（右下）
+    const barW=pillW, barX=pillX, barY=b.y+b.h-(big?28:22), barH=big?12:10;
+    T(ctx, '友好度 '+af.relation, barX+barW/2, barY-(big?22:17), {size:big?20:15, color:'#cbd5e1', align:'center'});
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(barX, barY, barW, barH, barH/2); ctx.fillStyle='rgba(255,255,255,0.10)'; ctx.fill();
+    ctx.beginPath(); ctx.roundRect(barX, barY, clamp(af.relation/100,0,1)*barW, barH, barH/2);
+    ctx.fillStyle='rgba(52,211,153,0.9)'; ctx.fill(); ctx.restore();
+  }
   // status.color の 'rgb(...)'/'#hex'/'rgba(...)' を任意アルファの rgba へ
   _rgbaFrom(color, alpha){
     if (!color) return 'rgba(148,163,184,'+alpha+')';
@@ -9780,6 +9845,8 @@ class MapScene extends GameKit.Scene {
       const selName=rd?rd.nameJP+'家':'未選択';
       const hint=this.diploTab==='court'?'仲介・推挙の相手':'征伐令の相手';
       T(ctx, hint+'：'+selName, L.listX+(big?250:186), labelY+(big?6:5), {size:big?18:14, color: rd?'#e8c07a':'#6b7d92'});
+      const _pgt=this._clanPageInfo();
+      if (_pgt.pages>1) T(ctx, 'ページ '+(_pgt.page+1)+'/'+_pgt.pages, L.listX+L.rowW, labelY, {size:big?20:16, color:'#9fb2c6', align:'right'});
       ctx.save(); ctx.strokeStyle='rgba(148,163,184,0.22)'; ctx.lineWidth=1.4;
       ctx.beginPath(); ctx.moveTo(L.listX, labelY+(big?30:24)); ctx.lineTo(L.listX+L.rowW, labelY+(big?30:24)); ctx.stroke(); ctx.restore();
       if (!this._diploClans().length) T(ctx,'対象となる勢力がありません', L.listX+(big?40:28), L.listY+40, {size:big?24:19, color:'#7d93ab'});
@@ -9791,6 +9858,8 @@ class MapScene extends GameKit.Scene {
     // セクション見出し＋下線ディバイダ
     T(ctx,'勢力 / Clans', L.listX, labelY, {size:big?28:22, weight:'bold', color:'#a78bfa'});
     T(ctx,'隣接・関係のある勢力のみ', L.listX+(big?230:170), labelY+(big?6:5), {size:big?18:14, color:'#6b7d92'});
+    const _pgc=this._clanPageInfo();
+    if (_pgc.pages>1) T(ctx, 'ページ '+(_pgc.page+1)+'/'+_pgc.pages+'（全'+_pgc.total+'家）', L.listX+L.rowW, labelY, {size:big?20:16, color:'#9fb2c6', align:'right'});
     T(ctx,'交渉 / Negotiate', L.rightX, labelY, {size:big?28:22, weight:'bold', color:'#e8c07a'});
     ctx.save(); ctx.strokeStyle='rgba(148,163,184,0.22)'; ctx.lineWidth=1.4;
     const divY=labelY+(big?30:24);
