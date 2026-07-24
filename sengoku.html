@@ -69,6 +69,12 @@
   }
   .bgm-toggle:hover { opacity:1; }
   .bgm-toggle.off { color:#64748b; border-color:rgba(148,163,184,0.35); }
+  /* Canvas 上にモーダル（外交パネル・各種オーバーレイ）が開いている間は、
+     左上の固定HTMLボタン（全画面/BGM/遊び方）を隠す。パネルのタブや題字と重なって
+     「大名外交」タブが押せず、代わりに全画面解除ボタンを誤タップして画面が固まる不具合を防ぐ。 */
+  body.is-touch.canvas-modal-open .fs-toggle,
+  body.is-touch.canvas-modal-open .bgm-toggle,
+  body.is-touch.canvas-modal-open .help-toggle { display:none !important; }
   body.is-touch .bgm-toggle { top: calc(env(safe-area-inset-top, 0px) + 8.5vh + 54px); right: max(12px, env(safe-area-inset-right)); }
   .help-toggle { right:60px; border-color:rgba(232,192,122,0.5); }
   body.is-touch .help-toggle { top: calc(env(safe-area-inset-top, 0px) + 8.5vh + 108px); right: max(12px, env(safe-area-inset-right)); }
@@ -5948,7 +5954,7 @@ class MapScene extends GameKit.Scene {
     if (!this.overlay && this.state.turn===1){ try { if (!localStorage.getItem('sengokuHelpSeen')){ localStorage.setItem('sengokuHelpSeen','1'); this._openHelp(); } } catch(_){} }
     this._save();
   }
-  exit(){ this._hideCastleAddPanel(); this._closeCastleListPanel(); this._unbindInput(); }
+  exit(){ this._hideCastleAddPanel(); this._closeCastleListPanel(); this._unbindInput(); if (typeof document!=='undefined') document.body.classList.remove('canvas-modal-open'); }
   _save(){ this.state.version=SAVE_VERSION; save.set('autosave', this.state); }
   _flash(jp, en){ this.message=jp; this.messageEN=en||''; this.messageT=2.2; }
   _stateMonth(){ const st=this.state; return Number.isFinite(st.month) ? st.month : ([3,6,9,12][st.season]||3); }
@@ -6037,7 +6043,10 @@ class MapScene extends GameKit.Scene {
 
     const btns = this._buttons();
     updateButtonHot(btns, p);
-    if (!this.showClans && !this.castleEdit && !this.castleMetaEdit && !this.religiousEdit && pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
+    // 右下の情報カードはPCのみポインタ直下の洲をプレビュー。タッチ端末では“ホバー”が最後の
+    // タップ位置に貼り付き、何もない地面のタップでも国情報カードが出てしまうため追従を無効化する
+    // （タッチでの情報表示は城・独立勢力・施設マーカーをタップした時だけ＝_activateMapPoint側で制御）。
+    if (!IS_TOUCH && !this.showClans && !this.castleEdit && !this.castleMetaEdit && !this.religiousEdit && pointInRect(p, MAP.clip)) this.hover = this._pickProvince(p.x, p.y);
 
     // ピンチ中はパン/タップを無効化
     if (this.pinching){ this.press=null; this.dragLast=null; return; }
@@ -6677,6 +6686,28 @@ class MapScene extends GameKit.Scene {
     }
     return bestDist<=40 ? best : null;
   }
+  // 独立勢力（寺社勢力）マーカーをタップした時の情報表示。
+  _showForceInfo(force){
+    const st=this.state, af=getAF(st, force.id), me=st.playerDaimyo;
+    let sJP='中立', sEN='Neutral';
+    if (af.vassalOf===me){ sJP='従属'; sEN='Vassal'; }
+    else if (af.allied){ sJP='同盟'; sEN='Allied'; }
+    else if (af.hired){ sJP='雇用中'; sEN='Hired'; }
+    else if (af.relation>=60){ sJP='友好'; sEN='Friendly'; }
+    else if (af.relation<=-40){ sJP='敵対'; sEN='Hostile'; }
+    this._flash(force.nameJP+'（独立勢力）｜'+sJP+'・関係'+(af.relation||0),
+                (force.nameEN||force.nameJP)+' (Force) | '+sEN+' rel '+(af.relation||0));
+    game.audio.beep(560,0.05,'sine');
+  }
+  // 施設（温泉・鉱山・港・寺社・鉄砲鍛冶）マーカーをタップした時の情報表示。
+  _showResourceInfo(marker){
+    const KIND={onsen:['温泉','Hot Spring'], gold:['金山','Gold Mine'], silver:['銀山','Silver Mine'],
+      copper:['銅山','Copper Mine'], temple:['寺院','Temple'], shrine:['神社','Shrine'],
+      port:['港','Port'], gunsmith:['鉄砲鍛冶','Gunsmith']};
+    const k=KIND[marker.kind]||[marker.kind||'施設','Facility'];
+    this._flash(marker.nameJP+'（'+k[0]+'）', (marker.nameEN||marker.nameJP)+' ('+k[1]+')');
+    game.audio.beep(600,0.05,'sine');
+  }
   _updateCastleEditor(game, p, btns){
     if (p.justPressed){
       for (const b of btns){
@@ -6751,8 +6782,16 @@ class MapScene extends GameKit.Scene {
     const p={x,y};
     for (const b of btns){ if ((b.on!==false)&&pointInRect(p,b)){ game.audio.beep(600,0.06,'triangle'); b.action(game); return; } }
     if (this.showClans) return;
-    const pid = this._pickProvince(x, y);
-    if (pid) this._clickProvince(game, pid);
+    // 情報表示は「城・独立勢力・施設」マーカーをタップした時だけ行う。
+    // 何もない地面のタップでは何も開かない（誤タップで国情報が出るのを防ぐ）。
+    // しきい値の狭いマーカー順（施設→勢力→城）で判定し、最初に当たったものを採用する。
+    const marker=this._pickResourceMarker(x, y);
+    if (marker){ this._showResourceInfo(marker); return; }
+    const force=this._pickReligiousForce(x, y);
+    if (force){ this._showForceInfo(force); return; }
+    const castle=this._pickCastleMarker(x, y);
+    if (castle){ this._clickProvince(game, castle.id); return; }
+    // 城を掴めなかったタップは無視。移動先選択中でなければ選択状態には触れない。
   }
   _pickProvince(x,y){
     if (!pointInRect({x,y}, MAP.clip)) return null;
@@ -8122,8 +8161,10 @@ class MapScene extends GameKit.Scene {
           bs.push({x:bx, y:byD+212, w:bw, h:92, jp:'婚姻の提案', en:'Propose marriage', sz:22, ensz:14, accent:'rgba(244,114,182,0.6)', on: daughters>=1 && dip.relation>=80 && !acted && !dip.ally && !dip.married, action:g=>this._diploPropose(g,'marriage')});
         }
       } else if(this.diploTab==='court'){
+        this._pushDiploTargetRows(bs, L);   // 仲介停戦・官位推挙の対象を選ぶための左一覧
         this._buildCourtButtons(bs,st,L);
       } else if(this.diploTab==='shogun'){
+        this._pushDiploTargetRows(bs, L);   // 征伐令の対象を選ぶための左一覧
         this._buildShogunButtons(bs,st,L);
       } else if(this.diploTab==='armed'){
         this._buildArmedForceButtons(bs,st,L);
@@ -8459,6 +8500,9 @@ class MapScene extends GameKit.Scene {
 
   /* ---- 描画 ---- */
   draw(ctx, game){
+    // モーダル（外交パネル／オーバーレイ）表示中は左上の固定HTMLボタンを隠す（CSSで制御）。
+    // 誤タップによる全画面解除＝「画面が固まる」現象と、題字・タブへの被りを防ぐ。
+    if (typeof document!=='undefined') document.body.classList.toggle('canvas-modal-open', !!(this.showClans || this.overlay));
     ctx.fillStyle='#05070d'; ctx.fillRect(0,0,W,H);
     this._drawMap(ctx);
     this.particles.draw(ctx);
@@ -8471,6 +8515,9 @@ class MapScene extends GameKit.Scene {
     if (this.religiousEdit) this._drawReligiousEditOverlay(ctx);
     if (this.castleMetaEdit) this._drawCastleMetaEditOverlay(ctx);
     // ボタン（一覧オーバーレイより前面に出して操作可能に）
+    // タッチ時は左のコマンドメニューが2列に折り返るため、地図が透けて雑然と見える。
+    // ボタン群の背後に一枚のパネルを敷いて“ひとまとまりの操作面”として見せ、違和感を抑える。
+    if (!this.overlay && !this.showClans && IS_TOUCH && (!this.castleEdit && !this.castleMetaEdit && !this.religiousEdit)) this._drawTouchMenuBacking(ctx);
     if (!this.overlay){ const btns=this._buttons(); for (const b of btns){ if (b._diploClan){ this._drawDiploRow(ctx,b); } else if (b._diploTab){ this._drawDiploTab(ctx,b); } else drawButton(ctx,b,this.t); } }
     // メッセージトースト
     if (this.messageT>0){
@@ -8888,6 +8935,20 @@ class MapScene extends GameKit.Scene {
       T(ctx, it.text, it.x+(it.mark?markOff:0), ty, {size:it.size, weight:'bold', color:it.color, shadow:true});
     });
   }
+  // タッチ時のコマンドメニュー背後に敷く一体型パネル（地図の透け込みを抑え、2列メニューを整然と見せる）。
+  // ※ 座標は _buttons() 内のメニュー定数（menuX=26 / menuY=200 / menuW=440 / menuH=150 / gap=18・2列×5行）と対応。
+  //    メニューの寸法を変更する場合は本メソッドの bounds も合わせて更新すること。
+  _drawTouchMenuBacking(ctx){
+    const menuX=26, menuY=200, menuW=440, menuH=150, gap=18, cols=2, rows=5, pad=18;
+    const x=menuX-pad, y=menuY-pad;
+    const w=cols*menuW+(cols-1)*gap+pad*2, h=rows*menuH+(rows-1)*gap+pad*2;
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 20);
+    ctx.fillStyle='rgba(6,9,16,0.9)'; ctx.fill();
+    ctx.lineWidth=1.6; ctx.strokeStyle='rgba(199,151,66,0.42)'; ctx.stroke();
+    ctx.fillStyle='rgba(246,213,138,0.10)'; ctx.fillRect(x+2, y+2, w-4, 3);
+    ctx.restore();
+  }
   _drawSidePanel(ctx){
     const st=this.state;
     const pid = this.selected || this.hover;
@@ -8957,6 +9018,15 @@ class MapScene extends GameKit.Scene {
     if (dip.truceUntil>=st.turn) return {jp:'停戦中', en:'Truce', color:'#eab308'};
     if (dip.relation<=-40) return {jp:'敵対', en:'Hostile', color:'#f87171'};
     return {jp:'中立', en:'Neutral', color:'#94a3b8'};
+  }
+  // 朝廷/幕府タブの左側に、仲介・推挙・征伐の「対象大名」を選ぶ一覧を積む。
+  // 大名外交タブと同じ勢力リスト（_diploClans）を再利用し、行の描画はボタンループ側（_drawDiploRow）に任せる。
+  _pushDiploTargetRows(bs, L){
+    const clans=this._diploClans();
+    const maxRows=Math.max(1, Math.floor((L.ph-210)/(L.rowH+10)));
+    clans.slice(0,maxRows).forEach((d,i)=>{
+      bs.push({x:L.listX, y:L.listY+i*(L.rowH+10), w:L.rowW, h:L.rowH, _diploClan:d.id, action:()=>{ this.selClan=d.id; }});
+    });
   }
   // ===== 朝廷タブ: ボタン定義 =====
   _buildCourtButtons(bs, st, L){
@@ -9585,6 +9655,19 @@ class MapScene extends GameKit.Scene {
     const infoRX=L.px+L.pw-(big?220:176);
     T(ctx,'所持金 '+myDmyo.gold.toLocaleString()+' 貫', infoRX, L.py+(big?30:22), {size:big?28:22, weight:'bold', color:'#f1d9a0', align:'right'});
     T(ctx,'未婚の姫 '+myDaughters+' 人', infoRX, L.py+(big?70:56), {size:big?24:18, color:'#9fb2c6', align:'right'});
+    // ---- 朝廷/幕府タブ: 左側に対象大名の選択一覧を出す（行自体はボタンループで描画） ----
+    if (this.diploTab==='court' || this.diploTab==='shogun'){
+      const labelY=L.py+(big?222:196);
+      T(ctx,'対象勢力 / Target', L.listX, labelY, {size:big?28:22, weight:'bold', color:'#a78bfa'});
+      const rid=this.selClan, rd=rid?daimyoDef(st,rid):null;
+      const selName=rd?rd.nameJP+'家':'未選択';
+      const hint=this.diploTab==='court'?'仲介・推挙の相手':'征伐令の相手';
+      T(ctx, hint+'：'+selName, L.listX+(big?250:186), labelY+(big?6:5), {size:big?18:14, color: rd?'#e8c07a':'#6b7d92'});
+      ctx.save(); ctx.strokeStyle='rgba(148,163,184,0.22)'; ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.moveTo(L.listX, labelY+(big?30:24)); ctx.lineTo(L.listX+L.rowW, labelY+(big?30:24)); ctx.stroke(); ctx.restore();
+      if (!this._diploClans().length) T(ctx,'対象となる勢力がありません', L.listX+(big?40:28), L.listY+40, {size:big?24:19, color:'#7d93ab'});
+      ctx.restore(); return;
+    }
     // ---- 大名外交タブのみ: 勢力一覧＋交渉ラベル＋詳細/空状態 ----
     if (this.diploTab!=='clan'){ ctx.restore(); return; }
     const labelY=L.py+(big?222:196);
