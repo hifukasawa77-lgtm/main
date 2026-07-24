@@ -6605,11 +6605,13 @@ class MapScene extends GameKit.Scene {
   }
   _startCastleEdit(game){
     this.castleEdit=true; this.religiousEdit=false; this.dragReligious=null; this.showClans=false; this.mode='select'; this.selected=null; this.hover=null; this.dragCastle=null;
+    // 編集中は最初に一度だけ全城をレイアウトし、ドラッグ対象だけを差分更新する。
+    this._castleLayout=null;
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
     this._flash('城をドラッグして位置を調整できます');
   }
   _finishCastleEdit(game){
-    this.castleEdit=false; this.dragCastle=null;
+    this.castleEdit=false; this.dragCastle=null; this._roadCache=null;
     const records=persistAllCastlePositionRecords();
     const csv=exportCastlePositionCsv(this.state);
     this.cells=computeProvinceCells();
@@ -6845,6 +6847,7 @@ class MapScene extends GameKit.Scene {
         const w=this._screenToWorld(p.x,p.y), d=this.dragCastle, c=MAP.world || MAP.clip;
         const nx=clamp(w.x-d.ox, c.x+16, c.x+c.w-16), ny=clamp(w.y-d.oy, c.y+16, c.y+c.h-16);
         setCastlePositionOverride(d.id, nx, ny);
+        this._updateCachedCastleLayoutItem(d.id);
         const pt=castleOverridePoint(d.id);
         CASTLE_LAND_SNAP_CACHE[d.id + ':' + Math.round(pt[0]) + ',' + Math.round(pt[1])] = {x:pt[0], y:pt[1]};
       } else if (this.press.dragged && this.dragLast){
@@ -8684,13 +8687,12 @@ class MapScene extends GameKit.Scene {
   // 順につなぐ。昔の街道は一直線ではないため、各区間をゆるやかに蛇行させて描く。
   // 経路は各城の座標に依存するため、城数・編集対象・地図ロード状態が変わったときだけ再計算。
   _roadSegments(){
-    const editing = this.castleEdit || this.castleMetaEdit || this.dragCastle;
     const customCount = (typeof CUSTOM_CASTLES!=='undefined' && CUSTOM_CASTLES) ? CUSTOM_CASTLES.length : 0;
     const mapReady = (ASSETS.img.map && (ASSETS.img.map.naturalWidth||ASSETS.img.map.width)) ? 1 : 0;
     const key = customCount+'|'+(this.editCastleId||'')+'|'+mapReady;
-    if (!editing && this._roadCache && this._roadCache.key===key) return this._roadCache.routes;
-    const routes=this._computeRoads();
-    if (!editing) this._roadCache={key, routes};
+    // 城位置の微調整中に街道を毎フレーム再計算しない。確定時に通常キャッシュを再生成する。
+    if (this._roadCache && this._roadCache.key===key) return this._roadCache.routes;
+    const routes=this._computeRoads(); this._roadCache={key, routes};
     return routes;
   }
   _computeRoads(){
@@ -8859,18 +8861,21 @@ class MapScene extends GameKit.Scene {
     }
     } // end if (showSubCastles)
   }
+  _updateCachedCastleLayoutItem(id){
+    const item=this._castleLayout && this._castleLayout.items.find(v=>v.id===id);
+    const p=DATA.provById[id];
+    if (!item || !p) return;
+    const [cx,cy]=provinceScreenPoint(p), dx=cx-item.cx, dy=cy-item.cy;
+    item.cx=cx; item.cy=cy; item.crestX+=dx; item.crestY+=dy; item.nx+=dx; item.ny+=dy;
+  }
   _castleLayoutItems(){
-    // 編集/ドラッグ中は都度再計算（インタラクティブ操作を即時反映）。
     const editing = this.castleEdit || this.castleMetaEdit || this.dragCastle;
     const customCount = (typeof CUSTOM_CASTLES!=='undefined' && CUSTOM_CASTLES) ? CUSTOM_CASTLES.length : 0;
-    const key = editing ? null :
-      this.state.turn+'|'+this.selected+'|'+this.hover+'|'+customCount+'|'+(this.editCastleId||'');
-    // キャッシュヒット条件: キー一致 かつ 0.5秒以内（所有権変化等の取りこぼしを自己修復）。
-    if (!editing && this._castleLayout && this._castleLayout.key===key && (this.t - this._castleLayout.t) < 0.5){
-      return this._castleLayout.items;
-    }
-    const items = this._computeCastleLayout();
-    if (!editing) this._castleLayout = { key, t:this.t, items };
+    const key=this.state.turn+'|'+this.selected+'|'+this.hover+'|'+customCount+'|'+(this.editCastleId||'');
+    // 編集中は初回だけ全件を計算。以降はドラッグ対象を差分更新するため、海判定を毎フレーム走らせない。
+    if (this._castleLayout && this._castleLayout.key===key && (editing || (this.t-this._castleLayout.t)<0.5)) return this._castleLayout.items;
+    const items=this._computeCastleLayout();
+    this._castleLayout={key,t:this.t,items};
     return items;
   }
   _computeCastleLayout(){
