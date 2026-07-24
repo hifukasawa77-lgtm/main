@@ -5756,6 +5756,23 @@ function updateButtonHot(buttons, p){ for (const b of buttons){ b._hot = pointIn
 /* ===================================================================
  * ScenarioSelectScene
  * =================================================================== */
+// シナリオ導入画面のグラフィック（三国志風のオープニング）。新規生成は使えないため、
+// 既に取り込み済みのGPT絵画調アセット（合戦背景・城）を各シナリオに割り当てて流用する。
+const SCENARIO_INTRO_ART = {
+  1550: 'assets/sengoku/gpt/battles/sengoku-battlefield-kawanakajima-gpt-image-2.png', // 風雲児立つ！（群雄割拠）
+  1560: 'assets/sengoku/gpt/battles/sengoku-battlefield-okehazama-gpt-image-2.png',    // 桶狭間の戦い
+  1568: 'assets/sengoku/gpt/castles/special/nijo.png',                                  // 信長上洛（京・二条）
+  1574: 'assets/sengoku/gpt/battles/sengoku-battlefield-nagashino-gpt-image-2.png',    // 長篠前夜
+  1578: 'assets/sengoku/gpt/castles/special/kasugayama-gpt-image-2.png',                // 軍神死す（春日山城）
+  1582: 'assets/sengoku/gpt/battles/sengoku-battlefield-yamazaki-gpt-image-2.png',      // 本能寺の変（直後の山崎）
+};
+const _scenarioIntroImgCache = {};
+function scenarioIntroImage(id){
+  const src = SCENARIO_INTRO_ART[id];
+  if (!src) return null;
+  if (!_scenarioIntroImgCache[id]){ const im = new Image(); im.src = src; _scenarioIntroImgCache[id] = im; }
+  return _scenarioIntroImgCache[id];
+}
 class ScenarioSelectScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
@@ -5763,6 +5780,8 @@ class ScenarioSelectScene extends GameKit.Scene {
     this.particles = new GameKit.Particles(W, H, {count:56, colors:['#e8c07a','#a78bfa','#22d3ee']});
     this.t=0; this.step='scenario'; this.scn=null; this.scrollDaimyo=0; this.difficulty='normal';
     this.buttons=[]; this._daimyoMaxScroll=0; this._daimyoViewport=null;
+    // 導入画面のグラフィックを先読み（表示時のちらつき防止）
+    (DATA.scenarios||[]).forEach(s=>scenarioIntroImage(s.id));
     this._onWheel=(e)=>{
       if (this.step!=='daimyo' || !this._daimyoViewport) return;
       const p=clientToCanvasXY(e.clientX,e.clientY);
@@ -5796,9 +5815,14 @@ class ScenarioSelectScene extends GameKit.Scene {
       const cardH=Math.min(220, Math.max(178, Math.floor((avail-(n-1)*gap)/n)));
       const startY=bandTop;
       DATA.scenarios.forEach((s,i)=>{
-        this.buttons.push({x:cx-cardW/2, y:startY+i*(cardH+gap), w:cardW, h:cardH, scn:s, action:()=>{ this.scn=s; this.step='difficulty'; this._rebuild(); }});
+        this.buttons.push({x:cx-cardW/2, y:startY+i*(cardH+gap), w:cardW, h:cardH, scn:s, action:()=>{ this.scn=s; this.step='intro'; this._rebuild(); }});
       });
       this.buttons.push({x:cx-220, y:backY, w:440, h:backH, label:'← 戻る Back', sz:31, action:()=>game.changeScene(new TitleScene())});
+    } else if (this.step==='intro'){
+      // 三国志風のシナリオ導入（グラフィック＋年代＋説明）→「この時代で開始」で難易度選択へ
+      const bw=460, bh=112, by=H-190, gap=64;
+      this.buttons.push({x:cx-bw-gap/2, y:by, w:bw, h:bh, label:'← シナリオ選択へ', sz:30, action:()=>{ this.step='scenario'; this._rebuild(); }});
+      this.buttons.push({x:cx+gap/2, y:by, w:bw, h:bh, label:'この時代で開始 →', sz:32, accent:'rgba(232,192,122,0.8)', action:()=>{ this.step='difficulty'; this._rebuild(); }});
     } else if (this.step==='difficulty'){
       const keys=['easy','normal','hard'];
       const cardW=1440, cardH=210, gap=54, startY=470;
@@ -5872,6 +5896,9 @@ class ScenarioSelectScene extends GameKit.Scene {
           T(ctx, 'AI収入 ×'+D.aiIncome.toFixed(2)+'　攻勢 '+D.aiMaxAttacks+'回/月', b.x+b.w-56, b.y+56, {size:26, color:'#9fb2c6', align:'right'});
         } else { drawButton(ctx, b, this.t); }
       }
+    } else if (this.step==='intro'){
+      this._drawScenarioIntro(ctx);
+      for (const b of this.buttons){ drawButton(ctx, b, this.t); }
     } else {
       T(ctx, this.scn.year+'年 '+this.scn.nameJP+' — 大名を選択 / Choose your clan', W/2, 136, {size:52, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
       T(ctx, this.scn.descEN, W/2, 200, {size:25, color:'#9fb2c6', align:'center'});
@@ -5911,6 +5938,50 @@ class ScenarioSelectScene extends GameKit.Scene {
       }
       for (const b of this.buttons){ if (!b.daimyo) drawButton(ctx, b, this.t); }
     }
+  }
+  // 三国志風のシナリオ導入画面（グラフィック＋年代＋タイトル＋説明）
+  _drawScenarioIntro(ctx){
+    const s=this.scn; if(!s) return;
+    const px=220, pw=W-440, artY=104, artH=660;   // 横長バナー（cover表示）
+    // グラフィック枠
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(px, artY, pw, artH, 22); ctx.clip();
+    const img=scenarioIntroImage(s.id);
+    const ok = img && drawCoverImage(ctx, img, px, artY, pw, artH);
+    if (!ok){
+      const g=ctx.createLinearGradient(px, artY, px+pw, artY+artH);
+      g.addColorStop(0,'rgba(30,41,59,0.6)'); g.addColorStop(1,'rgba(24,18,34,0.6)');
+      ctx.fillStyle=g; ctx.fillRect(px, artY, pw, artH);
+      T(ctx,'読み込み中… / Loading', px+pw/2, artY+artH/2-16, {size:32, color:'#9fb2c6', align:'center'});
+    } else {
+      // 下部を軽く暗くして枠との境界を締める
+      const g=ctx.createLinearGradient(0, artY+artH-180, 0, artY+artH);
+      g.addColorStop(0,'rgba(5,7,13,0)'); g.addColorStop(1,'rgba(5,7,13,0.55)');
+      ctx.fillStyle=g; ctx.fillRect(px, artY+artH-180, pw, 180);
+    }
+    ctx.restore();
+    ctx.save(); ctx.beginPath(); ctx.roundRect(px, artY, pw, artH, 22);
+    ctx.strokeStyle='rgba(232,192,122,0.5)'; ctx.lineWidth=2.6; ctx.stroke(); ctx.restore();
+    // 年代（eyebrow）＋タイトル＋英題＋説明
+    const tx=px+6, ey=artY+artH+54;
+    T(ctx, s.year+'年  /  OPENING STORY', tx, ey, {size:32, weight:'bold', color:'#c9a86a'});
+    T(ctx, s.nameJP, tx, ey+52, {size:88, weight:'bold', color:'#e8c07a', shadow:true});
+    if (s.nameEN) T(ctx, s.nameEN, tx, ey+168, {size:34, color:'#a78bfa'});
+    this._wrapText(ctx, s.descJP||'', tx, ey+232, pw-12, 50, {size:34, color:'#cbd5e1'});
+  }
+  // 日本語向けの簡易ワードラップ（文字単位で幅に折り返す）。戻り値は次の行のy。
+  _wrapText(ctx, text, x, y, maxW, lineH, opts){
+    opts=opts||{}; const size=opts.size||30, color=opts.color||'#e2e8f0';
+    ctx.save(); ctx.font=(opts.weight?opts.weight+' ':'')+size+'px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
+    let line='', ly=y;
+    for (const ch of Array.from(text)){
+      if (ch==='\n'){ if(line){T(ctx,line,x,ly,{size,color});} ly+=lineH; line=''; continue; }
+      if (ctx.measureText(line+ch).width>maxW && line){ T(ctx,line,x,ly,{size,color}); ly+=lineH; line=ch; }
+      else line+=ch;
+    }
+    if (line) { T(ctx,line,x,ly,{size,color}); ly+=lineH; }
+    ctx.restore();
+    return ly;
   }
 }
 
