@@ -31,8 +31,17 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 ## hideの案内エージェント（サイト内チャットウィジェット）
 - 実装3点セット: データ=`assets/js/agent-data.js`（GAMES/intent辞書/KB）・ロジック=`assets/js/agent.js`・AI=`cloudflare-worker/gemini-proxy.js`（SYSTEM_PROMPTは `site-knowledge.js` を `scripts/gen-agent-knowledge.mjs` で自動生成）
 - 検証: `node scripts/agent-evolve-check.mjs`（データ整合）＋ `node scripts/agent-dynamic-test.cjs`（Playwright 6シナリオ）
-- **日々自己進化**: Claude Code Remote の Routine（毎日 05:00 JST）が `/agent-evolve` を実行 → worker `/stats` で弱点発見 → `agent-data.js`/`data/agent-news.json` を小改善 → ローリングPR `claude/agent-evolve` に積み深澤が承認（mainへ直接pushしない）
+- **週次自己進化**: Claude Code Remote の Routine（毎週木曜 05:00 JST）が `/agent-evolve` を実行 → worker `/stats` で弱点発見 → `agent-data.js`/`data/agent-news.json` を小改善 → ローリングPR `claude/agent-evolve` に積み深澤が承認（mainへ直接pushしない）
 - **週次ブラッシュアップ提案**: Routine（毎週月曜 07:00 JST）が `/site-proposal` を実行 → 監査＋/stats＋トレンドからトップ3提案 → GitHub Issue（ラベル `proposal`）起票のみ。実装は深澤承認後に planner から
+
+## 定期実行（Routine）一覧 ※スケジュールの正はここ
+Claude Code Remote の Routine で自動起動されるスキル。**Routineを新設・変更・停止したら、この表と該当スキルの記載を必ず同時に更新する**（実態だけ変えて文書が残ると、次のセッションが誤った前提で動く。harness-lint 検査#11 が表とスキル記載の一致を機械検査する）。
+
+| スキル | スケジュール（JST） | 成果物 | mainへの直接push |
+|---|---|---|---|
+| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve` | 禁止（深澤承認制） |
+| `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ | 禁止（コード変更なし） |
+| `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
