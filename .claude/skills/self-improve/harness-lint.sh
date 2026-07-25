@@ -194,6 +194,39 @@ else
   ok "スキップ（生成スクリプトなし or node なし）"
 fi
 
+echo "== 11. Routineスケジュールのドリフト（CLAUDE.md「定期実行（Routine）一覧」== 各スキルの記載）=="
+# 2026-07-18にagent-evolveを日次→週次へ変えた際、実態だけ変わりCLAUDE.md・SKILL.md・
+# プロジェクトノートが「毎日05:00」のまま1週間放置された（07-25の16thで発見）。
+# CLAUDE.mdの表を正とし、各スキルSKILL.mdが同じ曜日・時刻を書いているかを機械照合する。
+# 注: Routineの「実態」はAPI側にありCIからは読めない。ここで防げるのは"片方だけ更新"のドリフト。
+if grep -q '定期実行（Routine）一覧' CLAUDE.md 2>/dev/null; then
+  # 注（bash罠）: この環境は LANG 未設定＝C locale のため、`[月火水木金土日]` のような
+  # 多バイト文字のブラケット表現はバイト単位比較になり必ず空振りする。
+  # 多バイト文字は「リテラル」か「[^...]（単バイト否定）」の形でのみ使うこと。
+  ROWS=$(grep -oE '^\| `/[a-z-]+` \| *毎週[^|]*曜 [0-9][0-9]:[0-9][0-9]' CLAUDE.md || true)
+  if [ -z "$ROWS" ]; then
+    note_warn "Routine一覧の表から行を抽出できない（表形式が変わった可能性）"
+  else
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      SK=$(printf '%s' "$row" | grep -oE '`/[a-z-]+`' | tr -d '`/')
+      DAY=$(printf '%s' "$row" | grep -oE '毎週[^ ]*曜')
+      TIME=$(printf '%s' "$row" | grep -oE '[0-9]{2}:[0-9]{2}')
+      F=".claude/skills/${SK}/SKILL.md"
+      if [ ! -f "$F" ]; then note_fail "Routine一覧のスキルが実在しない: $F"; continue; fi
+      # スキル側にスケジュール記載があるなら曜日・時刻の両方が一致していること
+      if grep -qE '毎週[^ ]*曜 *[0-9][0-9]:[0-9][0-9]|毎日 *[0-9][0-9]:[0-9][0-9]' "$F"; then
+        if grep -qE "${DAY} *${TIME}" "$F"; then ok "Routine整合 /${SK}: ${DAY} ${TIME}"
+        else note_fail "Routineドリフト: $F が CLAUDE.md の「${DAY} ${TIME}」と不一致"; fi
+      else
+        ok "Routine整合 /${SK}: スキル側にスケジュール記載なし（CLAUDE.mdの表が単一ソース）"
+      fi
+    done <<< "$ROWS"
+  fi
+else
+  note_warn "CLAUDE.md に「定期実行（Routine）一覧」が見つからない"
+fi
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then

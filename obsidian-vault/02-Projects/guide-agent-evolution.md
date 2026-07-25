@@ -12,7 +12,8 @@ tags: [project, agent, self-evolution]
 - **データ/ロジック分離**: `assets/js/agent-data.js`（進化の編集対象）＋ `assets/js/agent.js`（ロジック）。app.jsから約1,930行を切り出し
 - **賢さ**: カナ折り畳み＋長音展開の正規化、bigramファジー第2パス（タイポ耐性）、文脈スロット（それ→直前のゲーム）、永続プロファイル `hide-agent-profile-v1`（未プレイ優先おすすめ）、プロアクティブ提案（news/新着/未プレイ、セッション2件上限、FAB未読ドット）
 - **worker**: SYSTEM_PROMPT を `site-knowledge.js`（自動生成）化、公開 `GET /stats`（👎質問の集計＝弱点発見の入力）
-- **日次進化**: Routine（毎日05:00 JST）→ `/agent-evolve` → 改善最大3件（データのみ）→ ローリングPR `claude/agent-evolve` → 深澤承認制
+- **週次進化**: Routine（毎週木曜05:00 JST）→ `/agent-evolve` → 改善最大3件（データのみ）→ ローリングPR `claude/agent-evolve` → 深澤承認制
+  - 2026-07-18 に深澤の要望で日次→週次へ変更。**この変更時に CLAUDE.md・SKILL.md の「毎日」表記を更新し忘れ、07-25 の /self-improve 16th で是正**（→ CLAUDE.md「定期実行（Routine）一覧」を正の単一ソース化＋harness-lint 検査#11）
 - **週次提案**: Routine（月曜07:00 JST）→ `/site-proposal` → トップ3提案を Issue（`proposal`）起票のみ
 
 ## 品質ゲート
