@@ -28,6 +28,9 @@ related: ["[[MOC]]", "[[second-brain-system]]", "[[0003-recursive-self-improveme
 - 2026-07-13（12th）: Canvasパフォーマンス実証知見をスキル昇格 → [[0012-canvas-perf-patterns-promotion]] / release-check是正 → [[0013-release-check-scripts-exclusion]]
 - 2026-07-16（13th）: CSV取込マッチング・グリッド整合機械検証を昇格 → [[0014-import-matching-and-grid-verification-promotion]]。未昇格Dailyの遡り点検を実施し、それ自体をlint検査#8（警告△・非ブロッキング）へ機械化 → [[0015-unpromoted-learning-lint]]。突き合わせ・遡り点検はスキル手順1へ恒久化。**ループは「蓄積→想起→反映」に加え昇格漏れの検知まで機械化された状態**（lint検査#1〜#8）。
 
+- 2026-07-18（14th〜15th）: 合戦バグ群・固定CanvasモバイルUIをgame-dev/dynamic-testerへ昇格。lint検査#8をマーカー存在→**位置比較**へ強化 → [[0018-battle-verification-patterns-promotion]] / [[0019-fixed-canvas-mobile-ui-promotion]]
+- 2026-07-25（16th）: 7営業日の記録空白（別セッション作業）を遡及Daily化し、前処理コストの置き場所・Canvas絶対座標レイアウトの整合を昇格 → [[0020-perf-cost-placement-and-canvas-layout-promotion]]。続けてRoutineスケジュールの1週間ドリフトを発見・是正し、CLAUDE.mdの表を正の単一ソース化＋lint検査#11、**`/self-improve` 自体を週次Routine化**（日曜21:00 JST） → [[0021-routine-schedule-single-source]]。**ループが自分自身を定期実行するようになった段階**（lint検査#1〜#11）。
+
 ## 既知の課題・TODO
 - 反映は半自動（Claude判断＋ユーザー承認）。hookはLLMを呼べないため完全自動化はしない方針（暴走防止）。
 - 昇格の繰り返しによるCLAUDE.md肥大化は「狭く効かせる/重複させない/差分追記」のガードレールで抑制。運用しながら効き目を観察する。
