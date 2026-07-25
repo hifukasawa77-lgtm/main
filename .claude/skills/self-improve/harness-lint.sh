@@ -227,6 +227,48 @@ else
   note_warn "CLAUDE.md に「定期実行（Routine）一覧」が見つからない"
 fi
 
+echo "== 12. シェル検査の多バイトブラケット表現（C localeで空振り＝偽の✓を生む）=="
+# LANG未設定（C locale）では `[月火水木金土日]` のような多バイト文字のブラケット表現が
+# バイト単位比較になり必ず空振りする。厄介なのは**エラーにならず「検査が通った」ように
+# 見える**点で、lintの信頼性そのものを損なう（検査#11の初回実装で実際に発生, 2026-07-25）。
+# 正しい書き方: 多バイトはリテラルで置き、可変部は単バイトの否定クラスにする（`毎週[^ ]*曜`）。
+# 対象はシェル(grep/sed/awk)のみ。JSのRegExpはUTF-16認識なのでlocaleの影響を受けない。
+if command -v python3 >/dev/null 2>&1; then
+  MB=$(python3 - <<'PYEOF'
+import re, os
+pat = re.compile(r'\[\^?[^\]\n]*[^\x00-\x7F][^\]\n]*\]')
+out = []
+for dp, dn, fn in os.walk('.claude'):
+    for f in fn:
+        if not f.endswith('.sh'):
+            continue
+        p = os.path.join(dp, f)
+        try:
+            lines = open(p, encoding='utf-8', errors='replace').read().split('\n')
+        except OSError:
+            continue
+        for i, l in enumerate(lines, 1):
+            if l.strip().startswith('#'):   # 解説コメントは対象外（自己誤検出の回避）
+                continue
+            if not re.search(r'grep|sed|awk', l):
+                continue
+            m = pat.search(l)
+            if m:
+                out.append('%s:%d: %s' % (p, i, m.group(0)[:40]))
+print('\n'.join(out))
+PYEOF
+)
+  if [ -z "$MB" ]; then
+    ok "多バイトブラケット表現なし"
+  else
+    while IFS= read -r l; do
+      [ -n "$l" ] && note_fail "多バイトブラケット（C localeで空振り→偽の✓）: $l"
+    done <<< "$MB"
+  fi
+else
+  echo "  - python3なし（スキップ）"
+fi
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then
