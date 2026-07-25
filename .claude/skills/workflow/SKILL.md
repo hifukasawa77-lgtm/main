@@ -29,6 +29,15 @@ GitHub Pages ホスティング・エージェントパイプライン・コー�
   - CDN経由ライブラリは SRI (Subresource Integrity) ハッシュを付与すること（セキュリティ要件）。
   - デプロイ後は GitHub Pages の URL で実機確認し、キャッシュが残る場合は強制リロード（Ctrl+Shift+R）で確認すること。
 
+## Skill: GitHub Actions の保守 (Workflow Maintenance)
+- **概要**: `.github/workflows/` の Action バージョン更新と、CIが「存在するのに走らない」状態の防止（2026-07-25の `actions/checkout@v4` Node20非推奨対応で実証）。
+- **実装要件**:
+  - **バージョンは推測せずタグを実確認する**: 記憶で `@v5` 等と書くと、存在しないタグでCIが即死するか、逆に古いまま放置される（実際に「最新はv5」と想定したが実態は **v7** だった）。`git ls-remote --tags --refs https://github.com/actions/<name>` で確認し、**メジャータグが実semverリリースと同一SHAを指しているか**（`v7` → `v7.0.1` 等）まで見て、浮動タグだけの未リリース版を掴まないこと。
+  - **リリースノートが読めない環境では `action.yml` を直接読む**: GitHub API がプロキシで403になる環境では、`git clone --depth 1 --branch <tag>` して `action.yml` の `runs.using`（Node実行系＝非推奨解消の確認）と `inputs`（自分が渡している入力が残っているか）を確認すれば、互換性を実証ベースで判断できる。
+  - **Node実行系の非推奨警告は放置しない**: `Node.js 20 is deprecated` 系の警告はCIを失敗させないため見落とされる。警告のうちに上げること。上げる前に全ワークフローの `uses:` を横串grepし、同じActionを使う箇所を**まとめて**更新する（1本だけ直すとバージョン差が残る）。
+  - **CIの `paths` は「検査が正として読むファイル」を含める**: 検査対象だけでなく**正（single source of truth）側**が監視パスに無いと、そこを変更してもワークフローが起動せず、検査が一度も走らないまま通過する（harness-lint が `CLAUDE.md` を正とするのに `.claude/**` しか監視していなかった実例）。
+  - GitHub Actions は **YAML アンカー（`&` / `*`）を解釈しない**。`push` と `pull_request` で同じ `paths` を使う場合も明示的に二重記述し、片方だけ増やさないよう注意する。
+
 ## Skill: バグ報告・タスク管理 (Bug Report & Task Management)
 - **概要**: エージェントパイプラインへ渡す際の要件記述と、バグ発見時の報告フォーマット。
 - **バグ報告フォーマット**:
