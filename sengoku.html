@@ -891,14 +891,18 @@ function collectCastlePositionRecords(){
   const out={};
   if (!DATA || !Array.isArray(DATA.provinces)) return out;
   DATA.provinces.forEach(p=>{
-    let world=castleMapRecordToWorld(CASTLE_POS_OVERRIDES[p.id] || CASTLE_MAP_POINTS[p.id]);
+    const ov=CASTLE_POS_OVERRIDES[p.id];
+    const ovWorld=castleMapRecordToWorld(ov);
+    let world=ovWorld || castleMapRecordToWorld(CASTLE_MAP_POINTS[p.id]);
     if (!world){
       const pt=PROVINCE_GEO[p.id] ? geoToScreen(PROVINCE_GEO[p.id][0], PROVINCE_GEO[p.id][1]) : [toScreenX(p.x), toScreenY(p.y)];
       world={x:pt[0], y:pt[1]};
     }
-    const fixed=snapCastlePointToLand(p.id, world.x, world.y);
+    // 「確定」で指定された座標（pinned）は陸地スナップで動かさず、そのまま保存・描画する
+    const pinned = !!(ov && ov.pinned && ovWorld);
+    const fixed = pinned ? [world.x, world.y] : snapCastlePointToLand(p.id, world.x, world.y);
     const rec=castlePositionRecordFromWorld(fixed[0], fixed[1]);
-    if (rec) out[p.id]=rec;
+    if (rec){ if (pinned) rec.pinned=1; out[p.id]=rec; }
   });
   return out;
 }
@@ -1192,7 +1196,9 @@ function assignCastleRowIds(rows){
 function getCastleClass(id){ return CASTLE_CLASS_MAP[id]||'honjo'; }
 // CSVの座標(地図画像ピクセル)を城配置オーバーライドへ反映する
 // fillOnly=true の場合、既にオーバーライド済みの城は上書きしない（同梱シード用）
-function applyCastlePositionCsvRows(rows, fillOnly){
+// pin=true の場合、取り込んだ座標を「確定座標」として固定する（陸地スナップで動かさない）。
+// pin=false でも、既存の確定座標と同じ値のCSV行は確定状態を維持する（再読込で固定が外れないように）。
+function applyCastlePositionCsvRows(rows, fillOnly, pin){
   if (!Array.isArray(rows) || !rows.length) return 0;
   const ids=assignCastleRowIds(rows);
   const img=ASSETS && ASSETS.img && ASSETS.img.map;
@@ -1202,9 +1208,13 @@ function applyCastlePositionCsvRows(rows, fillOnly){
   rows.forEach((r,i)=>{
     const id = ids[i];
     if (!id) return;
-    if (fillOnly && CASTLE_POS_OVERRIDES[id]) return; // ユーザー編集済みは温存
+    const prev=CASTLE_POS_OVERRIDES[id];
+    if (fillOnly && prev) return; // ユーザー編集済みは温存
     const rec={x:r.x, y:r.y};
     if (iw && ih){ rec.mx=round6(clamp01(r.x/iw)); rec.my=round6(clamp01(r.y/ih)); }
+    const samePinned = prev && prev.pinned && Number.isFinite(prev.x) && Number.isFinite(prev.y)
+      && Math.round(prev.x)===Math.round(r.x) && Math.round(prev.y)===Math.round(r.y);
+    if (pin || samePinned) rec.pinned=1;
     CASTLE_POS_OVERRIDES[id]=rec;
     CASTLE_MAP_POINTS[id]=rec;
     const ct=CASTLE_TYPE_FROM_JP[r.castleType]||null;
@@ -1256,7 +1266,12 @@ function addCustomCastleToData(c){
   CASTLE_NAMES[c.id]=c.castleName||p.nameJP;
   // 城タイプ指定（例: special = 専用攻城グラフィック）はメタ上書きへ登録し、DATA/stateへ反映させる
   if (typeof c.castleType==='string' && c.castleType) CASTLE_META_OVERRIDES[c.id]=Object.assign({}, CASTLE_META_OVERRIDES[c.id]||{}, {castleType:c.castleType});
-  if (Number.isFinite(c.mx) && Number.isFinite(c.my)) CASTLE_POS_OVERRIDES[c.id]={mx:clamp01(c.mx), my:clamp01(c.my)};
+  // 城追加/CSV取込で明示指定された座標は確定座標（pinned）として扱い、陸地スナップで動かさない
+  if (Number.isFinite(c.mx) && Number.isFinite(c.my)){
+    const rec={mx:clamp01(c.mx), my:clamp01(c.my), pinned:1};
+    if (Number.isFinite(c.x) && Number.isFinite(c.y)){ rec.x=c.x; rec.y=c.y; }
+    CASTLE_POS_OVERRIDES[c.id]=rec;
+  }
   if (DATA.scenarios){
     DATA.scenarios.forEach(scn=>{
       scn.own=scn.own||{}; scn.place=scn.place||{};
@@ -3609,10 +3624,17 @@ function geoToScreen(lon, lat){
   const ox=c.x+(c.w-rx*scale)/2, oy=c.y+(c.h-ry*scale)/2;
   return [ox+(lon-g.minLon)*g.cos*scale, oy+(g.maxLat-lat)*scale];
 }
+// 城編集一覧やCSV取込で座標を「確定」した城は pinned フラグを持つ。
+// pinned の城は陸地スナップ（海判定による自動移動）を行わず、指定座標へ強制配置する。
+function isCastlePositionPinned(id){
+  const p=CASTLE_POS_OVERRIDES[id];
+  return !!(p && p.pinned);
+}
 function provinceScreenPoint(p){
   const manual=castleOverridePoint(p.id);
   const recorded=castleRecordedPoint(p.id);
   const raw = manual || recorded || (PROVINCE_GEO[p.id] ? geoToScreen(PROVINCE_GEO[p.id][0], PROVINCE_GEO[p.id][1]) : [toScreenX(p.x), toScreenY(p.y)]);
+  if (manual && isCastlePositionPinned(p.id)) return raw;
   return snapCastlePointToLand(p.id, raw[0], raw[1]);
 }
 
@@ -6239,6 +6261,11 @@ class MapScene extends GameKit.Scene {
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
     this.overlay=null; this.march=null; this.message=null; this.messageT=0;
+    // スマホでは左のコマンドメニュー（2列×5行）が地図を大きく覆い「邪魔」なため、
+    // 既定では畳んでおき「≡ コマンド」ボタンで開閉する。PCは従来どおり常時表示。
+    this.menuOpen=!IS_TOUCH;
+    // 全体地図（ズームアウト時・中地図）に国名ラベルを重ねるか
+    this.showProvinceNames=true;
     this.showClans=false; this.showTools=false; this.selClan=null; this.ploy=null; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.dragReligious=null; this.dragResource=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
     this.diploTab='clan'; this.armedSubTab='naval'; this.selForce=null; this.ninjaAction=null;
     this.diploClanPage=0; // 大名一覧は6件/ページで下スクロール（次の6大名）
@@ -6631,6 +6658,7 @@ class MapScene extends GameKit.Scene {
     const toDelete=[];
     const img=ASSETS&&ASSETS.img&&ASSETS.img.map;
     const iw=img&&(img.naturalWidth||img.width), ih=img&&(img.naturalHeight||img.height);
+    let moved=0;
     body.querySelectorAll('tr[data-id]').forEach(row=>{
       const id=row.dataset.id; if (!id) return;
       if (row.querySelector('.cl-del').checked){ toDelete.push(id); return; }
@@ -6652,7 +6680,11 @@ class MapScene extends GameKit.Scene {
       if (cxVal!==''&&cyVal!=='') {
         const cx=parseInt(cxVal,10), cy=parseInt(cyVal,10);
         if (Number.isFinite(cx)&&Number.isFinite(cy)&&iw&&ih){
-          const rec={x:Math.round(cx),y:Math.round(cy),mx:round6(clamp01(cx/iw)),my:round6(clamp01(cy/ih))};
+          // pinned:1 ＝ 一覧で確定した座標。陸地スナップ（海判定による自動移動）を無効化し、
+          // 入力どおりの座標へ強制的に城を再配置する。
+          const rec={x:Math.round(cx),y:Math.round(cy),mx:round6(clamp01(cx/iw)),my:round6(clamp01(cy/ih)),pinned:1};
+          const prev=CASTLE_POS_OVERRIDES[id];
+          if (!prev || Math.round(prev.x)!==rec.x || Math.round(prev.y)!==rec.y) moved++;
           // 一覧編集では上書き用と描画用の両方を更新する。片方だけだと確定後に古い座標で再描画される。
           CASTLE_POS_OVERRIDES[id]=rec;
           CASTLE_MAP_POINTS[id]=rec;
@@ -6671,7 +6703,7 @@ class MapScene extends GameKit.Scene {
     this._castleLayout=null; this._roadCache=null;
     this.cells=computeProvinceCells(); this.selected=null; this.hover=null;
     this._closeCastleListPanel(); this._save();
-    this._flash('城情報を更新しました（'+toDelete.length+'件削除）');
+    this._flash('城情報を更新しました（座標を'+moved+'城に強制反映 / '+toDelete.length+'件削除）');
   }
   _startCastleAdd(game){
     const ui=this._castleAddUi(); if (!ui) return;
@@ -6918,7 +6950,8 @@ class MapScene extends GameKit.Scene {
       created++;
     });
     if (created){ saveCustomCastles(); saveCastlePositionOverrides(); }
-    applyCastlePositionCsvRows(rows, false);
+    // 手動取込のCSV座標は「確定座標」として固定する（海判定による自動移動を行わない）
+    applyCastlePositionCsvRows(rows, false, true);
     let lvApplied=0, applied=0;
     const unmatched=[];
     rows.forEach((r,i)=>{
@@ -8489,15 +8522,32 @@ class MapScene extends GameKit.Scene {
     this._openGeneralListPanel();
   }
 
+  // 左コマンドメニューの寸法。_buttons() と _drawTouchMenuBacking() で共有し、
+  // 片方だけ変更して背景パネルとボタンがズレる事故を防ぐ。
+  _menuGeom(){
+    const toggleH=IS_TOUCH?120:0, toggleGap=IS_TOUCH?16:0;
+    const menuX=26, toggleY=IS_TOUCH?200:126;
+    return {
+      menuX, toggleY, toggleW:IS_TOUCH?440:198, toggleH, toggleGap,
+      menuY:toggleY+toggleH+toggleGap,
+      // メニュー項目が10個になり、タッチ時に高さ×10が下部の編集ボタン(家宝一覧など)と重なっていたため
+      // タッチ時の1項目の高さ/間隔を詰めて全項目が編集ボタンの上に収まるようにする。
+      menuW:IS_TOUCH?440:198, menuH:IS_TOUCH?140:72, gap:IS_TOUCH?16:14,
+      cols:IS_TOUCH?2:1, rows:IS_TOUCH?5:10,
+      menuSz:IS_TOUCH?52:25, menuIconSz:IS_TOUCH?62:30,
+      menuIconX:IS_TOUCH?62:32, menuLabelX:IS_TOUCH?126:64
+    };
+  }
+  // スマホでコマンドメニューが開いているか（PCは常時表示）
+  get _menuVisible(){ return !IS_TOUCH || (this.menuOpen && !this.showTools); }
   _buttons(){
     const bs=[]; const st=this.state;
     // スマホ（タッチ端末）では左メニューを一回り大きく表示して視認性を確保
-    const menuX=26, menuY=IS_TOUCH?200:126;
-    // メニュー項目が10個になり、タッチ時に高さ×10が下部の編集ボタン(家宝一覧など)と重なっていたため
-    // タッチ時の1項目の高さ/間隔を詰めて全項目が編集ボタンの上に収まるようにする。
-    const menuW=IS_TOUCH?440:198, menuH=IS_TOUCH?150:72, gap=IS_TOUCH?18:14;
-    const menuSz=IS_TOUCH?52:25, menuIconSz=IS_TOUCH?62:30;
-    const menuIconX=IS_TOUCH?62:32, menuLabelX=IS_TOUCH?126:64;
+    const G=this._menuGeom();
+    const menuX=G.menuX, menuY=G.menuY;
+    const menuW=G.menuW, menuH=G.menuH, gap=G.gap;
+    const menuSz=G.menuSz, menuIconSz=G.menuIconSz;
+    const menuIconX=G.menuIconX, menuLabelX=G.menuLabelX;
     const menu=[
       {jp:'内政', en:'Domestic', icon:'♜', action:g=>this._runProvinceCommand(g, this._openNaisei)},
       {jp:'城強化', en:'Castle', icon:'♛', action:g=>this._runProvinceCommand(g, this._castle)},
@@ -8510,15 +8560,21 @@ class MapScene extends GameKit.Scene {
       {jp:'武将一覧', en:'Generals', icon:'☷', action:()=>this._openGeneralsList()},
       {jp:'家臣団', en:'Retainers', icon:'⚑', action:()=>this._openRetainers()}
     ];
+    // スマホではメニューを開閉できるトグルを置き、既定は畳んで地図を広く見せる
+    if (!this.showClans && IS_TOUCH && !this.showTools){
+      bs.push({x:G.menuX, y:G.toggleY, w:G.toggleW, h:G.toggleH, skin:'topBar',
+        label:this.menuOpen?'✕ コマンドを閉じる':'≡ コマンド', sz:this.menuOpen?30:36,
+        action:()=>{ this.menuOpen=!this.menuOpen; }, noScale:true});
+    }
     // 外交モーダル表示中は、背面の左メニューを描かない（パネルと文字が重なるため）
-    if (!this.showClans) menu.forEach((m,i)=>{ const col=IS_TOUCH ? i%2 : 0, row=IS_TOUCH ? Math.floor(i/2) : i; bs.push({x:menuX+col*(menuW+gap), y:menuY+row*(menuH+gap), w:menuW, h:menuH, skin:'sengokuMenu', jp:m.jp, en:m.en, icon:m.icon, sz:menuSz, iconSz:menuIconSz, iconX:menuIconX, labelX:menuLabelX, action:m.action, noScale:true}); });
+    if (!this.showClans && this._menuVisible) menu.forEach((m,i)=>{ const col=IS_TOUCH ? i%G.cols : 0, row=IS_TOUCH ? Math.floor(i/G.cols) : i; bs.push({x:menuX+col*(menuW+gap), y:menuY+row*(menuH+gap), w:menuW, h:menuH, skin:'sengokuMenu', jp:m.jp, en:m.en, icon:m.icon, sz:menuSz, iconSz:menuIconSz, iconX:menuIconX, labelX:menuLabelX, action:m.action, noScale:true}); });
     // 外交モーダル表示中は、右上のグローバル操作（ターン終了・タイトル）を隠す。
     // パネルのヘッダ／✕閉じるボタンと重なって「ごちゃごちゃ」する原因になっていたため。
     if (!this.showClans){
       bs.push({x:W-(IS_TOUCH?410:296), y:IS_TOUCH?32:18, w:IS_TOUCH?248:150, h:IS_TOUCH?150:52, skin:'topBar', label:'ターン終了', sz:IS_TOUCH?30:21, action:g=>this._endTurn(g), noScale:true});
       bs.push({x:W-(IS_TOUCH?176:132), y:IS_TOUCH?32:18, w:IS_TOUCH?174:104, h:IS_TOUCH?150:52, skin:'topBar', label:'タイトル', sz:IS_TOUCH?29:20, action:()=>game.changeScene(new TitleScene()), noScale:true});
     }
-    if (!this.showClans && IS_TOUCH) bs.push({x:W-626, y:32, w:192, h:150, skin:'topBar', label:this.showTools?'操作へ':'管理', sz:34, action:()=>{ this.showTools=!this.showTools; }, noScale:true});
+    if (!this.showClans && IS_TOUCH) bs.push({x:W-626, y:32, w:192, h:150, skin:'topBar', label:this.showTools?'操作へ':'管理', sz:34, action:()=>{ this.showTools=!this.showTools; if (this.showTools) this.menuOpen=false; }, noScale:true});
     if (this.showClans){
       const L=this._diploLayout(); const me=st.playerDaimyo;
       // タブバー（4タブ）
@@ -8615,6 +8671,10 @@ class MapScene extends GameKit.Scene {
     if (ov.type==='middleMap'){
       const L=this._middleMapLayout();
       bs.push({x:L.px+L.pw-(IS_TOUCH?226:178),y:L.py+(IS_TOUCH?18:14),w:IS_TOUCH?190:150,h:IS_TOUCH?62:50,skin:'topBar',label:'✕ 閉じる',sz:IS_TOUCH?26:21,action:()=>{this.overlay=null;}});
+      // 国名ラベルの表示切替（既定は表示。城名と重ねたくない場合に消せる）
+      bs.push({x:L.px+L.pw-(IS_TOUCH?534:440),y:L.py+(IS_TOUCH?18:14),w:IS_TOUCH?262:224,h:IS_TOUCH?62:50,skin:'topBar',
+        label:(this.showProvinceNames!==false?'国名：表示中':'国名：非表示'),sz:IS_TOUCH?24:19,
+        action:()=>{this.showProvinceNames=(this.showProvinceNames===false);}});
       return bs;
     }
     if (ov.type==='march'){
@@ -8986,7 +9046,22 @@ class MapScene extends GameKit.Scene {
     this._drawCastleEditHints(ctx);
     this._drawReligiousEditHints(ctx);
     ctx.restore();
+    this._drawProvinceOverviewLabels(ctx);
     ctx.restore();
+  }
+  // ズームアウトした「全体の地図」では支城・城名が省略されるため、代わりに国（旧国名）の
+  // 位置を示すラベルを重ねて、どの国がどこにあるかを把握できるようにする。
+  // ズームインすると城名レイヤーへ切り替わるよう、支城表示の閾値(71%)と同じ境界で消す。
+  _drawProvinceOverviewLabels(ctx){
+    if (this.castleEdit || this.castleMetaEdit || this.religiousEdit) return;
+    if (this.showProvinceNames===false) return;
+    if (!this.cam || this.cam.zoom > MAP_SUBCASTLE_ZOOM_THRESHOLD) return;
+    const c=this.cam, cx=this._clipCx, cy=this._clipCy;
+    // 上部ステータスバーの下に隠れる位置へはラベルを置かない
+    const top=IS_TOUCH?134:44;
+    this._drawProvinceNameLabels(ctx,
+      (wx,wy)=>[(wx-c.cx)*c.zoom+cx, (wy-c.cy)*c.zoom*MAP_VERTICAL_STRETCH+cy],
+      {size:IS_TOUCH?26:19, bounds:{x:MAP.clip.x, y:MAP.clip.y+top, w:MAP.clip.w, h:MAP.clip.h-top}});
   }
   // 地形のスクリーン座標二次キャッシュ（Cycle 9, attributionで拡縮ブリットがz2.4最大コストと特定）:
   // 地形はワールド不変（Cycle4のワールド解像度オフスクリーン）だが、毎フレームのカメラ変換つき
@@ -9386,12 +9461,12 @@ class MapScene extends GameKit.Scene {
     });
   }
   // タッチ時のコマンドメニュー背後に敷く一体型パネル（地図の透け込みを抑え、2列メニューを整然と見せる）。
-  // ※ 座標は _buttons() 内のメニュー定数（menuX=26 / menuY=200 / menuW=440 / menuH=150 / gap=18・2列×5行）と対応。
-  //    メニューの寸法を変更する場合は本メソッドの bounds も合わせて更新すること。
+  // ※ 寸法は _menuGeom() を共有するため、片方だけズレることはない。
   _drawTouchMenuBacking(ctx){
-    const menuX=26, menuY=200, menuW=440, menuH=150, gap=18, cols=2, rows=5, pad=18;
-    const x=menuX-pad, y=menuY-pad;
-    const w=cols*menuW+(cols-1)*gap+pad*2, h=rows*menuH+(rows-1)*gap+pad*2;
+    if (!this._menuVisible) return;
+    const G=this._menuGeom(), pad=18;
+    const x=G.menuX-pad, y=G.menuY-pad;
+    const w=G.cols*G.menuW+(G.cols-1)*G.gap+pad*2, h=G.rows*G.menuH+(G.rows-1)*G.gap+pad*2;
     ctx.save();
     ctx.beginPath(); ctx.roundRect(x, y, w, h, 20);
     ctx.fillStyle='rgba(6,9,16,0.9)'; ctx.fill();
@@ -10515,11 +10590,66 @@ class MapScene extends GameKit.Scene {
     const px=pad, py=pad, pw=W-pad*2, ph=H-pad*2;
     return {px,py,pw,ph,headerH,footerH,mapX:px+16,mapY:py+headerH,mapW:pw-32,mapH:ph-headerH-footerH-16};
   }
+  /* ---- 全体地図の国名ラベル ----
+   * 城名だけでは「どの国がどこにあるか」が分からないため、全体地図（中地図）に旧国名を重ねる。
+   * 同じ国名を持つ城群の重心を国の代表座標とする。 */
+  _provinceLabelGroups(){
+    const customCount=(typeof CUSTOM_CASTLES!=='undefined' && CUSTOM_CASTLES)?CUSTOM_CASTLES.length:0;
+    const key=DATA.provinces.length+'|'+customCount;
+    // 城座標が変わらない限り結果は同じ。毎フレームの再計算を避けるため短時間キャッシュする。
+    if (this._provGroupCache && this._provGroupCache.key===key && (this.t-this._provGroupCache.t)<1) return this._provGroupCache.items;
+    const groups=new Map();
+    DATA.provinces.forEach(p=>{
+      if (isCastleDeleted(p.id)) return;
+      const name=(p.nameJP||'').trim(); if (!name) return;
+      const pt=provinceScreenPoint(p);
+      let g=groups.get(name);
+      if (!g){ g={name, nameEN:(p.nameEN||''), sx:0, sy:0, n:0}; groups.set(name,g); }
+      g.sx+=pt[0]; g.sy+=pt[1]; g.n++;
+    });
+    const items=[...groups.values()].map(g=>({name:g.name, nameEN:g.nameEN, wx:g.sx/g.n, wy:g.sy/g.n, count:g.n}))
+      .sort((a,b)=>b.count-a.count);
+    this._provGroupCache={key, t:this.t, items};
+    return items;
+  }
+  // 国名ラベルを画面座標で描画する（地図の拡大変換の外で描くため、縮尺に依らず読める大きさを保てる）。
+  // 重なるラベルは重要度（城数）の低いものから間引く。
+  _drawProvinceNameLabels(ctx, toScreen, opts){
+    const o=opts||{};
+    const groups=this._provinceLabelGroups();
+    const size=o.size||(IS_TOUCH?23:18), padX=10, padY=5, h=size+padY*2;
+    const bounds=o.bounds;
+    const placed=[];
+    const hit=(a,b)=>!(a.x+a.w<b.x||b.x+b.w<a.x||a.y+a.h<b.y||b.y+b.h<a.y);
+    ctx.save();
+    ctx.font='bold '+size+'px "Hiragino Sans","Yu Gothic","Segoe UI",sans-serif';
+    // 中心に置けない場合は上下左右へ少しずらして再試行し、密集地でも国名が消えすぎないようにする
+    const cand=[[0,0],[0,-(h+3)],[0,h+3],[0,-(h+3)*2],[0,(h+3)*2]];
+    groups.forEach(g=>{
+      const [sx,sy]=toScreen(g.wx,g.wy);
+      const w=ctx.measureText(g.name).width+padX*2;
+      let r=null;
+      for (const [dx,dy] of cand){
+        const t={x:sx-w/2+dx, y:sy-h/2+dy, w, h};
+        if (bounds && (t.x+t.w<bounds.x || t.x>bounds.x+bounds.w || t.y+t.h<bounds.y || t.y>bounds.y+bounds.h)) return;
+        if (!placed.some(o2=>hit(t,o2))){ r=t; break; }
+      }
+      if (!r) return;
+      placed.push(r);
+      ctx.beginPath(); ctx.roundRect(r.x,r.y,r.w,r.h,h/2);
+      ctx.fillStyle='rgba(4,8,15,0.78)'; ctx.fill();
+      ctx.lineWidth=1.2; ctx.strokeStyle='rgba(232,192,122,0.5)'; ctx.stroke();
+      ctx.fillStyle='#f3d78e'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(g.name, r.x+r.w/2, r.y+r.h/2+1);
+    });
+    ctx.restore();
+    return placed.length;
+  }
   _drawMiddleMap(ctx){
     const st=this.state, L=this._middleMapLayout();
     GameKit.UI.glassPanel(ctx,L.px,L.py,L.pw,L.ph,{radius:20,fill:'rgba(7,12,21,0.985)',stroke:'rgba(232,192,122,0.72)'});
     T(ctx,'中地図 / Middle Map',L.px+(IS_TOUCH?30:24),L.py+(IS_TOUCH?28:22),{size:IS_TOUCH?34:27,weight:'bold',color:'#f3d78e'});
-    T(ctx,'城ごとの勢力圏・家紋　/　Fixed scale',L.px+(IS_TOUCH?30:24),L.py+(IS_TOUCH?70:55),{size:IS_TOUCH?18:14,color:'#aab9cb'});
+    T(ctx,'国の位置・城ごとの勢力圏・家紋　/　Provinces & territories',L.px+(IS_TOUCH?30:24),L.py+(IS_TOUCH?70:55),{size:IS_TOUCH?18:14,color:'#aab9cb'});
     ctx.save(); ctx.beginPath(); ctx.roundRect(L.mapX,L.mapY,L.mapW,L.mapH,12); ctx.clip();
     ctx.fillStyle='#061326'; ctx.fillRect(L.mapX,L.mapY,L.mapW,L.mapH);
     const world=MAP.world, scale=Math.min(L.mapW/world.w,L.mapH/(world.h*MAP_VERTICAL_STRETCH));
@@ -10542,9 +10672,20 @@ class MapScene extends GameKit.Scene {
       drawKamonMap(ctx,owner,0,0,mark*2,dd.color); ctx.restore();
     });
     ctx.restore();
+    // 国名ラベルは拡大変換の外（画面座標）で描く。地図の縮尺に依らず一定の可読サイズを保つ。
+    let shown=0;
+    if (this.showProvinceNames!==false){
+      const toScreen=(wx,wy)=>[ox+(wx-world.x)*scale, oy+(wy-world.y)*scale*MAP_VERTICAL_STRETCH];
+      ctx.save(); ctx.beginPath(); ctx.roundRect(L.mapX,L.mapY,L.mapW,L.mapH,12); ctx.clip();
+      shown=this._drawProvinceNameLabels(ctx, toScreen, {size:IS_TOUCH?20:16, bounds:{x:L.mapX,y:L.mapY,w:L.mapW,h:L.mapH}});
+      ctx.restore();
+    }
     ctx.save(); ctx.beginPath(); ctx.roundRect(L.mapX,L.mapY,L.mapW,L.mapH,12); ctx.lineWidth=2; ctx.strokeStyle='rgba(238,208,144,0.56)'; ctx.stroke(); ctx.restore();
-    T(ctx,'各城の領域を大名色で表示。家紋は城の位置を示します。',L.px+26,L.py+L.ph-(IS_TOUCH?48:36),{size:IS_TOUCH?20:15,color:'#c9d5e3'});
-    T(ctx,'Territories / Crests',L.px+L.pw-26,L.py+L.ph-(IS_TOUCH?48:36),{size:IS_TOUCH?18:14,color:'#94a3b8',align:'right'});
+    const foot = this.showProvinceNames!==false
+      ? '金字の札が国（旧国名）の位置。領域は大名色、家紋は城の位置を示します。（表示中 '+shown+' 国）'
+      : '各城の領域を大名色で表示。家紋は城の位置を示します。「国名」ボタンで国の位置を表示できます。';
+    T(ctx,foot,L.px+26,L.py+L.ph-(IS_TOUCH?48:36),{size:IS_TOUCH?20:15,color:'#c9d5e3'});
+    T(ctx,'Provinces / Territories / Crests',L.px+L.pw-26,L.py+L.ph-(IS_TOUCH?48:36),{size:IS_TOUCH?18:14,color:'#94a3b8',align:'right'});
   }
   _drawOverlay(ctx){
     const ov=this.overlay, st=this.state;
