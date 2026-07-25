@@ -34,6 +34,7 @@ curl -s -m 30 https://ai-proxy.hi-fukasawa77.workers.dev/stats
 - `negatives`（👎が積み重なった質問）＝ intent辞書・KBの穴の候補。
 - `topHits` ＝ よく聞かれる話題。KB化するとAI消費ゼロで即答できる。
 - `/stats` が落ちていても中断しない（後続の整合チェックと鮮度改善だけで続行）。
+- **「到達不可」と「worker停止」を切り分ける**: `curl` の終了コード非ゼロ／`http_code=000` は worker の障害ではなく**実行環境から外向き通信が許可されていない**サイン。この場合はいくら待っても入力が空のままなので、PR本文の提案欄に「Routine実行環境の外向き許可（worker ドメイン）が必要」と明記して深澤へ上げる（自己進化の入力が恒久的にゼロになるため、鮮度改善だけの空回りを繰り返さない）。切り分けは `curl -s -o /dev/null -w '%{http_code}' -m 30 <url>/stats` で行う。
 
 ### 2. 整合チェック
 ```bash

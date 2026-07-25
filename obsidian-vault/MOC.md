@@ -42,6 +42,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0017-legacy-agents-tree-removal]] — レガシー.agents/skills/を削除しvideo-editingを正式スキルへ救出
 - [[0018-battle-verification-patterns-promotion]] — 合戦バグ群の学び（陣営の絶対基準/縦位置補正/reason別計測/シーン直起動検証）をgame-dev・dynamic-testerへ昇格＋lint検査#8の未昇格マーカー取りこぼし修正
 - [[0019-fixed-canvas-mobile-ui-promotion]] — 固定CanvasのモバイルUI対策（パネル拡大＋入力逆変換/ラベル幅フィット）をgame-devへ昇格＋lint検査#8を位置ベース検査へ強化
+- [[0020-perf-cost-placement-and-canvas-layout-promotion]] — 前処理コストの置き場所（静止時ベイクの罠/補償ハック撤去）をcodingへ、Canvas絶対座標レイアウトの整合（分岐の全要素更新/描画倍率とレイアウト予約の一致）をgame-devへ昇格＋7営業日分の遡及Daily整備
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
