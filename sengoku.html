@@ -937,6 +937,7 @@ const CASTLE_CLASS_MAP={}; // province_id → 'honjo'(本城) | 'shijo'(支城)
 const MAP_MIN_ZOOM=0.716;              // 16%拡大率（= 16×4.47/100）
 const MAP_DEFAULT_ZOOM=6.84;          // 153%拡大率（= 153×4.47/100）
 const MAP_SUBCASTLE_ZOOM_THRESHOLD=3.174; // 71%拡大率（= 71×4.47/100）
+const MAP_FORCE_FACILITY_ZOOM_THRESHOLD=4.47; // 100%拡大率: 武装勢力・施設を表示／操作できる最小倍率
 const MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD=13.41; // 300%拡大率（= 300×4.47/100）: これ以上でアセットの城グラフィック、299%以下は家紋マークを表示
 const MAP_SITE_GRAPHIC_ZOOM_THRESHOLD=13.41; // 300%拡大率（= 300×4.47/100）: これ以上で施設グラフィックを表示
 const CASTLE_POS_CSV_STORE = 'sengokuCastlePositionCsv:v1';
@@ -4627,10 +4628,15 @@ function applySengokuExpansions(){
   DATA.scenarios.forEach(scn=>{
     const activeDaimyoDefs = scn.id===1574 ? daimyoDefs.filter(d=>d.id!=='ichijo') : daimyoDefs;
     activeDaimyoDefs.forEach(d=>{ const cur=scn.daimyo.find(x=>x.id===d.id); if(cur) Object.assign(cur,d); else scn.daimyo.push({...d}); });
+    // 1582年1月の武田家はまだ存続。拡張大名の定義外なので明示的に開始勢力へ加える。
+    if (scn.id===1582 && !scn.daimyo.some(d=>d.id==='takeda')) scn.daimyo.push({id:'takeda', nameJP:'武田', nameEN:'Takeda', color:'#2980b9', ai:'defensive', capital:'kai', lord:'takeda_katsuyori'});
     scn.own = scn.own || {}; Object.assign(scn.own, owners);
     if (scn.id===1574) scn.own.nishi_tosa='chosokabe';
     // シナリオ別の史実補正: 共通owners適用後に城主を上書き（滅亡大名の領国を征服者へ移す）
     if (scn.ownFinal) Object.assign(scn.own, scn.ownFinal);
+    // 1582年シナリオは1月開始。武田家の滅亡は同年3月の甲州征伐後なので、
+    // 開始時点では甲斐・信濃を領有する武田勝頼家として残す。
+    if (scn.id===1582) Object.assign(scn.own, {kai:'takeda', shinano:'takeda', minami_shinano:'takeda'});
     // 領国を1つも持たない大名（当該シナリオで既に滅亡/未成立）を除外する
     // Correct leaders and ownership for historical scenario starts.
     const setScenarioLord=(did,gid)=>{ const d=scn.daimyo.find(x=>x.id===did); if(d) d.lord=gid; };
@@ -7023,6 +7029,7 @@ class MapScene extends GameKit.Scene {
   }
   _pickReligiousForce(x,y){
     if (!pointInRect({x,y}, MAP.clip)) return null;
+    if (!this.cam || this.cam.zoom < MAP_FORCE_FACILITY_ZOOM_THRESHOLD) return null;
     let best=null, bestDist=Infinity;
     for (const force of RELIGIOUS_FORCES){
       if (isMarkerDeleted(force.id)) continue;
@@ -7034,9 +7041,9 @@ class MapScene extends GameKit.Scene {
   }
   _pickResourceMarker(x,y){
     if (!pointInRect({x,y}, MAP.clip)) return null;
+    if (!this.cam || this.cam.zoom < MAP_FORCE_FACILITY_ZOOM_THRESHOLD) return null;
     let best=null, bestDist=Infinity;
     for (const marker of RESOURCE_MARKERS){
-      if (!this.cam || this.cam.zoom <= MAP_SUBCASTLE_ZOOM_THRESHOLD) continue;
       if (isMarkerDeleted(marker.id)) continue;
       const pt=resourceMarkerPoint(marker), screen=this._worldToScreen(pt[0],pt[1]);
       const d=Math.hypot(x-screen.x,y-screen.y);
@@ -9118,6 +9125,7 @@ class MapScene extends GameKit.Scene {
     // 変化検知でメモ化して描画のみ毎フレーム行う（マップFPSのボトルネック解消）。
     const items = this._castleLayoutItems();
     const showSubCastles = this.cam.zoom > MAP_SUBCASTLE_ZOOM_THRESHOLD;
+    const showForcesAndFacilities = this.cam.zoom >= MAP_FORCE_FACILITY_ZOOM_THRESHOLD;
     // 拡大率300%以上でアセットの城グラフィック、299%以下は家紋マークを城位置に表示する（深澤要望）。
     const showCastleGraphic = this.cam.zoom >= MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD;
     const labelSize=7, gap=7;  // 城アイコン13px・家紋15pxは drawCastleMarker のスプライトへ焼き込み済み（Cycle 8）
@@ -9150,8 +9158,8 @@ class MapScene extends GameKit.Scene {
       drawVerticalLabelCached(ctx, it.name, it.nx, _ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
       if (s!==1) ctx.restore();
     }
-    // 71%以上の拡大率でのみ支城・独立勢力マーカーを表示する
-    if (showSubCastles){
+    // 武装勢力・施設は100%以上、支城は従来どおり71%超から表示する。
+    if (showForcesAndFacilities){
     // 寺社勢力は領地を奪わず、史跡位置に独立勢力マーカーとして表示する。
     for (const marker of RESOURCE_MARKERS){
       if (isMarkerDeleted(marker.id)) continue;
@@ -9305,7 +9313,7 @@ class MapScene extends GameKit.Scene {
   // のみ描く。通常=琥珀リング、ドラッグ中の対象=緑リング（城のヒントと同じ配色・サイズ）。
   _drawReligiousEditHints(ctx){
     if (!this.religiousEdit) return;
-    if (this.cam.zoom <= MAP_SUBCASTLE_ZOOM_THRESHOLD) return;
+    if (this.cam.zoom < MAP_FORCE_FACILITY_ZOOM_THRESHOLD) return;
     const z=this.cam.zoom;
     ctx.save();
     const ring=(cx,cy,active)=>{
