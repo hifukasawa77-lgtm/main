@@ -950,15 +950,28 @@ function persistAllCastlePositionRecords(){
 
 /* ===================================================================
  * 城位置CSV（siro_ichi.csv）— 位置編集の「確定」で出力し、起動時に読込む
- * 列: 城名,国名,所属大名,城LV,X城の配置位置の座標,城の配置位置のY座標,城区分,城の種類
+ * 列: 城名,国名,シナリオ1〜6の大名,城LV,X城の配置位置の座標,城の配置位置のY座標,城区分,城の種類
  * =================================================================== */
 const CASTLE_POS_CSV_FILE = 'siro_ichi.csv';
-const CASTLE_POS_CSV_HEADER = ['城名','国名','所属大名','城LV','X城の配置位置の座標','城の配置位置のY座標','城区分','城の種類'];
+const CASTLE_POS_CSV_SCENARIO_HEADERS = ['シナリオ１(大名)','シナリオ２(大名)','シナリオ３(大名)','シナリオ４(大名)','シナリオ５(大名)','シナリオ６(大名)'];
+const CASTLE_POS_CSV_HEADER = ['城名','国名',...CASTLE_POS_CSV_SCENARIO_HEADERS,'城LV','X城の配置位置の座標','城の配置位置のY座標','城区分','城の種類'];
 const CASTLE_TYPE_FROM_JP={'平城':'hirajiro','山城':'yamajiro','平山城':'hirayamajiro','海城':'umajiro','特別':'special'};
 const CASTLE_TYPE_TO_JP={'hirajiro':'平城','yamajiro':'山城','hirayamajiro':'平山城','umajiro':'海城','special':'特別'};
 const CASTLE_CLASS_FROM_JP={'本城':'honjo','支城':'shijo'};
 const CASTLE_CLASS_TO_JP={'honjo':'本城','shijo':'支城'};
 const CASTLE_CLASS_MAP={}; // province_id → 'honjo'(本城) | 'shijo'(支城)
+// siro_ichi.csv から読み込んだ、開始時の城レベルと城種。
+// 領有はシナリオごとの CSV 行から反映する。
+const CSV_SIRO_ICHI_CASTLE_META={};
+// CSV側で後世名を併記した城は、既存の同一城IDに統合する。
+const SIRO_ICHI_CASTLE_NAME_ALIASES={
+  '伊豆韮山城':'韮山城',
+  '稲葉山城(岐阜城)':'稲葉山城',
+  '曳馬城(浜松城)':'曳馬城',
+  '深志城(松本城)':'深志城',
+  '尾山御坊(金沢城)':'金沢御坊',
+  '石山御坊(大阪城)':'石山御坊'
+};
 const MAP_MIN_ZOOM=0.716;              // 16%拡大率（= 16×4.47/100）
 const MAP_DEFAULT_ZOOM=6.84;          // 153%拡大率（= 153×4.47/100）
 const MAP_SUBCASTLE_ZOOM_THRESHOLD=3.174; // 71%拡大率（= 71×4.47/100）
@@ -1141,7 +1154,13 @@ function buildCastlePositionCsv(state){
     const ctKey=castleTypeForProvince(p.id, prov);
     const ctJP=CASTLE_TYPE_TO_JP[ctKey]||'平城';
     const ccJP=CASTLE_CLASS_TO_JP[getCastleClass(p.id)]||'本城';
-    const row=[castleNameForProvince(p), p.nameJP, daimyoName, castleLv, Math.round(rec.x), Math.round(rec.y), ccJP, ctJP];
+    const scenarioOwners=(DATA.scenarios||[]).slice(0,6).map(scn=>{
+      const scenarioProv=(state && state.scenarioId===scn.id && state.provinces) ? state.provinces[p.id] : null;
+      const ownerId=(scenarioProv && scenarioProv.owner) || (scn.own && scn.own[p.id]);
+      const d=(scn.daimyo||[]).find(x=>x.id===ownerId);
+      return d ? d.nameJP : '';
+    });
+    const row=[castleNameForProvince(p), p.nameJP, ...scenarioOwners, castleLv, Math.round(rec.x), Math.round(rec.y), ccJP, ctJP];
     lines.push(row.map(csvEscapeField).join(','));
   });
   return lines.join('\r\n') + '\r\n';
@@ -1170,24 +1189,46 @@ function exportCastlePositionCsv(state){
   return {csv, rows, downloaded};
 }
 // CSV文字列 → [{castleName, provinceName, daimyo, level, x, y}]
+// Excel等で改行が落ちたCSVも受け付ける。城種は固定語なので行境界を安全に復元できる。
+function normalizeSiroIchiCsv(text){
+  const clean=String(text||'').replace(/^﻿/, '');
+  if (/\r?\n/.test(clean)) return clean;
+  const marker='城の種類';
+  const headerEnd=clean.indexOf(marker);
+  if (headerEnd<0) return clean;
+  const headEnd=headerEnd+marker.length;
+  const head=clean.slice(0,headEnd);
+  const body=clean.slice(headEnd).replace(/(本城|支城),(平山城|平城|山城|海城|特別)(?=[^,\r\n]+,)/g, (_, castleClass, castleType)=>castleClass+','+castleType+'\n');
+  return head+'\n'+body;
+}
+// CSV文字列 → [{castleName, provinceName, scenarioDaimyos, level, x, y}]
 function parseCastlePositionCsv(text){
   const rows=[];
   if (!text) return rows;
-  const lines=text.replace(/^﻿/, '').split(/\r?\n/);
-  for (let i=0;i<lines.length;i++){
-    const line=lines[i];
-    if (!line.trim()) continue;
-    const cols=csvParseLine(line);
-    if (i===0 && (cols[0]==='城名')) continue; // ヘッダ行
+  const lines=normalizeSiroIchiCsv(text).split(/\r?\n/).filter(line=>line.trim());
+  if (!lines.length) return rows;
+  const header=csvParseLine(lines[0]).map(v=>v.trim());
+  const hasHeader=header[0]==='城名';
+  const col=(name, fallback)=>{
+    const i=header.indexOf(name);
+    return i>=0 ? i : fallback;
+  };
+  const scenarioCols=header.map((name,index)=>/^シナリオ[１-６1-6]\(大名\)$/.test(name) ? index : -1).filter(index=>index>=0);
+  const nameCol=col('城名',0), provinceCol=col('国名',1), levelCol=col('城LV',3);
+  const xCol=col('X城の配置位置の座標',4), yCol=col('城の配置位置のY座標',5);
+  const classCol=col('城区分',6), typeCol=col('城の種類',7);
+  for (let i=hasHeader?1:0;i<lines.length;i++){
+    const cols=csvParseLine(lines[i]);
     if (cols.length<6) continue;
-    const x=Number(cols[4]), y=Number(cols[5]);
+    const x=Number(cols[xCol]), y=Number(cols[yCol]);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    // 8列(新フォーマット): cols[6]=城区分, cols[7]=城種類
-    // 7列(旧フォーマット): cols[6]=城種類（後方互換）
-    const newFmt = cols.length>=8;
-    const castleClass=(newFmt?cols[6]:'本城').trim();
-    const castleType=(newFmt?cols[7]:cols[6]||'').trim();
-    rows.push({castleName:(cols[0]||'').trim(), provinceName:(cols[1]||'').trim(), daimyo:(cols[2]||'').trim(), level:(cols[3]||'').trim(), x, y, castleClass, castleType});
+    const scenarioDaimyos=scenarioCols.map(index=>(cols[index]||'').trim());
+    const daimyo=scenarioDaimyos[0] || (cols[2]||'').trim();
+    rows.push({
+      castleName:(cols[nameCol]||'').trim(), provinceName:(cols[provinceCol]||'').trim(),
+      daimyo, scenarioDaimyos, level:(cols[levelCol]||'').trim(), x, y,
+      castleClass:(cols[classCol]||'本城').trim(), castleType:(cols[typeCol]||'').trim()
+    });
   }
   return rows;
 }
@@ -1213,6 +1254,76 @@ function assignCastleRowIds(rows){
     if (id && !claimed[id]){ ids[i]=id; claimed[id]=true; }
   });
   return ids;
+}
+// CSV由来の城は名前から安定したIDを作る。再読込時に別の領地として重複しない。
+function siroIchiCastleId(castleName){
+  const key=Array.from(String(castleName||'castle')).map(ch=>ch.codePointAt(0).toString(16)).join('_');
+  return 'siro_ichi_'+key;
+}
+function siroIchiDaimyoId(scenario, name){
+  const normalized=String(name||'').trim().replace(/家$/, '');
+  if (!normalized || !scenario) return null;
+  const d=(scenario.daimyo||[]).find(item=>item.nameJP===normalized || item.nameJP+'家'===normalized);
+  return d ? d.id : null;
+}
+function siroIchiParentProvinceId(row){
+  const direct=(DATA.provinces||[]).find(p=>p.nameJP===row.provinceName && !p.id.startsWith('siro_ichi_'));
+  if (direct) return direct.id;
+  const iw=ASSETS.img.map && (ASSETS.img.map.naturalWidth||ASSETS.img.map.width);
+  const ih=ASSETS.img.map && (ASSETS.img.map.naturalHeight||ASSETS.img.map.height);
+  if (!iw || !ih) return null;
+  const mx=clamp01(row.x/iw), my=clamp01(row.y/ih);
+  let nearest=null, best=Infinity;
+  (DATA.provinces||[]).forEach(p=>{
+    if (p.id.startsWith('siro_ichi_')) return;
+    const pos=CASTLE_POS_OVERRIDES[p.id]||CASTLE_MAP_POINTS[p.id];
+    if (!pos || !Number.isFinite(pos.mx) || !Number.isFinite(pos.my)) return;
+    const d=(mx-pos.mx)*(mx-pos.mx)+(my-pos.my)*(my-pos.my);
+    if (d<best){ best=d; nearest=p.id; }
+  });
+  return nearest;
+}
+function integrateSiroIchiCsvRows(rows){
+  if (!Array.isArray(rows) || !rows.some(row=>Array.isArray(row.scenarioDaimyos) && row.scenarioDaimyos.some(Boolean))) return 0;
+  const byCastle={};
+  (DATA.provinces||[]).forEach(p=>{ byCastle[castleNameForProvince(p)]=p.id; });
+  const iw=ASSETS.img.map && (ASSETS.img.map.naturalWidth||ASSETS.img.map.width);
+  const ih=ASSETS.img.map && (ASSETS.img.map.naturalHeight||ASSETS.img.map.height);
+  let applied=0;
+  rows.forEach(row=>{
+    if (!row.castleName) return;
+    let id=byCastle[row.castleName]||byCastle[SIRO_ICHI_CASTLE_NAME_ALIASES[row.castleName]];
+    if (!id){
+      id=siroIchiCastleId(row.castleName);
+      const firstScenario=(DATA.scenarios||[])[0];
+      const ownerId=siroIchiDaimyoId(firstScenario, row.scenarioDaimyos[0]) || (firstScenario && firstScenario.own && firstScenario.own[siroIchiParentProvinceId(row)]);
+      const c={id, castleName:row.castleName, provinceName:row.provinceName||row.castleName, daimyoId:ownerId||null,
+        mx:iw?clamp01(row.x/iw):undefined, my:ih?clamp01(row.y/ih):undefined, x:row.x, y:row.y,
+        neighborId:siroIchiParentProvinceId(row), terrain:'plain', kokudaka:50,
+        castleType:CASTLE_TYPE_FROM_JP[row.castleType]||'hirajiro'};
+      addCustomCastleToData(c);
+      byCastle[row.castleName]=id;
+    }
+    const p=DATA.provById[id];
+    if (p && row.provinceName) p.nameJP=row.provinceName;
+    CASTLE_NAMES[id]=row.castleName;
+    const level=parseInt(row.level,10);
+    CSV_SIRO_ICHI_CASTLE_META[id]={level:(Number.isFinite(level)?clamp(level,1,10):null), castleType:CASTLE_TYPE_FROM_JP[row.castleType]||null};
+    const castleClass=CASTLE_CLASS_FROM_JP[row.castleClass];
+    if (castleClass) CASTLE_CLASS_MAP[id]=castleClass;
+    (DATA.scenarios||[]).forEach((scenario,index)=>{
+      const ownerId=siroIchiDaimyoId(scenario, row.scenarioDaimyos[index]);
+      if (ownerId){ scenario.own=scenario.own||{}; scenario.own[id]=ownerId; }
+      scenario.place=scenario.place||{};
+      if (!scenario.place[id]) scenario.place[id]=[];
+    });
+    applied++;
+  });
+  return applied;
+}
+function daimyoNameForStateScenario(row, state){
+  const index=(DATA.scenarios||[]).findIndex(s=>s.id===state.scenarioId);
+  return (index>=0 && row.scenarioDaimyos && row.scenarioDaimyos[index]) || row.daimyo;
 }
 function getCastleClass(id){ return CASTLE_CLASS_MAP[id]||'honjo'; }
 // CSVの座標(地図画像ピクセル)を城配置オーバーライドへ反映する
@@ -1267,8 +1378,11 @@ async function loadCastlePositionsFromCsv(){
   // HTML埋め込みシードCSVをフォールバックとして使用
   if (!text){ text=CASTLE_POS_SEED_CSV; fromSeed=true; }
   if (!text) return 0;
-  try { return applyCastlePositionCsvRows(parseCastlePositionCsv(text), fromSeed); }
-  catch (_) { return 0; }
+  try {
+    const rows=parseCastlePositionCsv(text);
+    integrateSiroIchiCsvRows(rows);
+    return applyCastlePositionCsvRows(rows, false);
+  } catch (_) { return 0; }
 }
 
 function customCastleId(name){
@@ -5675,6 +5789,12 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
       prov.soldiers = st.soldiers; prov.development = st.development; prov.castleLevel = st.castleLevel; prov.minchu = st.minchu;
       const historicalProvince = historicalSetup.provinces && historicalSetup.provinces[p.id];
       if (historicalProvince) Object.assign(prov, historicalProvince);
+      // 最新の siro_ichi.csv は城の等級・種別の基準データとして、年代別の既定値より優先する。
+      const csvMeta=CSV_SIRO_ICHI_CASTLE_META[p.id];
+      if (csvMeta){
+        if (Number.isFinite(csvMeta.level)) prov.castleLevel=csvMeta.level;
+        if (CASTLE_TYPES_ALL.includes(csvMeta.castleType)) prov.castleType=csvMeta.castleType;
+      }
     }
     state.provinces[p.id] = prov;
   });
@@ -7184,6 +7304,7 @@ class MapScene extends GameKit.Scene {
     if (!text){ text=CASTLE_POS_SEED_CSV; source='内蔵初期CSV'; }
     if (!text){ this._csvNotify('siro_ichi.csv \u306e\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f'); return; }
     const rows=parseCastlePositionCsv(text);
+    integrateSiroIchiCsvRows(rows);
     if (!rows.length){ this._csvNotify('\u8aad\u307f\u8fbc\u3081\u308b\u30c7\u30fc\u30bf\u304c\u3042\u308a\u307e\u305b\u3093\u3067\u3057\u305f'); return; }
     const st=this.state;
     const daimyos=daimyoOf(st).filter(d=>st.daimyo[d.id]);
@@ -7201,7 +7322,8 @@ class MapScene extends GameKit.Scene {
       const cname=(r.castleName||r.provinceName||'').trim();
       if (!cname) return;
       if (newByName[cname]){ ids[i]=newByName[cname]; return; }
-      const dm=daimyos.find(d=>d.nameJP===r.daimyo||d.nameJP+'家'===r.daimyo);
+      const ownerName=daimyoNameForStateScenario(r, st);
+      const dm=daimyos.find(d=>d.nameJP===ownerName||d.nameJP+'家'===ownerName);
       const mx=iw?clamp01(r.x/iw):0.5, my=ih?clamp01(r.y/ih):0.5;
       const world=mapImagePointToWorld(mx,my);
       const neighborId=this._nearestProvinceByWorld(world.x, world.y);
@@ -7227,7 +7349,8 @@ class MapScene extends GameKit.Scene {
         if (r.provinceName) p.nameJP=r.provinceName;
       }
       if (prov){
-        const dm=daimyos.find(d=>d.nameJP===r.daimyo||d.nameJP+'\u5bb6'===r.daimyo);
+        const ownerName=daimyoNameForStateScenario(r, st);
+        const dm=daimyos.find(d=>d.nameJP===ownerName||d.nameJP+'\u5bb6'===ownerName);
         const daimyoId=dm?dm.id:null;
         if (daimyoId) prov.owner=daimyoId;
         const lv=parseInt(r.level,10);
