@@ -1293,8 +1293,12 @@ function integrateSiroIchiCsvRows(rows){
   rows.forEach(row=>{
     if (!row.castleName) return;
     let id=byCastle[row.castleName]||byCastle[SIRO_ICHI_CASTLE_NAME_ALIASES[row.castleName]];
+    if (id && isCastleDeleted(id)) return;
     if (!id){
       id=siroIchiCastleId(row.castleName);
+      // 削除済みの城はCSVから復活させない。復活させると DATA にだけ洲が戻り、
+      // セーブ側（削除済み）との不整合でターン処理が例外になる。
+      if (isCastleDeleted(id)) return;
       const firstScenario=(DATA.scenarios||[])[0];
       const ownerId=siroIchiDaimyoId(firstScenario, row.scenarioDaimyos[0]) || (firstScenario && firstScenario.own && firstScenario.own[siroIchiParentProvinceId(row)]);
       const c={id, castleName:row.castleName, provinceName:row.provinceName||row.castleName, daimyoId:ownerId||null,
@@ -5881,16 +5885,88 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
   return state;
 }
 
+/* ---- セーブデータの正規化（旧セーブ・城編集との整合） ----
+ * DATA 側（洲・武将・大名）はリリースのたびに増え、城編集（削除／城主変更）でも動く。
+ * セーブは保存時点のスナップショットなので、両者がずれると
+ *   ・DATA にあってセーブに無い洲   → ownedProvinces が undefined.owner で例外
+ *   ・DATA にあってセーブに無い武将 → bestGeneralIn が undefined.alive で例外
+ * となり、ターン処理が収入計上の途中で止まる（＝「操作を完了できませんでした」＋金銭だけ増える）。
+ * 読み込み時に一度ここで埋め合わせ、以後の計算が欠損を踏まないようにする。 */
+function normalizeGameState(state){
+  if (!state || typeof state!=='object') return state;
+  const scn = DATA.scenarios ? DATA.scenarios.find(s=>s.id===state.scenarioId) : null;
+  state.provinces = state.provinces || {};
+  state.generals  = state.generals  || {};
+  state.daimyo    = state.daimyo    || {};
+  if (!state.armedForces || typeof state.armedForces!=='object') state.armedForces={};
+  if (!Number.isFinite(state.rngSeq)) state.rngSeq=(Number(state.rng)>>>0)||0x6d2b79f5;
+
+  // 1) セーブ後に追加された武将を補う（未登場＝非存命として足すだけ。既存値は触らない）
+  (DATA.generals||[]).forEach(g=>{
+    if (!state.generals[g.id]) state.generals[g.id]={loyalty:0, alive:false, location:null, daimyo:null, ambition:deriveAmbition(g)};
+  });
+
+  // 2) セーブ後に追加された洲（城）を補う。史実の城主が健在ならその家、いなければ空白領とする。
+  const dById={}; (scn && scn.daimyo || []).forEach(d=>dById[d.id]=d);
+  (DATA.provinces||[]).forEach(p=>{
+    if (state.provinces[p.id]) return;
+    let owner=(scn && scn.own && scn.own[p.id]) || null;
+    if (owner && !(state.daimyo[owner] && state.daimyo[owner].alive)) owner=null;
+    const prov={owner, soldiers:0, development:0, castleLevel:1, castleType:null, castleLayout:[], generals:[], hasActed:false, minchu:60};
+    if (owner){
+      const st0=deriveProvinceStats(p.kokudaka, dById[owner] && dById[owner].capital===p.id);
+      prov.soldiers=st0.soldiers; prov.development=st0.development; prov.castleLevel=st0.castleLevel; prov.minchu=st0.minchu;
+    } else {
+      const st0=deriveProvinceStats(p.kokudaka, false);
+      prov.soldiers=Math.round(st0.soldiers*0.5); prov.development=Math.round(st0.development*0.6);
+    }
+    const csvMeta=CSV_SIRO_ICHI_CASTLE_META[p.id];
+    if (csvMeta){
+      if (Number.isFinite(csvMeta.level)) prov.castleLevel=csvMeta.level;
+      if (CASTLE_TYPES_ALL.includes(csvMeta.castleType)) prov.castleType=csvMeta.castleType;
+    }
+    state.provinces[p.id]=prov;
+  });
+
+  // 3) 洲に残った実体のない武将IDを落とし、配属先が消えた武将は浪人へ戻す
+  Object.entries(state.provinces).forEach(([pid,prov])=>{
+    if (!prov || typeof prov!=='object') { delete state.provinces[pid]; return; }
+    if (!Array.isArray(prov.generals)) prov.generals=[];
+    else prov.generals=prov.generals.filter(gid=>!!state.generals[gid] && !!DATA.genById[gid]);
+    if (!Array.isArray(prov.castleLayout)) prov.castleLayout=[];
+    if (!Number.isFinite(prov.soldiers))     prov.soldiers=0;
+    if (!Number.isFinite(prov.development))  prov.development=0;
+    if (!Number.isFinite(prov.castleLevel))  prov.castleLevel=1;
+    if (!Number.isFinite(prov.minchu))       prov.minchu=60;
+  });
+  Object.values(state.generals).forEach(g=>{
+    if (!g || typeof g!=='object') return;
+    if (g.location && !state.provinces[g.location]){ g.location=null; g.daimyo=null; }
+  });
+  Object.values(state.daimyo).forEach(d=>{
+    if (!d || typeof d!=='object') return;
+    if (!Number.isFinite(d.gold)) d.gold=0;
+    if (!Number.isFinite(d.rice)) d.rice=0;
+  });
+  return state;
+}
+
 /* ---- state アクセス補助 ---- */
 function provOwner(state, pid){ return state.provinces[pid].owner; }
-function daimyoOf(state){ return DATA.scenarios.find(s=>s.id===state.scenarioId).daimyo; }
+function daimyoOf(state){ const scn=DATA.scenarios.find(s=>s.id===state.scenarioId); return (scn&&scn.daimyo)||[]; }
 function daimyoDef(state, did){ return daimyoOf(state).find(d=>d.id===did); }
+// 洲・武将・大名の各テーブルは、旧セーブ／城編集／シナリオ追加で片側だけが欠けることがある。
+// ここは毎ターンの計算とAI思考が通る最下層なので、欠損を例外にせず「無いもの」として扱う。
+// （例外を投げると _endTurn が収入計上の途中で中断し、押すたびに金銭だけが増えていく）
 function bestGeneralIn(state, pid){
   const prov = state.provinces[pid];
+  if (!prov) return null;
   let best=null, bestScore=-1;
-  prov.generals.forEach(gid=>{
-    if (!state.generals[gid].alive) return;
+  (prov.generals||[]).forEach(gid=>{
+    const gs = state.generals[gid];
+    if (!gs || !gs.alive) return;
     const g = DATA.genById[gid];
+    if (!g || !g.stats) return;
     const sc = g.stats.tou + g.stats.bu*0.4;
     if (sc>bestScore){ bestScore=sc; best=gid; }
   });
@@ -5898,17 +5974,20 @@ function bestGeneralIn(state, pid){
 }
 function provinceStrength(state, pid){
   const prov = state.provinces[pid];
+  if (!prov) return 0;
   const bg = bestGeneralIn(state, pid);
-  const tou = bg ? DATA.genById[bg].stats.tou : 45;
+  const bgDef = bg ? DATA.genById[bg] : null;
+  const tou = (bgDef && bgDef.stats) ? bgDef.stats.tou : 45;
   const dmyo = prov.owner ? state.daimyo[prov.owner] : null;
   const horseBonus = Math.min(Math.sqrt(dmyo?.horse||0)*0.025, 0.25);
   const gunBonus   = Math.min(Math.sqrt(dmyo?.gun  ||0)*0.025, 0.25);
-  return prov.soldiers * (1 + tou/200) * (1 + prov.castleLevel*0.08) * (1 + horseBonus + gunBonus);
+  return (Number(prov.soldiers)||0) * (1 + tou/200) * (1 + (Number(prov.castleLevel)||1)*0.08) * (1 + horseBonus + gunBonus);
 }
 function ownedProvinces(state, did){
-  return DATA.provinces.filter(p=>state.provinces[p.id].owner===did).map(p=>p.id);
+  const provs=(state && state.provinces)||{};
+  return DATA.provinces.filter(p=>{ const pr=provs[p.id]; return !!pr && pr.owner===did; }).map(p=>p.id);
 }
-function neighborsOf(pid){ return (DATA.provById[pid].neighbors)||[]; }
+function neighborsOf(pid){ const p=DATA.provById[pid]; return (p&&p.neighbors)||[]; }
 
 /* ---- 決定論PRNG（mulberry32・セーブ往復で再現可能） ---- */
 function srand(st){
@@ -6801,12 +6880,14 @@ class ScenarioSelectScene extends GameKit.Scene {
  * MapScene — 戦略マップ（ハブ）
  * =================================================================== */
 class MapScene extends GameKit.Scene {
-  constructor(state){ super(); this.state=normalizeDiplomacyState(state); refreshDiplomaticTreaties(this.state,[]); applyScenarioCastleNames(state.scenarioId); }
+  constructor(state){ super(); this.state=normalizeGameState(normalizeDiplomacyState(state)); refreshDiplomaticTreaties(this.state,[]); applyScenarioCastleNames(state.scenarioId); }
   enter(game){
     setCanvasViewportMode('fit');
     BGM.setMood('map'); BGM.start();
     ensureCustomCastlesInState(this.state);
     applyCastleMetaOverridesToState(this.state);
+    // 城の追加/削除を state へ反映した「後」に、DATA と state の欠損を最終的に揃える。
+    normalizeGameState(this.state);
     resetLegacyCastleLayouts(this.state);
     this.cells = computeProvinceCells();
     this.t=0; this.mode='select'; this.selected=null; this.hover=null;
@@ -6965,7 +7046,8 @@ class MapScene extends GameKit.Scene {
           pressedButton.action(game);
         } catch (err) {
           console.error('Map button action failed', err);
-          this._flash('操作を完了できませんでした。もう一度お試しください。', 'The action could not be completed. Please try again.');
+          // 原因が追えるよう、フラッシュにも例外の要旨を出す（変更は巻き戻し済み）。
+          this._flash('操作を完了できませんでした（'+((err&&err.message)||err)+'）', 'The action could not be completed: '+((err&&err.message)||err));
         }
         return;
       }
@@ -8533,8 +8615,40 @@ class MapScene extends GameKit.Scene {
     ov.data.captives.slice().forEach(g=>this._recruitCaptive(game, g));
   }
 
-  /* ---- ターン終了 → AI処理 ---- */
+  /* ---- ターン終了 → AI処理 ----
+   * ターン処理は「収入 → AI思考 → 解決」の順に state を書き換えていく。途中で例外が出ると
+   * 収入だけが確定した半端な状態が残り、ボタンを押し直すたびに金銭が積み上がってしまう
+   * （報告された「操作を完了できませんでした＋金銭が増える」はこれ）。
+   * そこで本体を _runTurn に切り出し、開始前のスナップショットで巻き戻せるようにする。 */
   _endTurn(game){
+    const st=this.state;
+    // 前回のターンが未確定のまま残っている場合は、収入を二重計上せず解決だけを再開する。
+    if (st.awaitingFinalize){ this._processTurnResolution(game); return; }
+    if (this._turnBusy) return;
+    let snapshot=null;
+    try { snapshot=JSON.stringify(st); } catch(_){ snapshot=null; }
+    this._turnBusy=true;
+    try {
+      this._runTurn(game);
+    } catch (err) {
+      // 半端な適用を残さないよう、ターン開始時点へ丸ごと巻き戻してから呼び出し元へ返す。
+      if (snapshot && this._restoreStateSnapshot(snapshot)) this.overlay=null;
+      throw err;
+    } finally {
+      this._turnBusy=false;
+    }
+  }
+  // スナップショットを同一オブジェクトへ書き戻す（this.state の参照は各所に配られている）
+  _restoreStateSnapshot(snapshot){
+    let obj=null;
+    try { obj=JSON.parse(snapshot); } catch(_){ return false; }
+    if (!obj || typeof obj!=='object') return false;
+    const st=this.state;
+    Object.keys(st).forEach(k=>{ if (!(k in obj)) delete st[k]; });
+    Object.assign(st, obj);
+    return true;
+  }
+  _runTurn(game){
     const st=this.state;
     const aiLog=[];
     const season=this._stateSeason();
@@ -8553,8 +8667,10 @@ class MapScene extends GameKit.Scene {
     });
     // 収入・兵糧（収穫／消費／兵站破綻）
     daimyoOf(st).forEach(d=>{
-      if (!st.daimyo[d.id].alive) return;
+      // シナリオへ後から追加された家は旧セーブに存在しない。未登場として飛ばす
+      // （ここで例外を投げると、先に処理した家の収入だけが確定してしまう）。
       const treas=st.daimyo[d.id];
+      if (!treas || !treas.alive) return;
       let inc=0, harvest=0, sol=0;
       ownedProvinces(st,d.id).forEach(pid=>{
         const prov=st.provinces[pid];
@@ -8580,7 +8696,7 @@ class MapScene extends GameKit.Scene {
         KOKUJIN_FORCES.forEach(kf=>{ const af=getAF(st,kf.id); if(af.allied&&af.vassalOf===st.playerDaimyo) treas.gold=Math.max(0,treas.gold-kf.recruitCost); });
       }
       // 従属国は主家へ収入の3割を貢納する
-      const suz=st.daimyo[d.id].vassalOf;
+      const suz=treas.vassalOf;
       if (suz && suz!==d.id && st.daimyo[suz] && st.daimyo[suz].alive && inc>0){
         const trib=Math.round(inc*0.3); treas.gold=Math.max(0,treas.gold-trib); st.daimyo[suz].gold+=trib;
       }
@@ -8607,7 +8723,7 @@ class MapScene extends GameKit.Scene {
     // AI 各大名
     st.pendingDefenses=[];
     daimyoOf(st).forEach(d=>{
-      if (d.id===st.playerDaimyo || !st.daimyo[d.id].alive) return;
+      if (d.id===st.playerDaimyo || !(st.daimyo[d.id] && st.daimyo[d.id].alive)) return;
       runStrategicAI(st, d, aiLog);
     });
     st.pendingTurnLog=aiLog;
@@ -8998,9 +9114,9 @@ class MapScene extends GameKit.Scene {
   }
   _updateDaimyoAlive(){
     const st=this.state;
-    daimyoOf(st).forEach(d=>{ if (ownedProvinces(st,d.id).length===0) st.daimyo[d.id].alive=false; });
+    daimyoOf(st).forEach(d=>{ const dm=st.daimyo[d.id]; if (dm && ownedProvinces(st,d.id).length===0) dm.alive=false; });
     // 主家が滅んだ従属国は独立に戻す
-    daimyoOf(st).forEach(d=>{ const suz=st.daimyo[d.id].vassalOf; if (suz && (!st.daimyo[suz] || !st.daimyo[suz].alive)) st.daimyo[d.id].vassalOf=null; });
+    daimyoOf(st).forEach(d=>{ const dm=st.daimyo[d.id]; if (!dm) return; const suz=dm.vassalOf; if (suz && (!st.daimyo[suz] || !st.daimyo[suz].alive)) dm.vassalOf=null; });
   }
   // 惣無事令の静謐領を再計算（Phase 3 → Phase 0 の isZonePacified を活性化）。
   // 天下人（プレイヤー）の直轄領＋従属大名領を「静謐」として ZoC 反応を抑止する。
@@ -9485,7 +9601,7 @@ class MapScene extends GameKit.Scene {
         } catch (err) {
           // 操作例外を更新ループまで伝播させず、画面全体が無反応になるのを防ぐ。
           console.error('Overlay action failed', err);
-          this._flash('操作を完了できませんでした。もう一度お試しください。', 'The action could not be completed. Please try again.');
+          this._flash('操作を完了できませんでした（'+((err&&err.message)||err)+'）', 'The action could not be completed: '+((err&&err.message)||err));
         }
       };
       // _hitFirstボタン（底部アクションボタン）を先にチェックして武将トグルより常に優先
