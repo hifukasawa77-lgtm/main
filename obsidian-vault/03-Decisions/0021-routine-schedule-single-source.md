@@ -57,6 +57,6 @@ related: ["[[recursive-self-improvement]]", "[[guide-agent-evolution]]", "[[0008
 
 上の「影響・トレードオフ」で **要確認** としていた初回firing（2026-07-26 21:10 JST）の結果。**firing自体は行われたが、成果物が一切残っていない**（`claude/self-improve` ブランチ・PR・Daily のいずれも無し）。この日は 17:23 JST まで作業コミットがあったため、prompt 手順2「検査#9で作業ありDailyなしが出たら遡及Dailyを書く」が働けば Daily は生成されていたはずである。
 
-原因は MCP コネクタの引き継ぎではなく**ブランチ指定の不一致**だった。prompt は固定ブランチ `claude/self-improve` での作業を指示しているが、実際のセッションはハーネス側が `claude/recursive-self-improvement-<乱数>` を作業ブランチとして割り当てる（remote には同名パターンのブランチが9本残存）。したがって本ADRの決定4が謳う「固定ブランチのローリングPR方式」は成立しておらず、CLAUDE.md の Routine 表が成果物として記載する「ローリングPR `claude/self-improve`」は**一度も存在したことがない**。
+**原因は未特定**。当初はブランチ指定の不一致（prompt は固定ブランチ `claude/self-improve` を指示する一方、セッションにはハーネスが `claude/recursive-self-improvement-<乱数>` を割り当てる）が原因だと考えたが、**`/agent-evolve` の Routine は固定ブランチ `claude/agent-evolve` で正常に動作しPR #272 を維持している**ため、固定ブランチ方式そのものが機能しないわけではない。確実に言えるのは「初回firingが痕跡ゼロで終わった」という事実のみである。
 
-これは本ADR自身が是正しようとした「文書と実態のドリフト」の再発であり、かつ検査#11 が見るのは曜日・時刻のみで**成果物欄は無防備**であることを示している。対応方針（表を実態へ合わせる／Routine側でブランチを切り直させる）は振る舞いの変更にあたるため深澤の判断待ち。詳細: [[0022-durable-state-and-press-to-act-promotion]]
+いずれにせよ、本ADRの決定4が謳う「固定ブランチのローリングPR方式」は `/self-improve` については一度も成立しておらず、CLAUDE.md の Routine 表が成果物として記載していた「ローリングPR `claude/self-improve`」は**一度も存在したことがない**。これは本ADR自身が是正しようとした「文書と実態のドリフト」の再発であり、かつ検査#11 が見るのは曜日・時刻のみで**成果物欄は無防備**であることを示している。詳細と対応: [[0022-durable-state-and-press-to-act-promotion]]

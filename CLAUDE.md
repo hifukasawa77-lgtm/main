@@ -41,7 +41,9 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 |---|---|---|---|
 | `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve` | 禁止（深澤承認制） |
 | `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ | 禁止（コード変更なし） |
-| `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
+| `/self-improve` | 毎週日曜 21:00 | PR（作業ブランチは下記※） | 禁止（深澤承認制） |
+
+※ `/self-improve` の作業ブランチは、**ハーネスから作業ブランチの指定がある場合はそれに従い**（Routineのfiringでは `claude/recursive-self-improvement-<乱数>` が割り当てられることがある）、指定が無い場合のみ固定ブランチ `claude/self-improve` を使う。いずれの場合もPRを作成/更新して深澤の承認を待つ。<br>2026-07-26 の初回firingは成果物（ブランチ・PR・Daily）が一切残らずに終了しており、原因は未特定。次回以降のfiringでは**痕跡が残ったかを翌セッションで確認する**こと（詳細: `obsidian-vault/03-Decisions/0022-*.md`）。
 
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
