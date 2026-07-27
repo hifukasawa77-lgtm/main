@@ -4010,7 +4010,9 @@ const WEATHER_BY_SEASON=[
 ];
 function weatherForState(st){
   const month=Number.isFinite(st.month)?st.month:3, season=Math.floor((month-1)/3);
-  if(st.weather && st.weather.month===month) return st.weather;
+  const current=st.weather;
+  // 旧セーブや編集データで天候レコードが不完全でも、undefined を画面・行軍計算へ渡さない。
+  if(current && current.month===month && typeof current.id==='string' && typeof current.jp==='string') return current;
   const list=WEATHER_BY_SEASON[season]||WEATHER_BY_SEASON[0]; const h=Math.abs(((st.year||1560)*37+month*19+(st.scenarioId||'').length*7));
   return Object.assign({month,season},list[h%list.length]);
 }
@@ -7871,6 +7873,14 @@ class MapScene extends GameKit.Scene {
     this.overlay={type:'march'};
   }
   _confirmMarch(game, auto){
+    try { return this._confirmMarchImpl(game, auto); }
+    catch (err) {
+      console.error('March confirmation failed', err);
+      if (this.march) this.march.error='出陣準備のデータに不整合があります（兵力・兵糧を確認してください）';
+      this._flash('出陣を開始できませんでした。兵力・兵糧を確認してください。', 'Could not start the march. Check troops and rice.');
+    }
+  }
+  _confirmMarchImpl(game, auto){
     const st=this.state, m=this.march;
     const src=st.provinces[m.srcId], dst=st.provinces[m.dstId];
     const troops=clamp(m.troops, 100, m.maxSend);
@@ -7894,7 +7904,13 @@ class MapScene extends GameKit.Scene {
       this._flash('行軍兵糧が不足しています（必要 '+logistics.rice+'千石）', 'Not enough rice for the march'); return;
     }
     const defOwner=dst.owner;
-    const zr = computeZoneReactions(st, st.playerDaimyo, m.srcId, m.dstId, totalTroops);
+    // 武装勢力・外交データが旧形式でも、行軍そのものは止めない。
+    let zr={lost:0,disrupt:false,notes:[]};
+    try { zr=computeZoneReactions(st, st.playerDaimyo, m.srcId, m.dstId, totalTroops); }
+    catch (err) {
+      console.error('March zone reaction failed', err);
+      m.error='周辺勢力の行軍判定を省略して出陣します';
+    }
     let arrive = totalTroops;
     if (zr.disrupt) arrive = Math.round(arrive*0.7);
     arrive = Math.max(100, arrive - zr.lost);
@@ -11820,6 +11836,7 @@ class MapScene extends GameKit.Scene {
       T(ctx, '戦力予測  勝率 '+f.winPct+'%  ・  想定生存 自約'+f.atkSurv+'／敵約'+f.defSurv+(f.dipBonus?' ・ 外交支援+'+Math.round(f.dipBonus*100)+'%':''), px+pw/2, py+294, {size:24, weight:'bold', color:col, align:'center'});
     }
     if (!hasRice) T(ctx,'⚠ 兵糧不足：商人・内政から兵糧を補給してください',px+pw/2,py+320,{size:19,weight:'bold',color:'#f87171',align:'center'});
+    if (m.error) T(ctx,'⚠ '+m.error,px+pw/2,py+320,{size:19,weight:'bold',color:'#fbbf24',align:'center'});
     // troops
     T(ctx, '出陣兵数', px+pw/2, py+350, {size:28, color:'#9fb2c6', align:'center'});
     T(ctx, m.troops+' 人', px+pw/2, py+389, {size:58, weight:'bold', color:'#f1e6cf', align:'center'});
