@@ -5842,7 +5842,8 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
   for (const [a,b,relation,ally=false,truceTurns=0] of (historicalSetup.diplomacy||[])){
     if (!state.daimyo[a] || !state.daimyo[b]) continue;
     const dip=getDip(state,a,b);
-    dip.relation=clamp(relation,-100,100); dip.ally=!!ally; dip.truceUntil=Math.max(0,truceTurns);
+    dip.relation=clamp(relation,-100,100); dip.trust=clamp(Math.round(Math.max(0,relation)*0.55),0,100); dip.hostility=clamp(Math.round(Math.max(0,-relation)*0.7),0,100);
+    dip.ally=!!ally; dip.allianceUntil=ally?state.turn+24:0; dip.truceUntil=Math.max(ally?dip.allianceUntil:0,truceTurns);
   }
   // 兵糧の初期備蓄（開始兵力に応じて消費○ヶ月分を配布）
   scn.daimyo.forEach(d=>{
@@ -5893,16 +5894,142 @@ function srand(st){
 
 /* ---- 外交（diplomacy）ヘルパ ---- */
 function relKey(a,b){ return a<b ? a+'|'+b : b+'|'+a; }
+const DIPLOMACY_DEFAULTS = {
+  relation:0, trust:0, fear:0, obligation:0, hostility:0,
+  truceUntil:0, ally:false, allianceUntil:0, married:false, marriageUntil:0,
+  hostageUntil:0, tradeUntil:0, passageUntil:0,
+  jointWarUntil:0, jointWarTarget:null, actedTurn:-1
+};
+function normalizeDipRecord(st, dip){
+  const relation=Number.isFinite(dip.relation)?dip.relation:0;
+  const legacyTrust=!Number.isFinite(dip.trust), legacyHostility=!Number.isFinite(dip.hostility);
+  for (const [key,value] of Object.entries(DIPLOMACY_DEFAULTS)){
+    if (dip[key]===undefined || dip[key]===null) dip[key]=value;
+  }
+  dip.relation=clamp(relation,-100,100);
+  // 旧セーブは関係値を種にして多軸評価へ移行する。以後は各交渉で個別に変動する。
+  if (legacyTrust) dip.trust=clamp(Math.round(Math.max(0,relation)*0.55),0,100);
+  if (legacyHostility) dip.hostility=clamp(Math.round(Math.max(0,-relation)*0.7),0,100);
+  dip.trust=clamp(Number(dip.trust)||0,0,100);
+  dip.fear=clamp(Number(dip.fear)||0,0,100);
+  dip.obligation=clamp(Number(dip.obligation)||0,0,100);
+  dip.hostility=clamp(Number(dip.hostility)||0,0,100);
+  if (dip.ally && !dip.allianceUntil) dip.allianceUntil=(st.turn||1)+24;
+  if (dip.married && !dip.marriageUntil) dip.marriageUntil=(st.turn||1)+48;
+  return dip;
+}
+function normalizeDiplomacyState(st){
+  if (!st.diplomacy || typeof st.diplomacy!=='object') st.diplomacy={};
+  Object.values(st.diplomacy).forEach(dip=>normalizeDipRecord(st,dip));
+  Object.values(st.daimyo||{}).forEach(d=>{
+    if (!Number.isFinite(d.diplomaticCredit)) d.diplomaticCredit=50;
+    d.diplomaticCredit=clamp(d.diplomaticCredit,0,100);
+  });
+  return st;
+}
 function getDip(st, a, b){
   if (!st.diplomacy) st.diplomacy = {};
   const k = relKey(a,b);
-  if (!st.diplomacy[k]) st.diplomacy[k] = { relation:0, truceUntil:0, ally:false };
-  return st.diplomacy[k];
+  if (!st.diplomacy[k]) st.diplomacy[k] = {...DIPLOMACY_DEFAULTS};
+  return normalizeDipRecord(st,st.diplomacy[k]);
 }
 function getRel(st, a, b){ return getDip(st,a,b).relation; }
 function addRel(st, a, b, delta){ const d=getDip(st,a,b); d.relation = clamp(d.relation+delta, -100, 100); return d.relation; }
-function areAllied(st, a, b){ return a!==b && getDip(st,a,b).ally; }
+function adjustDip(st,a,b,delta={}){
+  const d=getDip(st,a,b);
+  ['relation','trust','fear','obligation','hostility'].forEach(k=>{
+    if (!Number.isFinite(delta[k])) return;
+    const lo=k==='relation'?-100:0;
+    d[k]=clamp((Number(d[k])||0)+delta[k],lo,100);
+  });
+  return d;
+}
+function changeDiplomaticCredit(st,did,delta){
+  const d=st.daimyo&&st.daimyo[did]; if (!d) return 0;
+  const current=Number.isFinite(d.diplomaticCredit)?d.diplomaticCredit:50;
+  d.diplomaticCredit=clamp(current+delta,0,100);
+  return d.diplomaticCredit;
+}
+function treatyActive(st,dip,key){ return Number(dip&&dip[key])>=st.turn; }
+function areAllied(st, a, b){
+  if (a===b) return false;
+  const d=getDip(st,a,b);
+  return !!d.ally && (!d.allianceUntil || treatyActive(st,d,'allianceUntil'));
+}
 function inTruce(st, a, b){ return a!==b && getDip(st,a,b).truceUntil >= st.turn; }
+function activeDiplomacyPartners(st,did,key){
+  const result=[];
+  for (const [pair,raw] of Object.entries(st.diplomacy||{})){
+    const ids=pair.split('|'); if (ids.length!==2 || !ids.includes(did)) continue;
+    const other=ids[0]===did?ids[1]:ids[0], dip=normalizeDipRecord(st,raw);
+    if (treatyActive(st,dip,key) && st.daimyo[other]&&st.daimyo[other].alive) result.push(other);
+  }
+  return result;
+}
+function jointWarTargetsFor(st,did){
+  const targets=new Set();
+  for (const [pair,raw] of Object.entries(st.diplomacy||{})){
+    const ids=pair.split('|'); if (ids.length!==2 || !ids.includes(did)) continue;
+    const dip=normalizeDipRecord(st,raw);
+    if (treatyActive(st,dip,'jointWarUntil') && dip.jointWarTarget && st.daimyo[dip.jointWarTarget]?.alive) targets.add(dip.jointWarTarget);
+  }
+  return targets;
+}
+// 領地兵モデルのため、通行権は共同国境の街道・補給拠点を使える兵站ボーナスとして表現する。
+function diplomaticAttackBonus(st,attackerId,dstId){
+  const defender=st.provinces[dstId]?.owner;
+  let bonus=0;
+  activeDiplomacyPartners(st,attackerId,'passageUntil').forEach(partner=>{
+    const supports=neighborsOf(dstId).some(nb=>st.provinces[nb]?.owner===partner);
+    if (supports && partner!==defender) bonus=Math.max(bonus,0.08);
+  });
+  if (defender && jointWarTargetsFor(st,attackerId).has(defender)) bonus=Math.max(bonus,0.12);
+  return bonus;
+}
+function diplomacyAcceptance(st,proposer,target,base=0.35,fearWeight=0.001){
+  const dip=getDip(st,proposer,target);
+  const credit=st.daimyo[proposer]?.diplomaticCredit??50;
+  return clamp(base+dip.relation*0.0035+dip.trust*0.003+dip.obligation*0.0015-dip.hostility*0.003+(credit-50)*0.003+dip.fear*fearWeight,0.05,0.95);
+}
+function breachDiplomaticTreaties(st,a,b){
+  const dip=getDip(st,a,b);
+  const hadAlliance=areAllied(st,a,b), hadTruce=inTruce(st,a,b);
+  const hostage=treatyActive(st,dip,'hostageUntil');
+  const hadOtherTreaty=treatyActive(st,dip,'tradeUntil')||treatyActive(st,dip,'passageUntil')||treatyActive(st,dip,'jointWarUntil');
+  dip.ally=false; dip.allianceUntil=0; dip.truceUntil=0; dip.married=false; dip.marriageUntil=0;
+  dip.tradeUntil=0; dip.passageUntil=0; dip.jointWarUntil=0; dip.jointWarTarget=null;
+  adjustDip(st,a,b,{relation:hadAlliance?-35:-20,trust:hostage?-45:-30,hostility:hostage?35:22});
+  changeDiplomaticCredit(st,a,hostage?-25:(hadAlliance||hadTruce?-15:-8));
+  dip.hostageUntil=0;
+  return hostage?'盟約を破り、人質が処刑された。外交信用が大きく低下した':
+    (hadAlliance||hadTruce||hadOtherTreaty?'盟約を破棄して侵攻した。外交信用が低下した':'宣戦を布告した');
+}
+function refreshDiplomaticTreaties(st,log=[]){
+  for (const [pair,raw] of Object.entries(st.diplomacy||{})){
+    const dip=normalizeDipRecord(st,raw), ids=pair.split('|');
+    const playerInvolved=ids.includes(st.playerDaimyo);
+    if (dip.ally && dip.allianceUntil>0 && dip.allianceUntil<st.turn){
+      dip.ally=false; dip.allianceUntil=0;
+      adjustDip(st,ids[0],ids[1],{relation:-3});
+      if (playerInvolved) log.push('同盟期間が満了した（再交渉可能）');
+    }
+    if (dip.married && dip.marriageUntil>0 && dip.marriageUntil<st.turn){
+      dip.married=false; dip.marriageUntil=0;
+      if (playerInvolved) log.push('代替わりにより婚姻同盟の縁が薄れた');
+    }
+    for (const [key,label] of [['hostageUntil','人質交換'],['tradeUntil','通商条約'],['passageUntil','軍事通行権']]){
+      if (dip[key]>0 && dip[key]<st.turn){
+        dip[key]=0;
+        if (playerInvolved) log.push(label+'の期限が満了した');
+      }
+    }
+    if (dip.jointWarUntil>0 && dip.jointWarUntil<st.turn){
+      dip.jointWarUntil=0; dip.jointWarTarget=null;
+      if (playerInvolved) log.push('共闘盟約の期限が満了した');
+    }
+  }
+  return log;
+}
 /* 従属関係: st.daimyo[id].vassalOf に主家IDを保持 */
 function suzerainOf(st, id){ return (st.daimyo[id] && st.daimyo[id].vassalOf) || null; }
 function isVassalBond(st, a, b){ return a!==b && (suzerainOf(st,a)===b || suzerainOf(st,b)===a); }
@@ -6076,6 +6203,7 @@ function autoResolveBattle(opts){
   let aq = armyQuality(opts.atkGenerals, opts.year, opts.atkFamily, false, 0, null, opts.atkNaval||0, opts.atkFormation) * (0.9+rnd()*0.2);
   let dq = armyQuality(opts.defGenerals, opts.year, opts.defFamily, true, opts.castleLevel, opts.terrain, opts.defNaval||0, opts.defFormation) * (0.9+rnd()*0.2);
   const weather=opts.weather||null; aq*=weatherBattleMultiplier(weather,opts.atkFamily); dq*=weatherBattleMultiplier(weather,opts.defFamily);
+  aq*=1+(Number(opts.atkDiplomacyBonus)||0);
   // 陣形相性（じゃんけん）: 有利を取った側に+8%
   const fA=FORMATIONS[opts.atkFormation], fD=FORMATIONS[opts.defFormation];
   if (fA && fD){ if (fA.beats===opts.defFormation) aq*=1.08; else if (fD.beats===opts.atkFormation) dq*=1.08; }
@@ -6630,7 +6758,7 @@ class ScenarioSelectScene extends GameKit.Scene {
  * MapScene — 戦略マップ（ハブ）
  * =================================================================== */
 class MapScene extends GameKit.Scene {
-  constructor(state){ super(); this.state=state; applyScenarioCastleNames(state.scenarioId); }
+  constructor(state){ super(); this.state=normalizeDiplomacyState(state); refreshDiplomaticTreaties(this.state,[]); applyScenarioCastleNames(state.scenarioId); }
   enter(game){
     setCanvasViewportMode('fit');
     BGM.setMood('map'); BGM.start();
@@ -6646,7 +6774,7 @@ class MapScene extends GameKit.Scene {
     // 全体地図（ズームアウト時・中地図）に国名ラベルを重ねるか
     this.showProvinceNames=true;
     this.showClans=false; this.showTools=false; this.selClan=null; this.ploy=null; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.dragReligious=null; this.dragResource=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
-    this.diploTab='clan'; this.armedSubTab='naval'; this.selForce=null; this.ninjaAction=null;
+    this.diploTab='clan'; this.diploActionTab='basic'; this.diploWarTarget=null; this.armedSubTab='naval'; this.selForce=null; this.ninjaAction=null;
     this.diploClanPage=0; // 大名一覧は6件/ページで下スクロール（次の6大名）
     this.armedForcePage=0;
     this.allGenPage=0; this.allGenSelected=null; this.historyEventPage=0;
@@ -7615,6 +7743,18 @@ class MapScene extends GameKit.Scene {
   }
   _clickProvince(game, pid){
     const st=this.state; const prov=st.provinces[pid];
+    if (this.mode==='marchTarget'){
+      if (pid===this.selected){ this.mode='select'; this.selected=null; this._flash('出陣先の選択を取り消しました', 'March destination selection cancelled'); return; }
+      if (prov.owner===st.playerDaimyo){
+        if (prov.hasActed || prov.soldiers<=100){ this._flash('この城は出陣できません', 'This castle cannot march'); return; }
+        this.selected=pid; this._flash((DATA.provById[pid]?.nameJP||pid)+' を出陣元にしました。目的地を選択してください', 'March origin changed'); return;
+      }
+      const route=this._marchRoute(this.selected,pid);
+      if (!route){ this._flash('自領・通行権・同盟領を経由する行軍路がありません', 'No march route through friendly territory'); return; }
+      const src=st.provinces[this.selected];
+      if (src.hasActed || src.soldiers<=100){ this._flash('出陣元の兵または行動回数が不足しています', 'Origin cannot march'); return; }
+      this._openMarch(this.selected,pid,route); return;
+    }
     if (this.mode==='select'){
       if (prov.owner===st.playerDaimyo){ this.selected=pid; this.mode='province'; game.audio.beep(720,0.05,'sine'); }
       else { this.overlay={type:'provinceInfo', pid}; }
@@ -7633,18 +7773,92 @@ class MapScene extends GameKit.Scene {
     }
   }
 
-  /* ---- 出陣（March）オーバーレイ ---- */
-  _openMarch(srcId, dstId){
+  /* ---- 出陣計画：左メニューから出陣元を定め、地図で目的地を選ぶ ---- */
+  _beginMarchFromMenu(game){
+    const st=this.state, mine=ownedProvinces(st,st.playerDaimyo)
+      .filter(pid=>!st.provinces[pid].hasActed && st.provinces[pid].soldiers>100);
+    if (!mine.length){ this._flash('出陣できる城がありません（兵100以上・未行動の城が必要です）', 'No castle can march this turn'); return; }
+    const srcId=(this.selected && mine.includes(this.selected)) ? this.selected : mine[0];
+    this.selected=srcId; this.mode='marchTarget'; this.overlay=null; this.showClans=false;
+    const srcName=DATA.provById[srcId]?.nameJP||srcId;
+    this._flash(srcName+' を出陣元にしました。地図から出陣先の城を選択してください', 'Choose the destination castle on the map');
+    if (game?.audio) game.audio.beep(720,0.07,'triangle');
+  }
+  _marchRoute(srcId, dstId){
+    const st=this.state, me=st.playerDaimyo;
+    if (!srcId || !dstId || !st.provinces[srcId] || !st.provinces[dstId]) return null;
+    const passable=(pid)=>{
+      const owner=st.provinces[pid]?.owner;
+      return !owner || owner===me || suzerainOf(st,owner)===me || areAllied(st,me,owner) || (getDip(st,me,owner).passageUntil||0)>=st.turn;
+    };
+    const queue=[srcId], prev={[srcId]:null};
+    while(queue.length){
+      const cur=queue.shift();
+      for (const next of neighborsOf(cur)){
+        if (prev[next]!==undefined) continue;
+        if (next!==dstId && !passable(next)) continue;
+        prev[next]=cur;
+        if (next===dstId){
+          const route=[]; let at=dstId;
+          while(at!==null){ route.unshift(at); at=prev[at]; }
+          return route;
+        }
+        queue.push(next);
+      }
+    }
+    return null;
+  }
+  _marchLogistics(m, totalTroops){
+    const st=this.state, route=(m.route&&m.route.length?m.route:[m.srcId,m.dstId]);
+    const terrainMul={plain:1,coast:1.08,mountain:1.42,river:1.18,water:1.28};
+    const terrain=route.reduce((sum,pid)=>sum+(terrainMul[DATA.provById[pid]?.terrain]||1),0)/route.length;
+    const weather=weatherForProvince(st,m.dstId);
+    const weatherMul={clear:1,rain:1.28,storm:1.75,snow:1.8,hot:1.16,drought:1.08};
+    const weatherFactor=weatherMul[weather.id]||1;
+    const hops=Math.max(1,route.length-1);
+    const days=Math.max(1,Math.ceil(hops*3*terrain*weatherFactor));
+    const rice=Math.ceil(Math.max(0.1,(totalTroops/1000)*(days/30)*1.2)*10)/10;
+    const effect=weather.id==='snow'?'雪で進軍が大幅に遅延':weather.id==='storm'?'暴雨・嵐で進軍が大幅に遅延':weather.id==='rain'?'雨で進軍が遅延':weather.id==='hot'?'猛暑で行軍が鈍化':'天候による遅延なし';
+    return {route,hops,days,rice,weather,weatherFactor,terrainFactor:terrain,effect};
+  }
+  _marchAidOptions(m){
+    const st=this.state, me=st.playerDaimyo, out=[];
+    ownedProvinces(st,me).filter(pid=>pid!==m.srcId && !st.provinces[pid].hasActed && st.provinces[pid].soldiers>200)
+      .sort((a,b)=>st.provinces[b].soldiers-st.provinces[a].soldiers).slice(0,6).forEach(pid=>{
+        const p=st.provinces[pid], amount=Math.floor(Math.max(0,p.soldiers-100)*0.25/100)*100;
+        if(amount>=100) out.push({id:'castle:'+pid,kind:'castle',name:castleNameForProvince(DATA.provById[pid]),amount,sourceId:pid,desc:'自国の城から援軍'});
+      });
+    KOKUJIN_FORCES.forEach(f=>{ const af=getAF(st,f.id); if(af.actedTurn===st.turn) return; if(!(af.vassalOf===me || (af.allied&&af.relation>=60))) return;
+      const amount=Math.max(100,Math.floor(f.soldiers*0.35/100)*100); out.push({id:'kokujin:'+f.id,kind:'kokujin',name:f.nameJP,amount,forceId:f.id,desc:af.vassalOf===me?'従属国人の参陣':'国人衆へ援軍要請'}); });
+    const coastal=['coast','river','water'].includes(DATA.provById[m.dstId]?.terrain);
+    if(coastal) NAVAL_FORCES.forEach(f=>{ const af=getAF(st,f.id); if(af.actedTurn===st.turn) return; if(!(af.vassalOf===me || af.relation>=60)) return;
+      out.push({id:'naval:'+f.id,kind:'naval',name:f.nameJP,amount:0,bonus:Math.round((f.vassalBonus||0)*65),forceId:f.id,desc:'水軍・海賊衆の海上支援'}); });
+    RELIGIOUS_FORCES.forEach(f=>{ const af=getAF(st,f.id), ef=RELIGIOUS_FORCE_EFFECTS[f.id]; if(!ef || !ef.combatBonus || af.actedTurn===st.turn) return; if(!(af.vassalOf===me || (af.allied&&af.relation>=60))) return;
+      out.push({id:'religious:'+f.id,kind:'religious',name:f.nameJP,amount:0,bonus:ef.combatBonus,forceId:f.id,desc:'寺社勢力・一向門徒の加勢'}); });
+    daimyoOf(st).filter(d=>d.id!==me && st.daimyo[d.id]?.alive && (st.daimyo[d.id].vassalOf===me || areAllied(st,me,d.id))).forEach(d=>{
+      const total=totalSoldiersOf(st,d.id), amount=Math.max(200,Math.min(2000,Math.floor(total*(st.daimyo[d.id].vassalOf===me?0.25:0.12)/100)*100));
+      if(amount>=100) out.push({id:'daimyo:'+d.id,kind:'daimyo',name:d.nameJP+'家',amount,daimyoId:d.id,locked:st.daimyo[d.id].vassalOf===me,desc:st.daimyo[d.id].vassalOf===me?'従属大名：強制出陣':'同盟大名へ援軍要請'});
+    });
+    return out;
+  }
+  _marchAidSummary(m){
+    const options=this._marchAidOptions(m); let troops=0, navalBonus=0, combatBonus=0;
+    const selected=[];
+    options.forEach(o=>{ if(!m.aid?.[o.id]) return; selected.push(o); troops+=o.amount||0; if(o.kind==='naval') navalBonus+=o.bonus||0; if(o.kind==='religious') combatBonus+=o.bonus||0; });
+    return {options,selected,troops,navalBonus:Math.min(0.5,navalBonus),combatBonus:Math.min(0.35,combatBonus)};
+  }  /* ---- 出陣（March）オーバーレイ ---- */
+  _openMarch(srcId, dstId, route){
     const st=this.state; const src=st.provinces[srcId];
     const maxSend = src.soldiers-100;
     this.march = {
-      srcId, dstId,
+      srcId, dstId, route:route||[srcId,dstId],
       troops: Math.max(100, Math.round(maxSend*0.6/100)*100),
       maxSend,
       generals: src.generals.filter(g=>st.generals[g].alive).slice(),
-      pick: {},
-      genOffset: 0,
+      pick: {}, aid:{}, genOffset: 0,
     };
+    // 従属大名は主家の出陣に強制参加する。ほかの援軍は援軍画面で選択する。
+    this._marchAidOptions(this.march).filter(o=>o.locked).forEach(o=>{ this.march.aid[o.id]=true; });
     // デフォルトで最強武将を選択
     const bg = bestGeneralIn(st, srcId);
     if (bg) this.march.pick[bg]=true;
@@ -7657,18 +7871,25 @@ class MapScene extends GameKit.Scene {
     const gens=Object.keys(m.pick).filter(g=>m.pick[g]);
     const enemy = dst.owner!==st.playerDaimyo;
     if (!enemy){
-      // 増援は即時に確定する。
+      // 自国城への増援は従来どおり即時反映する。
       src.soldiers -= troops;
       gens.forEach(g=>{ const i=src.generals.indexOf(g); if(i>=0) src.generals.splice(i,1); });
-      src.hasActed=true;
-      dst.soldiers += troops;
+      src.hasActed=true; dst.soldiers += troops;
       gens.forEach(g=>{ st.generals[g].location=m.dstId; dst.generals.push(g); });
       this.overlay=null; this.march=null; this.selected=null; this.mode='select';
       game.audio.beep(520,0.1,'sine'); this._flash('増援を送りました', 'Reinforcements sent'); this._save();
       return;
     }
-    const zr = computeZoneReactions(st, st.playerDaimyo, m.srcId, m.dstId, troops);
-    let arrive = troops;
+    const aid=this._marchAidSummary(m);
+    const totalTroops=troops+aid.troops;
+    const logistics=this._marchLogistics(m,totalTroops);
+    const treasury=st.daimyo[st.playerDaimyo];
+    if ((treasury.rice||0)<logistics.rice){
+      this._flash('行軍兵糧が不足しています（必要 '+logistics.rice+'千石）', 'Not enough rice for the march'); return;
+    }
+    const defOwner=dst.owner;
+    const zr = computeZoneReactions(st, st.playerDaimyo, m.srcId, m.dstId, totalTroops);
+    let arrive = totalTroops;
     if (zr.disrupt) arrive = Math.round(arrive*0.7);
     arrive = Math.max(100, arrive - zr.lost);
     if (zr.notes.length){
@@ -7676,9 +7897,13 @@ class MapScene extends GameKit.Scene {
       this._flash(zr.notes.map(n=>n.jp).join(' / ')+extra, zr.notes.map(n=>n.en).join(' / '));
     }
     const ctx = this._buildBattleContext(m.srcId, m.dstId, arrive, gens);
-    // 手動戦の方式選択を取り消しても兵・武将を失わないよう、出陣元の
-    // 変更は実際に戦闘を開始する直前まで保留する。
-    ctx.marchCommit={srcId:m.srcId, troops, generals:gens.slice(), wasActed:src.hasActed, committed:false};
+    ctx.diplomaticWarOwner=defOwner||null;
+    ctx.navalBonus=Math.min(0.5,(ctx.navalBonus||0)+(aid.navalBonus||0));
+    ctx.diplomacyBonus=Math.min(0.5,(ctx.diplomacyBonus||0)+(aid.combatBonus||0));
+    ctx.marchLogistics=logistics;
+    ctx.aidSummary=aid;
+    // 手動戦の方式選択を取り消しても兵・武将・兵糧を失わないよう、出陣の実費は戦闘開始直前に確定する。
+    ctx.marchCommit={srcId:m.srcId, troops, generals:gens.slice(), wasActed:src.hasActed, aid:aid.selected.slice(), riceCost:logistics.rice, committed:false};
     this.overlay=null; this.march=null;
     if (auto){
       this._commitMarchForce(ctx);
@@ -7687,28 +7912,64 @@ class MapScene extends GameKit.Scene {
     } else {
       this.overlay={type:'battleType', ctx};
     }
+  }  _commitDiplomaticWarDeclaration(ctx){
+    if (!ctx || ctx._diplomaticWarCommitted || !ctx.diplomaticWarOwner) return '';
+    const st=this.state, me=st.playerDaimyo, owner=ctx.diplomaticWarOwner, dip=getDip(st,me,owner);
+    const hasTreaty=areAllied(st,me,owner)||inTruce(st,me,owner)||treatyActive(st,dip,'hostageUntil')||treatyActive(st,dip,'tradeUntil')||treatyActive(st,dip,'passageUntil')||treatyActive(st,dip,'jointWarUntil');
+    const note=hasTreaty?breachDiplomaticTreaties(st,me,owner):'宣戦を布告した';
+    if (!hasTreaty) adjustDip(st,me,owner,{relation:-12,hostility:15,fear:3});
+    ctx._diplomaticWarCommitted=true;
+    this._flash(note,hasTreaty?'Treaty broken: credibility fell':'War declared');
+    return note;
   }
   _commitMarchForce(ctx){
     const commit=ctx&&ctx.marchCommit;
     if (!commit || commit.committed) return;
-    const src=this.state.provinces[commit.srcId];
+    const st=this.state, src=st.provinces[commit.srcId], treasury=st.daimyo[st.playerDaimyo];
     if (!src) throw new Error('出陣元の城が見つかりません');
+    if ((treasury.rice||0)<(commit.riceCost||0)) throw new Error('行軍兵糧が不足しています');
+    const aid=commit.aid||[], draws=[];
+    // 先に全援軍の引き当て可否を確認し、中途半端な兵力減少を防ぐ。
+    for (const a of aid){
+      if (a.kind==='castle'){
+        const p=st.provinces[a.sourceId]; if (!p || p.hasActed || p.soldiers<(a.amount||0)) throw new Error('自城援軍を編成できません');
+      } else if (a.kind==='daimyo'){
+        const candidates=ownedProvinces(st,a.daimyoId).map(pid=>({pid,p:st.provinces[pid]})).filter(x=>x.p&&x.p.soldiers>100).sort((x,y)=>y.p.soldiers-x.p.soldiers);
+        if (!candidates.length || candidates[0].p.soldiers<(a.amount||0)) throw new Error(a.name+'の援軍を編成できません');
+      }
+    }
     src.soldiers=Math.max(0, src.soldiers-commit.troops);
     commit.generals.forEach(g=>{ const i=src.generals.indexOf(g); if(i>=0) src.generals.splice(i,1); });
     src.hasActed=true;
-    commit.committed=true;
+    for (const a of aid){
+      if (a.kind==='castle'){
+        const p=st.provinces[a.sourceId], wasActed=p.hasActed; p.soldiers-=a.amount; p.hasActed=true;
+        draws.push({kind:'castle',pid:a.sourceId,amount:a.amount,wasActed});
+      } else if (a.kind==='daimyo'){
+        const pick=ownedProvinces(st,a.daimyoId).map(pid=>({pid,p:st.provinces[pid]})).filter(x=>x.p&&x.p.soldiers>100).sort((x,y)=>y.p.soldiers-x.p.soldiers)[0];
+        pick.p.soldiers-=a.amount; draws.push({kind:'daimyo',pid:pick.pid,amount:a.amount});
+      } else if (a.forceId){
+        const af=getAF(st,a.forceId); draws.push({kind:'force',forceId:a.forceId,actedTurn:af.actedTurn}); af.actedTurn=st.turn;
+      }
+    }
+    treasury.rice=Math.max(0,(treasury.rice||0)-(commit.riceCost||0));
+    commit.aidDraws=draws; commit.committed=true;
   }
   _rollbackMarchForce(ctx){
     const commit=ctx&&ctx.marchCommit;
     if (!commit || !commit.committed) return;
-    const src=this.state.provinces[commit.srcId];
+    const st=this.state, src=st.provinces[commit.srcId];
     if (!src) return;
     src.soldiers+=commit.troops;
     commit.generals.forEach(g=>{ if (!src.generals.includes(g)) src.generals.push(g); });
     src.hasActed=commit.wasActed;
+    (commit.aidDraws||[]).forEach(d=>{
+      if ((d.kind==='castle'||d.kind==='daimyo') && st.provinces[d.pid]){ st.provinces[d.pid].soldiers+=d.amount; if(d.kind==='castle') st.provinces[d.pid].hasActed=d.wasActed; }
+      else if (d.kind==='force') getAF(st,d.forceId).actedTurn=d.actedTurn;
+    });
+    st.daimyo[st.playerDaimyo].rice=(st.daimyo[st.playerDaimyo].rice||0)+(commit.riceCost||0);
     commit.committed=false;
-  }
-  _buildBattleContext(srcId, dstId, troops, gens){
+  }  _buildBattleContext(srcId, dstId, troops, gens){
     const st=this.state; const dst=st.provinces[dstId];
     const dstOwner = dst.owner;
     const dDef = dstOwner? daimyoDef(st, dstOwner) : null;
@@ -7722,6 +7983,7 @@ class MapScene extends GameKit.Scene {
       castleType: castleTypeForProvince(dstId, dst),
       castleLayout: Array.isArray(dst.castleLayout)?dst.castleLayout:[],
       navalBonus: navalBonusFor(st, st.playerDaimyo, dstId), // 攻撃側=プレイヤーの水軍支援（沿岸のみ）
+      diplomacyBonus: diplomaticAttackBonus(st,st.playerDaimyo,dstId),
     };
   }
   _startBattleFromChoice(game, ctx, battleType){
@@ -7748,8 +8010,9 @@ class MapScene extends GameKit.Scene {
     const res = autoResolveBattle({
       atkSoldiers:ctx.attacker.soldiers, atkGenerals:ctx.attacker.generals, atkFamily:ctx.attacker.family,
       defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
-      year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, weather:weatherForState(st), rngFn:()=>srand(st),
-      atkNaval: navalBonusFor(st, st.playerDaimyo, ctx.dstId),
+      year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, weather:ctx.weather||weatherForState(st), rngFn:()=>srand(st),
+      atkNaval: ctx.navalBonus??navalBonusFor(st, st.playerDaimyo, ctx.dstId),
+      atkDiplomacyBonus: ctx.diplomacyBonus||0,
       atkFormation: ctx.atkFormation||'gankou',
       defFormation: (ctx.defender && ctx.defender.daimyo) ? aiFormationFor(st, ctx.defender.daimyo, false) : 'gankou',
     });
@@ -7763,6 +8026,8 @@ class MapScene extends GameKit.Scene {
   // 城の兵糧備蓄（開発度・城規模）・水運補給（沿岸/河川）・包囲力（兵力比・知略）に大きく左右される。
   // 干殺しに失敗すれば城は落ちないが、城兵は飢えで激減し民忠も下がる（次の攻略が楽になる）。
   _startStarvationSiege(game, c){
+    this._commitDiplomaticWarDeclaration(c);
+    this._commitMarchForce(c);
     const st=this.state; const dst=st.provinces[c.dstId];
     const atk=c.attacker.soldiers, def=Math.max(1,c.defender.soldiers);
     const castleLv=c.defender.castleLevel||1, dev=dst.development||40;
@@ -7946,7 +8211,8 @@ class MapScene extends GameKit.Scene {
         '◆ 「自動で決着」で残兵力から一括解決も可能',
       ]},
       { title:'外交・人事・難易度 / Diplomacy & More', lines:[
-        '◆ 外交: 贈物・停戦・同盟・婚姻。突出すると他大名の包囲網（反盟主連合）',
+        '◆ 外交: 関係・信頼・恐怖・恩義・敵意と自家信用が成功率を左右する',
+        '◆ 条約: 人質交換・通商・軍事通行権・共闘。期限満了後は再交渉できる',
         '◆ 従属: 臣従させると毎季貢納。「併合」で従属国を平和的に吸収できる',
         '◆ 調略: 敵将の寝返り・流言。捕らえた敵将は戦後に登用可能',
         '◆ 寿命/下剋上: 武将は史実没年で死去、低忠誠は出奔。名将は補充が肝心',
@@ -8218,6 +8484,8 @@ class MapScene extends GameKit.Scene {
         if (MINE_PROVINCES[pid]) inc += MINE_PROVINCES[pid].incomeBonus;
         if (SPECIALTY_PRODUCTS[pid]) inc += SPECIALTY_PRODUCTS[pid].bonus;
       });
+      // 通商条約は双方へ街道・港の交易収入をもたらす。
+      inc += activeDiplomacyPartners(st,d.id,'tradeUntil').length*60;
       // 難易度によるAI収入補正（プレイヤーは等倍）
       if (d.id!==st.playerDaimyo && diff.aiIncome!==1) inc=Math.round(inc*diff.aiIncome);
       treas.gold += inc;
@@ -8289,6 +8557,7 @@ class MapScene extends GameKit.Scene {
       defSoldiers:ctx.defender.soldiers, defGenerals:ctx.defender.generals, defFamily:ctx.defender.family,
       year:ctx.year, castleLevel:ctx.defender.castleLevel, terrain:ctx.terrain, weather:weatherForState(st), rngFn:()=>srand(st),
       defNaval: navalBonusFor(st, st.playerDaimyo, ctx.dstId), // 守備側=プレイヤーの水軍支援（沿岸のみ）
+      atkDiplomacyBonus:ctx.diplomacyBonus||0,
       atkFormation: (ctx.attacker && ctx.attacker.daimyo) ? aiFormationFor(st, ctx.attacker.daimyo, true) : 'gankou',
       defFormation: 'gankou', // 守備側=プレイヤー（自動解決時は均衡陣）
     });
@@ -8308,6 +8577,7 @@ class MapScene extends GameKit.Scene {
     st.season = Math.floor((st.month-1)/3);
     rollWeatherForState(st);
     st.turn++;
+    const diplomacyLog=refreshDiplomaticTreaties(st,[]);
     this.selected=null; this.mode='select';
     this._updateDaimyoAlive();
     this._refreshPacified(st);
@@ -8359,7 +8629,7 @@ class MapScene extends GameKit.Scene {
     // 年明けに寿命・下剋上／天災・ランダムイベント
     const lifeLog = (st.month===1) ? this._yearlyLifeEvents(st) : [];
     const eventLog = (st.month===1) ? this._yearlyEvents(st) : [];
-    const aiLog=(st.pendingTurnLog||[]).concat(ikkiLog).concat(forceLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
+    const aiLog=(st.pendingTurnLog||[]).concat(diplomacyLog).concat(ikkiLog).concat(forceLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
     // 歴史的ゲームイベントチェック（優先）
     const histEvts = this._checkHistoricalEvents(st);
     if (playerGekokujo){
@@ -8969,7 +9239,7 @@ class MapScene extends GameKit.Scene {
       // メニュー項目が10個になり、タッチ時に高さ×10が下部の編集ボタン(家宝一覧など)と重なっていたため
       // タッチ時の1項目の高さ/間隔を詰めて全項目が編集ボタンの上に収まるようにする。
       menuW:IS_TOUCH?440:198, menuH:IS_TOUCH?140:72, gap:IS_TOUCH?16:14,
-      cols:IS_TOUCH?2:1, rows:IS_TOUCH?5:10,
+      cols:IS_TOUCH?2:1, rows:IS_TOUCH?6:11,
       menuSz:IS_TOUCH?52:25, menuIconSz:IS_TOUCH?62:30,
       menuIconX:IS_TOUCH?62:32, menuLabelX:IS_TOUCH?126:64
     };
@@ -8985,6 +9255,7 @@ class MapScene extends GameKit.Scene {
     const menuSz=G.menuSz, menuIconSz=G.menuIconSz;
     const menuIconX=G.menuIconX, menuLabelX=G.menuLabelX;
     const menu=[
+      {jp:'出陣', en:'March', icon:'⚔', action:g=>this._beginMarchFromMenu(g)},
       {jp:'内政', en:'Domestic', icon:'♜', action:g=>this._runProvinceCommand(g, this._openNaisei)},
       {jp:'城強化', en:'Castle', icon:'♛', action:g=>this._runProvinceCommand(g, this._castle)},
       {jp:'徴兵', en:'Recruit', icon:'⚔', action:g=>this._runProvinceCommand(g, this._recruit)},
@@ -9038,20 +9309,38 @@ class MapScene extends GameKit.Scene {
         const rid=this.selClan;
         if (rid && st.daimyo[rid] && st.daimyo[rid].alive && rid!==me){
           const dip=getDip(st,me,rid); const acted=dip.actedTurn===st.turn; const gold=st.daimyo[me].gold;
-          const bx=L.rightX, bw=L.rightW; let by=L.py+(L.big?408:360);
-          bs.push({x:bx, y:by, w:bw, h:92, jp:'贈物（100貫）', en:'Gift (relation +)', sz:24, ensz:15, accent:'rgba(52,211,153,0.6)', on: gold>=100 && !acted, action:g=>this._diploPropose(g,'gift')}); by+=106;
-          bs.push({x:bx, y:by, w:bw, h:92, jp:'停戦を提案（80貫）', en:'Propose truce', sz:24, ensz:15, accent:'rgba(234,179,8,0.6)', on: gold>=80 && !acted && !dip.ally && !inTruce(st,me,rid), action:g=>this._diploPropose(g,'truce')}); by+=106;
-          bs.push({x:bx, y:by, w:bw, h:92, jp:'同盟を提案（150貫）', en:'Propose alliance', sz:24, ensz:15, accent:'rgba(167,139,250,0.62)', on: gold>=150 && !acted && !dip.ally, action:g=>this._diploPropose(g,'ally')}); by+=106;
-          if (dip.ally) bs.push({x:bx, y:by, w:bw, h:82, jp:'同盟を破棄', en:'Break alliance', sz:22, ensz:14, accent:'rgba(248,113,113,0.6)', on:!acted, action:g=>this._diploPropose(g,'break')});
-          const byD = dip.ally ? by+98 : by;
-          const daughters = st.daimyo[me].daughters ?? 1;
-          bs.push({x:bx, y:byD, w:bw, h:92, jp:'従属の提案（200貫）', en:'Propose vassalage', sz:21, ensz:13, accent:'rgba(251,191,36,0.55)', on: gold>=200 && !acted && !dip.ally && !inTruce(st,me,rid) && (dip.vassalUntil||0)<=st.turn && st.daimyo[rid].vassalOf!==me, action:g=>this._diploPropose(g,'vassal')});
-          if (st.daimyo[rid].vassalOf===me){
-            bs.push({x:bx, y:byD+106, w:bw, h:92, jp:'併合する（従属国を吸収）', en:'Annex vassal', sz:21, ensz:13, accent:'rgba(52,211,153,0.7)', on:!acted, action:g=>this._diploPropose(g,'annex')});
+          const bx=L.rightX, bw=L.rightW;
+          const navY=L.py+(L.big?412:372), navH=L.big?68:58, navGap=L.big?14:10, navW=(bw-navGap)/2;
+          bs.push({x:bx,y:navY,w:navW,h:navH,jp:'基本外交',en:'Basic',sz:L.big?24:20,ensz:13,
+            accent:this.diploActionTab==='basic'?'rgba(96,165,250,0.75)':'rgba(100,116,139,0.35)',action:()=>{this.diploActionTab='basic';}});
+          bs.push({x:bx+navW+navGap,y:navY,w:navW,h:navH,jp:'条約・共闘',en:'Treaties',sz:L.big?24:20,ensz:13,
+            accent:this.diploActionTab==='treaty'?'rgba(52,211,153,0.75)':'rgba(100,116,139,0.35)',action:()=>{this.diploActionTab='treaty';this.diploWarTarget=null;}});
+          let by=navY+navH+(L.big?18:14);
+          if (this.diploActionTab==='basic'){
+            bs.push({x:bx, y:by, w:bw, h:92, jp:'贈物（100貫）', en:'Gift (relation +)', sz:24, ensz:15, accent:'rgba(52,211,153,0.6)', on: gold>=100 && !acted, action:g=>this._diploPropose(g,'gift')}); by+=106;
+            bs.push({x:bx, y:by, w:bw, h:92, jp:'停戦を提案（80貫）', en:'Propose truce', sz:24, ensz:15, accent:'rgba(234,179,8,0.6)', on: gold>=80 && !acted && !areAllied(st,me,rid) && !inTruce(st,me,rid), action:g=>this._diploPropose(g,'truce')}); by+=106;
+            bs.push({x:bx, y:by, w:bw, h:92, jp:areAllied(st,me,rid)?'同盟を破棄':'同盟を提案（150貫）', en:areAllied(st,me,rid)?'Break alliance':'Propose alliance', sz:24, ensz:15, accent:areAllied(st,me,rid)?'rgba(248,113,113,0.6)':'rgba(167,139,250,0.62)', on:!acted && (areAllied(st,me,rid)||gold>=150), action:g=>this._diploPropose(g,areAllied(st,me,rid)?'break':'ally')}); by+=106;
+            const daughters = st.daimyo[me].daughters ?? 1;
+            bs.push({x:bx, y:by, w:bw, h:92, jp:'従属の提案（200貫）', en:'Propose vassalage', sz:21, ensz:13, accent:'rgba(251,191,36,0.55)', on: gold>=200 && !acted && !areAllied(st,me,rid) && !inTruce(st,me,rid) && (dip.vassalUntil||0)<=st.turn && st.daimyo[rid].vassalOf!==me, action:g=>this._diploPropose(g,'vassal')}); by+=106;
+            if (st.daimyo[rid].vassalOf===me){
+              bs.push({x:bx, y:by, w:bw, h:92, jp:'併合する（従属国を吸収）', en:'Annex vassal', sz:21, ensz:13, accent:'rgba(52,211,153,0.7)', on:!acted, action:g=>this._diploPropose(g,'annex')});
+            } else {
+              bs.push({x:bx, y:by, w:bw, h:92, jp:'臣従を要求', en:'Demand submission', sz:22, ensz:14, accent:'rgba(248,113,113,0.55)', on: !acted && !areAllied(st,me,rid) && (dip.vassalUntil||0)<=st.turn, action:g=>this._diploPropose(g,'demand')});
+            }
+            by+=106;
+            bs.push({x:bx, y:by, w:bw, h:92, jp:'婚姻の提案', en:'Propose marriage', sz:22, ensz:14, accent:'rgba(244,114,182,0.6)', on: daughters>=1 && dip.relation>=80 && !acted && !dip.married, action:g=>this._diploPropose(g,'marriage')});
           } else {
-            bs.push({x:bx, y:byD+106, w:bw, h:92, jp:'臣従を要求', en:'Demand submission', sz:22, ensz:14, accent:'rgba(248,113,113,0.55)', on: !acted && !dip.ally && (dip.vassalUntil||0)<=st.turn, action:g=>this._diploPropose(g,'demand')});
+            const remain=k=>Math.max(0,(dip[k]||0)-st.turn);
+            const hostageOn=treatyActive(st,dip,'hostageUntil'), tradeOn=treatyActive(st,dip,'tradeUntil'), passageOn=treatyActive(st,dip,'passageUntil'), warOn=treatyActive(st,dip,'jointWarUntil');
+            bs.push({x:bx,y:by,w:bw,h:92,jp:hostageOn?'人質交換中（残'+remain('hostageUntil')+'）':'人質交換を提案（50貫）',en:'Exchange hostages',sz:22,ensz:14,accent:'rgba(251,146,60,0.58)',on:gold>=50&&!acted&&!hostageOn&&dip.relation>=10,action:g=>this._diploPropose(g,'hostage')}); by+=106;
+            bs.push({x:bx,y:by,w:bw,h:92,jp:tradeOn?'通商条約中（残'+remain('tradeUntil')+'）':'通商条約（120貫）',en:'Trade treaty: +60/turn',sz:22,ensz:14,accent:'rgba(45,212,191,0.58)',on:gold>=120&&!acted&&!tradeOn&&dip.relation>=0,action:g=>this._diploPropose(g,'trade')}); by+=106;
+            bs.push({x:bx,y:by,w:bw,h:92,jp:passageOn?'軍事通行権（残'+remain('passageUntil')+'）':'軍事通行権（100貫）',en:'Access: border logistics +8%',sz:22,ensz:14,accent:'rgba(96,165,250,0.58)',on:gold>=100&&!acted&&!passageOn&&(dip.relation>=15||areAllied(st,me,rid)),action:g=>this._diploPropose(g,'passage')}); by+=106;
+            const targets=this._jointWarCandidates(rid);
+            if (!targets.some(d=>d.id===this.diploWarTarget)) this.diploWarTarget=targets[0]?.id||null;
+            const target=this.diploWarTarget?daimyoDef(st,this.diploWarTarget):null;
+            bs.push({x:bx,y:by,w:bw,h:78,jp:'共闘目標：'+(target?target.nameJP+'家':'対象なし'),en:'Change joint-war target',sz:21,ensz:13,accent:'rgba(148,163,184,0.4)',on:targets.length>1&&!warOn,action:()=>this._cycleJointWarTarget(rid)}); by+=92;
+            bs.push({x:bx,y:by,w:bw,h:92,jp:warOn?'共闘盟約中（残'+remain('jointWarUntil')+'）':'共闘を依頼（180貫）',en:'Joint campaign: logistics +12%',sz:22,ensz:14,accent:'rgba(248,113,113,0.58)',on:gold>=180&&!acted&&!warOn&&!!target&&(areAllied(st,me,rid)||dip.relation>=40),action:g=>this._diploPropose(g,'jointWar')});
           }
-          bs.push({x:bx, y:byD+212, w:bw, h:92, jp:'婚姻の提案', en:'Propose marriage', sz:22, ensz:14, accent:'rgba(244,114,182,0.6)', on: daughters>=1 && dip.relation>=80 && !acted && !dip.ally && !dip.married, action:g=>this._diploPropose(g,'marriage')});
         }
       } else if(this.diploTab==='court'){
         this._buildCourtButtons(bs,st,L);
@@ -9157,6 +9446,7 @@ class MapScene extends GameKit.Scene {
         bs.push({x:scrX, y:genTop, w:60, h:60, label:'▲', sz:30, action:()=>{ m.genOffset=Math.max(0,genOff-1); }});
       if (genOff<maxGenOff)
         bs.push({x:scrX, y:genBot-66, w:60, h:60, label:'▼', sz:30, action:()=>{ m.genOffset=Math.min(maxGenOff,genOff+1); }});
+      bs.push({x:px+pw/2-150, y:py+474, w:300, h:58, jp:'援軍・兵站', en:'Aid & Logistics', sz:24, ensz:13, accent:'rgba(56,189,248,0.62)', action:()=>{ this.overlay={type:'marchAid'}; }});
       const dst=st.provinces[m.dstId];
       const enemy = dst.owner!==st.playerDaimyo;
       const by=py+ph-129;
@@ -9168,6 +9458,20 @@ class MapScene extends GameKit.Scene {
         bs.push({x:px+60, y:by, w:390, h:90, jp:'増援を送る', en:'Reinforce', sz:39, accent:'rgba(52,211,153,0.7)', _hitFirst:true, action:g=>this._confirmMarch(g,false)});
         bs.push({x:px+pw-285, y:by, w:225, h:90, jp:'取消', en:'Cancel', sz:36, _hitFirst:true, action:()=>{ this.overlay=null; this.march=null; }});
       }
+    } else if (ov.type==='marchAid'){
+      const m=this.march, px=W/2-590, py=H/2-480, pw=1180;
+      const aid=this._marchAidSummary(m), opts=aid.options, per=8;
+      const maxPage=Math.max(0,Math.ceil(opts.length/per)-1), page=Math.min(m.aidPage||0,maxPage);
+      opts.slice(page*per,page*per+per).forEach((o,i)=>{
+        const col=i%2,row=Math.floor(i/2), x=px+52+col*548,y=py+176+row*104;
+        bs.push({x,y,w:510,h:84,_aid:o, on:!o.locked, action:()=>{ if(!o.locked) m.aid[o.id]=!m.aid[o.id]; }});
+      });
+      if(maxPage>0){
+        bs.push({x:px+420,y:py+790,w:150,h:82,label:'▲',sz:30,on:page>0,action:()=>{m.aidPage=page-1;}});
+        bs.push({x:px+610,y:py+790,w:150,h:82,label:'▼',sz:30,on:page<maxPage,action:()=>{m.aidPage=page+1;}});
+      }
+      bs.push({x:px+52,y:py+790,w:330,h:82,jp:'出陣準備へ戻る',en:'Back to March',sz:28,ensz:15,accent:'rgba(52,211,153,0.65)',action:()=>{this.overlay={type:'march'};}});
+      bs.push({x:px+pw-382,y:py+790,w:330,h:82,jp:'取消',en:'Cancel',sz:28,ensz:15,action:()=>{this.overlay=null;this.march=null;this.mode='select';this.selected=null;}});
     } else if (ov.type==='battleType'){
       const c=ov.ctx; const px=W/2-520, py=H/2-330, pw=1040, ph=660;
       const by=py+448;
@@ -10035,7 +10339,7 @@ class MapScene extends GameKit.Scene {
     const { pages, page } = this._clanPageInfo(clans.length);
     this.diploClanPage=page; // クランプ結果を反映
     clans.slice(page*PAGE, page*PAGE+PAGE).forEach((d,i)=>{
-      bs.push({x:L.listX, y:L.listY+i*(L.rowH+10), w:L.rowW, h:L.rowH, _diploClan:d.id, action:()=>{ this.selClan=d.id; }});
+      bs.push({x:L.listX, y:L.listY+i*(L.rowH+10), w:L.rowW, h:L.rowH, _diploClan:d.id, action:()=>{ this.selClan=d.id; this.diploWarTarget=null; }});
     });
     if (pages>1){
       const navY=L.listY+PAGE*(L.rowH+10)+(L.big?8:6);
@@ -10533,6 +10837,22 @@ class MapScene extends GameKit.Scene {
     }
     this._save();
   }
+  _jointWarCandidates(partnerId){
+    const st=this.state, me=st.playerDaimyo;
+    const partnerBorders=new Set();
+    ownedProvinces(st,partnerId).forEach(pid=>neighborsOf(pid).forEach(nb=>{ const o=st.provinces[nb]?.owner; if(o&&o!==partnerId) partnerBorders.add(o); }));
+    return daimyoOf(st).filter(d=>d.id!==me&&d.id!==partnerId&&st.daimyo[d.id]?.alive&&partnerBorders.has(d.id)
+      &&!areAllied(st,me,d.id)&&!areAllied(st,partnerId,d.id)&&!inTruce(st,me,d.id)&&!inTruce(st,partnerId,d.id))
+      .sort((a,b)=>{
+        const da=getDip(st,me,a.id), db=getDip(st,me,b.id);
+        return (db.hostility+ownedProvinces(st,b.id).length*3)-(da.hostility+ownedProvinces(st,a.id).length*3);
+      });
+  }
+  _cycleJointWarTarget(partnerId){
+    const targets=this._jointWarCandidates(partnerId); if (!targets.length){ this.diploWarTarget=null; return; }
+    const i=targets.findIndex(d=>d.id===this.diploWarTarget);
+    this.diploWarTarget=targets[(i+1+targets.length)%targets.length].id;
+  }
   _diploPropose(game, kind){
     const st=this.state, me=st.playerDaimyo, rid=this.selClan;
     if (!rid || !st.daimyo[rid] || !st.daimyo[rid].alive) return;
@@ -10540,54 +10860,59 @@ class MapScene extends GameKit.Scene {
     if (kind!=='break' && dip.actedTurn===st.turn){ this._flash('この勢力へは今季もう交渉できません', 'Already negotiated this turn'); return; }
     const myPow=ownedProvinces(st,me).length, thPow=ownedProvinces(st,rid).length;
     const pay=(n)=>{ st.daimyo[me].gold-=n; };
+    const accepted=(base,fearWeight)=>srand(st)<diplomacyAcceptance(st,me,rid,base,fearWeight);
     if (kind==='gift'){
       if (st.daimyo[me].gold<100){ this._flash('金が足りません','Not enough gold'); return; }
       pay(100);
-      const _pBonus=Math.floor((st.daimyo[me].prestige??5)/50); // 威信ボーナス最大+5（sengoku_expansion_v1）
-      addRel(st,me,rid,8+_pBonus);
+      const pBonus=Math.floor((st.daimyo[me].prestige??5)/50);
+      adjustDip(st,me,rid,{relation:8+pBonus,trust:5,obligation:8,hostility:-3});
       st.daimyo[me].prestige=Math.min(300,(st.daimyo[me].prestige??5)+1);
       dip.actedTurn=st.turn;
-      game.audio.beep(600,0.1,'sine'); this._flash(daimyoDef(st,rid).nameJP+'家へ贈物（関係+8）', 'Gift sent (relation +8)');
+      game.audio.beep(600,0.1,'sine'); this._flash(daimyoDef(st,rid).nameJP+'家へ贈物（信頼・恩義上昇）', 'Gift sent: trust and obligation up');
     } else if (kind==='truce'){
       if (st.daimyo[me].gold<80){ this._flash('金が足りません','Not enough gold'); return; }
       pay(80); dip.actedTurn=st.turn;
-      const chance=clamp(0.4 + dip.relation/110 - Math.max(0,(myPow-thPow))/40, 0.08, 0.94);
-      if (srand(st)<chance){ dip.truceUntil=st.turn+8; addRel(st,me,rid,6); game.audio.jingle([{f:523,d:0.09},{f:698,d:0.13}]); this._flash(daimyoDef(st,rid).nameJP+'家と停戦が成立（8ターン）', 'Truce agreed (8 turns)'); }
-      else { addRel(st,me,rid,-3); game.audio.beep(240,0.14,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は停戦を拒否した', 'Truce refused'); }
+      const chance=clamp(diplomacyAcceptance(st,me,rid,0.38)-Math.max(0,myPow-thPow)/40,0.08,0.94);
+      if (srand(st)<chance){ dip.truceUntil=st.turn+8; adjustDip(st,me,rid,{relation:6,trust:4,hostility:-8}); changeDiplomaticCredit(st,me,1); game.audio.jingle([{f:523,d:0.09},{f:698,d:0.13}]); this._flash(daimyoDef(st,rid).nameJP+'家と停戦が成立（8ターン）', 'Truce agreed (8 turns)'); }
+      else { adjustDip(st,me,rid,{relation:-3,hostility:2}); game.audio.beep(240,0.14,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は停戦を拒否した', 'Truce refused'); }
     } else if (kind==='ally'){
       if (st.daimyo[me].gold<150){ this._flash('金が足りません','Not enough gold'); return; }
       pay(150); dip.actedTurn=st.turn;
-      if (dip.relation<35){ addRel(st,me,rid,4); game.audio.beep(240,0.14,'sawtooth'); this._flash('関係が浅く同盟を断られた（関係+4）', 'Alliance refused: relation too low'); }
-      else {
-        const chance=clamp(0.2 + (dip.relation-35)/110, 0.05, 0.9);
-        if (srand(st)<chance){ dip.ally=true; dip.truceUntil=st.turn+999; addRel(st,me,rid,10); game.audio.jingle([{f:523,d:0.1},{f:659,d:0.1},{f:784,d:0.16}]); this._flash(daimyoDef(st,rid).nameJP+'家と同盟が成立！', 'Alliance formed!'); }
-        else { addRel(st,me,rid,-4); game.audio.beep(240,0.14,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は同盟を見送った', 'Alliance declined'); }
-      }
+      if (dip.relation<35){ adjustDip(st,me,rid,{relation:4}); game.audio.beep(240,0.14,'sawtooth'); this._flash('関係が浅く同盟を断られた（関係+4）', 'Alliance refused: relation too low'); }
+      else if (accepted(0.22)){
+        dip.ally=true; dip.allianceUntil=st.turn+18; dip.truceUntil=dip.allianceUntil;
+        adjustDip(st,me,rid,{relation:10,trust:12,hostility:-10}); changeDiplomaticCredit(st,me,2);
+        game.audio.jingle([{f:523,d:0.1},{f:659,d:0.1},{f:784,d:0.16}]); this._flash(daimyoDef(st,rid).nameJP+'家と18ターンの同盟が成立！', 'Alliance formed for 18 turns!');
+      } else { adjustDip(st,me,rid,{relation:-4,hostility:2}); game.audio.beep(240,0.14,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は同盟を見送った', 'Alliance declined'); }
     } else if (kind==='break'){
-      dip.ally=false; dip.truceUntil=0; addRel(st,me,rid,-30); dip.actedTurn=st.turn;
-      game.audio.beep(200,0.18,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家との同盟を破棄（関係-30）', 'Alliance broken (relation -30)');
+      const hostage=treatyActive(st,dip,'hostageUntil');
+      dip.ally=false; dip.allianceUntil=0; dip.truceUntil=0; dip.married=false; dip.marriageUntil=0; dip.passageUntil=0; dip.jointWarUntil=0; dip.jointWarTarget=null;
+      adjustDip(st,me,rid,{relation:-30,trust:hostage?-40:-25,hostility:hostage?28:15}); changeDiplomaticCredit(st,me,hostage?-20:-12);
+      if (hostage) dip.hostageUntil=0;
+      dip.actedTurn=st.turn;
+      game.audio.beep(200,0.18,'sawtooth'); this._flash(hostage?'同盟を破棄。人質が処刑され外交信用が大幅低下':'同盟を破棄（信頼・外交信用低下）', 'Alliance broken: credibility fell');
     } else if (kind==='vassal'){
       if (st.daimyo[me].gold<200){ this._flash('金が足りません','Not enough gold'); return; }
       pay(200); dip.actedTurn=st.turn;
-      dip.truceUntil=st.turn+20; dip.vassalUntil=st.turn+20; addRel(st,me,rid,15);
+      dip.truceUntil=st.turn+20; dip.vassalUntil=st.turn+20; adjustDip(st,me,rid,{relation:15,trust:6,obligation:12});
       game.audio.jingle([{f:392,d:0.12},{f:330,d:0.18}]);
-      this._flash(daimyoDef(st,rid).nameJP+'家に従属（停戦20ターン、関係+15）', 'Submitted as vassal (truce 20 turns)');
+      this._flash(daimyoDef(st,rid).nameJP+'家と従属協定（停戦20ターン）', 'Vassal agreement (truce 20 turns)');
     } else if (kind==='demand'){
-      dip.actedTurn=st.turn;
-      if (myPow<thPow*1.2){ addRel(st,me,rid,-12); game.audio.beep(200,0.16,'sawtooth'); this._flash('国力差が足りず臣従を断られた（関係-12）','Too weak to demand submission'); }
+      dip.actedTurn=st.turn; adjustDip(st,me,rid,{fear:10,hostility:8});
+      if (myPow<thPow*1.2){ adjustDip(st,me,rid,{relation:-12}); game.audio.beep(200,0.16,'sawtooth'); this._flash('国力差が足りず臣従を断られた（関係-12）','Too weak to demand submission'); }
       else {
-        const chance=clamp(0.1+(myPow-thPow)*0.06+dip.relation/200, 0.05, 0.85);
-        if (srand(st)<chance){ st.daimyo[rid].vassalOf=me; dip.truceUntil=st.turn+999; addRel(st,me,rid,12); game.audio.jingle([{f:523,d:0.09},{f:698,d:0.15},{f:880,d:0.18}]); this._flash(daimyoDef(st,rid).nameJP+'家が臣従（従属国となり毎季貢納する）','Now your vassal (pays tribute)'); }
-        else { addRel(st,me,rid,-8); game.audio.beep(200,0.16,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は臣従を拒否した（関係-8）','Submission refused'); }
+        const chance=clamp(0.1+(myPow-thPow)*0.06+dip.relation/200+dip.fear/300,0.05,0.85);
+        if (srand(st)<chance){ st.daimyo[rid].vassalOf=me; dip.truceUntil=st.turn+999; adjustDip(st,me,rid,{relation:12,obligation:15}); game.audio.jingle([{f:523,d:0.09},{f:698,d:0.15},{f:880,d:0.18}]); this._flash(daimyoDef(st,rid).nameJP+'家が臣従（従属国となり毎季貢納する）','Now your vassal (pays tribute)'); }
+        else { adjustDip(st,me,rid,{relation:-8,hostility:8}); game.audio.beep(200,0.16,'sawtooth'); this._flash(daimyoDef(st,rid).nameJP+'家は臣従を拒否した（関係-8）','Submission refused'); }
       }
     } else if (kind==='annex'){
       if (st.daimyo[rid].vassalOf!==me){ this._flash('従属国ではありません','Not your vassal'); return; }
       dip.actedTurn=st.turn;
       ownedProvinces(st,rid).slice().forEach(pid=>{
         const prov=st.provinces[pid]; prov.owner=me;
-        prov.generals.filter(g=>st.generals[g].alive).forEach(g=>{ st.generals[g].daimyo=me; st.generals[g].loyalty=Math.min(st.generals[g].loyalty||50, 55); });
+        prov.generals.filter(g=>st.generals[g].alive).forEach(g=>{ st.generals[g].daimyo=me; st.generals[g].loyalty=Math.min(st.generals[g].loyalty||50,55); });
       });
-      st.daimyo[rid].alive=false; st.daimyo[rid].vassalOf=null;
+      st.daimyo[rid].alive=false; st.daimyo[rid].vassalOf=null; changeDiplomaticCredit(st,me,-3);
       game.audio.jingle([{f:523,d:0.1},{f:659,d:0.1},{f:784,d:0.16},{f:1047,d:0.2}]);
       this._flash(daimyoDef(st,rid).nameJP+'家を併合した（従属国を吸収）','Annexed your vassal');
       this.selClan=null; this._checkEnd(game);
@@ -10595,9 +10920,44 @@ class MapScene extends GameKit.Scene {
       const dmyo=st.daimyo[me];
       if ((dmyo.daughters??1)<1){ this._flash('未婚の姫がいません','No unmarried daughters'); return; }
       if (dip.relation<80){ this._flash('関係が80以上必要です','Relation must be ≥ 80'); return; }
-      dmyo.daughters=(dmyo.daughters??1)-1; dip.married=true; dip.ally=true; dip.truceUntil=st.turn+999; addRel(st,me,rid,20); dip.actedTurn=st.turn;
+      dmyo.daughters=(dmyo.daughters??1)-1; dip.married=true; dip.marriageUntil=st.turn+48; dip.ally=true; dip.allianceUntil=dip.marriageUntil; dip.truceUntil=dip.marriageUntil;
+      adjustDip(st,me,rid,{relation:20,trust:25,obligation:15,hostility:-20}); changeDiplomaticCredit(st,me,4); dip.actedTurn=st.turn;
       game.audio.jingle([{f:523,d:0.1},{f:659,d:0.1},{f:784,d:0.1},{f:1047,d:0.2}]);
-      this._flash(daimyoDef(st,rid).nameJP+'家と婚姻が成立！（同盟・関係+20）','Marriage alliance formed!');
+      this._flash(daimyoDef(st,rid).nameJP+'家と婚姻同盟が成立！（48ターン）','Marriage alliance formed for 48 turns!');
+    } else if (kind==='hostage'){
+      if (st.daimyo[me].gold<50 || dip.relation<10){ this._flash('人質交換には50貫と関係10以上が必要','Requires 50 gold and relation 10'); return; }
+      pay(50); dip.actedTurn=st.turn;
+      if (accepted(0.42)){
+        dip.hostageUntil=st.turn+18; dip.truceUntil=Math.max(dip.truceUntil,dip.hostageUntil);
+        adjustDip(st,me,rid,{relation:10,trust:18,obligation:8,hostility:-8}); changeDiplomaticCredit(st,me,2);
+        game.audio.jingle([{f:440,d:.08},{f:660,d:.12}]); this._flash('人質交換が成立（18ターン・相互不戦）','Hostage exchange agreed for 18 turns');
+      } else { adjustDip(st,me,rid,{relation:-2}); this._flash('人質交換を拒否された','Hostage exchange refused'); }
+    } else if (kind==='trade'){
+      if (st.daimyo[me].gold<120){ this._flash('金が足りません','Not enough gold'); return; }
+      pay(120); dip.actedTurn=st.turn;
+      if (accepted(0.46)){
+        dip.tradeUntil=st.turn+12; adjustDip(st,me,rid,{relation:6,trust:7,obligation:4,hostility:-4}); changeDiplomaticCredit(st,me,1);
+        game.audio.jingle([{f:523,d:.08},{f:698,d:.12}]); this._flash('通商条約が成立（12ターン・双方毎季+60貫）','Trade treaty: both gain 60 per turn');
+      } else { adjustDip(st,me,rid,{relation:-2}); this._flash('通商条約を拒否された','Trade treaty refused'); }
+    } else if (kind==='passage'){
+      if (st.daimyo[me].gold<100){ this._flash('金が足りません','Not enough gold'); return; }
+      pay(100); dip.actedTurn=st.turn;
+      if (accepted(0.34)){
+        dip.passageUntil=st.turn+10; adjustDip(st,me,rid,{relation:5,trust:9,obligation:5}); changeDiplomaticCredit(st,me,1);
+        game.audio.jingle([{f:494,d:.08},{f:659,d:.12}]); this._flash('軍事通行権が成立（共同国境の兵站+8%）','Military access: border logistics +8%');
+      } else { adjustDip(st,me,rid,{relation:-3,hostility:2}); this._flash('軍事通行権を拒否された','Military access refused'); }
+    } else if (kind==='jointWar'){
+      const target=this.diploWarTarget, valid=this._jointWarCandidates(rid).some(d=>d.id===target);
+      if (!valid){ this._flash('共闘可能な目標がありません','No valid joint-war target'); return; }
+      if (st.daimyo[me].gold<180){ this._flash('金が足りません','Not enough gold'); return; }
+      pay(180); dip.actedTurn=st.turn;
+      const threat=ownedProvinces(st,target).length-Math.max(myPow,thPow);
+      const chance=clamp(diplomacyAcceptance(st,me,rid,0.28)+threat*0.025,0.08,0.92);
+      if (srand(st)<chance){
+        dip.jointWarTarget=target; dip.jointWarUntil=st.turn+8;
+        adjustDip(st,me,rid,{relation:8,trust:8,obligation:6}); adjustDip(st,me,target,{relation:-8,hostility:12}); adjustDip(st,rid,target,{relation:-8,hostility:12}); changeDiplomaticCredit(st,me,2);
+        game.audio.jingle([{f:392,d:.08},{f:523,d:.08},{f:784,d:.16}]); this._flash(daimyoDef(st,rid).nameJP+'家と反'+daimyoDef(st,target).nameJP+'共闘が成立','Joint campaign agreed');
+      } else { adjustDip(st,me,rid,{relation:-4,trust:-2}); this._flash('共闘依頼を断られた','Joint campaign refused'); }
     }
     this._save();
   }
@@ -10758,12 +11118,17 @@ class MapScene extends GameKit.Scene {
       const cx=L.rightX+L.rightW/2;
       T(ctx, d.nameJP+'家 / '+(d.nameEN||''), cx, L.py+(big?258:226), {size:big?40:32, weight:'bold', color:'#f1e6cf', align:'center'});
       T(ctx, '状態：'+stat.jp+'（'+stat.en+'）  関係：'+dip.relation+'  領国：'+ownedProvinces(st,rid).length+'洲', cx, L.py+(big?310:270), {size:big?26:20, color:stat.color, align:'center'});
+      T(ctx,'信頼 '+dip.trust+'　恐怖 '+dip.fear+'　恩義 '+dip.obligation+'　敵意 '+dip.hostility+'　自家信用 '+(st.daimyo[me].diplomaticCredit??50),cx,L.py+(big?354:312),{size:big?21:17,color:'#9fb2c6',align:'center'});
       const extraInfo=[];
-      if (st.daimyo[rid].vassalOf===me) extraInfo.push('従属国（毎季貢納・併合可能）👑');
-      if (dip.married) extraInfo.push('婚姻同盟成立済み 💐');
-      if ((dip.vassalUntil||0) > st.turn) extraInfo.push('従属中（停戦'+Math.max(0,dip.truceUntil-st.turn)+'ターン残）');
-      if (dip.actedTurn===st.turn) extraInfo.push('※今季は交渉済み');
-      if (extraInfo.length) T(ctx, extraInfo.join(' ・ '), cx, L.py+(big?354:312), {size:big?22:18, color:'#7d93ab', align:'center'});
+      if (st.daimyo[rid].vassalOf===me) extraInfo.push('従属国 👑');
+      if (dip.married) extraInfo.push('婚姻 残'+Math.max(0,dip.marriageUntil-st.turn));
+      if (treatyActive(st,dip,'hostageUntil')) extraInfo.push('人質 残'+Math.max(0,dip.hostageUntil-st.turn));
+      if (treatyActive(st,dip,'tradeUntil')) extraInfo.push('通商 残'+Math.max(0,dip.tradeUntil-st.turn));
+      if (treatyActive(st,dip,'passageUntil')) extraInfo.push('通行権 残'+Math.max(0,dip.passageUntil-st.turn));
+      if (treatyActive(st,dip,'jointWarUntil')&&dip.jointWarTarget) extraInfo.push('共闘：対'+(daimyoDef(st,dip.jointWarTarget)?.nameJP||'不明')+' 残'+Math.max(0,dip.jointWarUntil-st.turn));
+      if ((dip.vassalUntil||0)>st.turn) extraInfo.push('従属協定 残'+Math.max(0,dip.vassalUntil-st.turn));
+      if (dip.actedTurn===st.turn) extraInfo.push('今季交渉済み');
+      if (extraInfo.length) T(ctx,extraInfo.join(' ・ '),cx,L.py+(big?386:340),{size:big?19:15,color:'#7d93ab',align:'center'});
     } else {
       this._drawDiploEmptyPane(ctx, L, clans);
     }
@@ -11158,6 +11523,7 @@ class MapScene extends GameKit.Scene {
     if (s!==1){ ctx.translate(W/2, H/2); ctx.scale(s, s); ctx.translate(-W/2, -H/2); }
     OVERLAY_DRAW = true;
     if (ov.type==='march') this._drawMarch(ctx);
+    else if (ov.type==='marchAid') this._drawMarchAid(ctx);
     else if (ov.type==='battleType') this._drawBattleType(ctx, ov.ctx);
     else if (ov.type==='provinceInfo') this._drawProvinceInfo(ctx, ov.pid);
     else if (ov.type==='markerInfo') this._drawMarkerInfo(ctx, ov.source, ov.id);
@@ -11186,6 +11552,7 @@ class MapScene extends GameKit.Scene {
     const btns=this._overlayButtons(); for (const b of btns){
       if (b._noRender) continue;
       if (b._gen){ drawGenToggle(ctx, b, this.march, st); }
+      else if (b._aid){ this._drawMarchAidRow(ctx, b); }
       else if (b._ployTarget){ this._drawPloyTargetRow(ctx, b); }
       else if (b._rowGid){ this._drawRetainerRow(ctx, b); }
       else drawButton(ctx,b,this.t);
@@ -11363,26 +11730,53 @@ class MapScene extends GameKit.Scene {
     T(ctx, DATA.provById[nb].nameJP+(tdef?'（'+tdef.nameJP+'）':''), b.x+52, b.y+b.h/2-16, {size:22, weight:'bold', color:'#eef2f7'});
     T(ctx, '兵'+tp.soldiers, b.x+b.w-16, b.y+b.h/2-12, {size:19, color:'#9fb2c6', align:'right'});
   }
-  /* 出陣プレビュー: 現在の選択でモンテカルロ試行し勝率・想定生存兵を返す（ゲーム乱数は消費しない） */
+  _drawMarchAid(ctx){
+    const m=this.march, px=W/2-590, py=H/2-480, pw=1180;
+    const aid=this._marchAidSummary(m), logistics=this._marchLogistics(m,m.troops+aid.troops);
+    GameKit.UI.glassPanel(ctx,px,py,pw,900,{radius:26,fill:'rgba(14,22,38,0.98)',stroke:'rgba(56,189,248,0.58)'});
+    T(ctx,'援軍要請・兵站 / Aid & Logistics',px+pw/2,py+44,{size:42,weight:'bold',color:'#7dd3fc',align:'center'});
+    T(ctx,'援軍を選択すると、到着兵力と行軍兵糧がただちに再計算されます。従属大名は強制出陣です。',px+pw/2,py+98,{size:20,color:'#cbd5e1',align:'center'});
+    const weather=logistics.weather;
+    T(ctx,'行軍 '+logistics.days+'日　兵糧 '+logistics.rice+'千石　天候 '+weather.jp+'（'+logistics.effect+'）',px+pw/2,py+132,{size:25,weight:'bold',color:['storm','snow'].includes(weather.id)?'#fbbf24':'#a7f3d0',align:'center'});
+    const aidPage=Math.min(m.aidPage||0,Math.max(0,Math.ceil(aid.options.length/8)-1));
+    if(aid.options.length>8) T(ctx,'援軍候補 '+(aidPage+1)+' / '+Math.ceil(aid.options.length/8)+' ページ',px+pw/2,py+160,{size:18,color:'#94a3b8',align:'center'});
+    if(!aid.options.length) T(ctx,'要請可能な援軍はいません。外交・武装勢力から関係を築くと選択肢が増えます。',px+pw/2,py+310,{size:24,color:'#94a3b8',align:'center'});
+  }
+  _drawMarchAidRow(ctx,b){
+    const o=b._aid, selected=!!this.march?.aid?.[o.id];
+    ctx.save(); ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,12);
+    ctx.fillStyle=selected?'rgba(34,197,94,0.20)':'rgba(30,41,59,0.86)'; ctx.fill();
+    ctx.lineWidth=selected?2.6:1.2; ctx.strokeStyle=o.locked?'rgba(251,191,36,0.85)':(selected?'rgba(74,222,128,0.88)':'rgba(148,163,184,0.35)'); ctx.stroke(); ctx.restore();
+    T(ctx,(selected?'☑ ':'☐ ')+o.name,b.x+20,b.y+17,{size:24,weight:'bold',color:o.locked?'#fde68a':'#f1f5f9'});
+    const value=o.amount?('兵 '+o.amount+'人'):(o.kind==='naval'?'海戦支援 +'+Math.round(o.bonus*100)+'%':'戦力支援 +'+Math.round(o.bonus*100)+'%');
+    T(ctx,value,b.x+b.w-18,b.y+17,{size:22,weight:'bold',color:'#86efac',align:'right'});
+    T(ctx,o.desc+(o.locked?'（強制出陣）':''),b.x+20,b.y+52,{size:17,color:'#9fb2c6'});
+  }  /* 出陣プレビュー: 現在の選択でモンテカルロ試行し勝率・想定生存兵を返す（ゲーム乱数は消費しない） */
   _battleForecast(m){
     const st=this.state, dst=st.provinces[m.dstId];
     const gens=Object.keys(m.pick).filter(g=>m.pick[g]);
     const troops=clamp(m.troops,100,m.maxSend);
-    const key=m.dstId+'|'+troops+'|'+gens.slice().sort().join(',');
+    const aid=this._marchAidSummary(m);
+    const totalTroops=troops+aid.troops;
+    const baseDiplomacy=typeof diplomaticAttackBonus==='function'?diplomaticAttackBonus(st,st.playerDaimyo,m.dstId):0;
+    const dipBonus=baseDiplomacy+(aid.combatBonus||0);
+    const navalBonus=Math.min(0.5,navalBonusFor(st,st.playerDaimyo,m.dstId)+(aid.navalBonus||0));
+    const key=m.dstId+'|'+totalTroops+'|'+gens.slice().sort().join(',')+'|'+dipBonus+'|'+navalBonus;
     if (this._forecastCache && this._forecastCache.key===key) return this._forecastCache.val;
     const defGens=dst.generals.filter(g=>st.generals[g] && st.generals[g].alive);
     const N=60; let wins=0, aSum=0, dSum=0;
     for (let i=0;i<N;i++){
       const r=autoResolveBattle({
-        atkSoldiers:troops, atkGenerals:gens, atkFamily:st.playerDaimyo,
+        atkSoldiers:totalTroops, atkGenerals:gens, atkFamily:st.playerDaimyo,
         defSoldiers:dst.soldiers, defGenerals:defGens, defFamily:dst.owner||'',
         year:st.year, castleLevel:dst.castleLevel, terrain:DATA.provById[m.dstId].terrain,
-        rngFn:Math.random, atkNaval: navalBonusFor(st, st.playerDaimyo, m.dstId),
+        rngFn:Math.random, weather:weatherForProvince(st,m.dstId), atkNaval:navalBonus,
+        atkDiplomacyBonus:dipBonus,
       });
       if (r.attackerWins) wins++;
       aSum+=r.atkSurvivors; dSum+=r.defSurvivors;
     }
-    const val={winPct:Math.round(wins/N*100), atkSurv:Math.round(aSum/N), defSurv:Math.round(dSum/N)};
+    const val={winPct:Math.round(wins/N*100), atkSurv:Math.round(aSum/N), defSurv:Math.round(dSum/N), dipBonus};
     this._forecastCache={key, val};
     return val;
   }
@@ -11396,6 +11790,10 @@ class MapScene extends GameKit.Scene {
     T(ctx, (enemy?'出陣 / March to Battle':'増援 / Reinforce'), px+pw/2, py+45, {size:51, weight:'bold', color:'#e8c07a', align:'center'});
     T(ctx, src.nameJP+'  →  '+dst.nameJP+(dstProv.owner?'（'+daimyoDef(st,dstProv.owner).nameJP+'家）':'（空白地）'), px+pw/2, py+129, {size:33, color:'#cbd5e1', align:'center'});
     T(ctx, '敵兵力 約'+dstProv.soldiers+'人 ・ 城Lv'+dstProv.castleLevel+' ・ 地形'+terrainJP(dst.terrain), px+pw/2, py+183, {size:27, color:'#9fb2c6', align:'center'});
+    const aid=this._marchAidSummary(m), logistics=this._marchLogistics(m,m.troops+aid.troops);
+    const weatherColor=['storm','snow'].includes(logistics.weather.id)?'#fbbf24':'#a7f3d0';
+    T(ctx,'行軍 '+logistics.days+'日 ・ 兵糧 '+logistics.rice+'千石 ・ '+logistics.weather.jp+'（'+logistics.effect+'）',px+pw/2,py+214,{size:20,weight:'bold',color:weatherColor,align:'center'});
+    if(aid.selected.length) T(ctx,'援軍 '+aid.selected.length+'勢力 ・ 合流兵 '+aid.troops+'人',px+pw/2,py+239,{size:19,color:'#7dd3fc',align:'center'});
     // 水軍支援（沿岸戦）の注記（OS-03）
     const navB=navalBonusFor(st, st.playerDaimyo, m.dstId);
     if (enemy && navB>0){
@@ -11405,7 +11803,7 @@ class MapScene extends GameKit.Scene {
     if (enemy){
       const f=this._battleForecast(m);
       const col=f.winPct>=65?'#4ade80':f.winPct>=40?'#fbbf24':'#f87171';
-      T(ctx, '戦力予測  勝率 '+f.winPct+'%  ・  想定生存 自約'+f.atkSurv+'／敵約'+f.defSurv, px+pw/2, py+225, {size:27, weight:'bold', color:col, align:'center'});
+      T(ctx, '戦力予測  勝率 '+f.winPct+'%  ・  想定生存 自約'+f.atkSurv+'／敵約'+f.defSurv+(f.dipBonus?' ・ 外交支援+'+Math.round(f.dipBonus*100)+'%':''), px+pw/2, py+225, {size:27, weight:'bold', color:col, align:'center'});
     }
     // troops
     T(ctx, '出陣兵数', px+pw/2, py+255, {size:30, color:'#9fb2c6', align:'center'});
@@ -11737,6 +12135,15 @@ function runAIDiplomacy(st, d, log){
   // 盟主（最大勢力）
   let leader=null, leaderN=0; alive.forEach(x=>{ const n=provN(x.id); if (n>leaderN){ leaderN=n; leader=x.id; } });
   const dominant = leader && leaderN >= Math.max(8, Math.round(total*0.14));
+  // 友好的なAI同士も通商・軍路を結び、外交世界がプレイヤーだけで止まらないようにする。
+  if (Math.random()<0.09){
+    const cordial=alive.filter(x=>x.id!==d.id&&x.id!==st.playerDaimyo&&getRel(st,d.id,x.id)>=20&&!isVassalBond(st,d.id,x.id));
+    if (cordial.length){
+      const partner=cordial[Math.floor(Math.random()*cordial.length)], dip=getDip(st,d.id,partner.id);
+      if (!treatyActive(st,dip,'tradeUntil')){ dip.tradeUntil=st.turn+10; adjustDip(st,d.id,partner.id,{relation:3,trust:4,obligation:2}); }
+      else if (areAllied(st,d.id,partner.id)&&!treatyActive(st,dip,'passageUntil')){ dip.passageUntil=st.turn+8; adjustDip(st,d.id,partner.id,{trust:3}); }
+    }
+  }
 
   // 1) 反・盟主包囲網: 盟主でない大名は、盟主以外の非盟主と同盟する
   if (dominant && d.id!==leader && allyCount(d.id) < 2){
@@ -11747,7 +12154,7 @@ function runAIDiplomacy(st, d, log){
       const willing = 0.3 + (leaderN/total)*1.3;
       if (Math.random() < Math.min(0.78, willing)){
         const dip=getDip(st,d.id,partner.id);
-        if (!dip.ally){ dip.ally=true; addRel(st,d.id,partner.id,25);
+        if (!dip.ally){ dip.ally=true; dip.allianceUntil=st.turn+18; dip.truceUntil=dip.allianceUntil; adjustDip(st,d.id,partner.id,{relation:25,trust:15,hostility:-10});
           if (leader===st.playerDaimyo && log){ log.push(d.nameJP+'家と'+daimyoDef(st,partner.id).nameJP+'家が同盟（反'+daimyoDef(st,leader).nameJP+'包囲網）'); }
           return;
         }
@@ -11760,14 +12167,14 @@ function runAIDiplomacy(st, d, log){
   const borders=[...borderIds].filter(id=>st.daimyo[id]&&st.daimyo[id].alive);
   let threat=null, tN=myN*1.6; borders.forEach(id=>{ const n=provN(id); if (n>tN){ tN=n; threat=id; } });
   if (threat && !areAllied(st,d.id,threat) && !inTruce(st,d.id,threat) && Math.random()<0.5){
-    const dip=getDip(st,d.id,threat); dip.truceUntil=st.turn+(6+Math.floor(Math.random()*6)); addRel(st,d.id,threat,6);
+    const dip=getDip(st,d.id,threat); dip.truceUntil=st.turn+(6+Math.floor(Math.random()*6)); adjustDip(st,d.id,threat,{relation:6,trust:3,hostility:-6});
     return;
   }
 
   // 3) 硬直防止: 盟主が没落したら同盟を解消する余地
   if (!dominant && Math.random()<0.12){
     const ally = alive.find(x=>x.id!==d.id && areAllied(st,d.id,x.id));
-    if (ally){ getDip(st,d.id,ally.id).ally=false; }
+    if (ally){ const dip=getDip(st,d.id,ally.id); dip.ally=false; dip.allianceUntil=0; adjustDip(st,d.id,ally.id,{relation:-8,trust:-10,hostility:5}); changeDiplomaticCredit(st,d.id,-5); }
   }
 }
 function runStrategicAI(st, d, log){
@@ -11809,6 +12216,7 @@ function runStrategicAI(st, d, log){
       const tp=st.provinces[nb];
       let val = DATA.provById[nb].kokudaka/Math.max(1,provinceStrength(st,nb));
       if (tp.owner===st.playerDaimyo) val*=diff.targetPlayerBias;
+      if (jointWarTargetsFor(st,d.id).has(tp.owner)) val*=3;
       if (val>bestScore){ bestScore=val; best=nb; }
     });
     if (!best) continue;
@@ -11839,6 +12247,7 @@ function runStrategicAI(st, d, log){
         attacker:{daimyo:d.id, family:d.id, soldiers:send, generals:gens},
         defender:{daimyo:tp.owner, family:tp.owner||'', soldiers:tp.soldiers, generals:tp.generals.filter(g=>st.generals[g].alive).slice(), castleLevel:tp.castleLevel},
         terrain:DATA.provById[best].terrain,
+        diplomacyBonus:diplomaticAttackBonus(st,d.id,best),
       };
       prov.soldiers-=send0; prov.hasActed=true;
       if (zr.lost>0 && zr.notes.length) log.push(DATA.provById[best].nameJP+'へ向かう'+d.nameJP+'勢を'+zr.notes.map(n=>n.jp).join('、')+'  /  '+zr.notes.map(n=>n.en).join('; '));
@@ -11855,6 +12264,7 @@ function runStrategicAI(st, d, log){
         atkSoldiers:send, atkGenerals:gens, atkFamily:d.id,
         defSoldiers:tp.soldiers, defGenerals:ctx.defender.generals, defFamily:tp.owner||'',
         year:st.year, castleLevel:tp.castleLevel, terrain:ctx.terrain, rngFn:()=>srand(st),
+        atkDiplomacyBonus:ctx.diplomacyBonus||0,
         atkFormation: aiFormationFor(st, d.id, true),
         defFormation: tp.owner ? aiFormationFor(st, tp.owner, false) : 'gankou',
       });
@@ -12708,6 +13118,7 @@ class BattleScene extends GameKit.Scene {
     this.defFormation = c.defFormation || (c.defender && c.defender.daimyo ? aiFormationFor(this.state, c.defender.daimyo, false) : 'gankou');
     // 水軍ボーナス（沿岸戦のみ。プレイヤー側の全部隊に加算。OS-03）
     this.navalBonus = (c.navalBonus!=null ? c.navalBonus : navalBonusFor(this.state, this.state.playerDaimyo, c.dstId)) || 0;
+    this.diplomacyBonus=Number(c.diplomacyBonus)||0;
     this.isNaval = this.navalBonus>0;
     this.t=0; this.round=1; this.maxRounds=12; this.phase='player'; this.selected=null;
     // 委任: ONの間はAIが自軍部隊を1手ずつ自動で指揮する（敵殲滅または決着まで継続）
@@ -13306,12 +13717,13 @@ class BattleScene extends GameKit.Scene {
     if (atk.side==='def' && this._defRallyT>0) commandAtk*=1.2;
     // 水軍支援（沿岸戦）: プレイヤー側の攻防に加算（OS-03）
     const navAtk = (this.navalBonus && atk.side===this.playerSide) ? (1+this.navalBonus) : 1;
+    const dipAtk = atk.side==='atk' ? (1+this.diplomacyBonus) : 1;
     const navDef = (this.navalBonus && def.side===this.playerSide) ? (1+this.navalBonus) : 1;
     // 陣形補正（Phase 2）: 攻撃する側の atk、受ける側の def を適用
     const fmA=FORMATIONS[atk.side==='atk'?this.atkFormation:this.defFormation];
     const fmD=FORMATIONS[def.side==='atk'?this.atkFormation:this.defFormation];
     const formAtk=fmA?fmA.atk:1, formDef=fmD?fmD.def:1;
-    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type)*commandAtk*navAtk*formAtk*weatherUnitMultiplier({id:this.weather},atk.type);
+    const baseAtk = atk.count*ua.atk*(1+atk.stat.bu/200)*advantage(atk.type,def.type)*commandAtk*navAtk*dipAtk*formAtk*weatherUnitMultiplier({id:this.weather},atk.type);
     let commandDef=def._shieldWall?1.35:1;
     // 城固有の守備補正（総構え・難攻不落など）＋櫓上の守兵は高所有利
     if (this.siege && def.side==='def'){ commandDef*=(this._castleDefBuff||1); if (def.castlePost==='yagura'||def.castlePost==='wall') commandDef*=1.12; }
@@ -13885,6 +14297,7 @@ class BattleScene extends GameKit.Scene {
       defSoldiers:dS, defGenerals:def.map(s=>s.gen).filter(Boolean), defFamily:this.ctx.defender.family,
       year:this.ctx.year, castleLevel:this.ctx.defender.castleLevel, terrain:this.ctx.terrain, rngFn:()=>srand(this.state),
       atkNaval: this.playerSide==='atk'?this.navalBonus:0, defNaval: this.playerSide==='def'?this.navalBonus:0,
+      atkDiplomacyBonus:this.diplomacyBonus,
       atkFormation: this.atkFormation, defFormation: this.defFormation,
     });
     this._finishWithCounts(game, res.attackerWins, res.atkSurvivors, res.defSurvivors, '自動解決 / Auto');
@@ -14243,6 +14656,7 @@ class BattleScene extends GameKit.Scene {
      else if(this.fieldLayout) T(ctx,'緑=森(守備+・移動遅)  /  土色=山(守備+・移動遅)  /  水色=川(移動遅)  /  青=水面(通行不可)',36,218,{size:16,color:'#dbe4ee'});
     T(ctx,'\u30e9\u30a6\u30f3\u30c9 '+this.round+' / '+this.maxRounds+'  '+(this.phase==='player'?(this.delegated?'\u81ea\u8ecd\u30bf\u30fc\u30f3\uff08\u59d4\u4efb\u4e2d\uff09':'\u81ea\u8ecd\u30bf\u30fc\u30f3'):'\u6575\u8ecd\u30bf\u30fc\u30f3'),36,82,{size:22,color:this.delegated?'#67e8f9':'#9fb2c6'});
     if(this.isNaval) T(ctx,'\u2693 \u6d77\u6226\u30fb\u6c34\u8ecd\u652f\u63f4 +'+Math.round(this.navalBonus*100)+'% / Naval support',W/2-180,42,{size:22,weight:'bold',color:'#7dd3fc'});
+    if(this.diplomacyBonus>0) T(ctx,'\u2691 \u5916\u4ea4\u5171\u95d8\u30fb\u5175\u7ad9 +'+Math.round(this.diplomacyBonus*100)+'%',W/2+180,42,{size:22,weight:'bold',color:'#86efac'});
     T(ctx,daimyoDef(this.state,c.attacker.daimyo).nameJP+'  /  '+(c.defender.daimyo?daimyoDef(this.state,c.defender.daimyo).nameJP:'\u7121\u6240\u5c5e'),36,116,{size:22,color:'#cbd5e1'});
     if(this.battleType==='siege'){
       T(ctx,castleTypeLabel(this.castleType)+'  '+castleSizeLabel(this.castleLevel),36,150,{size:20,color:'#f2c879'});
