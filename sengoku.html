@@ -4019,7 +4019,7 @@ function weatherForState(st){
   const month=Number.isFinite(st.month)?st.month:3, season=Math.floor((month-1)/3);
   const current=st.weather;
   // 旧セーブや編集データで天候レコードが不完全でも、undefined を画面・行軍計算へ渡さない。
-  if(current && current.month===month && typeof current.id==='string' && typeof current.jp==='string') return current;
+  if(current && current.month===month && typeof current.id==='string' && typeof current.jp==='string' && Number.isFinite(current.income) && Number.isFinite(current.harvest)) return current;
   const list=WEATHER_BY_SEASON[season]||WEATHER_BY_SEASON[0]; const h=Math.abs(((st.year||1560)*37+month*19+(st.scenarioId||'').length*7));
   return Object.assign({month,season},list[h%list.length]);
 }
@@ -8512,6 +8512,17 @@ class MapScene extends GameKit.Scene {
     const season=this._stateSeason();
     const weather=weatherForState(st);
     const diff=difficultyOf(st);
+    // 旧セーブやCSVで追加した城に欠損値があっても、ターン処理全体をNaNで壊さない。
+    // 数値が不正な場合だけ安全な初期値へ戻し、既存の正常な値はそのまま維持する。
+    Object.values(st.daimyo||{}).forEach(d=>{
+      if (!Number.isFinite(d.gold)) d.gold=0;
+      if (!Number.isFinite(d.rice)) d.rice=0;
+    });
+    Object.values(st.provinces||{}).forEach(p=>{
+      if (!Number.isFinite(p.soldiers)) p.soldiers=0;
+      if (!Number.isFinite(p.development)) p.development=0;
+      if (!Number.isFinite(p.castleLevel)) p.castleLevel=1;
+    });
     // 収入・兵糧（収穫／消費／兵站破綻）
     daimyoOf(st).forEach(d=>{
       if (!st.daimyo[d.id].alive) return;
@@ -8519,8 +8530,10 @@ class MapScene extends GameKit.Scene {
       let inc=0, harvest=0, sol=0;
       ownedProvinces(st,d.id).forEach(pid=>{
         const prov=st.provinces[pid];
-        const kd=DATA.provById[pid].kokudaka;
-        inc += Math.round(kd*(prov.development/100)*SEASONS[season].mod*0.9*weather.income);
+        const kd=Number(DATA.provById[pid] && DATA.provById[pid].kokudaka) || 0;
+        const development=Number(prov.development) || 0;
+        const incomeWeather=Number.isFinite(weather.income) ? weather.income : 1;
+        inc += Math.round(kd*(development/100)*SEASONS[season].mod*0.9*incomeWeather);
         sol += prov.soldiers;
         if (season===2) harvest += Math.round(kd*(prov.development/100)*RICE_HARVEST_RATE*weather.harvest);
         // 湊・鉱山・特産品ボーナス（sengoku_expansion_v1）
@@ -13118,6 +13131,25 @@ const FIELD_HEX_LAYOUTS = {
     '.................',
     '.................',
   ],
+  // 海戦も野戦と同じ背景優先のヘックス描画を使う。上端だけ空・遠景として外し、
+  // それ以外は全て航行可能な水面にして艦隊の移動・初期配置を安定させる。
+  battleNaval: [
+    '-----------------',
+    '-----------------',
+    '-----------------',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+    'wwwwwwwwwwwwwwwww',
+  ],
 };
 const FIELD_HEX_KINDS = {f:'forest', m:'mountain', r:'river', w:'water', '-':'sky'};
 function fieldLayoutTerrain(key){
@@ -13179,7 +13211,7 @@ class BattleScene extends GameKit.Scene {
     this.battlefieldKey = battlefieldKeyForContext(c);
     // 野戦も攻城戦と同じ方式: 戦場画像へ画像解析でトレースした地形レイアウト(FIELD_HEX_LAYOUTS)を敷き、
     // 背景画像の森・山・川とヘックスの色枠を一致させる。トレースが無い画像のみ従来の生成地形。
-    this.fieldLayout = this.battleType==='field' ? fieldLayoutTerrain(this.battlefieldKey) : null;
+    this.fieldLayout = (this.battleType==='field'||this.battleType==='naval') ? fieldLayoutTerrain(this.battlefieldKey) : null;
     this.terrainMap = this.fieldLayout || this._genTerrain(c.terrain);
     // 戦場外(sky)行数 = 画像の地平線より上。守備側の布陣はこの直下から始める。
     // 地平線が水平でない画像もあるため、行の全マスがskyの間だけ数える（列0だけでは判定しない）
@@ -13408,7 +13440,7 @@ class BattleScene extends GameKit.Scene {
     const sized=types.map(t=>({t,n:Math.max(1,Math.round(total*comp[t]))})).sort((a,b)=>b.n-a.n);
     let gi=0; const siegeDef=isDef&&this.battleType==='siege';
     // 守備(敵)側の前線は「地平線の稜線」ではなく開けた戦場の中に置く（_fieldDefenderFrontRow）
-    const defRow0=this.battleType==='field'?this._fieldDefenderFrontRow():(this.fieldSkyRows||0);
+    const defRow0=this.fieldLayout?this._fieldDefenderFrontRow():(this.fieldSkyRows||0);
     const baseRow=siegeDef?6:(isDef?defRow0:HEX.rows-1), row2=siegeDef?7:(isDef?defRow0+1:HEX.rows-2);
     sized.forEach((s,idx)=>{
       const gid=gi<gens.length?gens[gi++]:null, gstat=gid?DATA.genById[gid].stats:{tou:48,bu:48,chi:48,sei:48};
@@ -13428,6 +13460,9 @@ class BattleScene extends GameKit.Scene {
   _fieldDefenderFrontRow(){
     const sky=this.fieldSkyRows||0, FRONT_MIN=4, FRONT_MAX=7;
     if (!this.fieldLayout) return clamp(sky, FRONT_MIN, FRONT_MAX);
+    // 海戦は水面が戦場そのもの。野戦用の平地/森判定では前線を求められないため、
+    // 地平線の直下に固定して、海上へ艦隊を自然に配置する。
+    if (this.naval) return clamp(Math.max(sky+1, FRONT_MIN), FRONT_MIN, FRONT_MAX);
     let firstOpen=Math.max(sky, FRONT_MIN);
     for (let r=sky;r<HEX.rows;r++){
       let open=0, total=0;
@@ -13439,7 +13474,7 @@ class BattleScene extends GameKit.Scene {
   // 野戦の初期配置: 希望地点が戦場外(sky)・水面・山・既占有なら、最寄りの空き平地/森へ寄せる。
   // 同距離の候補が複数あるときは「より手前(row大=地平線から遠い)」を優先し、上(稜線側)へ寄らないようにする。
   _fieldSpawnSpot(prefCol, prefRow){
-    const ok=(c,r)=>{ const t=this.terrainMap[c+','+r]; return t!=='sky' && t!=='water' && t!=='mountain' && !this.stackAt(c,r); };
+    const ok=(c,r)=>{ const t=this.terrainMap[c+','+r]; return t!=='sky' && (this.naval || (t!=='water' && t!=='mountain')) && !this.stackAt(c,r); };
     if (ok(prefCol,prefRow)) return [prefCol,prefRow];
     const seen={}; seen[prefCol+','+prefRow]=true;
     let frontier=[[prefCol,prefRow]];
