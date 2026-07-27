@@ -316,6 +316,36 @@ else
   echo "  - obsidian-vault/01-Daily なし（スキップ）"
 fi
 
+echo "== 14. 監査スクリプトの"偽の✓"パターン（stdin奪取／PCRE非UTF）=="
+# 2026-07-28に実在した2件を静的検出する。どちらもエラーではなく**合格側に倒れる**
+# ため、実行しているのに何も見ていない状態が長期間気づかれない（ADR 0013 の再発）。
+#  (a) `printf ... | python3 - <<'PY'` : ヒアドキュメントがパイプを上書きして stdin を
+#      奪うため sys.stdin は空。perf-audit が「0ページ計測・1MB超過0件 ✅」を出していた。
+#  (b) `grep -P '\x{3040}'` に `(*UTF)` 無し : C locale では PCRE がバイトモードになり
+#      "code point value is too large" で全行エラー。`grep -c` は 0 を返すので
+#      「該当なし」と区別できない。i18n-check の日本語判定が常に0だった。
+# 自分自身（検出パターンを本文に含む）と、コメント行（罠の説明を書くと自分で
+# 偽陽性を出す。検査#7と同じ扱い）は除外する。
+SELF_LINT=".claude/skills/self-improve/harness-lint.sh"
+NOT_COMMENT='^[^:]+:[0-9]+:[[:space:]]*#'
+BADSTDIN=$(grep -rnE '\|[[:space:]]*python3[[:space:]]+-[[:space:]]*<<' \
+  --include='*.sh' .claude/ 2>/dev/null \
+  | grep -v "^$SELF_LINT:" | grep -vE "$NOT_COMMENT" || true)
+BADPCRE=$(grep -rn -e 'grep[^|]*-[a-zA-Z]*P' --include='*.sh' .claude/ 2>/dev/null \
+  | grep -F 'x{' | grep -vF '(*UTF)' \
+  | grep -v "^$SELF_LINT:" | grep -vE "$NOT_COMMENT" || true)
+if [ -z "$BADSTDIN" ] && [ -z "$BADPCRE" ]; then
+  ok "偽の✓パターンなし（stdin奪取・PCRE非UTF）"
+else
+  while IFS= read -r l; do
+    [ -n "$l" ] && note_fail "python3のstdinをヒアドキュメントが奪う（データが空で偽の✓）: ${l%%:*}:$(echo "$l" | cut -d: -f2)"
+  done <<< "$BADSTDIN"
+  while IFS= read -r l; do
+    [ -n "$l" ] && note_fail "PCREに(*UTF)なし（C localeで全行エラー→常に0件）: ${l%%:*}:$(echo "$l" | cut -d: -f2)"
+  done <<< "$BADPCRE"
+fi
+
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then

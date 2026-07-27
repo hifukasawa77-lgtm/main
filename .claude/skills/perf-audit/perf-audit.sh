@@ -14,10 +14,17 @@ if [ $# -gt 0 ]; then TARGETS="$(printf '%s\n' "$@")"; else
     -not -name 'admin*.html' | sed 's|^\./||' | sort)
 fi
 
-printf '%s\n' "$TARGETS" | python3 - <<'PY'
+# 対象リストは環境変数で渡す。`printf ... | python3 - <<'PY'` はヒアドキュメントが
+# パイプを上書きして stdin を奪うため、sys.stdin からは1件も読めず「0ページ計測・
+# 超過0件 ✅」という偽の合格を延々と出していた（2026-07-28に発見・修正）。
+PERF_TARGETS="$TARGETS" python3 - <<'PY'
 import os, re, sys
 
-targets = [l.strip() for l in sys.stdin if l.strip() and os.path.isfile(l.strip())]
+targets = [l.strip() for l in os.environ.get('PERF_TARGETS', '').splitlines()
+           if l.strip() and os.path.isfile(l.strip())]
+if not targets:
+    print('==> perf-audit: 対象HTMLが0件（探索条件を確認）❌')
+    sys.exit(1)
 WARN, LIMIT = 500*1024, 1024*1024
 fail = False
 rows = []
