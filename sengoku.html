@@ -5921,9 +5921,15 @@ function normalizeDipRecord(st, dip){
 function normalizeDiplomacyState(st){
   if (!st.diplomacy || typeof st.diplomacy!=='object') st.diplomacy={};
   Object.values(st.diplomacy).forEach(dip=>normalizeDipRecord(st,dip));
-  Object.values(st.daimyo||{}).forEach(d=>{
+  Object.entries(st.daimyo||{}).forEach(([did,d])=>{
     if (!Number.isFinite(d.diplomaticCredit)) d.diplomaticCredit=50;
     d.diplomaticCredit=clamp(d.diplomaticCredit,0,100);
+    // 兵糧システム導入前のセーブには rice が無い。未定義時だけ初期備蓄を補完し、
+    // 実際に兵糧が尽きた（0 の）セーブ状態はそのまま尊重する。
+    if (!Number.isFinite(d.rice)){
+      const soldiers=totalSoldiersOf(st,did);
+      d.rice=Math.round(soldiers/1000 * RICE_CONSUME_PER_1000 * RICE_INIT_MONTHS)+20;
+    }
   });
   return st;
 }
@@ -9422,13 +9428,13 @@ class MapScene extends GameKit.Scene {
     }
     if (ov.type==='march'){
       const m=this.march; const px=W/2-585, py=H/2-540, pw=1170, ph=1080;
-      // troops -/+
-      bs.push({x:px+66, y:py+294, w:132, h:81, label:'-100', sz:30, action:()=>{ m.troops=clamp(m.troops-100,100,m.maxSend); }});
-      bs.push({x:px+66, y:py+384, w:132, h:69, label:'-500', sz:24, action:()=>{ m.troops=clamp(m.troops-500,100,m.maxSend); }});
-      bs.push({x:px+pw-198, y:py+294, w:132, h:81, label:'+100', sz:30, action:()=>{ m.troops=clamp(m.troops+100,100,m.maxSend); }});
-      bs.push({x:px+pw-198, y:py+384, w:132, h:69, label:'+500', sz:24, action:()=>{ m.troops=clamp(m.troops+500,100,m.maxSend); }});
-      bs.push({x:px+pw/2-225, y:py+405, w:195, h:66, label:'半数', sz:27, action:()=>{ m.troops=clamp(Math.round(m.maxSend*0.5/100)*100,100,m.maxSend); }});
-      bs.push({x:px+pw/2+30, y:py+405, w:195, h:66, label:'全軍', sz:27, action:()=>{ m.troops=m.maxSend; }});
+      // 行軍・戦力予測の情報欄を増やしたため、兵力操作は一段下へ配置する。
+      bs.push({x:px+66, y:py+327, w:132, h:81, label:'-100', sz:30, action:()=>{ m.troops=clamp(m.troops-100,100,m.maxSend); }});
+      bs.push({x:px+66, y:py+418, w:132, h:69, label:'-500', sz:24, action:()=>{ m.troops=clamp(m.troops-500,100,m.maxSend); }});
+      bs.push({x:px+pw-198, y:py+327, w:132, h:81, label:'+100', sz:30, action:()=>{ m.troops=clamp(m.troops+100,100,m.maxSend); }});
+      bs.push({x:px+pw-198, y:py+418, w:132, h:69, label:'+500', sz:24, action:()=>{ m.troops=clamp(m.troops+500,100,m.maxSend); }});
+      bs.push({x:px+pw/2-225, y:py+470, w:195, h:66, label:'半数', sz:27, action:()=>{ m.troops=clamp(Math.round(m.maxSend*0.5/100)*100,100,m.maxSend); }});
+      bs.push({x:px+pw/2+30, y:py+470, w:195, h:66, label:'全軍', sz:27, action:()=>{ m.troops=m.maxSend; }});
       // generals toggles（スクロール対応: 底部ボタンに被らないよう3行まで表示）
       const GEN_VIS = 3;
       const genOff = m.genOffset||0;
@@ -9437,16 +9443,16 @@ class MapScene extends GameKit.Scene {
       m.generals.forEach((g,i)=>{
         const row=Math.floor(i/2);
         if (row<genOff || row>=genOff+GEN_VIS) return;
-        const gx=px+60+(i%2)*(pw/2-45), gy=py+549+(row-genOff)*72;
+        const gx=px+60+(i%2)*(pw/2-45), gy=py+670+(row-genOff)*72;
         bs.push({x:gx, y:gy, w:pw/2-90, h:60, _gen:g, action:()=>{ m.pick[g]=!m.pick[g]; }});
       });
       // ▲▼スクロールボタン（右端の余白に配置）
-      const scrX=px+pw-72, genTop=py+549, genBot=py+549+GEN_VIS*72;
+      const scrX=px+pw-72, genTop=py+670, genBot=py+670+GEN_VIS*72;
       if (genOff>0)
         bs.push({x:scrX, y:genTop, w:60, h:60, label:'▲', sz:30, action:()=>{ m.genOffset=Math.max(0,genOff-1); }});
       if (genOff<maxGenOff)
         bs.push({x:scrX, y:genBot-66, w:60, h:60, label:'▼', sz:30, action:()=>{ m.genOffset=Math.min(maxGenOff,genOff+1); }});
-      bs.push({x:px+pw/2-150, y:py+474, w:300, h:58, jp:'援軍・兵站', en:'Aid & Logistics', sz:24, ensz:13, accent:'rgba(56,189,248,0.62)', action:()=>{ this.overlay={type:'marchAid'}; }});
+      bs.push({x:px+pw/2-150, y:py+550, w:300, h:58, jp:'援軍・兵站', en:'Aid & Logistics', sz:24, ensz:13, accent:'rgba(56,189,248,0.62)', action:()=>{ this.overlay={type:'marchAid'}; }});
       const dst=st.provinces[m.dstId];
       const enemy = dst.owner!==st.playerDaimyo;
       const by=py+ph-129;
@@ -11797,32 +11803,35 @@ class MapScene extends GameKit.Scene {
     T(ctx, src.nameJP+'  →  '+dst.nameJP+(dstProv.owner?'（'+daimyoDef(st,dstProv.owner).nameJP+'家）':'（空白地）'), px+pw/2, py+129, {size:33, color:'#cbd5e1', align:'center'});
     T(ctx, '敵兵力 約'+dstProv.soldiers+'人 ・ 城Lv'+dstProv.castleLevel+' ・ 地形'+terrainJP(dst.terrain), px+pw/2, py+183, {size:27, color:'#9fb2c6', align:'center'});
     const aid=this._marchAidSummary(m), logistics=this._marchLogistics(m,m.troops+aid.troops);
-    const weatherColor=['storm','snow'].includes(logistics.weather.id)?'#fbbf24':'#a7f3d0';
-    T(ctx,'行軍 '+logistics.days+'日 ・ 兵糧 '+logistics.rice+'千石 ・ '+logistics.weather.jp+'（'+logistics.effect+'）',px+pw/2,py+214,{size:20,weight:'bold',color:weatherColor,align:'center'});
-    if(aid.selected.length) T(ctx,'援軍 '+aid.selected.length+'勢力 ・ 合流兵 '+aid.troops+'人',px+pw/2,py+239,{size:19,color:'#7dd3fc',align:'center'});
-    // 水軍支援（沿岸戦）の注記（OS-03）
+    const treasury=st.daimyo[st.playerDaimyo];
+    const hasRice=(treasury.rice||0)>=logistics.rice;
+    const weatherColor=hasRice?(['storm','snow'].includes(logistics.weather.id)?'#fbbf24':'#a7f3d0'):'#f87171';
+    T(ctx,'行軍 '+logistics.days+'日 ・ 兵糧 '+logistics.rice+'千石（備蓄 '+Math.floor(treasury.rice||0)+'）・ '+logistics.weather.jp,px+pw/2,py+214,{size:20,weight:'bold',color:weatherColor,align:'center'});
+    if(aid.selected.length) T(ctx,'援軍 '+aid.selected.length+'勢力 ・ 合流兵 '+aid.troops+'人',px+pw/2,py+240,{size:19,color:'#7dd3fc',align:'center'});
+    // 水軍支援（沿岸戦）の注記は、行軍・援軍情報の下に固定する。
     const navB=navalBonusFor(st, st.playerDaimyo, m.dstId);
     if (enemy && navB>0){
-      T(ctx, '⚓ 海戦: 従属水軍の支援で兵力 +'+Math.round(navB*100)+'% / Naval support', px+pw/2, py+205, {size:22, weight:'bold', color:'#7dd3fc', align:'center'});
+      T(ctx, '⚓ 海戦: 従属水軍の支援で兵力 +'+Math.round(navB*100)+'% / Naval support', px+pw/2, py+266, {size:20, weight:'bold', color:'#7dd3fc', align:'center'});
     }
-    // 戦力予測（敵地への出陣時のみ・1行で簡潔に）
+    // 戦力予測は兵站表示と重ならない位置に独立させる。
     if (enemy){
       const f=this._battleForecast(m);
       const col=f.winPct>=65?'#4ade80':f.winPct>=40?'#fbbf24':'#f87171';
-      T(ctx, '戦力予測  勝率 '+f.winPct+'%  ・  想定生存 自約'+f.atkSurv+'／敵約'+f.defSurv+(f.dipBonus?' ・ 外交支援+'+Math.round(f.dipBonus*100)+'%':''), px+pw/2, py+225, {size:27, weight:'bold', color:col, align:'center'});
+      T(ctx, '戦力予測  勝率 '+f.winPct+'%  ・  想定生存 自約'+f.atkSurv+'／敵約'+f.defSurv+(f.dipBonus?' ・ 外交支援+'+Math.round(f.dipBonus*100)+'%':''), px+pw/2, py+294, {size:24, weight:'bold', color:col, align:'center'});
     }
+    if (!hasRice) T(ctx,'⚠ 兵糧不足：商人・内政から兵糧を補給してください',px+pw/2,py+320,{size:19,weight:'bold',color:'#f87171',align:'center'});
     // troops
-    T(ctx, '出陣兵数', px+pw/2, py+255, {size:30, color:'#9fb2c6', align:'center'});
-    T(ctx, m.troops+' 人', px+pw/2, py+307, {size:60, weight:'bold', color:'#f1e6cf', align:'center'});
-    T(ctx, '（最大 '+m.maxSend+'）', px+pw/2, py+375, {size:26, color:'#7d93ab', align:'center'});
-    T(ctx, '― 従軍武将 ―', px+pw/2, py+498, {size:30, color:'#e8c07a', align:'center'});
-    if (m.generals.length===0) T(ctx,'（武将なし）', px+pw/2, py+558, {size:27, color:'#7d93ab', align:'center'});
+    T(ctx, '出陣兵数', px+pw/2, py+350, {size:28, color:'#9fb2c6', align:'center'});
+    T(ctx, m.troops+' 人', px+pw/2, py+389, {size:58, weight:'bold', color:'#f1e6cf', align:'center'});
+    T(ctx, '（最大 '+m.maxSend+'）', px+pw/2, py+455, {size:25, color:'#7d93ab', align:'center'});
+    T(ctx, '― 従軍武将 ―', px+pw/2, py+620, {size:30, color:'#e8c07a', align:'center'});
+    if (m.generals.length===0) T(ctx,'（武将なし）', px+pw/2, py+682, {size:27, color:'#7d93ab', align:'center'});
     // 隠れている武将数をスクロールエリア下端に表示
     const _gVis=3, _gOff=m.genOffset||0;
     const _totalRows=Math.ceil(m.generals.length/2);
     if (_totalRows>_gVis){
       const _hidden=Math.max(0, _totalRows-_gOff-_gVis)*2;
-      if (_hidden>0) T(ctx,'▼  他 '+_hidden+' 名', px+pw/2, py+549+_gVis*72+18, {size:24, color:'#94a3b8', align:'center'});
+      if (_hidden>0) T(ctx,'▼  他 '+_hidden+' 名', px+pw/2, py+670+_gVis*72+18, {size:24, color:'#94a3b8', align:'center'});
     }
   }
   _drawMapWrappedText(ctx,text,x,y,maxW,lineH,opts={}){
