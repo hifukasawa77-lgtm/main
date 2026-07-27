@@ -269,6 +269,53 @@ else
   echo "  - python3なし（スキップ）"
 fi
 
+echo "== 13. 週次Routineの実行痕跡（Vaultのマーカー鮮度・警告のみ／exit codeに影響しない）=="
+# Routineの実行実態は Claude Code Remote のAPI側にあり、リポジトリからは読めない。
+# 唯一リポジトリに残せるのは各スキルがDailyへ書く実行痕跡マーカー
+# `<!-- routine:<skill> -->` なので、その鮮度で「無言の故障」を検出する。
+# 「起動しなかった」と「起動して何も残さず終了した」は区別できないが、どちらも要調査。
+# 散文中のスキル名を痕跡にすると、この検査の結果を報告するDaily自身が痕跡を偽造して
+# しまう（自己充足）ため、判定は専用マーカー行のみで行う。
+# 日付はファイル名から取る（mtimeはフレッシュクローンで無意味／検査#7）。
+# 週次(7日)＋猶予3日＝10日を閾値にする。判断はLLM作業のため非ブロッキング（△）。
+ROUTINE_STALE_DAYS=10
+NOW_S=$(date -u +%s)
+check_routine_trace() { # $1=表示名 $2=マーカーのskill名 $3=探索globs
+  local label="$1" skill="$2" latest="" f d ds age
+  for f in $3; do
+    [ -f "$f" ] || continue
+    grep -qF -- "<!-- routine:$skill -->" "$f" 2>/dev/null || continue
+    d=$(basename "$f" .md)
+    case "$d" in
+      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+      *) continue ;;
+    esac
+    [ "$d" \> "$latest" ] && latest="$d"
+  done
+  if [ -z "$latest" ]; then
+    note_warn "$label: 実行痕跡マーカーなし（未起動 or 無痕跡終了の疑い。マーカー: <!-- routine:$skill -->）"
+    return
+  fi
+  ds=$(date -u -d "$latest" +%s 2>/dev/null || echo 0)
+  if [ "$ds" = 0 ]; then
+    ok "$label: 直近の痕跡 $latest（日数換算不可）"
+    return
+  fi
+  age=$(( (NOW_S - ds) / 86400 ))
+  if [ "$age" -gt "$ROUTINE_STALE_DAYS" ]; then
+    note_warn "$label: 直近の痕跡が $latest（${age}日前・週次の想定を超過）。Routineが無言で失敗していないか確認"
+  else
+    ok "$label: 直近の痕跡 $latest（${age}日前）"
+  fi
+}
+if [ -d obsidian-vault/01-Daily ]; then
+  check_routine_trace "/self-improve" "self-improve" "obsidian-vault/01-Daily/*.md"
+  check_routine_trace "/agent-evolve" "agent-evolve" "obsidian-vault/01-Daily/*.md"
+  check_routine_trace "/site-proposal" "site-proposal" "obsidian-vault/01-Daily/*.md obsidian-vault/02-Projects/site-proposals/*.md"
+else
+  echo "  - obsidian-vault/01-Daily なし（スキップ）"
+fi
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then

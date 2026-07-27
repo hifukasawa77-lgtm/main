@@ -78,6 +78,13 @@ git push -u origin claude/agent-evolve
 `obsidian-vault/01-Daily/YYYY-MM-DD.md` に実施内容と学びを1〜3行で記録する
 （second-brain スキルの書式に従う。プロジェクトノートは `02-Projects/guide-agent-evolution.md`）。
 
+**実行痕跡マーカー（必須）**: そのDailyに `<!-- routine:agent-evolve -->` の行を1つ含めること。
+**改善ネタが無く1件も変更しなかった場合も、その旨1行＋マーカーを書いてコミット・プッシュしてから終わる**
+（無痕跡で終了しない）。Routineの実行結果はチャットに残るだけでリポジトリからは追えず、痕跡が無いと
+「起動しなかった」のか「起動して何も出さずに終わった」のか判別できない。harness-lint 検査#13 が
+このマーカーの鮮度を見張るため、**本文の散文で `agent-evolve` と書くだけでは痕跡と認められない**
+（他セッションの言及と区別できないため、マーカー行が唯一の判定基準）。
+
 ## 運用メモ
 
 - この仕組みは Claude Code Remote の Routine（毎週木曜 05:00 JST）から新セッションで起動される。
