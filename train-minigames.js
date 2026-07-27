@@ -203,7 +203,7 @@ function initStampRally() {
       // スタンプアイコン（SVG参照）
       const icon = mkEl('img');
       icon.src = stamped
-        ? 'assets/trains/generated/ui/stamp-done.png'
+        ? 'assets/trains/generated/ui/stamp-done.webp'
         : 'assets/trains/generated/ui/stamp-empty.png';
       icon.alt = stamped ? 'スタンプ済み' : '未スタンプ';
       icon.style.cssText = `width:32px;height:32px;filter:${stamped ? 'none' : 'grayscale(1) opacity(.55)'};`;
@@ -818,7 +818,7 @@ function initSugoroku() {
   diceWrap.style.cssText = 'display:flex;align-items:center;gap:16px;justify-content:center;margin-bottom:16px;';
 
   const diceImg = mkEl('img');
-  diceImg.src = 'assets/trains/generated/ui/dice.png';
+  diceImg.src = 'assets/trains/generated/ui/dice.webp';
   diceImg.alt = 'さいころ';
   diceImg.style.cssText = 'width:72px;height:72px;cursor:pointer;transition:transform .15s;';
   diceImg.id = 'dice-img';

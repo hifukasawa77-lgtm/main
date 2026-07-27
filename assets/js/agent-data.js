@@ -66,7 +66,7 @@
           title:{ja:'Chinese Checkers',en:'Chinese Checkers Neon'}, emoji:'🟣',
           desc:{ja:'チャイニーズチェッカー × AI',en:'Chinese checkers with AI'},
           aliases:{ja:['チャイニーズチェッカー','ダイヤモンドゲーム'],en:['chinese checkers','sternhalma']} },
-        { slug:'checkers', href:'checkers.html', cat:'board', thumb:'assets/checkers/checkers-thumb.png',
+        { slug:'checkers', href:'checkers.html', cat:'board', thumb:'assets/checkers/checkers-thumb-w1000.webp',
           title:{ja:'Checkers AI',en:'Checkers AI'}, emoji:'⛀',
           desc:{ja:'強制ジャンプ・キング対応のチェッカーAI',en:'Checkers with forced jumps and kings'},
           aliases:{ja:['チェッカー','チェッカーズ','ドラフツ'],en:['checkers','draughts']} },

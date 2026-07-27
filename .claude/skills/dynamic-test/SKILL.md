@@ -44,6 +44,8 @@ bash .claude/skills/dynamic-test/run.sh --changed
 ```
 
 ## 注意
+- **FAILが出たら「変更前も同じか」を先に確認する（回帰判定はベースライン比較で行う）**: このテストは絶対評価なので、既存の環境要因（`file://` のcanvas taint・`ERR_CONNECTION_RESET`・canvas未描画）を変更由来のFAILと取り違えやすい。手戻りを避けるため、FAILを差し戻す前に `git worktree add /tmp/base HEAD` でベースラインを立て、**HTTP配信**（両方を別ポートで `http.server` 相当に載せる）で before/after の jsErrors・404・canvas状態を突き合わせること。2026-07-28 のアセット軽量化では、`file://` で3ページがFAILしたがHTTP比較では前後とも0エラーで、**すべて環境要因の偽FAIL**だった。
+- 画質・見た目の回帰は before/after のスクリーンショットを画素差分（RMSE・差分>30の画素割合）で数値化して判定する。ただしパーティクル等のアニメーション背景があるページは無変更でも差分が出るため、数値だけで判断せず該当領域を等倍で目視確認すること。
 - `file://` で開くため、`fetch()` 依存の外部API部分はエラーになり得る（本番のみ動く箇所は jsErrors の内容で判断する）
 - スクリーンショットは `test-screenshots/` に溜まる。コミットに含めない
 - ヘッドレスでは `confirm()`/`alert()` が**自動キャンセル**される。確認ダイアログを通る正常系（保存/削除等）を検証するときは `page.on('dialog', d => d.accept())` を入れないと正常系がFAILに見える（誤検知の実例あり）
