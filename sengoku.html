@@ -494,8 +494,11 @@
     </div>
     <div class="castle-list-actions">
       <button id="forceListCancel" type="button">閉じる</button>
+      <button id="forceListCsvExport" type="button">CSV出力</button>
+      <button id="forceListCsvImport" type="button">CSV取込</button>
       <button id="forceListConfirm" class="primary" type="button">確定</button>
     </div>
+    <input id="forceListCsvFile" type="file" accept=".csv,text/csv" hidden>
   </div>
 </div>
 <div id="generalListPanel" class="general-list-panel" aria-label="武将一覧パネル">
@@ -1228,6 +1231,42 @@ function parseCastlePositionCsv(text){
       castleName:(cols[nameCol]||'').trim(), provinceName:(cols[provinceCol]||'').trim(),
       daimyo, scenarioDaimyos, level:(cols[levelCol]||'').trim(), x, y,
       castleClass:(cols[classCol]||'本城').trim(), castleType:(cols[typeCol]||'').trim()
+    });
+  }
+  return rows;
+}
+/* ---- 勢力・施設編集一覧のCSV入出力（城位置CSVと同型） ---- */
+const FORCE_LIST_CSV_FILE = 'force_list.csv';
+const FORCE_LIST_CSV_HEADER = ['ID','勢力・施設名称','支配大名','X','Y','近くの城'];
+function downloadForceListCsv(csv){
+  try {
+    const blob=new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'}); // BOM付でExcel等の文字化け防止
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=FORCE_LIST_CSV_FILE;
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ try{ URL.revokeObjectURL(url); a.remove(); }catch(_){} }, 0);
+    return true;
+  } catch (_) { return false; }
+}
+// CSV文字列 → [{id, name, daimyo, x, y, near}]
+function parseForceListCsv(text){
+  const rows=[];
+  if (!text) return rows;
+  const clean=String(text).replace(/^﻿/, '');
+  const lines=clean.split(/\r?\n/).filter(line=>line.trim());
+  if (!lines.length) return rows;
+  const header=csvParseLine(lines[0]).map(v=>v.trim());
+  const hasHeader=header[0]==='ID' || header[0]==='勢力・施設名称';
+  const col=(name, fallback)=>{ const i=header.indexOf(name); return i>=0 ? i : fallback; };
+  const idCol=col('ID',0), nameCol=col('勢力・施設名称',1), daimyoCol=col('支配大名',2);
+  const xCol=col('X',3), yCol=col('Y',4), nearCol=col('近くの城',5);
+  for (let i=hasHeader?1:0;i<lines.length;i++){
+    const cols=csvParseLine(lines[i]);
+    if (cols.length<4) continue;
+    rows.push({
+      id:(cols[idCol]||'').trim(), name:(cols[nameCol]||'').trim(), daimyo:(cols[daimyoCol]||'').trim(),
+      x:Number(cols[xCol]), y:Number(cols[yCol]), near:(cols[nearCol]||'').trim()
     });
   }
   return rows;
@@ -7271,6 +7310,8 @@ class MapScene extends GameKit.Scene {
     if (countEl) countEl.textContent='全'+entries.length+'件';
     document.getElementById('forceListConfirm').onclick=()=>this._confirmForceListPanel();
     document.getElementById('forceListCancel').onclick=()=>this._closeForceListPanel();
+    document.getElementById('forceListCsvExport').onclick=()=>this._exportForceListCsv();
+    document.getElementById('forceListCsvImport').onclick=()=>this._chooseForceListCsv(game);
     // 他の編集モードを終了してから一覧を開く
     this.religiousEdit=false; this.dragReligious=null; this.dragResource=null;
     this.castleEdit=false; this.castleMetaEdit=false; this._hideCastleAddPanel();
@@ -7317,6 +7358,97 @@ class MapScene extends GameKit.Scene {
     saveResourceMarkerPositions(); saveReligiousForcePositions(); saveMarkerMetaOverrides();
     this._closeForceListPanel(); this._save();
     this._flash('勢力・施設情報を更新しました（'+delCount+'件削除）');
+  }
+  // 勢力・施設編集一覧の内容をforce_list.csvに出力する
+  _buildForceListCsv(){
+    const st=this.state;
+    const daimyos=daimyoOf(st).filter(d=>st.daimyo[d.id]);
+    const daimyoNameForId=id=>(daimyos.find(d=>d.id===id)||{}).nameJP||'';
+    const entries=[];
+    RESOURCE_MARKERS.forEach(m=>{ if (!isMarkerDeleted(m.id)) entries.push({type:'res', m}); });
+    RELIGIOUS_FORCES.forEach(m=>{ if (!isMarkerDeleted(m.id)) entries.push({type:'rel', m}); });
+    const lines=[FORCE_LIST_CSV_HEADER.join(',')];
+    entries.forEach(({type,m})=>{
+      const pt=type==='rel'?religiousForcePoint(m):resourceMarkerPoint(m);
+      const px=Math.round(pt[0]), py=Math.round(pt[1]);
+      const nearId=this._nearestCastleId(pt[0],pt[1])||'';
+      const nearP=nearId?DATA.provById[nearId]:null;
+      const nearName=nearP?castleNameForProvince(nearP):'';
+      const row=[m.id, m.nameJP, daimyoNameForId(markerDaimyoOf(m.id)), px, py, nearName];
+      lines.push(row.map(csvEscapeField).join(','));
+    });
+    return lines.join('\r\n')+'\r\n';
+  }
+  _exportForceListCsv(){
+    const csv=this._buildForceListCsv();
+    const downloaded=downloadForceListCsv(csv);
+    const rows=csv.trim().split(/\r?\n/).length-1;
+    this._csvNotify('勢力・施設'+rows+'件を'+FORCE_LIST_CSV_FILE+'に出力しました'+(downloaded?'':'（ダウンロード不可）'), 'force-list-open');
+  }
+  // 「CSV取込」はブラウザのファイル選択を開く
+  _chooseForceListCsv(game){
+    const input=document.getElementById('forceListCsvFile');
+    if (!input){ this._csvNotify('CSVファイル選択を初期化できませんでした', 'force-list-open'); return; }
+    input.value='';
+    input.onchange=async()=>{
+      const file=input.files&&input.files[0];
+      if (!file) return;
+      try {
+        const text=await file.text();
+        this._importForceListCsv(text, game);
+      } catch (_) {
+        this._csvNotify('CSVファイルを読み込めませんでした', 'force-list-open');
+      }
+    };
+    input.click();
+  }
+  // CSVの内容を勢力・施設マーカーへ反映する。ID列で一致させ、無ければ名称一致にフォールバックする。
+  _importForceListCsv(text, game){
+    const rows=parseForceListCsv(text);
+    if (!rows.length){ this._csvNotify('読み込めるデータがありませんでした', 'force-list-open'); return; }
+    const st=this.state;
+    const daimyos=daimyoOf(st).filter(d=>st.daimyo[d.id]);
+    const castleList=DATA.provinces.filter(p=>!isCastleDeleted(p.id)).map(p=>({id:p.id, name:castleNameForProvince(p)}));
+    let applied=0; const unmatched=[];
+    rows.forEach(r=>{
+      let marker=null, type=null;
+      if (r.id){
+        marker=RELIGIOUS_FORCES.find(m=>m.id===r.id); if (marker) type='rel';
+        if (!marker){ marker=RESOURCE_MARKERS.find(m=>m.id===r.id); if (marker) type='res'; }
+      }
+      if (!marker && r.name){
+        marker=RELIGIOUS_FORCES.find(m=>m.nameJP===r.name||MARKER_ORIGINAL_NAMES[m.id]===r.name); if (marker) type='rel';
+        if (!marker){ marker=RESOURCE_MARKERS.find(m=>m.nameJP===r.name||MARKER_ORIGINAL_NAMES[m.id]===r.name); if (marker) type='res'; }
+      }
+      if (!marker || isMarkerDeleted(marker.id)){ unmatched.push(r.name||r.id); return; }
+      const id=marker.id;
+      applied++;
+      if (r.name) marker.nameJP=r.name;
+      const nameOverride=(r.name && r.name!==MARKER_ORIGINAL_NAMES[id]) ? r.name : null;
+      const dm=daimyos.find(d=>d.nameJP===r.daimyo);
+      setMarkerMetaOverride(id,{name:nameOverride, daimyo:(dm?dm.id:null), deleted:false});
+      let placed=false;
+      if (r.near){
+        const near=castleList.find(c=>c.name===r.near);
+        if (near){
+          const p=DATA.provById[near.id];
+          if (p){
+            const c=provinceScreenPoint(p), j=this._markerJitter(id);
+            if (type==='rel') setReligiousForcePosition(id, c[0]+j.dx, c[1]+j.dy);
+            else setResourceMarkerPosition(id, c[0]+j.dx, c[1]+j.dy);
+            placed=true;
+          }
+        }
+      }
+      if (!placed && Number.isFinite(r.x) && Number.isFinite(r.y)){
+        if (type==='rel') setReligiousForcePosition(id, r.x, r.y);
+        else setResourceMarkerPosition(id, r.x, r.y);
+      }
+    });
+    saveResourceMarkerPositions(); saveReligiousForcePositions(); saveMarkerMetaOverrides();
+    this._save();
+    this._csvNotify('CSV：'+applied+'件に反映しました'+(unmatched.length?'（未一致'+unmatched.length+'件）':''), 'force-list-open');
+    if (document.body.classList.contains('force-list-open')) this._openForceListPanel(game);
   }
   /* ---- 大名編集パネル ---- */
   _openDaimyoEditPanel(){
@@ -7569,8 +7701,8 @@ class MapScene extends GameKit.Scene {
     if (game && game.audio) game.audio.beep(880,0.08,'triangle');
     this._flash('\u5168'+Object.keys(records).length+'\u57ce\u306e\u5ea7\u6a19\u3092 siro_ichi.csv \u306b\u51fa\u529b\u3057\u307e\u3057\u305f'+(csv.downloaded?'':'\uff08\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u4e0d\u53ef\uff09'));
   }
-  _csvNotify(msg){
-    const panelOpen=document.body.classList.contains('castle-list-open');
+  _csvNotify(msg, panelClass){
+    const panelOpen=document.body.classList.contains(panelClass||'castle-list-open');
     if (panelOpen){
       let el=document.getElementById('castleListCsvMsg');
       if (!el){
