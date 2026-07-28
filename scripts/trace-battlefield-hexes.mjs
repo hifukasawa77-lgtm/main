@@ -16,6 +16,10 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// トレースの基準は「設計キャンバス」2560x2080。sengoku.html 側の HEX_DESIGN と必ず同じ値にすること。
+// 実キャンバスは 16:9(2560x1440) だが、sengoku.html はこの設計キャンバスを contain フィットして
+// ヘックスを配置するため、レイアウトの (col,row) は設計キャンバス基準のまま通用する。
+// （実キャンバスの値をここへ書くと、生成されるレイアウトがゲームの描画位置とずれる）
 const W = 2560, H = 2080;
 const HEX = { size: 68, cols: 17, rows: 15, ox: 300, oy: 250 };
 
