@@ -287,9 +287,9 @@ window.SANGUO_SCENARIOS = [
 
 | シナリオ | 都市数の内訳 | playable | victory.ratio |
 |---|---|---|---|
-| 184 黄巾の乱 | han 9 / turban 4 / dong 1 / wei 1 / shu 1 / wu 1 / yuan 3 | turban, wei, shu, wu, yuan, dong, han | 0.70 |
+| 184 黄巾の乱 | han 11 / turban 4 / dong 1 / wei 1 / shu 1 / wu 1 / yuan 1 | turban, wei, shu, wu, yuan, dong, han | 0.70 |
 | 190 反董卓 | dong 3 / yuan 2 / wei 2 / shu 1 / biao 4 / wu 4 / han 4 | dong, yuan, wei, shu, wu, biao, han | 0.60 |
-| 198 呂布討伐 | wei 3 / lubu 1 / yuan 3 / shu 1 / biao 4 / wu 4 / han 4 | wei, lubu, yuan, shu, biao, wu | 0.60 |
+| 198 呂布討伐 | wei 3 / lubu 1 / yuan 2 / shu 1 / biao 4 / wu 4 / han 5 | wei, lubu, yuan, shu, biao, wu | 0.60 |
 | 200 官渡 | wei 4 / yuan 3 / shu 1 / biao 3 / wu 4 / han 5 | wei, yuan, shu, biao, wu | 0.65 |
 | 207 三顧の礼 | wei 7 / biao 3 / shu 1 / wu 4 / han 5 | wei, biao, shu, wu | 0.70 |
 | 208 赤壁 | wei 10 / shu 1 / wu 4 / han 5 | wei, shu, wu | 0.80 |
