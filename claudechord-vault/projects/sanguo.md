@@ -1,7 +1,7 @@
 ---
 type: プロジェクト
 project: sanguo
-status: 作業中
+status: 承認済み
 phase: 要件定義
 target_file: sanguo.html
 owner: 深澤

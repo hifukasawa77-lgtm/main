@@ -1,11 +1,11 @@
 ---
 type: 基本設計書
 project: sanguo
-status: 作業中
+status: 承認済み
 agent: planner
 target_file: sanguo.html
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-07-29
 tags: [claudechord, 基本設計, sanguo]
 ---
 
