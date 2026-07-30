@@ -790,6 +790,62 @@ function saveCustomCastles(){
   try { localStorage.setItem(CUSTOM_CASTLE_STORE, JSON.stringify(CUSTOM_CASTLES)); }
   catch (_) {}
 }
+/* ---- 街道（プレイヤーが自由に結ぶ拠点間の道）と関所 ----
+ * 城の位置編集・勢力/施設の位置編集と同型に、state の外側・独立localStorageで永続化する。
+ * エンドポイントは {type:'castle'|'resource'|'religious', id} で拠点種別を横断的に参照する。 */
+const CUSTOM_ROAD_STORE = 'sengokuCustomRoads:v1';
+function endpointKey(ref){ return ref ? ref.type+':'+ref.id : ''; }
+function roadIdFor(a,b){ const ka=endpointKey(a), kb=endpointKey(b); return ka<kb ? ka+'>'+kb : kb+'>'+ka; }
+// 点(px,py)から線分(ax,ay)-(bx,by)への最短距離と、その最近接点の線分上の割合(0..1)を返す。
+function distToSegment(px,py,ax,ay,bx,by){
+  const dx=bx-ax, dy=by-ay, len2=dx*dx+dy*dy;
+  const t=len2>0 ? clamp01(((px-ax)*dx+(py-ay)*dy)/len2) : 0;
+  const cx=ax+dx*t, cy=ay+dy*t;
+  return {dist:Math.hypot(px-cx,py-cy), t};
+}
+function endpointPoint(ref){
+  if (!ref) return null;
+  if (ref.type==='castle'){ const p=DATA.provById[ref.id]; return (p && !isCastleDeleted(ref.id)) ? provinceScreenPoint(p) : null; }
+  if (ref.type==='resource'){ const m=RESOURCE_MARKERS.find(v=>v.id===ref.id); return (m && !isMarkerDeleted(ref.id)) ? resourceMarkerPoint(m) : null; }
+  if (ref.type==='religious'){ const m=RELIGIOUS_FORCES.find(v=>v.id===ref.id); return (m && !isMarkerDeleted(ref.id)) ? religiousForcePoint(m) : null; }
+  return null;
+}
+function loadCustomRoads(){
+  try { const v=JSON.parse(localStorage.getItem(CUSTOM_ROAD_STORE) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (_) { return []; }
+}
+const CUSTOM_ROADS = loadCustomRoads();
+function saveCustomRoads(){
+  try { localStorage.setItem(CUSTOM_ROAD_STORE, JSON.stringify(CUSTOM_ROADS)); }
+  catch (_) {}
+}
+const CUSTOM_CHECKPOINT_STORE = 'sengokuCustomCheckpoints:v1';
+const CHECKPOINT_SETUP_COST = 300;       // 設置コスト（一時金）
+const CHECKPOINT_TOLL_INCOME = 40;       // 毎ターン通行料収入（所有者）
+const CHECKPOINT_MAINTENANCE_COST = 15;  // 毎ターン維持費（所有者）
+const CHECKPOINT_DEFENSE_BONUS = 0.10;   // その関所の道がdstIdに接する侵攻ボーナスを減殺する量
+function loadCustomCheckpoints(){
+  try { const v=JSON.parse(localStorage.getItem(CUSTOM_CHECKPOINT_STORE) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (_) { return []; }
+}
+const CUSTOM_CHECKPOINTS = loadCustomCheckpoints();
+function saveCustomCheckpoints(){
+  try { localStorage.setItem(CUSTOM_CHECKPOINT_STORE, JSON.stringify(CUSTOM_CHECKPOINTS)); }
+  catch (_) {}
+}
+// dstId を城側エンドポイントに持つ道に関所が設置されていれば、そこを経由する侵攻の外交ボーナスを減殺する。
+// 防衛側にとっては国境の関所による防衛効果、攻撃側（＝関所の所有者自身）にとっては自軍の通行が鈍る欠点として、
+// diplomaticAttackBonus の唯一のフックで両方の効果を自然に表す。
+function checkpointRoadPenalty(dstId){
+  if (!CUSTOM_CHECKPOINTS.length || !CUSTOM_ROADS.length) return 0;
+  let penalty=0;
+  for (const cp of CUSTOM_CHECKPOINTS){
+    const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road) continue;
+    const touches=(road.a.type==='castle' && road.a.id===dstId) || (road.b.type==='castle' && road.b.id===dstId);
+    if (touches) penalty=Math.max(penalty, CHECKPOINT_DEFENSE_BONUS);
+  }
+  return penalty;
+}
 const CASTLE_META_STORE = 'sengokuCastleMetaOverrides:v1';
 function loadCastleMetaOverrides(){
   try { const v=JSON.parse(localStorage.getItem(CASTLE_META_STORE) || '{}'); return v && typeof v==='object' && !Array.isArray(v) ? v : {}; }
@@ -1678,6 +1734,47 @@ const GPT_ASSETS = {
   historicalEventsAtlas1: 'assets/sengoku/gpt/events/sengoku-historical-events-atlas-01-gpt-image-2.png',
   historicalEventsAtlas2: 'assets/sengoku/gpt/events/sengoku-historical-events-atlas-02-gpt-image-2.png',
   eventKawanakajimaDuel: 'assets/sengoku/gpt/events/sengoku-event-kawanakajima-duel-dragon-tiger-gpt-image-2.png',
+  eventNikaikuzure: 'assets/sengoku/gpt/historical-events/event-nikaikuzure.png',
+  eventToishiKuzure: 'assets/sengoku/gpt/historical-events/event-toishi-kuzure.png',
+  eventItsukushima: 'assets/sengoku/gpt/historical-events/event-itsukushima.png',
+  eventImperialCeremony: 'assets/sengoku/gpt/historical-events/event-imperial-ceremony.png',
+  eventInouePurge: 'assets/sengoku/gpt/historical-events/event-inoue-purge.png',
+  eventDaineiji: 'assets/sengoku/gpt/historical-events/event-daineiji.png',
+  eventNobuhideDeath: 'assets/sengoku/gpt/historical-events/event-nobuhide-death.png',
+  eventShotokuji: 'assets/sengoku/gpt/historical-events/event-shotokuji.png',
+  eventKawanakajimaFirst: 'assets/sengoku/gpt/historical-events/event-kawanakajima-first.png',
+  eventKosoSunAlliance: 'assets/sengoku/gpt/historical-events/event-koso-sun-alliance.png',
+  eventShinguIncident: 'assets/sengoku/gpt/historical-events/event-shingu-incident.png',
+  eventKinoshitaService: 'assets/sengoku/gpt/historical-events/event-kinoshita-service.png',
+  eventKiyosuCapture: 'assets/sengoku/gpt/historical-events/event-kiyosu-capture.png',
+  eventKawanakajimaSecond: 'assets/sengoku/gpt/historical-events/event-kawanakajima-second.png',
+  eventNagaragawa: 'assets/sengoku/gpt/historical-events/event-nagaragawa.png',
+  eventKawanakajimaThird: 'assets/sengoku/gpt/historical-events/event-kawanakajima-third.png',
+  eventMoriBoshu: 'assets/sengoku/gpt/historical-events/event-mori-boshu.png',
+  eventThreeArrows: 'assets/sengoku/gpt/historical-events/event-three-arrows.png',
+  eventNobukatsuPurge: 'assets/sengoku/gpt/historical-events/event-nobukatsu-purge.png',
+  eventShingenTonsure: 'assets/sengoku/gpt/historical-events/event-shingen-tonsure.png',
+  eventMatsudairaIndependence: 'assets/sengoku/gpt/historical-events/event-matsudaira-independence.png',
+  eventKantoKanrei: 'assets/sengoku/gpt/historical-events/event-kanto-kanrei.png',
+  eventKiyosuAlliance: 'assets/sengoku/gpt/historical-events/event-kiyosu-alliance.png',
+  eventOtomoSorin: 'assets/sengoku/gpt/historical-events/event-otomo-sorin.png',
+  eventUsamiMasakageDeath: 'assets/sengoku/gpt/historical-events/event-usami-masakage-death.png',
+  eventEirokuIncident: 'assets/sengoku/gpt/historical-events/event-eiroku-incident.png',
+  eventYoshinobuIncident: 'assets/sengoku/gpt/historical-events/event-yoshinobu-incident.png',
+  eventTokugawaRename: 'assets/sengoku/gpt/historical-events/event-tokugawa-rename.png',
+  eventGifuRename: 'assets/sengoku/gpt/historical-events/event-gifu-rename.png',
+  eventHonkokuji: 'assets/sengoku/gpt/historical-events/event-honkokuji.png',
+  eventKanegasaki: 'assets/sengoku/gpt/historical-events/event-kanegasaki.png',
+  eventHieizan: 'assets/sengoku/gpt/historical-events/event-hieizan.png',
+  eventMuromachiEnd: 'assets/sengoku/gpt/historical-events/event-muromachi-end.png',
+  eventKizugawaguchiFirst: 'assets/sengoku/gpt/historical-events/event-kizugawaguchi-first.png',
+  eventKenshinDeath: 'assets/sengoku/gpt/historical-events/event-kenshin-death.png',
+  eventOtateRebellion: 'assets/sengoku/gpt/historical-events/event-otate-rebellion.png',
+  eventTenshoIga: 'assets/sengoku/gpt/historical-events/event-tensho-iga.png',
+  eventOmauzoro: 'assets/sengoku/gpt/historical-events/event-omauzoro.png',
+  eventHonnoji: 'assets/sengoku/gpt/historical-events/event-honnoji.png',
+  eventChugokuReturn: 'assets/sengoku/gpt/historical-events/event-chugoku-return.png',
+  eventFirstKantoCampaign: 'assets/sengoku/gpt/historical-events/event-first-kanto-campaign.png',
   siegeHirajiro: 'assets/sengoku/gpt/castles/types/hirajiro.png',
   siegeYamajiro: 'assets/sengoku/gpt/castles/types/yamajiro.png',
   siegeHirayamajiro: 'assets/sengoku/gpt/castles/types/hirayamajiro.png',
@@ -2539,9 +2636,66 @@ const GAME_EVENT_DEFS = (()=>{
   ]; // end return
 })();
 
+const EXPANDED_GAME_EVENT_DEFS = [
+  ['nikaikuzure','二階崩れの変','Nikaikuzure Incident',1550,2,'otomo','豊後で大友義鑑が家中の対立に倒れ、家督をめぐる政変が起きた。'],
+  ['toishi-kuzure','砥石崩れ','Toishi-kuzure',1550,9,'takeda','砥石城攻略に失敗した武田軍は、信濃の山中で大きな損害を受けて退いた。'],
+  ['inoue-purge','井上党粛清','Purge of the Inoue Clan',1550,7,'mori','毛利元就は井上党を粛清し、家中の統制を強めた。'],
+  ['nagao-masakage-surrender','長尾政景降伏','Nagao Masakage Surrenders',1551,3,'uesugi','越後の長尾政景が降伏し、長尾景虎の国内統一が進んだ。'],
+  ['daineiji','大寧寺の変','Daineiji Incident',1551,9,'ouchi','陶隆房の挙兵で大内義隆が追い詰められ、大内家の政局は大きく転換した。'],
+  ['shokokuji','相国寺の戦い','Battle of Shokokuji',1551,8,'ashikaga','京都の相国寺周辺で細川・三好勢力の争いが激化した。'],
+  ['nobuhide-death','信秀の死（憤怒の焼香）','Death of Oda Nobuhide',1552,3,'oda','織田信秀の死により尾張の主導権をめぐる対立が表面化した。'],
+  ['hirate-suicide','平手政秀諫死','Hirate Masahide\'s Remonstrance',1552,1,'oda','平手政秀は信長を諫めるため自刃し、家中に強い衝撃を与えた。'],
+  ['shotokuji','正徳寺会見','Meeting at Shōtokuji',1552,4,'oda','織田信長と斎藤道三が正徳寺で会見し、両家の結び付きが確認された。'],
+  ['kawanakajima-1','第一次川中島の戦い','First Battle of Kawanakajima',1553,8,'uesugi','武田と長尾（上杉）が川中島で初めて本格的に対峙した。'],
+  ['koso-sun-alliance','甲相駿三国同盟','Kai-Sagami-Suruga Alliance',1554,3,'takeda','武田・北条・今川の婚姻同盟が成立し、東国の勢力均衡が変化した。'],
+  ['shingu-incident','新宮党事件','Shingū Party Incident',1554,8,'amago','尼子家で新宮党が粛清され、家中の有力な軍事基盤が失われた。'],
+  ['kinoshita-service','木下藤吉郎士官','Kinoshita Tōkichirō Enters Service',1554,10,'oda','木下藤吉郎が織田家に仕え、のちの羽柴秀吉の出世が始まった。'],
+  ['itsukushima','厳島の戦い','Battle of Itsukushima',1555,10,'mori','毛利元就は厳島で陶晴賢を破り、中国地方の主導権を握った。'],
+  ['kawanakajima-2','第二次川中島の戦い','Second Battle of Kawanakajima',1555,7,'uesugi','川中島での対陣は続き、信濃をめぐる争いは長期化した。'],
+  ['kiyosu-capture','尾張清洲城の奪取','Capture of Kiyosu Castle',1555,6,'oda','織田信長は清洲城を掌握し、尾張統一への足場を固めた。'],
+  ['nagaragawa','長良川の戦い','Battle of Nagaragawa',1556,4,'saito','斎藤道三と義龍が長良川で争い、道三は敗れて討たれた。'],
+  ['kawanakajima-3','第三次川中島の戦い','Third Battle of Kawanakajima',1557,8,'uesugi','武田と上杉の軍勢は三度目の川中島対陣に臨んだ。'],
+  ['mori-boshu','毛利家の防長制圧','Mōri Conquest of Suō and Nagato',1557,5,'mori','毛利家は防長を平定し、中国地方で大きく勢力を伸ばした。'],
+  ['three-arrows','三子教訓状の発給','Letter of Instruction to Three Sons',1557,11,'mori','毛利元就は三子に結束を説き、毛利家の将来を託した。'],
+  ['nobukatsu-purge','織田信勝の粛清','Purge of Oda Nobukatsu',1558,4,'oda','織田信長は弟・信勝を粛清し、尾張の主導権を確立した。'],
+  ['shingen-tonsure','武田晴信の剃髪','Takeda Harunobu Takes Tonsure',1558,6,'takeda','武田晴信は剃髪して信玄と号し、名実ともに戦国大名として歩みを進めた。'],
+  ['hojo-campaign-1','第一次関東侵攻（北条征伐）','First Kantō Campaign',1560,7,'uesugi','上杉勢の関東侵攻により、北条氏をめぐる関東の緊張が高まった。'],
+  ['kiyosu-alliance','清洲同盟','Kiyosu Alliance',1562,1,'oda','織田信長と松平元康が清洲同盟を結び、今川後の同盟関係を築いた。'],
+  ['otomo-sorin','大友宗麟への改名','Ōtomo Sōrin Takes His Name',1562,5,'otomo','大友義鎮は宗麟と号し、豊後の政権運営を新たな段階へ進めた。'],
+  ['konodai-2','第二次国府台の戦い','Second Battle of Kōnodai',1564,1,'hojo','北条軍は国府台で里見軍を破り、房総への影響力を拡大した。'],
+  ['usami-masakage-death','宇佐美定満・長尾政景変死','Deaths of Usami and Nagao Masakage',1564,8,'uesugi','宇佐美定満と長尾政景が野尻池で没し、越後の政局は揺れた。'],
+  ['tokugawa-rename','徳川への改名','Adoption of the Tokugawa Name',1566,12,'tokugawa','松平家康は徳川と改姓し、三河守に任じられて家格を高めた。'],
+  ['gifu-rename','岐阜城への改名','Renaming of Gifu Castle',1567,10,'oda','信長は稲葉山城と城下の名を岐阜と改め、天下取りの拠点とした。'],
+  ['honkokuji','本国寺の変','Honkokuji Incident',1569,1,'ashikaga','三好三人衆が足利義昭を襲撃したが、本国寺での防戦により退けられた。'],
+  ['muromachi-end','室町幕府が滅亡','Fall of the Muromachi Shogunate',1573,8,'oda','織田信長は足利義昭を京都から追放し、室町幕府は滅亡した。'],
+  ['kenshin-death','上杉謙信の急死','Death of Uesugi Kenshin',1578,3,'uesugi','上杉謙信が急死し、越後の後継問題が一気に深刻化した。'],
+  ['tensho-iga','天正伊賀の乱','Tenshō Iga War',1581,9,'oda','織田軍が伊賀へ侵攻し、伊賀の自治的な勢力は大きな打撃を受けた。'],
+  ['omauzoro','御馬揃え','Grand Horse Procession',1581,2,'oda','織田信長は京都で大規模な御馬揃えを行い、その威勢を天下に示した。'],
+  ['chugoku-return','中国大返し','Chūgoku Ōgaeshi',1582,6,'oda','本能寺の変を知った羽柴秀吉は、備中から畿内へ急ぎ引き返した。']
+].map(([id,nameJP,nameEN,year,month,clan,descriptionJP])=>({
+  id,nameJP,nameEN,year,month,
+  condition:st=>!!(st.daimyo&&st.daimyo[clan]&&st.daimyo[clan].alive),
+  lines:[{sp:'史官',spEN:'Chronicler',jp:descriptionJP,en:nameEN+' changes the balance of power.'}],
+  effectJP:descriptionJP,effectEN:nameEN+' changes the balance of power.'
+}));
+const ALL_GAME_EVENT_DEFS = GAME_EVENT_DEFS.concat(EXPANDED_GAME_EVENT_DEFS);
+const EVENT_ART_KEYS = {
+  nikaikuzure:'eventNikaikuzure','toishi-kuzure':'eventToishiKuzure','inoue-purge':'eventInouePurge','nagao-masakage-surrender':'eventToishiKuzure',
+  daineiji:'eventDaineiji',shokokuji:'eventNikaikuzure','nobuhide-death':'eventNobuhideDeath','hirate-suicide':'eventNikaikuzure',shotokuji:'eventShotokuji',
+  'kawanakajima-1':'eventKawanakajimaFirst','kawanakajima-2':'eventKawanakajimaSecond','kawanakajima-3':'eventKawanakajimaThird',itsukushima:'eventItsukushima',nagaragawa:'eventNagaragawa','konodai-2':'battleKonodai',
+  'koso-sun-alliance':'eventKosoSunAlliance','shingu-incident':'eventShinguIncident','kinoshita-service':'eventKinoshitaService','kiyosu-capture':'eventKiyosuCapture','mori-boshu':'eventMoriBoshu','three-arrows':'eventThreeArrows',
+  'nobukatsu-purge':'eventNobukatsuPurge','shingen-tonsure':'eventShingenTonsure','hojo-campaign-1':'eventFirstKantoCampaign','kiyosu-alliance':'eventKiyosuAlliance','otomo-sorin':'eventOtomoSorin',
+  'usami-masakage-death':'eventUsamiMasakageDeath','tokugawa-rename':'eventTokugawaRename','gifu-rename':'eventGifuRename',honkokuji:'eventHonkokuji','muromachi-end':'eventMuromachiEnd',
+  'kenshin-death':'eventKenshinDeath','tensho-iga':'eventTenshoIga',omauzoro:'eventOmauzoro','chugoku-return':'eventChugokuReturn',
+  okehazama:'battleOkehazama',kawanakajima:'eventKawanakajimaDuel','matsudaira-independence':'eventMatsudairaIndependence','hojo-campaign':'eventToishiKuzure','kanto-kanrei':'eventKantoKanrei',
+  'yoshinobu-disinheritance':'eventYoshinobuIncident','eiroku-incident':'eventEirokuIncident',sunomata:'eventToishiKuzure',anegawa:'battleAnegawa',kanegasaki:'eventKanegasaki',hieizan:'eventHieizan',
+  mikatagahara:'battleMikatagahara',nagashino:'battleNagashino','kizugawaguchi-1':'eventKizugawaguchiFirst',tedorigawa:'battleTedorigawa',mimigawa:'battleMimigawa','otate-rebellion':'eventOtateRebellion',
+  honnoji:'eventHonnoji',yamazaki:'battleYamazaki','kiyosu-conference':'eventNikaikuzure',shizugatake:'eventToishiKuzure'
+};
 /* 歴史的イベントのアートを描画（HISTORICAL_EVENTSと同じアトラス参照） */
 function drawGameEventArt(ctx, evtId, x, y, w, h){
-  const ev=HISTORICAL_EVENTS.find(e=>e.id===evtId);
+  const original=HISTORICAL_EVENTS.find(e=>e.id===evtId);
+  const ev=original ? {...original,assetKey:EVENT_ART_KEYS[evtId]||original.assetKey} : {id:evtId,assetKey:EVENT_ART_KEYS[evtId]||'eventNikaikuzure'};
   drawHistoricalEventArt(ctx, ev, x, y, w, h);
 }
 
@@ -5459,13 +5613,32 @@ function drawCastleIcon(ctx, x, y, size, color, shadow=null){
   ctx.strokeStyle='rgba(2,6,23,0.7)'; ctx.lineWidth=1; ctx.strokeRect(-size*0.34,-size*0.04,size*0.68,size*0.38);
   ctx.restore();
 }
+// 関所（プレイヤーが街道に設置する検問所）のベクターアイコン。門柱2本＋屋根付き横木。
+function drawCheckpointIcon(ctx, x, y, size, color){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=4; ctx.shadowOffsetY=2;
+  ctx.fillStyle='rgba(10,14,20,0.92)';
+  ctx.fillRect(-size*0.42,-size*0.50,size*0.16,size*0.90);
+  ctx.fillRect(size*0.26,-size*0.50,size*0.16,size*0.90);
+  ctx.fillStyle=color || '#f2b84b';
+  ctx.beginPath();
+  ctx.moveTo(-size*0.52,-size*0.30); ctx.lineTo(0,-size*0.62); ctx.lineTo(size*0.52,-size*0.30);
+  ctx.lineTo(size*0.52,-size*0.14); ctx.lineTo(0,-size*0.44); ctx.lineTo(-size*0.52,-size*0.14);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='rgba(2,6,23,0.75)'; ctx.lineWidth=Math.max(1,size*0.06);
+  ctx.beginPath(); ctx.moveTo(-size*0.42,size*0.06); ctx.lineTo(size*0.42,size*0.06); ctx.stroke();
+  ctx.restore();
+}
 // 城マーカーのスプライト（Cycle 8）: 家紋（299%以下）を clanId×色 でキー化して1枚に焼き込む。
 // 300%以上のアセット城グラフィックは家紋の2.5倍（世界32.5px）と大きく、この216px焼き込み
 // キャンバスに収まらないため drawCastleMarker 側で単一 drawImage の直接描画に切り替える
 // （高ズーム時はビューフラスタムカリングで可視城数が少なく、焼き込み不要でも軽量）。
 const MARKER_SPRITE = { cache:new Map() };
+// 地図アイコン（城グラフィック・勢力/施設マーカー）の縮小率。約15%縮小（深澤要望 2026-07-30）。
+const MAP_ICON_SCALE = 0.85;
 // 城グラフィック（300%以上表示）の世界サイズ。家紋基準13pxの2.5倍（深澤要望 2026-07-19）。
-const CASTLE_GRAPHIC_WORLD = 13 * 2.5;
+const CASTLE_GRAPHIC_WORLD = 13 * 2.5 * MAP_ICON_SCALE;
 function castleMarkerSprite(clanId, color){
   const key = clanId + '|' + color;
   const hit = MARKER_SPRITE.cache.get(key);
@@ -5896,7 +6069,7 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
   };
   // シナリオ開始年以前に発生した歴史イベントを既発火扱いにする
   const _startYear = scn.year;
-  GAME_EVENT_DEFS.forEach(def=>{ if(def.year!==undefined && def.year<_startYear) state.firedEvents[def.id]=true; });
+  ALL_GAME_EVENT_DEFS.forEach(def=>{ if(def.year!==undefined && def.year<_startYear) state.firedEvents[def.id]=true; });
   state.rngSeq = (state.rng >>> 0) || 1;
   // count provinces per daimyo for starting gold
   const owncnt = {};
@@ -6197,6 +6370,7 @@ function diplomaticAttackBonus(st,attackerId,dstId){
     if (supports && partner!==defender) bonus=Math.max(bonus,0.08);
   });
   if (defender && jointWarTargetsFor(st,attackerId).has(defender)) bonus=Math.max(bonus,0.12);
+  bonus -= checkpointRoadPenalty(dstId);
   return bonus;
 }
 function diplomacyAcceptance(st,proposer,target,base=0.35,fearWeight=0.001){
@@ -6996,6 +7170,7 @@ class MapScene extends GameKit.Scene {
     // 全体地図（ズームアウト時・中地図）に国名ラベルを重ねるか
     this.showProvinceNames=true;
     this.showClans=false; this.showTools=false; this.selClan=null; this.ploy=null; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.dragReligious=null; this.dragResource=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
+    this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null;
     this.diploTab='clan'; this.diploActionTab='basic'; this.diploWarTarget=null; this.armedSubTab='naval'; this.selForce=null; this.ninjaAction=null;
     this.diploClanPage=0; // 大名一覧は6件/ページで下スクロール（次の6大名）
     this.armedForcePage=0;
@@ -7131,6 +7306,8 @@ class MapScene extends GameKit.Scene {
     if (this.castleEdit){ this._updateCastleEditor(game, p, btns); return; }
     if (this.castleMetaEdit){ this._updateCastleMetaEditor(game, p, btns); return; }
     if (this.religiousEdit){ this._updateReligiousEditor(game, p, btns); return; }
+    if (this.roadEdit){ this._updateRoadEditor(game, p, btns); return; }
+    if (this.checkpointEdit){ this._updateCheckpointEditor(game, p, btns); return; }
 
     if (p.justPressed){
       // 画面固定ボタンは押下時に即実行する。従来は pointer release まで待っていたため、
@@ -7273,6 +7450,7 @@ class MapScene extends GameKit.Scene {
     document.getElementById('castleListAdd').onclick=()=>{ this._closeCastleListPanel(); this._startCastleAdd(this._listGame); };
     document.getElementById('castleListCsvImport').onclick=()=>this._chooseSiroIchiCsv(this._listGame);
     this.castleMetaEdit=false; this.castleEdit=false; this._hideCastleAddPanel();
+    this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null;
     document.body.classList.add('castle-list-open');
   }
   _closeCastleListPanel(){
@@ -7346,6 +7524,7 @@ class MapScene extends GameKit.Scene {
     // 他の編集モードを終了してから一覧を開く
     this.religiousEdit=false; this.dragReligious=null; this.dragResource=null;
     this.castleEdit=false; this.castleMetaEdit=false; this._hideCastleAddPanel();
+    this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null;
     document.body.classList.add('force-list-open');
   }
   _closeForceListPanel(){
@@ -7718,7 +7897,7 @@ class MapScene extends GameKit.Scene {
     this._flash(castleName+'を追加しました');
   }
   _startCastleEdit(game){
-    this.castleEdit=true; this.religiousEdit=false; this.dragReligious=null; this.showClans=false; this.mode='select'; this.selected=null; this.hover=null; this.dragCastle=null;
+    this.castleEdit=true; this.religiousEdit=false; this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null; this.dragReligious=null; this.showClans=false; this.mode='select'; this.selected=null; this.hover=null; this.dragCastle=null;
     // 編集中は最初に一度だけ全城をレイアウトし、ドラッグ対象だけを差分更新する。
     this._castleLayout=null;
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
@@ -7731,6 +7910,133 @@ class MapScene extends GameKit.Scene {
     this.cells=computeProvinceCells();
     if (game && game.audio) game.audio.beep(880,0.08,'triangle');
     this._flash('\u5168'+Object.keys(records).length+'\u57ce\u306e\u5ea7\u6a19\u3092 siro_ichi.csv \u306b\u51fa\u529b\u3057\u307e\u3057\u305f'+(csv.downloaded?'':'\uff08\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u4e0d\u53ef\uff09'));
+  }
+  /* ---- \u8857\u9053\u7de8\u96c6: \u62e0\u70b9\u3092\u30af\u30ea\u30c3\u30af\u2192\u30af\u30ea\u30c3\u30af\u3067\u8857\u9053\u3092\u8ffd\u52a0\u3001\u65e2\u5b58\u306e\u8857\u9053\u3092\u30af\u30ea\u30c3\u30af\u3067\u524a\u9664 ---- */
+  _startRoadEdit(game){
+    this.roadEdit=true; this.checkpointEdit=false; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false;
+    this.roadFrom=null; this.dragCastle=null; this.dragReligious=null; this.dragResource=null;
+    this.showClans=false; this.mode='select'; this.selected=null; this.hover=null;
+    this._closeCastleListPanel(); this._closeForceListPanel();
+    if (game && game.audio) game.audio.beep(720,0.06,'triangle');
+    this._flash('\u62e0\u70b9\u3092\u30af\u30ea\u30c3\u30af\u3057\u3066\u8857\u9053\u306e\u8d77\u70b9\u2192\u7d42\u70b9\u3092\u9078\u629e\uff08\u65e2\u5b58\u306e\u8857\u9053\u3092\u30af\u30ea\u30c3\u30af\u3067\u524a\u9664\uff09', 'Click two points to connect a road (click a road to remove it)');
+  }
+  _finishRoadEdit(game){
+    this.roadEdit=false; this.roadFrom=null;
+    if (game && game.audio) game.audio.beep(880,0.08,'triangle');
+    this._flash('\u8857\u9053\u7de8\u96c6\u3092\u7d42\u4e86\u3057\u307e\u3057\u305f', 'Finished editing roads');
+  }
+  // \u57ce/\u5bfa\u793e\u72ec\u7acb\u52e2\u529b/\u8cc7\u6e90\u30fb\u53f2\u8de1\u30de\u30fc\u30ab\u30fc\u306e\u9806\u306b\u65e2\u5b58\u306epick\u95a2\u6570\u3092\u8a66\u3057\u3001\u6700\u521d\u306b\u30d2\u30c3\u30c8\u3057\u305f\u62e0\u70b9\u3092\u8fd4\u3059\u3002
+  _pickAnyEndpoint(x,y){
+    const c=this._pickCastleMarker(x,y); if (c) return {type:'castle', id:c.id};
+    const r=this._pickReligiousForce(x,y); if (r) return {type:'religious', id:r.id};
+    const m=this._pickResourceMarker(x,y); if (m) return {type:'resource', id:m.id};
+    return null;
+  }
+  _pickRoad(x,y){
+    if (!CUSTOM_ROADS.length) return null;
+    let best=null, bestDist=Infinity;
+    for (const road of CUSTOM_ROADS){
+      const wa=endpointPoint(road.a), wb=endpointPoint(road.b); if (!wa || !wb) continue;
+      const sa=this._worldToScreen(wa[0],wa[1]), sb=this._worldToScreen(wb[0],wb[1]);
+      const r=distToSegment(x,y,sa.x,sa.y,sb.x,sb.y);
+      if (r.dist<bestDist){ bestDist=r.dist; best={road,t:r.t}; }
+    }
+    return bestDist<=14 ? best : null;
+  }
+  _addRoad(a,b){
+    const id=roadIdFor(a,b);
+    if (CUSTOM_ROADS.some(r=>r.id===id)) return; // \u65e2\u5b58\u306e\u533a\u9593\u306f\u91cd\u8907\u8ffd\u52a0\u3057\u306a\u3044
+    CUSTOM_ROADS.push({id, a, b});
+    saveCustomRoads();
+  }
+  _deleteRoad(id){
+    const idx=CUSTOM_ROADS.findIndex(r=>r.id===id); if (idx<0) return;
+    CUSTOM_ROADS.splice(idx,1);
+    // \u9053\u9023\u308c\u306b\u306a\u308b\u95a2\u6240\u3082\u524a\u9664\u3059\u308b\uff08\u95a2\u6240\u306f\u9053\u306e\u4e0a\u306b\u3057\u304b\u5b58\u5728\u3067\u304d\u306a\u3044\u305f\u3081\uff09
+    for (let i=CUSTOM_CHECKPOINTS.length-1;i>=0;i--){ if (CUSTOM_CHECKPOINTS[i].roadId===id) CUSTOM_CHECKPOINTS.splice(i,1); }
+    saveCustomRoads(); saveCustomCheckpoints();
+  }
+  _updateRoadEditor(game, p, btns){
+    if (!p.justPressed) return;
+    for (const b of btns){
+      if ((b.on!==false) && pointInRect(p,b)){ if (game && game.audio) game.audio.beep(600,0.05,'sine'); b.action(game); return; }
+    }
+    if (!this.roadFrom){
+      const hitRoad=this._pickRoad(p.x,p.y);
+      if (hitRoad){
+        this._deleteRoad(hitRoad.road.id);
+        if (game && game.audio) game.audio.beep(220,0.08,'sawtooth');
+        this._flash('\u8857\u9053\u3092\u524a\u9664\u3057\u307e\u3057\u305f', 'Road removed');
+        return;
+      }
+    }
+    const hit=this._pickAnyEndpoint(p.x,p.y);
+    if (!hit) return;
+    if (!this.roadFrom){
+      this.roadFrom=hit;
+      if (game && game.audio) game.audio.beep(660,0.05,'sine');
+      this._flash('\u7d42\u70b9\u3068\u306a\u308b\u62e0\u70b9\u3092\u30af\u30ea\u30c3\u30af', 'Click the destination point');
+    } else {
+      if (endpointKey(hit)!==endpointKey(this.roadFrom)){
+        this._addRoad(this.roadFrom, hit);
+        if (game && game.audio) game.audio.beep(880,0.08,'triangle');
+        this._flash('\u8857\u9053\u3092\u8ffd\u52a0\u3057\u307e\u3057\u305f', 'Road added');
+      }
+      this.roadFrom=null;
+    }
+  }
+  /* ---- \u95a2\u6240\u7de8\u96c6: \u8857\u9053\u3092\u30af\u30ea\u30c3\u30af\u3057\u3066\u8a2d\u7f6e\uff08\u8a2d\u7f6e\u30b3\u30b9\u30c8\u6d88\u8cbb\uff09\u3001\u65e2\u5b58\u306e\u95a2\u6240\u3092\u30af\u30ea\u30c3\u30af\u3067\u64a4\u53bb ---- */
+  _startCheckpointEdit(game){
+    this.checkpointEdit=true; this.roadEdit=false; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false;
+    this.roadFrom=null; this.dragCastle=null; this.dragReligious=null; this.dragResource=null;
+    this.showClans=false; this.mode='select'; this.selected=null; this.hover=null;
+    this._closeForceListPanel();
+    if (game && game.audio) game.audio.beep(720,0.06,'triangle');
+    this._flash('\u8857\u9053\u3092\u30af\u30ea\u30c3\u30af\u3057\u3066\u95a2\u6240\u3092\u8a2d\u7f6e\uff08\u8a2d\u7f6e\u8cbb'+CHECKPOINT_SETUP_COST+'\u8cab\uff09\uff0f\u65e2\u5b58\u306e\u95a2\u6240\u3092\u30af\u30ea\u30c3\u30af\u3067\u64a4\u53bb', 'Click a road to build a checkpoint, or click one to remove it');
+  }
+  _finishCheckpointEdit(game){
+    this.checkpointEdit=false;
+    if (game && game.audio) game.audio.beep(880,0.08,'triangle');
+    this._flash('\u95a2\u6240\u914d\u7f6e\u3092\u7d42\u4e86\u3057\u307e\u3057\u305f', 'Finished placing checkpoints');
+  }
+  _pickCheckpoint(x,y){
+    if (!CUSTOM_CHECKPOINTS.length) return null;
+    let best=null, bestDist=Infinity;
+    for (const cp of CUSTOM_CHECKPOINTS){
+      const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road) continue;
+      const wa=endpointPoint(road.a), wb=endpointPoint(road.b); if (!wa || !wb) continue;
+      const wx=wa[0]+(wb[0]-wa[0])*cp.frac, wy=wa[1]+(wb[1]-wa[1])*cp.frac;
+      const s=this._worldToScreen(wx,wy);
+      const d=Math.hypot(x-s.x,y-s.y);
+      if (d<bestDist){ bestDist=d; best=cp; }
+    }
+    return bestDist<=20 ? best : null;
+  }
+  _placeCheckpoint(road, frac){
+    if (CUSTOM_CHECKPOINTS.some(cp=>cp.roadId===road.id)) { this._flash('\u3053\u306e\u8857\u9053\u306b\u306f\u3059\u3067\u306b\u95a2\u6240\u304c\u3042\u308a\u307e\u3059', 'This road already has a checkpoint'); return; }
+    const treas=this.state.daimyo[this.state.playerDaimyo];
+    if (!treas || (treas.gold||0)<CHECKPOINT_SETUP_COST){ this._flash('\u8cc7\u91d1\u304c\u8db3\u308a\u307e\u305b\u3093\uff08\u8a2d\u7f6e\u8cbb'+CHECKPOINT_SETUP_COST+'\u8cab\uff09', 'Not enough gold'); return; }
+    treas.gold-=CHECKPOINT_SETUP_COST;
+    CUSTOM_CHECKPOINTS.push({id:'cp_'+road.id+'_'+Date.now().toString(36), roadId:road.id, ownerId:this.state.playerDaimyo, frac});
+    saveCustomCheckpoints();
+    this._flash('\u95a2\u6240\u3092\u8a2d\u7f6e\u3057\u307e\u3057\u305f\uff08\u6bce\u30bf\u30fc\u30f3\u901a\u884c\u6599+'+CHECKPOINT_TOLL_INCOME+'\uff0f\u7dad\u6301\u8cbb-'+CHECKPOINT_MAINTENANCE_COST+'\uff09', 'Checkpoint built');
+  }
+  _removeCheckpoint(id){
+    const idx=CUSTOM_CHECKPOINTS.findIndex(cp=>cp.id===id); if (idx<0) return;
+    CUSTOM_CHECKPOINTS.splice(idx,1);
+    saveCustomCheckpoints();
+    this._flash('\u95a2\u6240\u3092\u64a4\u53bb\u3057\u307e\u3057\u305f', 'Checkpoint removed');
+  }
+  _updateCheckpointEditor(game, p, btns){
+    if (!p.justPressed) return;
+    for (const b of btns){
+      if ((b.on!==false) && pointInRect(p,b)){ if (game && game.audio) game.audio.beep(600,0.05,'sine'); b.action(game); return; }
+    }
+    const hitCp=this._pickCheckpoint(p.x,p.y);
+    if (hitCp){ this._removeCheckpoint(hitCp.id); if (game && game.audio) game.audio.beep(220,0.08,'sawtooth'); return; }
+    const hitRoad=this._pickRoad(p.x,p.y);
+    if (hitRoad){ this._placeCheckpoint(hitRoad.road, hitRoad.t); if (game && game.audio) game.audio.beep(880,0.08,'triangle'); return; }
+    this._flash('\u8857\u9053\u306e\u4e0a\u3092\u30af\u30ea\u30c3\u30af\u3057\u3066\u304f\u3060\u3055\u3044\uff08\u5148\u306b\u8857\u9053\u7de8\u96c6\u3067\u9053\u3092\u4f5c\u6210\uff09', 'Click on a road (create one with Road Edit first)');
   }
   _csvNotify(msg, panelClass){
     const panelOpen=document.body.classList.contains(panelClass||'castle-list-open');
@@ -7857,7 +8163,7 @@ class MapScene extends GameKit.Scene {
     if (document.body.classList.contains('castle-list-open')) this._openCastleListPanel(game);
   }
   _startReligiousEdit(game){
-    this.religiousEdit=true; this.castleEdit=false; this.castleMetaEdit=false; this.dragCastle=null; this.dragReligious=null;
+    this.religiousEdit=true; this.castleEdit=false; this.castleMetaEdit=false; this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null; this.dragCastle=null; this.dragReligious=null;
     this.showClans=false; this.mode='select'; this.selected=null; this.hover=null;
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
     this.dragResource=null;
@@ -8881,6 +9187,11 @@ class MapScene extends GameKit.Scene {
       });
       // 通商条約は双方へ街道・港の交易収入をもたらす。
       inc += activeDiplomacyPartners(st,d.id,'tradeUntil').length*60;
+      // 関所の通行料収入・維持費（設置は常にプレイヤーのみ）
+      if (CUSTOM_CHECKPOINTS.length){
+        const cpCount=CUSTOM_CHECKPOINTS.filter(cp=>cp.ownerId===d.id).length;
+        if (cpCount) inc += cpCount*(CHECKPOINT_TOLL_INCOME-CHECKPOINT_MAINTENANCE_COST);
+      }
       // 難易度によるAI収入補正（プレイヤーは等倍）
       if (d.id!==st.playerDaimyo && diff.aiIncome!==1) inc=Math.round(inc*diff.aiIncome);
       treas.gold += inc;
@@ -9170,7 +9481,7 @@ class MapScene extends GameKit.Scene {
   _checkHistoricalEvents(st){
     if (!st.firedEvents) st.firedEvents={};
     const fired=[];
-    for (const def of GAME_EVENT_DEFS){
+    for (const def of ALL_GAME_EVENT_DEFS){
       if (st.firedEvents[def.id]) continue;
       // 発火条件: 年・月チェック
       if (def.year!==undefined){
@@ -9750,13 +10061,15 @@ class MapScene extends GameKit.Scene {
     if (!this.showClans && (!IS_TOUCH || this.showTools)){
     const zW=IS_TOUCH?140:84, zH=IS_TOUCH?140:72, zSz=IS_TOUCH?52:36;
     const dW=IS_TOUCH?280:212, dH=IS_TOUCH?140:86, dSz1=IS_TOUCH?34:28, dSz2=IS_TOUCH?32:26;
-    const colX0=34, colX1=IS_TOUCH?298:260, colX2=IS_TOUCH?562:484;
+    const colX0=34, colX1=IS_TOUCH?298:260, colX2=IS_TOUCH?562:484, colX3=colX2*2-colX1;
     const rowZoom=IS_TOUCH?H-610:H-426;
     const rowDev0=IS_TOUCH?H-452:H-326;
     const rowDev1=IS_TOUCH?H-296:H-218, rowDev2=IS_TOUCH?H-140:H-118;
     bs.push({x:colX0, y:rowZoom, w:zW, h:zH, skin:'topBar', label:'＋', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }, noScale:true});
     bs.push({x:colX0+zW+(IS_TOUCH?18:48), y:rowZoom, w:zW, h:zH, skin:'topBar', label:'－', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }, noScale:true});
     bs.push({x:colX0, y:rowDev0, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'大名編集', sz:dSz2, action:g=>this._openDaimyoEditPanel(g), noScale:true});
+    bs.push({x:colX2, y:rowDev0, w:dW, h:dH, skin:'topBar', label:this.roadEdit?'完了':'街道編集', sz:dSz2, action:g=>{ this.roadEdit?this._finishRoadEdit(g):this._startRoadEdit(g); }, noScale:true});
+    bs.push({x:colX3, y:rowDev0, w:dW, h:dH, skin:'topBar', label:this.checkpointEdit?'完了':'関所配置', sz:dSz2, action:g=>{ this.checkpointEdit?this._finishCheckpointEdit(g):this._startCheckpointEdit(g); }, noScale:true});
     bs.push({x:colX0, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'城編集一覧', sz:dSz2, action:g=>this._openCastleListPanel(g), noScale:true});
     bs.push({x:colX2, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'勢力・施設編集一覧', sz:dSz2, action:g=>this._openForceListPanel(g), noScale:true});
     bs.push({x:colX0, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:dSz2, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }, noScale:true});
@@ -10193,6 +10506,8 @@ class MapScene extends GameKit.Scene {
     ctx.beginPath(); ctx.rect(MAP.clip.x, MAP.clip.y, MAP.clip.w, MAP.clip.h); ctx.clip();
     this._drawTerrainScreenCached(ctx);
     this._drawRoads(ctx);   // 地形の上・城レイヤーの下に街道（城同士をつなぐ道）を描く
+    this._drawCustomRoads(ctx);
+    this._drawCheckpoints(ctx);
     ctx.save();
     this._camApply(ctx);
     this._drawCastleLayer(ctx);
@@ -10339,6 +10654,44 @@ class MapScene extends GameKit.Scene {
     }
     ctx.restore();
   }
+  // プレイヤーが自由に結んだ街道（CUSTOM_ROADS）。史実5街道（蛇行・琥珀色）と区別できるよう、
+  // 直線・明るめの実線で描く。取り消し（削除）はこの道を _pickRoad で拾うことで行う。
+  _drawCustomRoads(ctx){
+    if (!CUSTOM_ROADS.length) return;
+    const clip=MAP.clip, z=this.cam.zoom;
+    const path=new Path2D(); let any=false;
+    for (const road of CUSTOM_ROADS){
+      const wa=endpointPoint(road.a), wb=endpointPoint(road.b);
+      if (!wa || !wb) continue;
+      const sa=this._worldToScreen(wa[0],wa[1]), sb=this._worldToScreen(wb[0],wb[1]);
+      if (Math.max(sa.x,sb.x)<clip.x || Math.min(sa.x,sb.x)>clip.x+clip.w ||
+          Math.max(sa.y,sb.y)<clip.y || Math.min(sa.y,sb.y)>clip.y+clip.h) continue;
+      path.moveTo(sa.x,sa.y); path.lineTo(sb.x,sb.y); any=true;
+    }
+    if (!any) return;
+    const base=clamp(z*0.42, 1.4, 6);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(clip.x,clip.y,clip.w,clip.h); ctx.clip();
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.strokeStyle='rgba(30,58,95,0.55)'; ctx.lineWidth=base+1.6; ctx.stroke(path);
+    ctx.strokeStyle='rgba(147,197,253,0.75)'; ctx.lineWidth=base*0.75; ctx.stroke(path);
+    ctx.restore();
+  }
+  // 街道に設置された関所（CUSTOM_CHECKPOINTS）。位置は道の frac（a→b上の割合）から都度算出するため、
+  // 端点（城・寺社/資源マーカー）が編集で動いても自動的に追従する。
+  _drawCheckpoints(ctx){
+    if (!CUSTOM_CHECKPOINTS.length || !CUSTOM_ROADS.length) return;
+    const clip=MAP.clip;
+    const size=Math.max(9, 15*MAP_ICON_SCALE*Math.min(2, this.cam.zoom/2));
+    for (const cp of CUSTOM_CHECKPOINTS){
+      const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road) continue;
+      const wa=endpointPoint(road.a), wb=endpointPoint(road.b); if (!wa || !wb) continue;
+      const wx=wa[0]+(wb[0]-wa[0])*cp.frac, wy=wa[1]+(wb[1]-wa[1])*cp.frac;
+      const s=this._worldToScreen(wx,wy);
+      if (!pointInRect(s, clip)) continue;
+      drawCheckpointIcon(ctx, s.x, s.y, size);
+    }
+  }
   _drawCastleLayer(ctx){
     // 城レイヤーのラベル配置はワールド座標系（カメラ変換はctx側）で計算されるため、
     // ズーム/パンでは変化しない。所有・選択・ホバー・ターンが変わらない限り毎フレーム同一。
@@ -10391,7 +10744,7 @@ class MapScene extends GameKit.Scene {
       const labelH = Math.max(18, Array.from(marker.nameJP).length*gap+6);
       const s=lscale*MK;
       if (s!==1){ ctx.save(); ctx.translate(cx,cy); ctx.scale(s,s); ctx.translate(-cx,-cy); }
-      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5, showIcon: this.cam.zoom > MAP_SITE_GRAPHIC_ZOOM_THRESHOLD});
+      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5*MAP_ICON_SCALE, showIcon: this.cam.zoom > MAP_SITE_GRAPHIC_ZOOM_THRESHOLD});
       if (s!==1) ctx.restore();
     }
     for (const force of RELIGIOUS_FORCES){
@@ -10409,7 +10762,7 @@ class MapScene extends GameKit.Scene {
       // アセット遅延読込中だけは従来の家紋へフォールバックして、マーカーを消さない。
       if (this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD){
         const assetKey=religiousForceAssetKey(force);
-        if (!drawMapSiteImage(ctx, assetKey, cx, cy+4, 22, 1.6)){
+        if (!drawMapSiteImage(ctx, assetKey, cx, cy+4, 22*MAP_ICON_SCALE, 1.6)){
           drawKamonMap(ctx, crestId, cx-size/2, cy-size/2+4, size, force.color);
         }
       }
@@ -10468,7 +10821,7 @@ class MapScene extends GameKit.Scene {
       const gap=7;
       const labelH=Math.max(18, Array.from(name).length*gap+5);
       const labelW=labelSize+7;
-      const crestSize=15;
+      const crestSize=15*MAP_ICON_SCALE;
       const icx=cx-5, icy=cy+9;              // 城アイコンの中心（等倍。描画は cx-5,cy+9 を使う）
       const crestX=icx-crestSize/2, crestY=icy-crestSize/2;   // アイコン中心に重ねる（等倍）
       occupied.push(inflate({x:crestX, y:crestY, w:crestSize, h:crestSize}, cx, cy));  // 家紋の占有（MK倍で予約）
