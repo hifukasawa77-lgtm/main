@@ -6243,6 +6243,75 @@ const HISTORICAL_SCENARIO_SETUP = {
     diplomacy:[['oda','tokugawa',90,true],['oda','mori',-25],['oda','hojo',-35],['oda','uesugi',-45],['tokugawa','hojo',45],['mori','ukita',20]]
   }
 };
+// 城主が1つの城（多くは居城）に偏り、他の自城が空になる問題を解消する。
+// 石高が高い城ほど多くの武将（城主+与力）を抱えられるよう目標人数を重み付けし、
+// 目標を超える城から動かせる武将（当主本人は除く）を供出して、空き城・不足城へ配り直す。
+// 史実の在番城（GENERAL_HOME_CASTLE等）で既に個別配置された武将は末尾ではなく先頭付近に残るため、
+// 供出は主に「基本配属＝居城への一括配属」で増えた武将から優先的に行われる。
+function balanceCastleGarrisons(state, scn){
+  const byDaimyo = {};
+  for (const pid in state.provinces){
+    const prov = state.provinces[pid];
+    if (!prov.owner) continue;
+    (byDaimyo[prov.owner] = byDaimyo[prov.owner] || []).push(pid);
+  }
+  for (const did in byDaimyo){
+    const provIds = byDaimyo[did];
+    if (provIds.length <= 1) continue;
+    const d = scn.daimyo.find(x=>x.id===did);
+    const lordId = d && d.lord;
+    const total = provIds.reduce((s,pid)=>s+state.provinces[pid].generals.length, 0);
+    if (total === 0) continue;
+    const weights = {}; let totalWeight = 0;
+    provIds.forEach(pid=>{ const w = Math.max(1, Math.sqrt(DATA.provById[pid]?.kokudaka || 10)); weights[pid]=w; totalWeight+=w; });
+    const targets = {};
+    provIds.forEach(pid=>{ targets[pid] = Math.max(1, Math.round(total * weights[pid]/totalWeight)); });
+    // 目標を超える城から、当主本人以外の武将を供出する（配列末尾＝基本配属で増えた武将から優先）
+    const donors = [];
+    provIds.forEach(pid=>{
+      const prov = state.provinces[pid];
+      let excess = prov.generals.length - targets[pid];
+      if (excess <= 0) return;
+      const movable = prov.generals.filter(gid=>gid!==lordId);
+      while (excess > 0 && movable.length){
+        const gid = movable.pop();
+        const idx = prov.generals.indexOf(gid);
+        if (idx>=0) prov.generals.splice(idx,1);
+        donors.push(gid);
+        excess--;
+      }
+    });
+    if (!donors.length) continue;
+    // 空き城を最優先、次に目標未達の度合い、同程度なら石高が高い城の順に受け入れる
+    const receivers = provIds.slice().sort((a,b)=>{
+      const na=state.provinces[a].generals.length, nb=state.provinces[b].generals.length;
+      const emptyA=na===0?0:1, emptyB=nb===0?0:1;
+      if (emptyA!==emptyB) return emptyA-emptyB;
+      const needB=targets[b]-nb, needA=targets[a]-na;
+      if (needB!==needA) return needB-needA;
+      return (DATA.provById[b]?.kokudaka||0)-(DATA.provById[a]?.kokudaka||0);
+    });
+    let ri=0;
+    donors.forEach(gid=>{
+      let placed=false;
+      for (let tries=0; tries<receivers.length; tries++){
+        const pid = receivers[(ri+tries)%receivers.length];
+        const prov = state.provinces[pid];
+        if (prov.generals.length===0 || prov.generals.length<targets[pid]){
+          prov.generals.push(gid);
+          state.generals[gid].location=pid; state.generals[gid].daimyo=did;
+          placed=true; ri=(ri+tries+1)%receivers.length;
+          break;
+        }
+      }
+      if (!placed){
+        const pid = receivers[0];
+        state.provinces[pid].generals.push(gid);
+        state.generals[gid].location=pid; state.generals[gid].daimyo=did;
+      }
+    });
+  }
+}
 function buildGameState(scenarioId, playerDaimyo, difficulty){
   const scn = DATA.scenarios.find(s=>s.id===scenarioId);
   const historicalSetup = HISTORICAL_SCENARIO_SETUP[scenarioId] || {};
@@ -6327,6 +6396,8 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
       }
     });
   }
+  // 城主不在の空き城・武将の偏りを解消（当主本人は動かさない）
+  balanceCastleGarrisons(state, scn);
   // 年代別の初期外交。外交相手が当該シナリオに不在なら安全に無視する。
   for (const [a,b,relation,ally=false,truceTurns=0] of (historicalSetup.diplomacy||[])){
     if (!state.daimyo[a] || !state.daimyo[b]) continue;
@@ -13361,8 +13432,25 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
     // 占領
     dst.owner = winner;
     dst.soldiers = res.atkSurvivors;
-    // 攻撃側武将を移動
-    atkGens.forEach(g=>{ if (st.generals[g].alive){ st.generals[g].location=ctx.dstId; st.generals[g].daimyo=winner; dst.generals.push(g); } });
+    // 攻撃側武将：1名は新城主として現地に残り、残りは帰城する（自分の城から動かない方針の例外＝落城時のみ）
+    {
+      const aliveAtk = atkGens.filter(g=>st.generals[g].alive);
+      const nonLordAlive = aliveAtk.filter(g=>!isLord(g));
+      const castellanPool = nonLordAlive.length ? nonLordAlive : aliveAtk;
+      const newCastellan = castellanPool.length ? castellanPool.reduce((weakest,g)=>{
+        const gs=DATA.genById[g].stats, ws=DATA.genById[weakest].stats;
+        return (gs.tou+gs.bu+gs.chi) < (ws.tou+ws.bu+ws.chi) ? g : weakest;
+      }) : null;
+      aliveAtk.forEach(g=>{
+        st.generals[g].daimyo=winner;
+        if (g===newCastellan){
+          st.generals[g].location=ctx.dstId; dst.generals.push(g);
+          retHonors(st.generals[g]).castleLord=ctx.dstId;
+        } else {
+          st.generals[g].location=ctx.srcId; if (src) src.generals.push(g);
+        }
+      });
+    }
     // 攻撃側のわずかな討死
     const atkLossFrac = 1 - res.atkSurvivors/Math.max(1,ctx.attacker.soldiers);
     rollGeneralDeaths(st, atkGens, atkLossFrac*0.5, isLord, R).forEach(g=>generalsLost.push(g));
