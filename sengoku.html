@@ -8502,6 +8502,15 @@ class MapScene extends GameKit.Scene {
   }
   _clickProvince(game, pid){
     const st=this.state; const prov=st.provinces[pid];
+    if (this.mode==='marchOrigin'){
+      if (pid===this.selected){ this.mode='select'; this.selected=null; this._flash('出陣を取り消しました', 'March cancelled'); return; }
+      if (prov.owner!==st.playerDaimyo){ this._flash('自分の城を選択してください', 'Select one of your own castles'); return; }
+      if (prov.hasActed || prov.soldiers<=100){ this._flash('この城は出陣できません（兵100以下または行動済み）', 'This castle cannot march'); return; }
+      this.selected=pid; this.mode='marchTarget';
+      this._flash((DATA.provById[pid]?.nameJP||pid)+'を出陣元にしました。出陣先の城を選択してください', 'Now select the destination castle');
+      if (game && game.audio) game.audio.beep(720,0.06,'triangle');
+      return;
+    }
     if (this.mode==='marchTarget'){
       if (pid===this.selected){ this.mode='select'; this.selected=null; this._flash('出陣先の選択を取り消しました', 'March destination selection cancelled'); return; }
       if (prov.owner===st.playerDaimyo){
@@ -8532,15 +8541,13 @@ class MapScene extends GameKit.Scene {
     }
   }
 
-  /* ---- 出陣計画：左メニューから出陣元を定め、地図で目的地を選ぶ ---- */
+  /* ---- 出陣計画：左メニューから開始し、地図上で「出陣元→出陣先」の順に城を選ぶ2ステップ方式 ---- */
   _beginMarchFromMenu(game){
     const st=this.state, mine=ownedProvinces(st,st.playerDaimyo)
       .filter(pid=>!st.provinces[pid].hasActed && st.provinces[pid].soldiers>100);
     if (!mine.length){ this._flash('出陣できる城がありません（兵100以上・未行動の城が必要です）', 'No castle can march this turn'); return; }
-    const srcId=(this.selected && mine.includes(this.selected)) ? this.selected : mine[0];
-    this.selected=srcId; this.mode='marchTarget'; this.overlay=null; this.showClans=false;
-    const srcName=DATA.provById[srcId]?.nameJP||srcId;
-    this._flash(srcName+' を出陣元にしました。地図から出陣先の城を選択してください', 'Choose the destination castle on the map');
+    this.selected=null; this.mode='marchOrigin'; this.overlay=null; this.showClans=false;
+    this._flash('出陣元の城を選択してください', 'Select the castle to march from');
     if (game?.audio) game.audio.beep(720,0.07,'triangle');
   }
   _marchRoute(srcId, dstId){
@@ -11136,7 +11143,8 @@ class MapScene extends GameKit.Scene {
     const countryName=p.nameEN ? p.nameJP+' / '+p.nameEN : p.nameJP;
     // スマホでは情報パネルを一回り大きく表示
     const big=IS_TOUCH;
-    const w=big?904:660, h=big?416:292, x=W-w-28, y=H-h-34;
+    const extraH=big?96:70; // 城主・在城武将の2行分
+    const w=big?904:660, h=(big?416:292)+extraH, x=W-w-28, y=H-h-34;
     ctx.save();
     ctx.beginPath(); ctx.roundRect(x,y,w,h,8);
     ctx.fillStyle='rgba(10,12,16,0.78)'; ctx.fill();
@@ -11161,6 +11169,16 @@ class MapScene extends GameKit.Scene {
       T(ctx, r[0], rx, ry, {size:big?30:21, color:'#b7a06a'});
       T(ctx, r[1], rx+valOff, ry, {size:big?(i===0?33:35):(i===0?23:25), weight:'bold', color:r[2]||'#e2e8f0'});
     });
+    // 城主任命(joshu)された武将・在城中の武将一覧。クリックで確認できるようにする（深澤要望2026-07-30）。
+    const gens=(prov.generals||[]).filter(g=>st.generals[g] && st.generals[g].alive);
+    const castellanId=castellanOf(st,pid);
+    const castellanName=castellanId ? (DATA.genById[castellanId]?.nameJP||castellanId) : '未任命';
+    const gensLine=gens.length ? gens.map(g=>DATA.genById[g]?.nameJP||g).join('・') : 'なし';
+    const extraY0=y+rowY0+3*rowGap+(big?10:8);
+    T(ctx, '城主', x+rowX, extraY0, {size:big?30:21, color:'#b7a06a'});
+    T(ctx, castellanName, x+rowX+valOff, extraY0, {size:big?26:19, weight:'bold', color:castellanId?'#fbbf24':'#94a3b8'});
+    T(ctx, '在城武将', x+rowX, extraY0+(big?46:34), {size:big?30:21, color:'#b7a06a'});
+    this._drawMapWrappedText(ctx, gensLine, x+rowX+valOff, extraY0+(big?46:34), w-rowX-valOff-(big?24:18), big?32:24, {size:big?24:17, color:'#e2e8f0'});
   }
   _diploLayout(){
     // スマホでは他のコマンド画面（_overlayScale で1.5倍表示）と体感サイズを揃えるため、
@@ -13300,6 +13318,15 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
   }
 }
 
+// 城主任命(joshu)で任じられた武将のうち、現在もその城に在番している者を返す（いなければnull）。
+function castellanOf(st, pid){
+  const prov=st.provinces[pid]; if (!prov) return null;
+  const gid=(prov.generals||[]).find(g=>{
+    const gs=st.generals[g];
+    return gs && gs.alive && gs.honors && gs.honors.castleLord===pid;
+  });
+  return gid||null;
+}
 /* ============================ 論功行賞・家臣団 ============================
  * 戦功に報い(知行/感状/家宝/官位/賞金/縁組/偏諱/城主/名誉職)、あるいは罰する(追放/切腹)。
  * すべて忠誠を主軸に、資源(金/娘/prestige/court_rel)を消費して家臣を掌握する。 */
