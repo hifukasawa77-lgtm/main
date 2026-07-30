@@ -955,11 +955,17 @@ function applyCastleMetaToData(id){
   if (meta.daimyoId && DATA.scenarios){ DATA.scenarios.forEach(scn=>{ scn.own=scn.own||{}; scn.own[id]=meta.daimyoId; }); }
 }
 function applyCastleMetaOverridesToData(){ Object.keys(CASTLE_META_OVERRIDES).forEach(applyCastleMetaToData); }
-function applyCastleMetaOverridesToState(state){
+// opts.applyOwner=false で所属大名(daimyoId)の上書きだけを抑止できる。城種別・攻城レイアウトは
+// 城そのものの構造的属性（誰の所有かに関わらない）なので、地図を開くたびに再適用して問題ない。
+// 所属大名だけは「シナリオ初期値／編集ツールでの明示変更」を表すため、新規ゲーム開始時や
+// 編集確定の直後にだけ適用し、既存セーブの地図再表示のたびには適用しない
+// （深澤報告2026-07-30: 佐倉城と同型のバグ。攻略した城の所有権が地図を開くたびに巻き戻っていた）。
+function applyCastleMetaOverridesToState(state, opts={}){
   if (!state || !state.provinces) return;
+  const applyOwner = opts.applyOwner!==false;
   Object.entries(CASTLE_META_OVERRIDES).forEach(([id, meta])=>{
     if (meta.deleted){ removeCastleFromState(state, id); return; }
-    if (meta.daimyoId && state.provinces[id]) state.provinces[id].owner=meta.daimyoId;
+    if (applyOwner && meta.daimyoId && state.provinces[id]) state.provinces[id].owner=meta.daimyoId;
     if (state.provinces[id]){
       if (CASTLE_TYPES_ALL.includes(meta.castleType)) state.provinces[id].castleType=meta.castleType;
       if (Array.isArray(meta.castleLayout)) state.provinces[id].castleLayout=meta.castleLayout;
@@ -1592,8 +1598,11 @@ function ensureCustomCastlesInState(state){
   if (!state || !state.provinces) return;
   CUSTOM_CASTLES.forEach(c=>{
     if (!DATA.provById[c.id]) addCustomCastleToData(c);
+    // 既にstateへ存在する城（＝一度でも登場済みの城）は、シナリオの初期領有者(c.daimyoId)で
+    // 上書きしない。ここで毎回上書きすると、この城をプレイヤーが攻略しても地図再表示のたびに
+    // 元の大名の所有へ巻き戻ってしまう（深澤報告2026-07-30: 佐倉城を攻略しても千葉家のまま）。
+    // 初回のみ、まだ存在しない城のstateエントリを初期領有者で新規作成する。
     if (!state.provinces[c.id]) state.provinces[c.id]={owner:c.daimyoId, soldiers:800, development:35, castleLevel:1, castleType:'hirajiro', castleLayout:[], generals:[], hasActed:false, minchu:60};
-    else state.provinces[c.id].owner=c.daimyoId;
   });
 }
 function setCanvasViewportMode(mode){
@@ -7257,7 +7266,7 @@ class MapScene extends GameKit.Scene {
     setCanvasViewportMode('fit');
     BGM.setMood('map'); BGM.start();
     ensureCustomCastlesInState(this.state);
-    applyCastleMetaOverridesToState(this.state);
+    applyCastleMetaOverridesToState(this.state, {applyOwner:false});
     // 城の追加/削除を state へ反映した「後」に、DATA と state の欠損を最終的に揃える。
     normalizeGameState(this.state);
     resetLegacyCastleLayouts(this.state);
