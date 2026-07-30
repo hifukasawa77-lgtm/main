@@ -477,6 +477,7 @@
     <div class="castle-list-header">
       <div class="castle-list-title">勢力・施設編集一覧</div>
       <div id="forceListCount" class="castle-list-count"></div>
+      <div class="castle-list-count">CSV取込は X,Y を優先します（「近くの城」は X,Y が空欄の行にのみ反映）</div>
     </div>
     <div class="castle-list-scroll">
       <table>
@@ -1430,9 +1431,12 @@ function parseForceListCsv(text){
   for (let i=hasHeader?1:0;i<lines.length;i++){
     const cols=csvParseLine(lines[i]);
     if (cols.length<4) continue;
+    // 空欄は Number('')===0 で「座標0」と誤読されるため NaN にして「未指定」と区別する。
+    // （取込は X,Y を優先するので、この判定を誤ると全マーカーが左上へ吸い寄せられる）
+    const num=v=>{ const s=String(v==null?'':v).trim(); return s===''?NaN:Number(s); };
     rows.push({
       id:(cols[idCol]||'').trim(), name:(cols[nameCol]||'').trim(), daimyo:(cols[daimyoCol]||'').trim(),
-      x:Number(cols[xCol]), y:Number(cols[yCol]), near:(cols[nearCol]||'').trim()
+      x:num(cols[xCol]), y:num(cols[yCol]), near:(cols[nearCol]||'').trim()
     });
   }
   return rows;
@@ -7868,8 +7872,17 @@ class MapScene extends GameKit.Scene {
       const nameOverride=(r.name && r.name!==MARKER_ORIGINAL_NAMES[id]) ? r.name : null;
       const dm=daimyos.find(d=>d.nameJP===r.daimyo);
       setMarkerMetaOverride(id,{name:nameOverride, daimyo:(dm?dm.id:null), deleted:false});
+      // 配置は X,Y を最優先する。「近くの城」列はCSV出力時に座標から自動計算される派生列で、
+      // 城側の位置が少しでも違うと別の城名になるため、これを優先すると出力→取込で座標が
+      // 城の近く＋ジッタへ寄ってしまい往復で一致しなかった。
+      // 「近くの城」は X,Y が空欄（＝座標を指定しない）の行のフォールバックとして使う。
       let placed=false;
-      if (r.near){
+      if (Number.isFinite(r.x) && Number.isFinite(r.y)){
+        if (type==='rel') setReligiousForcePosition(id, r.x, r.y);
+        else setResourceMarkerPosition(id, r.x, r.y);
+        placed=true;
+      }
+      if (!placed && r.near){
         const near=castleList.find(c=>c.name===r.near);
         if (near){
           const p=DATA.provById[near.id];
@@ -7877,13 +7890,8 @@ class MapScene extends GameKit.Scene {
             const c=provinceScreenPoint(p), j=this._markerJitter(id);
             if (type==='rel') setReligiousForcePosition(id, c[0]+j.dx, c[1]+j.dy);
             else setResourceMarkerPosition(id, c[0]+j.dx, c[1]+j.dy);
-            placed=true;
           }
         }
-      }
-      if (!placed && Number.isFinite(r.x) && Number.isFinite(r.y)){
-        if (type==='rel') setReligiousForcePosition(id, r.x, r.y);
-        else setResourceMarkerPosition(id, r.x, r.y);
       }
     });
     saveResourceMarkerPositions(); saveReligiousForcePositions(); saveMarkerMetaOverrides();
