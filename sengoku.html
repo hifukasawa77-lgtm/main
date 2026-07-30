@@ -803,6 +803,42 @@ function distToSegment(px,py,ax,ay,bx,by){
   const cx=ax+dx*t, cy=ay+dy*t;
   return {dist:Math.hypot(px-cx,py-cy), t};
 }
+// 折れ線(pts, [[x,y],...])の各区間長を返す。ヘルパー2つ（pickOnPolyline/pointAtFrac）で共有する。
+function polylineSegLens(pts){
+  let total=0; const segLens=[];
+  for (let i=0;i<pts.length-1;i++){ const d=Math.hypot(pts[i+1][0]-pts[i][0], pts[i+1][1]-pts[i][1]); segLens.push(d); total+=d; }
+  return {segLens, total};
+}
+// 点(x,y)に最も近い折れ線上の位置を探し、{dist, frac}（frac=弧長ベースの折れ線全体に対する割合0..1）を返す。
+function pickOnPolyline(pts, x, y){
+  if (pts.length<2) return {dist:Infinity, frac:0};
+  const {segLens, total}=polylineSegLens(pts);
+  let bestDist=Infinity, bestFrac=0, acc=0;
+  for (let i=0;i<pts.length-1;i++){
+    const a=pts[i], b=pts[i+1];
+    const r=distToSegment(x,y,a[0],a[1],b[0],b[1]);
+    if (r.dist<bestDist){ bestDist=r.dist; bestFrac= total>0 ? (acc+segLens[i]*r.t)/total : 0; }
+    acc+=segLens[i];
+  }
+  return {dist:bestDist, frac:bestFrac};
+}
+// 折れ線(pts)上の弧長割合(frac 0..1)に対応する座標を返す。pointsは2次元配列[[x,y],...]。
+function pointAtFrac(pts, frac){
+  if (!pts.length) return null;
+  if (pts.length===1) return pts[0];
+  const {segLens, total}=polylineSegLens(pts);
+  if (total<=0) return pts[0];
+  const target=clamp01(frac)*total; let acc=0;
+  for (let i=0;i<pts.length-1;i++){
+    if (acc+segLens[i]>=target || i===pts.length-2){
+      const t=segLens[i]>0 ? (target-acc)/segLens[i] : 0;
+      const a=pts[i], b=pts[i+1];
+      return [a[0]+(b[0]-a[0])*clamp01(t), a[1]+(b[1]-a[1])*clamp01(t)];
+    }
+    acc+=segLens[i];
+  }
+  return pts[pts.length-1];
+}
 function endpointPoint(ref){
   if (!ref) return null;
   if (ref.type==='castle'){ const p=DATA.provById[ref.id]; return (p && !isCastleDeleted(ref.id)) ? provinceScreenPoint(p) : null; }
@@ -1522,6 +1558,35 @@ function applyCustomCastlesToData(){
     if (!(cur && CASTLE_TYPES_ALL.includes(cur.castleType))) CASTLE_META_OVERRIDES[id]=Object.assign({}, cur||{}, {castleType:ct});
   });
   applyCastleMetaOverridesToData(); saveCastlePositionOverrides();
+}
+function castleMxMy(id){
+  const o=CASTLE_POS_OVERRIDES[id]||CASTLE_MAP_POINTS[id];
+  return (o && Number.isFinite(o.mx) && Number.isFinite(o.my)) ? [o.mx, o.my] : null;
+}
+// カスタム城（城追加ツール／siro_ichi.csv取込）は追加時に neighborId 1件（最寄りの母国）しか
+// neighbors へ登録されないため、隣接グラフ上は「その1本の道」でしか出入りできない孤立ノードになる。
+// 進軍経路探索(_marchRoute)はこの neighbors を辿るBFSのため、近くに別の城があっても行軍できない
+// （深澤報告 2026-07-30: 至近の敵城へ出陣しようとしても「行軍路がありません」と出る）。
+// 実際の地図上の近さ（mx,my正規化座標）に基づき、隣接が薄いノードへ最寄り数件を双方向に補完する。
+const ADJACENCY_REPAIR_MIN_NEIGHBORS=2, ADJACENCY_REPAIR_MAX_DIST=0.10, ADJACENCY_REPAIR_K=5;
+function repairSparseCastleAdjacency(){
+  DATA.provinces.forEach(p=>{
+    if (isCastleDeleted(p.id) || (p.neighbors||[]).length>=ADJACENCY_REPAIR_MIN_NEIGHBORS) return;
+    const pos=castleMxMy(p.id); if (!pos) return;
+    const candidates=[];
+    DATA.provinces.forEach(q=>{
+      if (q.id===p.id || isCastleDeleted(q.id)) return;
+      const qpos=castleMxMy(q.id); if (!qpos) return;
+      const d=Math.hypot(pos[0]-qpos[0], pos[1]-qpos[1]);
+      if (d<=ADJACENCY_REPAIR_MAX_DIST) candidates.push({id:q.id, d});
+    });
+    candidates.sort((a,b)=>a.d-b.d);
+    candidates.slice(0,ADJACENCY_REPAIR_K).forEach(({id})=>{
+      if (!(p.neighbors||[]).includes(id)) (p.neighbors=p.neighbors||[]).push(id);
+      const q=DATA.provById[id];
+      if (q && !(q.neighbors||[]).includes(p.id)) (q.neighbors=q.neighbors||[]).push(p.id);
+    });
+  });
 }
 function ensureCustomCastlesInState(state){
   if (!state || !state.provinces) return;
@@ -6698,6 +6763,9 @@ class BootScene extends GameKit.Scene {
       applyGeneralMetaToData();
       return loadCastlePositionsFromCsv().catch(()=>0);
     }).then(()=>{
+      // 城追加ツール／CSV取込で加わった城は neighborId 1件だけでは行軍経路探索上の孤立ノードになるため、
+      // 全カスタム城の統合が終わったこの時点で地図上の近さに基づき隣接を補完する。
+      repairSparseCastleAdjacency();
       buildPortraitSlots();
       this.targetProgress=1; this.done=true;
       // 残りのアセット（顔画像・城・城郭タイル等）は背景で優先度順に読み込む。
@@ -7197,7 +7265,7 @@ class MapScene extends GameKit.Scene {
     // 全体地図（ズームアウト時・中地図）に国名ラベルを重ねるか
     this.showProvinceNames=true;
     this.showClans=false; this.showTools=false; this.selClan=null; this.ploy=null; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false; this.castleAddOpen=false; this.dragCastle=null; this.dragReligious=null; this.dragResource=null; this.editCastleId=null; this.pinching=false; this.press=null; this.dragLast=null; this.lastMapCoord=null; this._suppressTapUntil=0;
-    this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null;
+    this.roadEdit=false; this.checkpointEdit=false; this.roadDraw=null;
     this.diploTab='clan'; this.diploActionTab='basic'; this.diploWarTarget=null; this.armedSubTab='naval'; this.selForce=null; this.ninjaAction=null;
     this.diploClanPage=0; // 大名一覧は6件/ページで下スクロール（次の6大名）
     this.armedForcePage=0;
@@ -7477,7 +7545,7 @@ class MapScene extends GameKit.Scene {
     document.getElementById('castleListAdd').onclick=()=>{ this._closeCastleListPanel(); this._startCastleAdd(this._listGame); };
     document.getElementById('castleListCsvImport').onclick=()=>this._chooseSiroIchiCsv(this._listGame);
     this.castleMetaEdit=false; this.castleEdit=false; this._hideCastleAddPanel();
-    this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null;
+    this.roadEdit=false; this.checkpointEdit=false; this.roadDraw=null;
     document.body.classList.add('castle-list-open');
   }
   _closeCastleListPanel(){
@@ -7551,7 +7619,7 @@ class MapScene extends GameKit.Scene {
     // 他の編集モードを終了してから一覧を開く
     this.religiousEdit=false; this.dragReligious=null; this.dragResource=null;
     this.castleEdit=false; this.castleMetaEdit=false; this._hideCastleAddPanel();
-    this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null;
+    this.roadEdit=false; this.checkpointEdit=false; this.roadDraw=null;
     document.body.classList.add('force-list-open');
   }
   _closeForceListPanel(){
@@ -7924,7 +7992,7 @@ class MapScene extends GameKit.Scene {
     this._flash(castleName+'を追加しました');
   }
   _startCastleEdit(game){
-    this.castleEdit=true; this.religiousEdit=false; this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null; this.dragReligious=null; this.showClans=false; this.mode='select'; this.selected=null; this.hover=null; this.dragCastle=null;
+    this.castleEdit=true; this.religiousEdit=false; this.roadEdit=false; this.checkpointEdit=false; this.roadDraw=null; this.dragReligious=null; this.showClans=false; this.mode='select'; this.selected=null; this.hover=null; this.dragCastle=null;
     // 編集中は最初に一度だけ全城をレイアウトし、ドラッグ対象だけを差分更新する。
     this._castleLayout=null;
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
@@ -7941,14 +8009,14 @@ class MapScene extends GameKit.Scene {
   /* ---- \u8857\u9053\u7de8\u96c6: \u62e0\u70b9\u3092\u30af\u30ea\u30c3\u30af\u2192\u30af\u30ea\u30c3\u30af\u3067\u8857\u9053\u3092\u8ffd\u52a0\u3001\u65e2\u5b58\u306e\u8857\u9053\u3092\u30af\u30ea\u30c3\u30af\u3067\u524a\u9664 ---- */
   _startRoadEdit(game){
     this.roadEdit=true; this.checkpointEdit=false; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false;
-    this.roadFrom=null; this.dragCastle=null; this.dragReligious=null; this.dragResource=null;
+    this.roadDraw=null; this.dragCastle=null; this.dragReligious=null; this.dragResource=null;
     this.showClans=false; this.mode='select'; this.selected=null; this.hover=null;
     this._closeCastleListPanel(); this._closeForceListPanel();
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
     this._flash('\u62e0\u70b9\u3092\u30af\u30ea\u30c3\u30af\u3057\u3066\u8857\u9053\u306e\u8d77\u70b9\u2192\u7d42\u70b9\u3092\u9078\u629e\uff08\u65e2\u5b58\u306e\u8857\u9053\u3092\u30af\u30ea\u30c3\u30af\u3067\u524a\u9664\uff09', 'Click two points to connect a road (click a road to remove it)');
   }
   _finishRoadEdit(game){
-    this.roadEdit=false; this.roadFrom=null;
+    this.roadEdit=false; this.roadDraw=null;
     if (game && game.audio) game.audio.beep(880,0.08,'triangle');
     this._flash('\u8857\u9053\u7de8\u96c6\u3092\u7d42\u4e86\u3057\u307e\u3057\u305f', 'Finished editing roads');
   }
@@ -7959,21 +8027,24 @@ class MapScene extends GameKit.Scene {
     const m=this._pickResourceMarker(x,y); if (m) return {type:'resource', id:m.id};
     return null;
   }
+  // \u9053\u306e\u6298\u308c\u7dda\u3092\u30b9\u30af\u30ea\u30fc\u30f3\u5ea7\u6a19\u3078\u5909\u63db\u3057\u3066\u8fd4\u3059\uff08\u63cf\u753b\u30fb\u5f53\u305f\u308a\u5224\u5b9a\u3067\u5171\u7528\uff09\u3002
+  _roadScreenPath(road){
+    return (road.path||[]).map(w=>{ const s=this._worldToScreen(w[0],w[1]); return [s.x,s.y]; });
+  }
   _pickRoad(x,y){
     if (!CUSTOM_ROADS.length) return null;
     let best=null, bestDist=Infinity;
     for (const road of CUSTOM_ROADS){
-      const wa=endpointPoint(road.a), wb=endpointPoint(road.b); if (!wa || !wb) continue;
-      const sa=this._worldToScreen(wa[0],wa[1]), sb=this._worldToScreen(wb[0],wb[1]);
-      const r=distToSegment(x,y,sa.x,sa.y,sb.x,sb.y);
-      if (r.dist<bestDist){ bestDist=r.dist; best={road,t:r.t}; }
+      const sp=this._roadScreenPath(road); if (sp.length<2) continue;
+      const r=pickOnPolyline(sp,x,y);
+      if (r.dist<bestDist){ bestDist=r.dist; best={road,t:r.frac}; }
     }
     return bestDist<=14 ? best : null;
   }
-  _addRoad(a,b){
+  _addRoad(a,b,path){
     const id=roadIdFor(a,b);
     if (CUSTOM_ROADS.some(r=>r.id===id)) return; // \u65e2\u5b58\u306e\u533a\u9593\u306f\u91cd\u8907\u8ffd\u52a0\u3057\u306a\u3044
-    CUSTOM_ROADS.push({id, a, b});
+    CUSTOM_ROADS.push({id, a, b, path});
     saveCustomRoads();
   }
   _deleteRoad(id){
@@ -7983,39 +8054,59 @@ class MapScene extends GameKit.Scene {
     for (let i=CUSTOM_CHECKPOINTS.length-1;i>=0;i--){ if (CUSTOM_CHECKPOINTS[i].roadId===id) CUSTOM_CHECKPOINTS.splice(i,1); }
     saveCustomRoads(); saveCustomCheckpoints();
   }
+  // \u8857\u9053\u7de8\u96c6\u306f\u300c\u62e0\u70b9\u4e0a\u3067press\u2192\u30c9\u30e9\u30c3\u30b0\u3067\u81ea\u7531\u306b\u7dda\u3092\u5f15\u304f\u2192\u5225\u306e\u62e0\u70b9\u4e0a\u3067drop\u300d\u306e1\u30b9\u30c8\u30ed\u30fc\u30af\u3067\u5b8c\u7d50\u3059\u308b\u3002
+  // \u30c9\u30e9\u30c3\u30b0\u4e2d\u3067\u306a\u3044\u72b6\u614b\u3067\u9053\u3092\u30af\u30ea\u30c3\u30af\u3057\u305f\u5834\u5408\u306f\u524a\u9664\u3068\u3057\u3066\u6271\u3046\u3002
   _updateRoadEditor(game, p, btns){
-    if (!p.justPressed) return;
-    for (const b of btns){
-      if ((b.on!==false) && pointInRect(p,b)){ if (game && game.audio) game.audio.beep(600,0.05,'sine'); b.action(game); return; }
-    }
-    if (!this.roadFrom){
+    if (p.justPressed){
+      for (const b of btns){
+        if ((b.on!==false) && pointInRect(p,b)){ if (game && game.audio) game.audio.beep(600,0.05,'sine'); b.action(game); return; }
+      }
+      const hit=this._pickAnyEndpoint(p.x,p.y);
+      if (hit){
+        const startPt=endpointPoint(hit);
+        this.roadDraw={from:hit, path: startPt?[startPt]:[], lastScreen:{x:p.x,y:p.y}};
+        if (game && game.audio) game.audio.beep(660,0.05,'sine');
+        return;
+      }
       const hitRoad=this._pickRoad(p.x,p.y);
       if (hitRoad){
         this._deleteRoad(hitRoad.road.id);
         if (game && game.audio) game.audio.beep(220,0.08,'sawtooth');
         this._flash('\u8857\u9053\u3092\u524a\u9664\u3057\u307e\u3057\u305f', 'Road removed');
-        return;
       }
+      return;
     }
-    const hit=this._pickAnyEndpoint(p.x,p.y);
-    if (!hit) return;
-    if (!this.roadFrom){
-      this.roadFrom=hit;
-      if (game && game.audio) game.audio.beep(660,0.05,'sine');
-      this._flash('\u7d42\u70b9\u3068\u306a\u308b\u62e0\u70b9\u3092\u30af\u30ea\u30c3\u30af', 'Click the destination point');
-    } else {
-      if (endpointKey(hit)!==endpointKey(this.roadFrom)){
-        this._addRoad(this.roadFrom, hit);
-        if (game && game.audio) game.audio.beep(880,0.08,'triangle');
-        this._flash('\u8857\u9053\u3092\u8ffd\u52a0\u3057\u307e\u3057\u305f', 'Road added');
+    if (this.roadDraw && p.isDown){
+      const d=this.roadDraw, last=d.lastScreen;
+      // \u30de\u30a6\u30b9\u79fb\u52d5\u91cf\u304c\u5c0f\u3055\u3044\u3046\u3061\u306f\u70b9\u3092\u8ffd\u52a0\u3057\u306a\u3044\uff08\u914d\u5217\u304c\u80a5\u5927\u5316\u3057\u306a\u3044\u3088\u3046\u753b\u97628px\u3054\u3068\u306b\u9593\u5f15\u304f\uff09
+      if (!last || Math.hypot(p.x-last.x, p.y-last.y)>=8){
+        const w=this._screenToWorld(p.x,p.y);
+        d.path.push([w.x,w.y]);
+        d.lastScreen={x:p.x,y:p.y};
       }
-      this.roadFrom=null;
+      return;
+    }
+    if (this.roadDraw && !p.isDown){
+      const d=this.roadDraw; this.roadDraw=null;
+      const hit=this._pickAnyEndpoint(p.x,p.y);
+      if (hit && endpointKey(hit)!==endpointKey(d.from)){
+        const endPt=endpointPoint(hit);
+        if (endPt) d.path.push(endPt);
+        if (d.path.length>=2){
+          this._addRoad(d.from, hit, d.path);
+          if (game && game.audio) game.audio.beep(880,0.08,'triangle');
+          this._flash('\u8857\u9053\u3092\u8ffd\u52a0\u3057\u307e\u3057\u305f', 'Road added');
+        }
+      } else {
+        if (game && game.audio) game.audio.beep(220,0.06,'sine');
+        this._flash('\u62e0\u70b9\u306e\u4e0a\u3067\u30c9\u30ed\u30c3\u30d7\u3057\u3066\u304f\u3060\u3055\u3044', 'Drop on a point to connect it');
+      }
     }
   }
   /* ---- \u95a2\u6240\u7de8\u96c6: \u8857\u9053\u3092\u30af\u30ea\u30c3\u30af\u3057\u3066\u8a2d\u7f6e\uff08\u8a2d\u7f6e\u30b3\u30b9\u30c8\u6d88\u8cbb\uff09\u3001\u65e2\u5b58\u306e\u95a2\u6240\u3092\u30af\u30ea\u30c3\u30af\u3067\u64a4\u53bb ---- */
   _startCheckpointEdit(game){
     this.checkpointEdit=true; this.roadEdit=false; this.castleEdit=false; this.castleMetaEdit=false; this.religiousEdit=false;
-    this.roadFrom=null; this.dragCastle=null; this.dragReligious=null; this.dragResource=null;
+    this.roadDraw=null; this.dragCastle=null; this.dragReligious=null; this.dragResource=null;
     this.showClans=false; this.mode='select'; this.selected=null; this.hover=null;
     this._closeForceListPanel();
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
@@ -8030,10 +8121,9 @@ class MapScene extends GameKit.Scene {
     if (!CUSTOM_CHECKPOINTS.length) return null;
     let best=null, bestDist=Infinity;
     for (const cp of CUSTOM_CHECKPOINTS){
-      const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road) continue;
-      const wa=endpointPoint(road.a), wb=endpointPoint(road.b); if (!wa || !wb) continue;
-      const wx=wa[0]+(wb[0]-wa[0])*cp.frac, wy=wa[1]+(wb[1]-wa[1])*cp.frac;
-      const s=this._worldToScreen(wx,wy);
+      const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road || !road.path || road.path.length<2) continue;
+      const w=pointAtFrac(road.path, cp.frac); if (!w) continue;
+      const s=this._worldToScreen(w[0],w[1]);
       const d=Math.hypot(x-s.x,y-s.y);
       if (d<bestDist){ bestDist=d; best=cp; }
     }
@@ -8190,7 +8280,7 @@ class MapScene extends GameKit.Scene {
     if (document.body.classList.contains('castle-list-open')) this._openCastleListPanel(game);
   }
   _startReligiousEdit(game){
-    this.religiousEdit=true; this.castleEdit=false; this.castleMetaEdit=false; this.roadEdit=false; this.checkpointEdit=false; this.roadFrom=null; this.dragCastle=null; this.dragReligious=null;
+    this.religiousEdit=true; this.castleEdit=false; this.castleMetaEdit=false; this.roadEdit=false; this.checkpointEdit=false; this.roadDraw=null; this.dragCastle=null; this.dragReligious=null;
     this.showClans=false; this.mode='select'; this.selected=null; this.hover=null;
     if (game && game.audio) game.audio.beep(720,0.06,'triangle');
     this.dragResource=null;
@@ -10683,17 +10773,18 @@ class MapScene extends GameKit.Scene {
   }
   // プレイヤーが自由に結んだ街道（CUSTOM_ROADS）。史実5街道（蛇行・琥珀色）と区別できるよう、
   // 直線・明るめの実線で描く。取り消し（削除）はこの道を _pickRoad で拾うことで行う。
+  // 街道はプレイヤーがドラッグで描いた折れ線をそのまま描画する（拠点の位置合わせは開始/終了点のみ）。
   _drawCustomRoads(ctx){
     if (!CUSTOM_ROADS.length) return;
     const clip=MAP.clip, z=this.cam.zoom;
     const path=new Path2D(); let any=false;
     for (const road of CUSTOM_ROADS){
-      const wa=endpointPoint(road.a), wb=endpointPoint(road.b);
-      if (!wa || !wb) continue;
-      const sa=this._worldToScreen(wa[0],wa[1]), sb=this._worldToScreen(wb[0],wb[1]);
-      if (Math.max(sa.x,sb.x)<clip.x || Math.min(sa.x,sb.x)>clip.x+clip.w ||
-          Math.max(sa.y,sb.y)<clip.y || Math.min(sa.y,sb.y)>clip.y+clip.h) continue;
-      path.moveTo(sa.x,sa.y); path.lineTo(sb.x,sb.y); any=true;
+      if (!road.path || road.path.length<2) continue;
+      const sp=this._roadScreenPath(road);
+      let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+      for (const p of sp){ if(p[0]<minx)minx=p[0]; if(p[0]>maxx)maxx=p[0]; if(p[1]<miny)miny=p[1]; if(p[1]>maxy)maxy=p[1]; }
+      if (maxx<clip.x||minx>clip.x+clip.w||maxy<clip.y||miny>clip.y+clip.h) continue; // 画面外はカリング
+      this._catmullPath(path, sp); any=true;
     }
     if (!any) return;
     const base=clamp(z*0.42, 1.4, 6);
@@ -10704,17 +10795,15 @@ class MapScene extends GameKit.Scene {
     ctx.strokeStyle='rgba(147,197,253,0.75)'; ctx.lineWidth=base*0.75; ctx.stroke(path);
     ctx.restore();
   }
-  // 街道に設置された関所（CUSTOM_CHECKPOINTS）。位置は道の frac（a→b上の割合）から都度算出するため、
-  // 端点（城・寺社/資源マーカー）が編集で動いても自動的に追従する。
+  // 街道に設置された関所（CUSTOM_CHECKPOINTS）。位置は道の折れ線上の弧長割合(frac)から都度算出する。
   _drawCheckpoints(ctx){
     if (!CUSTOM_CHECKPOINTS.length || !CUSTOM_ROADS.length) return;
     const clip=MAP.clip;
     const size=Math.max(9, 15*MAP_ICON_SCALE*Math.min(2, this.cam.zoom/2));
     for (const cp of CUSTOM_CHECKPOINTS){
-      const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road) continue;
-      const wa=endpointPoint(road.a), wb=endpointPoint(road.b); if (!wa || !wb) continue;
-      const wx=wa[0]+(wb[0]-wa[0])*cp.frac, wy=wa[1]+(wb[1]-wa[1])*cp.frac;
-      const s=this._worldToScreen(wx,wy);
+      const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road || !road.path || road.path.length<2) continue;
+      const w=pointAtFrac(road.path, cp.frac); if (!w) continue;
+      const s=this._worldToScreen(w[0],w[1]);
       if (!pointInRect(s, clip)) continue;
       drawCheckpointIcon(ctx, s.x, s.y, size);
     }
