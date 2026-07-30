@@ -13823,6 +13823,70 @@ const CASTLE_HEX_LAYOUTS = {
       [12,10],[13,10],[14,10],[6,11],[8,11],[9,11],[10,11]]
   }
 };
+// 特別城(castleType==='special')の天守ヘックス。特別城は城ごとに専用の攻城バックドロップを持ち、
+// 天守閣が描かれている位置が画像ごとに違うため、平城レイアウトの天守(8,5)を流用すると
+// 天守マーカーが絵の天守閣から外れる（新発田城では絵の三階櫓が右上、マーカーは盤中央だった）。
+// 各背景画像へヘックス盤を重ね、天守閣（天守を持たない山城・館は主郭の中心建物）の載るマスを
+// トレースした値。キーは SPECIAL_CASTLE_IMAGE_BY_NAME の画像キー。
+// 検証: scripts/trace-special-castle-keeps.mjs（画像へ番号入りヘックスとマーカーを重ねて目視確認）
+const SPECIAL_CASTLE_KEEP_HEX = {
+  siegeKasugayama:[9,0], siegeAzuchi:[9,0], siegeOdawara:[11,2], siegeGifu:[12,0],
+  siegeOdani:[13,0], siegeOsaka:[11,2], siegeKaizu:[8,4], siegeHamamatsu:[12,1],
+  siegeGassanTomita:[11,0], siegeBicchuTakamatsu:[10,4], siegeHimeji:[13,2], siegeIwamura:[14,0],
+  siegeTakeda:[13,0], siegeNanao:[13,2], siegeMinowa:[11,3], siegeIwadeyama:[13,2],
+  siegeIwadono:[13,0], siegeEdo:[12,3], siegeHirosaki:[10,2], siegeShibata:[11,1],
+  siegeTochio:[12,0], siegeKannonji:[13,0], siegeNijo:[9,4], siegeTottori:[12,1],
+  siegeYoshidaKoriyama:[13,0], siegeMiki:[13,0], siegeShiroishi:[13,1], siegeSumoto:[15,1],
+  siegeIshiyamago:[13,1], siegeHirado:[15,1], siegeIgaueno:[12,0], siegeKarasawayama:[12,0],
+  siegeKuroi:[14,0], siegeKurokawa:[11,4], siegeTachibanayama:[16,0],
+};
+// 特別城の城郭レイアウトは、天守ヘックスを中心とする同心リング（輪郭式）で生成する。
+// 天守だけを動かして平城レイアウトの塁を据え置くと、天守が北外堀の外側へ出て
+// 攻め手から到達不能（＝落城不能）になる。塁を天守中心のリングにすれば天守がどこにあっても
+// 「土橋を渡る→大手門を破る→虎口を破る→天守」の攻城手順がそのまま成立する。
+// リングは「天守からの距離がちょうどNのマス」の集合なので、盤外へはみ出しても内外を隔てる
+// 閉じた壁であり続ける（盤端そのものが壁として働く）。
+const SPECIAL_CASTLE_RINGS = [
+  {dist:2, kind:'stonewall', opening:'gate'},    // 本丸石垣＋虎口
+  {dist:4, kind:'wall',      opening:'gate'},    // 二の丸城壁＋大手門
+  {dist:7, kind:'moat',      opening:'drymoat'}, // 外堀＋土橋
+];
+function buildSpecialCastleLayout(keepHex){
+  const [kc,kr]=keepHex;
+  const spec={keep:[[kc,kr]]};
+  for (const ring of SPECIAL_CASTLE_RINGS){
+    const cells=[];
+    for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
+      if (hexDist(c,r,kc,kr)===ring.dist) cells.push([c,r]);
+    }
+    if (!cells.length) continue;
+    // 虎口・大手門・土橋は、攻め手が攻め上がってくる盤下側（最も row が大きいマス）に開ける。
+    // 同率なら天守の真下に近い列を選び、3つの開口が縦に並んで一本の登城路になるようにする。
+    let open=0;
+    for (let i=1;i<cells.length;i++){
+      const a=cells[i], b=cells[open];
+      if (a[1]>b[1] || (a[1]===b[1] && Math.abs(a[0]-kc)<Math.abs(b[0]-kc))) open=i;
+    }
+    for (let i=0;i<cells.length;i++){
+      const kind = i===open ? ring.opening : ring.kind;
+      (spec[kind] || (spec[kind]=[])).push(cells[i]);
+    }
+  }
+  return spec;
+}
+// 特別城の外堀リング半径（＝城内と城外の境目）。守備隊を城外へ湧かせないための判定に使う。
+const SPECIAL_CASTLE_OUTER_DIST = SPECIAL_CASTLE_RINGS[SPECIAL_CASTLE_RINGS.length-1].dist;
+// 攻城戦の背景に使う専用画像キー。特別城は城名ごとの専用グラフィック、それ以外は城タイプ別。
+function siegeImageKeyFor(castleType, provId){
+  if (castleType==='special'){
+    const cn=castleNameForProvince(DATA.provById[provId]||{id:provId});
+    return SPECIAL_CASTLE_IMAGE_BY_NAME[cn]||'siegeHirajiro';
+  }
+  if (castleType==='yamajiro') return 'siegeYamajiro';
+  if (castleType==='hirayamajiro') return 'siegeHirayamajiro';
+  if (castleType==='umajiro') return 'siegeUmajiro';
+  return 'siegeHirajiro';
+}
 /* ══ 塁（石垣・土塁・城壁）の性質 ══
    石垣・土塁は「急な坂（法面）」であり、崩して突破口を開いても駆け上がるには手間がかかる。
    さらに塁の上には城の守備兵が詰めており、武将（スタック）が配置されていなくても
@@ -14327,6 +14391,7 @@ class BattleScene extends GameKit.Scene {
     BGM.setMood(this.battleType==='siege' ? 'siege' : 'field'); BGM.start();
     this.castleLevel=c.defender.castleLevel||1;
     this.castleType=c.castleType || castleTypeForProvince(c.dstId, this.state.provinces[c.dstId]);
+    this.siegeImageKey=siegeImageKeyFor(this.castleType, c.dstId);
     this.castleName=(DATA.provById[c.dstId]?castleNameForProvince(DATA.provById[c.dstId]):'');
     this.castleLayout=Array.isArray(c.castleLayout)?c.castleLayout:[];
     this.weather=(c.weather&&c.weather.id)||c.weather||weatherForState(this.state).id;
@@ -14469,16 +14534,33 @@ class BattleScene extends GameKit.Scene {
     leader.col=kc; leader.row=kr; leader.castlePost='keep';
     defenders.forEach(s=>{
       if (s===leader) return;
-      if (this._cellObstructs(s.col,s.row) || this.stackAt(s.col,s.row)!==s){ const spot=this._findGarrisonSpot(); if (spot){ s.col=spot[0]; s.row=spot[1]; } }
+      if (this._cellObstructs(s.col,s.row) || this._cellOutsideCastle(s.col,s.row) || this.stackAt(s.col,s.row)!==s){
+        const spot=this._findGarrisonSpot(); if (spot){ s.col=spot[0]; s.row=spot[1]; }
+      }
     });
   }
   // 守備隊を置きたくない(通過不可 or 渡河ペナルティ)マスか。天守は可。
   _cellObstructs(c,r){ const cell=this.castleCells && this.castleCells[c+','+r]; return !!(cell && cell.kind!=='keep'); }
+  // 外堀リングより外＝城外。_buildStacks の籠城布陣は行6-7固定なので、天守が盤上部にある
+  // 特別城では城外の野原へ守備隊が湧く。生成レイアウトの城だけ城内へ引き戻す。
+  _cellOutsideCastle(c,r){
+    if (this.castleOuterDist==null || !this.keepHex) return false;
+    return hexDist(c,r,this.keepHex[0],this.keepHex[1]) >= this.castleOuterDist;
+  }
+  // 籠城する空きマスを天守に近い順（本丸→二の丸→三の丸）で探す。行5-9の固定走査では
+  // 天守の位置によって城外を指してしまうため、天守からの距離で探索する。
   _findGarrisonSpot(){
-    for (let r=5;r<=9;r++) for (let c=3;c<HEX.cols-3;c++){
-      if (this.stackAt(c,r)) continue; if (this._cellObstructs(c,r)) continue; return [c,r];
+    if (!this.keepHex) return null;
+    const [kc,kr]=this.keepHex;
+    const cells=[];
+    for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
+      if (c===kc && r===kr) continue;
+      if (this.stackAt(c,r) || this._cellObstructs(c,r) || this._cellOutsideCastle(c,r)) continue;
+      cells.push([c,r,hexDist(c,r,kc,kr)]);
     }
-    return null;
+    if (!cells.length) return null;
+    cells.sort((a,b)=> a[2]-b[2] || b[1]-a[1] || a[0]-b[0]);
+    return [cells[0][0], cells[0][1]];
   }
   _deploySiegeCannon(){
     let col=Math.floor(HEX.cols/2), row=HEX.rows-1;
@@ -14513,8 +14595,12 @@ class BattleScene extends GameKit.Scene {
       const g = RAMPART_GARRISON[kind] ? Math.round(garrisonBase*RAMPART_GARRISON[kind]) : 0;
       cells[k]={kind, hp, maxHp:hp, destroyed:false, flameT:0, garrison:g, garrison0:g, volleyT:0};
     };
-    // 専用画像の特別城(castleType==='special')は同心輪郭の平城レイアウトを既定とする
-    const spec=CASTLE_HEX_LAYOUTS[this.castleType] || CASTLE_HEX_LAYOUTS.hirajiro;
+    // 専用画像の特別城(castleType==='special')は、画像ごとにトレースした天守ヘックスを中心に
+    // 輪郭式の城郭を生成する（天守マーカーを絵の天守閣に一致させたうえで攻城手順を保つ）。
+    const traced=this.castleType==='special' ? SPECIAL_CASTLE_KEEP_HEX[this.siegeImageKey] : null;
+    this.castleOuterDist = traced ? SPECIAL_CASTLE_OUTER_DIST : null;
+    const spec = traced ? buildSpecialCastleLayout(traced)
+      : (CASTLE_HEX_LAYOUTS[this.castleType] || CASTLE_HEX_LAYOUTS.hirajiro);
     for (const kind in spec){ if (kind!=='keep') spec[kind].forEach(([c,r])=>set(c,r,kind)); }
     const [kc,kr]=spec.keep[0];
     cells[kc+','+kr]={kind:'keep', hp:0, maxHp:0, destroyed:false, flameT:0, garrison:0, garrison0:0, volleyT:0};
@@ -15797,13 +15883,7 @@ class BattleScene extends GameKit.Scene {
 
   /* ---- 描画 ---- */
   draw(ctx, game){
-    let siegeKey='siegeHirajiro';
-    if (this.castleType==='special'){
-      const cn=castleNameForProvince(DATA.provById[this.ctx.dstId]||{id:this.ctx.dstId});
-      siegeKey=SPECIAL_CASTLE_IMAGE_BY_NAME[cn]||'siegeHirajiro';
-    } else if (this.castleType==='yamajiro') siegeKey='siegeYamajiro';
-    else if (this.castleType==='hirayamajiro') siegeKey='siegeHirayamajiro';
-    else if (this.castleType==='umajiro') siegeKey='siegeUmajiro';
+    const siegeKey=this.siegeImageKey || siegeImageKeyFor(this.castleType, this.ctx.dstId);
     const backdrop=this.battleType==='siege' ? ASSETS.img[siegeKey] : (ASSETS.img[this.battlefieldKey] || ASSETS.img.battle);
     // 攻城戦の背景は常に等倍。城郭セル(CASTLE_HEX_LAYOUTS)は背景画像の水堀・城壁位置へ
     // トレースしてあるため、城レベルによる拡大を掛けると堀・石垣ヘックスが画像とずれる。
