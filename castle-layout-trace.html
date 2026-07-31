@@ -1,71 +1,4 @@
-#!/usr/bin/env node
-/**
- * trace-castle-layout.mjs
- * 攻城バックドロップ（城タイプ別4種＋城別35種）の上でヘックスの「侵入可否」を目視トレースする道具。
- *
- * なぜ手動トレースなのか:
- *   これらの背景は写実的な俯瞰CGで、水堀・石垣・曲輪・遠景の水田の色差が非常に小さい。
- *   手トレース済み4城を正解データとして自動分類を実測したところ、
- *     ・しきい値方式（色＋粗さ）… 水堀の適合率46% / 再現率48%、城ごとの一致率55〜73%
- *       （全マス「侵入出来る」と答えるだけで73%になるので、基準値と同等以下）
- *     ・画像適応の領域成長法 … F1 0.22
- *   実測値は 水堀 blue=+1.0 / 石垣 −9.5 / 遠景の水田 −3.0、粗さはいずれも8〜10で重なる。
- *   油彩調で色差の大きい野戦（trace-battlefield-hexes.mjs）と違い、攻城は目視トレースが要る。
- *
- * 使い方:
- *   node scripts/trace-castle-layout.mjs --serve   … ページを生成し、そのまま開けるURLを表示する
- *     表示されたURL（既定 http://127.0.0.1:8787/castle-layout-trace.html）をブラウザで開く。
- *     --serve を付けない場合はリポジトリ直下に castle-layout-trace.html を出すだけなので、
- *     ファイルをブラウザへドラッグ（file://）して開いてもよい。どちらでも背景画像は表示される
- *   ページ上での操作:
- *     パレットで種別を選び、ヘックスをクリックして塗る。右クリックで「侵入出来る」に戻す
- *     編集内容はブラウザに自動保存されるので、何回かに分けて進めてよい
- *     城ごとに「閉じている・落城可能」を即時判定して表示する（赤＝要修正が出たら直す）
- *   仕上げ:
- *     上部の「全城まとめてJSONを保存」でファイルを落とす
- *     node scripts/apply-castle-layouts.mjs <落としたJSON>   … sengoku.html へ反映
- *     node scripts/verify-castle-layouts.mjs                  … 全39城を機械検査
- * 依存: なし（出力HTMLがブラウザのCanvasで描画する）
- */
-import fs from 'node:fs';
-import path from 'node:path';
-
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-// 出力先はフラグ以外の最初の引数。--serve のポート番号を出力先と取り違えないよう除く
-const argv = process.argv.slice(2);
-const serveAt = argv.indexOf('--serve');
-const positional = argv.filter((a, i) => !a.startsWith('--') && !(serveAt >= 0 && i === serveAt + 1 && /^\d+$/.test(a)));
-const OUT = path.resolve(positional[0] || path.join(ROOT, 'castle-layout-trace.html'));
-const src = fs.readFileSync(path.join(ROOT, 'sengoku.html'), 'utf8');
-
-// sengoku.html 内のオブジェクトリテラルをそのまま値として取り出す（自リポジトリのファイルのみ対象）
-function literal(name, re) {
-  const m = src.match(re);
-  if (!m) throw new Error(`sengoku.html から ${name} を読み取れない（定義名が変わった可能性）`);
-  return new Function('return ' + m[1])();
-}
-const CASTLE_HEX_LAYOUTS = literal('CASTLE_HEX_LAYOUTS', /const CASTLE_HEX_LAYOUTS = (\{[\s\S]*?\n\});/);
-const TRACED = literal('CASTLE_TRACED_LAYOUTS', /const CASTLE_TRACED_LAYOUTS = (\{[\s\S]*?\n\});/);
-const KEEPS = literal('SPECIAL_CASTLE_KEEP_HEX', /const SPECIAL_CASTLE_KEEP_HEX = (\{[\s\S]*?\n\});/);
-const RINGS = literal('SPECIAL_CASTLE_RINGS', /const SPECIAL_CASTLE_RINGS = (\[[\s\S]*?\n\]);/);
-
-const nameByKey = {};
-for (const m of src.matchAll(/'([^']+)'\s*:\s*'(siege[A-Za-z]+)'/g)) nameByKey[m[2]] = JSON.parse('"' + m[1] + '"');
-const fileByKey = {};
-for (const m of src.matchAll(/(siege[A-Za-z]+):\s*'(assets\/[^']+)'/g)) fileByKey[m[1]] = m[2];
-
-// 城タイプ別4種は CASTLE_HEX_LAYOUTS、特別城35種は トレース済み→無ければ生成リング を初期値にする
-const castles = [];
-for (const [type, key] of [['hirajiro', 'siegeHirajiro'], ['yamajiro', 'siegeYamajiro'],
-  ['hirayamajiro', 'siegeHirayamajiro'], ['umajiro', 'siegeUmajiro']]) {
-  if (fileByKey[key]) castles.push({ id: key, label: `城タイプ: ${type}`, file: fileByKey[key], layout: CASTLE_HEX_LAYOUTS[type], done: true });
-}
-for (const [key, keep] of Object.entries(KEEPS)) {
-  if (!fileByKey[key]) continue;
-  castles.push({ id: key, label: nameByKey[key] || key, file: fileByKey[key], keep, layout: TRACED[key] || null, done: !!TRACED[key] });
-}
-
-const html = `<!doctype html>
+<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>攻城ヘックス 侵入可否トレース / Castle Hex Passability Trace</title>
 <style>
@@ -150,8 +83,8 @@ const KINDS=[
 const FILL={moat:'rgba(24,72,116,0.35)',drymoat:'rgba(120,96,58,0.30)',stonewall:'rgba(96,92,86,0.5)',
  wall:'rgba(80,86,96,0.5)',earthwork:'rgba(120,96,56,0.4)',gate:'rgba(74,52,30,0.5)',
  palisade:'rgba(120,84,44,0.4)',yagura:'rgba(120,84,44,0.5)',keep:'rgba(226,178,96,0.35)'};
-const CASTLES=${JSON.stringify(castles)};
-const RINGS=${JSON.stringify(RINGS)};
+const CASTLES=[{"id":"siegeHirajiro","label":"城タイプ: hirajiro","file":"assets/sengoku/gpt/castles/types/hirajiro.png","layout":{"keep":[[8,5]],"gate":[[8,6],[5,9]],"moat":[[5,3],[6,3],[7,3],[8,3],[9,3],[10,3],[11,3],[12,3],[0,4],[1,4],[2,4],[3,4],[4,4],[13,4],[14,4],[15,4],[16,4],[0,5],[15,6],[16,6],[15,7],[16,7],[0,8],[14,8],[15,8],[0,9],[14,9],[6,10],[7,10],[8,10],[9,10],[10,10],[11,10],[12,10],[13,10],[14,10],[15,10],[6,11],[7,11],[8,11],[9,11],[10,11],[11,11],[12,11],[14,11]],"drymoat":[[5,10],[4,11]],"wall":[[1,9],[2,9],[3,9],[4,9],[6,9],[7,9],[8,9],[9,9],[10,9],[11,9],[12,9],[13,9]],"stonewall":[[5,4],[6,4],[7,4],[8,4],[9,4],[10,4],[11,4],[4,5],[11,5],[4,6],[5,6],[6,6],[7,6],[9,6],[10,6],[11,6],[12,6]]},"done":true},{"id":"siegeYamajiro","label":"城タイプ: yamajiro","file":"assets/sengoku/gpt/castles/types/yamajiro.png","layout":{"keep":[[13,1]],"gate":[[13,2]],"drymoat":[[13,3],[8,7],[5,11]],"stonewall":[[12,0],[15,0],[12,1],[15,1],[12,2],[14,2]],"palisade":[[9,3],[10,3],[11,3],[12,3],[14,3],[15,3],[16,3],[3,7],[4,7],[5,7],[6,7],[7,7],[9,7],[10,7],[11,7],[12,7],[13,7],[2,11],[3,11],[4,11],[6,11],[7,11],[8,11],[9,11],[10,11],[11,11],[12,11]]},"done":true},{"id":"siegeHirayamajiro","label":"城タイプ: hirayamajiro","file":"assets/sengoku/gpt/castles/types/hirayamajiro.png","layout":{"keep":[[10,3]],"gate":[[10,4],[7,10],[8,12]],"moat":[[0,9],[0,10],[0,11],[0,12],[1,12],[15,12],[16,12],[0,13],[1,13],[15,13],[16,13]],"wall":[[2,12],[3,12],[4,12],[5,12],[6,12],[7,12],[9,12],[10,12],[11,12],[12,12],[13,12]],"stonewall":[[10,2],[11,2],[9,3],[11,3],[11,4],[2,9],[3,9],[15,9],[16,9],[4,10],[5,10],[6,10],[14,10],[15,10],[8,11],[9,11],[10,11],[11,11],[12,11],[13,11]]},"done":true},{"id":"siegeUmajiro","label":"城タイプ: umajiro","file":"assets/sengoku/gpt/castles/types/umajiro.png","layout":{"keep":[[12,2]],"gate":[[11,3],[8,6],[7,11]],"moat":[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[8,0],[9,0],[10,0],[11,0],[14,0],[15,0],[16,0],[0,1],[1,1],[2,1],[3,1],[4,1],[5,1],[6,1],[7,1],[8,1],[9,1],[10,1],[11,1],[14,1],[15,1],[16,1],[0,2],[1,2],[2,2],[3,2],[4,2],[5,2],[6,2],[7,2],[8,2],[9,2],[10,2],[0,3],[1,3],[2,3],[3,3],[4,3],[5,3],[6,3],[16,3],[0,4],[1,4],[2,4],[3,4],[16,4],[0,5],[1,5],[2,5],[3,5],[16,5],[0,6],[2,6],[16,6],[0,7],[16,7],[0,8],[16,8],[0,9],[16,9],[0,10],[0,11],[0,12],[1,12],[14,12],[15,12],[16,12],[0,13],[1,13],[13,13],[14,13],[15,13],[16,13],[0,14],[13,14],[14,14],[15,14],[16,14]],"stonewall":[[12,0],[13,0],[12,1],[13,1],[11,2],[13,2],[12,3],[11,4],[12,4],[13,4],[9,5],[10,5],[5,6],[6,6],[7,6],[15,6],[2,7],[4,7],[15,7],[2,8],[15,8],[2,9],[14,9],[2,10],[3,10],[4,10],[5,10],[11,10],[12,10],[13,10],[14,10],[6,11],[8,11],[9,11],[10,11]]},"done":true},{"id":"siegeKasugayama","label":"春日山城","file":"assets/sengoku/gpt/castles/special/kasugayama-gpt-image-2.png","keep":[9,0],"layout":null,"done":false},{"id":"siegeAzuchi","label":"安土城","file":"assets/sengoku/gpt/castles/special/azuchi.png","keep":[9,0],"layout":null,"done":false},{"id":"siegeOdawara","label":"小田原城","file":"assets/sengoku/gpt/castles/special/odawara.png","keep":[11,2],"layout":null,"done":false},{"id":"siegeGifu","label":"岐阜城","file":"assets/sengoku/gpt/castles/special/gifu.png","keep":[12,0],"layout":null,"done":false},{"id":"siegeOdani","label":"小谷城","file":"assets/sengoku/gpt/castles/special/odani.png","keep":[13,0],"layout":null,"done":false},{"id":"siegeOsaka","label":"大坂城","file":"assets/sengoku/gpt/castles/special/osaka.png","keep":[11,2],"layout":null,"done":false},{"id":"siegeKaizu","label":"海津城","file":"assets/sengoku/gpt/castles/special/kaizu.png","keep":[8,4],"layout":null,"done":false},{"id":"siegeHamamatsu","label":"浜松城","file":"assets/sengoku/gpt/castles/special/hamamatsu.png","keep":[12,1],"layout":null,"done":false},{"id":"siegeGassanTomita","label":"月山富田城","file":"assets/sengoku/gpt/castles/special/gassan_tomita.png","keep":[11,0],"layout":null,"done":false},{"id":"siegeBicchuTakamatsu","label":"備中高松城","file":"assets/sengoku/gpt/castles/special/bicchu_takamatsu.png","keep":[10,4],"layout":null,"done":false},{"id":"siegeHimeji","label":"姫路城","file":"assets/sengoku/gpt/castles/special/himeji.png","keep":[13,2],"layout":null,"done":false},{"id":"siegeIwamura","label":"岩村城","file":"assets/sengoku/gpt/castles/special/iwamura.png","keep":[14,0],"layout":null,"done":false},{"id":"siegeTakeda","label":"躑躅ヶ崎館","file":"assets/sengoku/gpt/castles/special/takeda.png","keep":[13,0],"layout":null,"done":false},{"id":"siegeNanao","label":"七尾城","file":"assets/sengoku/gpt/castles/special/nanao.png","keep":[13,2],"layout":null,"done":false},{"id":"siegeMinowa","label":"箕輪城","file":"assets/sengoku/gpt/castles/special/minowa.png","keep":[11,3],"layout":null,"done":false},{"id":"siegeIwadeyama","label":"岩出山城","file":"assets/sengoku/gpt/castles/special/iwadeyama.png","keep":[13,2],"layout":null,"done":false},{"id":"siegeIwadono","label":"岩殿城","file":"assets/sengoku/gpt/castles/special/iwadono.png","keep":[13,0],"layout":null,"done":false},{"id":"siegeEdo","label":"江戸城","file":"assets/sengoku/gpt/castles/special/edo.png","keep":[12,3],"layout":null,"done":false},{"id":"siegeHirosaki","label":"弘前城","file":"assets/sengoku/gpt/castles/special/hirosaki.png","keep":[10,2],"layout":null,"done":false},{"id":"siegeShibata","label":"新発田城","file":"assets/sengoku/gpt/castles/special/shibata.png","keep":[11,1],"layout":{"keep":[[11,1]],"gate":[[13,10],[4,11]],"stonewall":[[14,3],[15,3],[16,3],[15,4],[16,4],[3,12],[4,12]],"wall":[[5,4],[6,4],[7,4],[11,4],[12,4],[13,4],[14,4],[11,5],[12,5],[13,5],[0,6],[1,6],[0,7],[1,7],[10,7],[11,7],[12,7],[0,8],[1,8],[2,8],[3,8],[4,8],[5,8],[6,8],[16,8],[14,9],[15,9],[5,11],[6,11],[7,11],[8,11],[9,11],[10,11],[11,11],[12,11],[8,12],[9,12],[10,12],[11,12]],"moat":[[0,3],[1,3],[2,3],[3,3],[3,6],[4,6],[5,6],[6,6],[3,7],[4,7],[5,7],[6,7],[14,11],[15,11],[16,11],[0,12],[1,12],[14,12],[15,12],[16,12],[0,13],[1,13],[14,13],[15,13],[16,13]]},"done":true},{"id":"siegeTochio","label":"栃尾城","file":"assets/sengoku/gpt/castles/special/tochio.png","keep":[12,0],"layout":null,"done":false},{"id":"siegeKannonji","label":"観音寺城","file":"assets/sengoku/gpt/castles/special/kannonji.png","keep":[13,0],"layout":null,"done":false},{"id":"siegeNijo","label":"二条城","file":"assets/sengoku/gpt/castles/special/nijo.png","keep":[9,4],"layout":null,"done":false},{"id":"siegeTottori","label":"鳥取城","file":"assets/sengoku/gpt/castles/special/tottori.png","keep":[12,1],"layout":null,"done":false},{"id":"siegeYoshidaKoriyama","label":"吉田郡山城","file":"assets/sengoku/gpt/castles/special/yoshida_koriyama.png","keep":[13,0],"layout":null,"done":false},{"id":"siegeMiki","label":"三木城","file":"assets/sengoku/gpt/castles/special/miki.png","keep":[13,0],"layout":null,"done":false},{"id":"siegeShiroishi","label":"白石城","file":"assets/sengoku/gpt/castles/special/shiroishi.png","keep":[13,1],"layout":null,"done":false},{"id":"siegeSumoto","label":"洲本城","file":"assets/sengoku/gpt/castles/special/sumoto.png","keep":[15,1],"layout":null,"done":false},{"id":"siegeIshiyamago","label":"石山御坊","file":"assets/sengoku/gpt/castles/special/ishiyamago.png","keep":[13,1],"layout":null,"done":false},{"id":"siegeHirado","label":"平戸城","file":"assets/sengoku/gpt/castles/special/hirado.png","keep":[15,1],"layout":null,"done":false},{"id":"siegeIgaueno","label":"伊賀上野城","file":"assets/sengoku/gpt/castles/special/igaueno.png","keep":[12,0],"layout":null,"done":false},{"id":"siegeKarasawayama","label":"唐沢山城","file":"assets/sengoku/gpt/castles/special/karasawayama.png","keep":[12,0],"layout":null,"done":false},{"id":"siegeKuroi","label":"黒井城","file":"assets/sengoku/gpt/castles/special/kuroi.png","keep":[14,0],"layout":null,"done":false},{"id":"siegeKurokawa","label":"黒川城","file":"assets/sengoku/gpt/castles/special/kurokawa.png","keep":[11,4],"layout":null,"done":false},{"id":"siegeTachibanayama","label":"立花山城","file":"assets/sengoku/gpt/castles/special/tachibanayama.png","keep":[16,0],"layout":null,"done":false}];
+const RINGS=[{"dist":2,"kind":"stonewall","opening":"gate"},{"dist":4,"kind":"wall","opening":"gate"},{"dist":7,"kind":"moat","opening":"drymoat"}];
 const LS='sengoku-castle-trace-v1';
 
 // ---- 侵入可否の即時判定（sengoku.html の検査と同じ内容）----
@@ -397,7 +330,7 @@ function blockFor(id){
   for(const k of order){ if(!by[k])continue;
     lines.push('    '+k+': ['+by[k].map(([c,r])=>'['+c+','+r+']').join(',')+'],'); }
   lines.push('  },');
-  return lines.join('\\n');
+  return lines.join('\n');
 }
 document.getElementById('save').onclick=()=>{
   const out={};
@@ -417,27 +350,3 @@ document.getElementById('clearAll').onclick=()=>{
   localStorage.removeItem(LS); location.reload();
 };
 </script></body></html>
-`;
-fs.writeFileSync(OUT, html);
-console.log(`wrote ${OUT} (${castles.length} castles: 城タイプ4 + 特別城${castles.length - 4} / うちトレース済み ${castles.filter(c => c.done).length})`);
-
-// --serve: 城の背景画像は file:// だとブラウザにブロックされるため、HTTPで配信する
-if (serveAt >= 0) {
-  const http = await import('node:http');
-  const port = Number(argv[serveAt + 1]) || 8787;
-  const MIME = { '.html': 'text/html; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
-    '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
-  http.createServer((req, res) => {
-    const rel = decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, '') || 'index.html';
-    const file = path.join(ROOT, rel);
-    if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
-    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });
-    fs.createReadStream(file).pipe(res);
-  }).listen(port, '127.0.0.1', () => {
-    console.log(`\nブラウザで開く: http://127.0.0.1:${port}/${path.basename(OUT)}`);
-    console.log('（終了は Ctrl+C。塗り終えたら「全城まとめてJSONを保存」→ node scripts/apply-castle-layouts.mjs <JSON>）');
-  });
-} else {
-  console.log('このファイルをブラウザで開けば編集できる（file:// で可）。');
-  console.log('URLで開きたい場合: node scripts/trace-castle-layout.mjs --serve');
-}
