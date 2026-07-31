@@ -35,6 +35,8 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 ```bash
 node scripts/trace-castle-layout.mjs          # 編集ページを生成（39城・現在の状態を初期値に）
 # ブラウザで castle-layout-trace.html を開き、絵を見てヘックスを塗る（編集は自動保存）
+#   ドラッグでなぞって連続塗り／数字キー1〜0で種別切替／右ドラッグで消去／Ctrl+Zで取り消し
+#   上部の索引から城へジャンプ。丸印が進捗（緑=OK 黄=注意 赤=要修正 白抜き=未トレース）
 #   城ごとに「閉じている・落城可能」を即時判定。要修正（赤）が出たら直す
 node scripts/apply-castle-layouts.mjs castle-layouts.json   # sengoku.html へ反映
 node scripts/verify-castle-layouts.mjs                      # 全39城を機械検査（必須）
