@@ -22,6 +22,33 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - ライブラリを追加する場合はCDN経由、ビルドツール不使用
 - ゲーム系はCanvas APIのみで完結させる方針
 
+## 戦国風雲記の攻城ヘックス（侵入可否）
+
+攻城戦のヘックスは「侵入出来る／破壊すれば侵入出来る／侵入出来ない」の3分類で、
+定義は `sengoku.html` の `CASTLE_PASSABILITY` に一本化してある（進入判定・枠の描き分け・凡例が共有）。
+
+- 城郭レイアウトの優先順: ①`CASTLE_TRACED_LAYOUTS`（絵をトレース済み）→ ②特別城は天守中心の生成リング → ③`CASTLE_HEX_LAYOUTS`（城タイプ別）
+- 天守の位置は `SPECIAL_CASTLE_KEEP_HEX`（特別城35城分、専用画像からトレース済み）
+- **自動画像分類は使わない**。手トレース済み4城を正解として実測した結果、しきい値方式で水堀の適合率46%/再現率48%（全マスopenと答える基準値と同等以下）、領域成長法でF1 0.22。写実CGのため水堀・石垣・曲輪・遠景の水田の色差が数階調しかない
+
+### トレース手順
+編集ページはリポジトリにコミットしてあり、GitHub Pages から直接開ける（Node不要）:
+<https://hifukasawa77-lgtm.github.io/main/castle-layout-trace.html>
+**`sengoku.html` のレイアウトを更新したら、必ず再生成してコミットし直すこと**（初期値が古いままになる）。
+
+```bash
+node scripts/trace-castle-layout.mjs          # 編集ページを再生成（39城・現在の状態を初期値に）
+node scripts/trace-castle-layout.mjs --serve  # 生成してローカルURLで開く（手元で作業する場合）
+# 絵を見てヘックスを塗る（編集はブラウザに自動保存）
+#   ドラッグでなぞって連続塗り／数字キー1〜0で種別切替／右ドラッグで消去／Ctrl+Zで取り消し
+#   上部の索引から城へジャンプ。丸印が進捗（緑=OK 黄=注意 赤=要修正 白抜き=未トレース）
+#   城ごとに「閉じている・落城可能」を即時判定。要修正（赤）が出たら直す
+node scripts/apply-castle-layouts.mjs castle-layouts.json   # sengoku.html へ反映
+node scripts/verify-castle-layouts.mjs                      # 全39城を機械検査（必須）
+```
+検査内容: 天守が盤内で1マス／無傷なら天守へ到達不能／破壊可能な塁を全部破れば到達可能／城内に空きマスが十分。
+トレースが天守を囲みきれない場合は `ensureKeepSealed()` が本丸石垣＋虎口を自動で足す（素通り落城の防止）。
+
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
 - スターター: `gamekit/template.html` をリポジトリ直下にコピーして開始する
