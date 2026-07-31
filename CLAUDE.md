@@ -22,6 +22,26 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - ライブラリを追加する場合はCDN経由、ビルドツール不使用
 - ゲーム系はCanvas APIのみで完結させる方針
 
+## 戦国風雲記の攻城ヘックス（侵入可否）
+
+攻城戦のヘックスは「侵入出来る／破壊すれば侵入出来る／侵入出来ない」の3分類で、
+定義は `sengoku.html` の `CASTLE_PASSABILITY` に一本化してある（進入判定・枠の描き分け・凡例が共有）。
+
+- 城郭レイアウトの優先順: ①`CASTLE_TRACED_LAYOUTS`（絵をトレース済み）→ ②特別城は天守中心の生成リング → ③`CASTLE_HEX_LAYOUTS`（城タイプ別）
+- 天守の位置は `SPECIAL_CASTLE_KEEP_HEX`（特別城35城分、専用画像からトレース済み）
+- **自動画像分類は使わない**。手トレース済み4城を正解として実測した結果、しきい値方式で水堀の適合率46%/再現率48%（全マスopenと答える基準値と同等以下）、領域成長法でF1 0.22。写実CGのため水堀・石垣・曲輪・遠景の水田の色差が数階調しかない
+
+### トレース手順
+```bash
+node scripts/trace-castle-layout.mjs          # 編集ページを生成（39城・現在の状態を初期値に）
+# ブラウザで castle-layout-trace.html を開き、絵を見てヘックスを塗る（編集は自動保存）
+#   城ごとに「閉じている・落城可能」を即時判定。要修正（赤）が出たら直す
+node scripts/apply-castle-layouts.mjs castle-layouts.json   # sengoku.html へ反映
+node scripts/verify-castle-layouts.mjs                      # 全39城を機械検査（必須）
+```
+検査内容: 天守が盤内で1マス／無傷なら天守へ到達不能／破壊可能な塁を全部破れば到達可能／城内に空きマスが十分。
+トレースが天守を囲みきれない場合は `ensureKeepSealed()` が本丸石垣＋虎口を自動で足す（素通り落城の防止）。
+
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
 - スターター: `gamekit/template.html` をリポジトリ直下にコピーして開始する
