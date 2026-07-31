@@ -13,21 +13,29 @@
  *   油彩調で色差の大きい野戦（trace-battlefield-hexes.mjs）と違い、攻城は目視トレースが要る。
  *
  * 使い方:
- *   1) node scripts/trace-castle-layout.mjs        … リポジトリ直下に castle-layout-trace.html を出す
- *   2) ブラウザで開く（file:// で可。画像は相対パスで読む）
- *   3) パレットで種別を選び、ヘックスをクリックして塗る。右クリックで「侵入出来る」に戻す
- *      ・編集内容はブラウザに自動保存されるので、何回かに分けて進めてよい
- *      ・城ごとに「閉じている/落城可能」を即時判定して表示する（赤が出たら直す）
- *   4) 上部の「全城まとめてJSONを保存」でファイルを落とす
- *   5) node scripts/apply-castle-layouts.mjs <落としたJSON>   … sengoku.html へ反映
- *   6) node scripts/verify-castle-layouts.mjs                  … 全39城を機械検査
+ *   node scripts/trace-castle-layout.mjs --serve   … ページを生成し、そのまま開けるURLを表示する
+ *     表示されたURL（既定 http://127.0.0.1:8787/castle-layout-trace.html）をブラウザで開く。
+ *     --serve を付けない場合はリポジトリ直下に castle-layout-trace.html を出すだけなので、
+ *     ファイルをブラウザへドラッグ（file://）して開いてもよい。どちらでも背景画像は表示される
+ *   ページ上での操作:
+ *     パレットで種別を選び、ヘックスをクリックして塗る。右クリックで「侵入出来る」に戻す
+ *     編集内容はブラウザに自動保存されるので、何回かに分けて進めてよい
+ *     城ごとに「閉じている・落城可能」を即時判定して表示する（赤＝要修正が出たら直す）
+ *   仕上げ:
+ *     上部の「全城まとめてJSONを保存」でファイルを落とす
+ *     node scripts/apply-castle-layouts.mjs <落としたJSON>   … sengoku.html へ反映
+ *     node scripts/verify-castle-layouts.mjs                  … 全39城を機械検査
  * 依存: なし（出力HTMLがブラウザのCanvasで描画する）
  */
 import fs from 'node:fs';
 import path from 'node:path';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const OUT = path.resolve(process.argv[2] || path.join(ROOT, 'castle-layout-trace.html'));
+// 出力先はフラグ以外の最初の引数。--serve のポート番号を出力先と取り違えないよう除く
+const argv = process.argv.slice(2);
+const serveAt = argv.indexOf('--serve');
+const positional = argv.filter((a, i) => !a.startsWith('--') && !(serveAt >= 0 && i === serveAt + 1 && /^\d+$/.test(a)));
+const OUT = path.resolve(positional[0] || path.join(ROOT, 'castle-layout-trace.html'));
 const src = fs.readFileSync(path.join(ROOT, 'sengoku.html'), 'utf8');
 
 // sengoku.html 内のオブジェクトリテラルをそのまま値として取り出す（自リポジトリのファイルのみ対象）
@@ -313,4 +321,24 @@ document.getElementById('clearAll').onclick=()=>{
 `;
 fs.writeFileSync(OUT, html);
 console.log(`wrote ${OUT} (${castles.length} castles: 城タイプ4 + 特別城${castles.length - 4} / うちトレース済み ${castles.filter(c => c.done).length})`);
-console.log('ブラウザで開いて塗り、「全城まとめてJSONを保存」→ node scripts/apply-castle-layouts.mjs <JSON>');
+
+// --serve: 城の背景画像は file:// だとブラウザにブロックされるため、HTTPで配信する
+if (serveAt >= 0) {
+  const http = await import('node:http');
+  const port = Number(argv[serveAt + 1]) || 8787;
+  const MIME = { '.html': 'text/html; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
+    '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+  http.createServer((req, res) => {
+    const rel = decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, '') || 'index.html';
+    const file = path.join(ROOT, rel);
+    if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });
+    fs.createReadStream(file).pipe(res);
+  }).listen(port, '127.0.0.1', () => {
+    console.log(`\nブラウザで開く: http://127.0.0.1:${port}/${path.basename(OUT)}`);
+    console.log('（終了は Ctrl+C。塗り終えたら「全城まとめてJSONを保存」→ node scripts/apply-castle-layouts.mjs <JSON>）');
+  });
+} else {
+  console.log('このファイルをブラウザで開けば編集できる（file:// で可）。');
+  console.log('URLで開きたい場合: node scripts/trace-castle-layout.mjs --serve');
+}
