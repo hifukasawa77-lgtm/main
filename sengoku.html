@@ -13823,20 +13823,155 @@ const CASTLE_HEX_LAYOUTS = {
       [12,10],[13,10],[14,10],[6,11],[8,11],[9,11],[10,11]]
   }
 };
+// 特別城(castleType==='special')の天守ヘックス。特別城は城ごとに専用の攻城バックドロップを持ち、
+// 天守閣が描かれている位置が画像ごとに違うため、平城レイアウトの天守(8,5)を流用すると
+// 天守マーカーが絵の天守閣から外れる（新発田城では絵の三階櫓が右上、マーカーは盤中央だった）。
+// 各背景画像へヘックス盤を重ね、天守閣（天守を持たない山城・館は主郭の中心建物）の載るマスを
+// トレースした値。キーは SPECIAL_CASTLE_IMAGE_BY_NAME の画像キー。
+// 検証: scripts/trace-special-castle-keeps.mjs（画像へ番号入りヘックスとマーカーを重ねて目視確認）
+const SPECIAL_CASTLE_KEEP_HEX = {
+  siegeKasugayama:[9,0], siegeAzuchi:[9,0], siegeOdawara:[11,2], siegeGifu:[12,0],
+  siegeOdani:[13,0], siegeOsaka:[11,2], siegeKaizu:[8,4], siegeHamamatsu:[12,1],
+  siegeGassanTomita:[11,0], siegeBicchuTakamatsu:[10,4], siegeHimeji:[13,2], siegeIwamura:[14,0],
+  siegeTakeda:[13,0], siegeNanao:[13,2], siegeMinowa:[11,3], siegeIwadeyama:[13,2],
+  siegeIwadono:[13,0], siegeEdo:[12,3], siegeHirosaki:[10,2], siegeShibata:[11,1],
+  siegeTochio:[12,0], siegeKannonji:[13,0], siegeNijo:[9,4], siegeTottori:[12,1],
+  siegeYoshidaKoriyama:[13,0], siegeMiki:[13,0], siegeShiroishi:[13,1], siegeSumoto:[15,1],
+  siegeIshiyamago:[13,1], siegeHirado:[15,1], siegeIgaueno:[12,0], siegeKarasawayama:[12,0],
+  siegeKuroi:[14,0], siegeKurokawa:[11,4], siegeTachibanayama:[16,0],
+};
+// 特別城の城郭レイアウトは、天守ヘックスを中心とする同心リング（輪郭式）で生成する。
+// 天守だけを動かして平城レイアウトの塁を据え置くと、天守が北外堀の外側へ出て
+// 攻め手から到達不能（＝落城不能）になる。塁を天守中心のリングにすれば天守がどこにあっても
+// 「土橋を渡る→大手門を破る→虎口を破る→天守」の攻城手順がそのまま成立する。
+// リングは「天守からの距離がちょうどNのマス」の集合なので、盤外へはみ出しても内外を隔てる
+// 閉じた壁であり続ける（盤端そのものが壁として働く）。
+const SPECIAL_CASTLE_RINGS = [
+  {dist:2, kind:'stonewall', opening:'gate'},    // 本丸石垣＋虎口
+  {dist:4, kind:'wall',      opening:'gate'},    // 二の丸城壁＋大手門
+  {dist:7, kind:'moat',      opening:'drymoat'}, // 外堀＋土橋
+];
+function buildSpecialCastleLayout(keepHex){
+  const [kc,kr]=keepHex;
+  const spec={keep:[[kc,kr]]};
+  for (const ring of SPECIAL_CASTLE_RINGS){
+    const cells=[];
+    for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
+      if (hexDist(c,r,kc,kr)===ring.dist) cells.push([c,r]);
+    }
+    if (!cells.length) continue;
+    // 虎口・大手門・土橋は、攻め手が攻め上がってくる盤下側（最も row が大きいマス）に開ける。
+    // 同率なら天守の真下に近い列を選び、3つの開口が縦に並んで一本の登城路になるようにする。
+    let open=0;
+    for (let i=1;i<cells.length;i++){
+      const a=cells[i], b=cells[open];
+      if (a[1]>b[1] || (a[1]===b[1] && Math.abs(a[0]-kc)<Math.abs(b[0]-kc))) open=i;
+    }
+    for (let i=0;i<cells.length;i++){
+      const kind = i===open ? ring.opening : ring.kind;
+      (spec[kind] || (spec[kind]=[])).push(cells[i]);
+    }
+  }
+  return spec;
+}
+/* ══ 絵をトレース済みの城郭レイアウト ══
+   キーは攻城バックドロップの画像キー（siegeImageKeyFor が返す値）。1城ずつ追加でき、
+   ここに無い城は下の生成リング／城タイプ別レイアウトへフォールバックする。
+   作り方: node scripts/trace-castle-layout.mjs で編集ページを出し、絵の水堀・石垣・城壁・
+   土塁・柵・城門・櫓・空堀を見ながらヘックスを塗り、「この城のJSを出力」の結果を貼る。
+   追加したら node scripts/verify-castle-layouts.mjs で
+   「無傷なら天守へ到達不能／破壊すれば到達可能」を必ず機械確認すること。
+   ※自動画像分類は成立しない（手トレース済み4城を正解として実測: しきい値方式で
+     水堀の適合率46%・再現率48%、領域成長法でF1 0.22。水堀/石垣/曲輪/遠景の水田の
+     色差が数階調しかないため）。scripts/trace-castle-layout.mjs 冒頭に詳細。 */
+const CASTLE_TRACED_LAYOUTS = {
+  // 新発田城（輪郭式の平城）。北の川・内堀・南西と南東の外堀を水堀に、
+  // 白壁の長塀を城壁、天守台と門の石積みを石垣、表門と大手橋の門を城門としてトレース。
+  siegeShibata: {
+    keep: [[11,1]],
+    gate: [[13,10],[4,11]],
+    stonewall: [[14,3],[15,3],[16,3],[15,4],[16,4],[3,12],[4,12]],
+    wall: [[5,4],[6,4],[7,4],[11,4],[12,4],[13,4],[14,4],[11,5],[12,5],[13,5],
+      [0,6],[1,6],[0,7],[1,7],[10,7],[11,7],[12,7],
+      [0,8],[1,8],[2,8],[3,8],[4,8],[5,8],[6,8],[16,8],[14,9],[15,9],
+      [5,11],[6,11],[7,11],[8,11],[9,11],[10,11],[11,11],[12,11],
+      [8,12],[9,12],[10,12],[11,12]],
+    moat: [[0,3],[1,3],[2,3],[3,3],[3,6],[4,6],[5,6],[6,6],[3,7],[4,7],[5,7],[6,7],
+      [14,11],[15,11],[16,11],[0,12],[1,12],[14,12],[15,12],[16,12],
+      [0,13],[1,13],[14,13],[15,13],[16,13]],
+  },
+};
+// トレースした塁だけでは天守が囲みきれないことがある（絵の本丸石垣が細くて1マスに満たない等）。
+// そのままだと攻め手が何も壊さずに天守へ歩ける＝素通りで落城してしまうため、天守が開いている
+// ときだけ本丸石垣リング＋虎口を足して閉じる。トレース済みの塁は上書きしない（絵の情報が優先）。
+function ensureKeepSealed(spec, keepHex){
+  const [kc,kr]=keepHex;
+  const taken={};
+  for (const kind in spec) for (const [c,r] of spec[kind]) taken[c+','+r]=kind;
+  const ring=hexNeighbors(kc,kr).filter(([c,r])=>!taken[c+','+r]);
+  if (!ring.length) return spec;                       // 既に塁か盤端で囲まれている
+  // 攻め手側（row が大きい方）を虎口にして、残りを石垣で塞ぐ
+  let open=0;
+  for (let i=1;i<ring.length;i++){
+    const a=ring[i], b=ring[open];
+    if (a[1]>b[1] || (a[1]===b[1] && Math.abs(a[0]-kc)<Math.abs(b[0]-kc))) open=i;
+  }
+  ring.forEach((cell,i)=>{
+    const kind = i===open ? 'gate' : 'stonewall';
+    (spec[kind] || (spec[kind]=[])).push(cell);
+  });
+  return spec;
+}
+// 特別城の外堀リング半径（＝城内と城外の境目）。守備隊を城外へ湧かせないための判定に使う。
+const SPECIAL_CASTLE_OUTER_DIST = SPECIAL_CASTLE_RINGS[SPECIAL_CASTLE_RINGS.length-1].dist;
+// 攻城戦の背景に使う専用画像キー。特別城は城名ごとの専用グラフィック、それ以外は城タイプ別。
+function siegeImageKeyFor(castleType, provId){
+  if (castleType==='special'){
+    const cn=castleNameForProvince(DATA.provById[provId]||{id:provId});
+    return SPECIAL_CASTLE_IMAGE_BY_NAME[cn]||'siegeHirajiro';
+  }
+  if (castleType==='yamajiro') return 'siegeYamajiro';
+  if (castleType==='hirayamajiro') return 'siegeHirayamajiro';
+  if (castleType==='umajiro') return 'siegeUmajiro';
+  return 'siegeHirajiro';
+}
 /* ══ 塁（石垣・土塁・城壁）の性質 ══
    石垣・土塁は「急な坂（法面）」であり、崩して突破口を開いても駆け上がるには手間がかかる。
    さらに塁の上には城の守備兵が詰めており、武将（スタック）が配置されていなくても
    取り付いた寄手へ石と矢を浴びせて迎撃する。以下はその数値表。 */
 // 進入に要する移動コスト（平地1マス=1）。未破壊の門・柵・石垣は isCastleBlocked が進入自体を弾くため、
 // この表が効くのは「坑道で崩した／門を破った後」と空堀。
-const RAMPART_CLIMB = { stonewall:3, wall:3, earthwork:3, gate:2, palisade:2, drymoat:2 };
+const RAMPART_CLIMB = { stonewall:3, wall:3, earthwork:3, yagura:3, gate:2, palisade:2, drymoat:2 };
 // 塁に詰める守備兵の相対量（城規模から算出した基準兵数に掛ける）
-const RAMPART_GARRISON = { stonewall:1.00, wall:0.90, earthwork:0.85, gate:1.10, palisade:0.55 };
+const RAMPART_GARRISON = { stonewall:1.00, wall:0.90, earthwork:0.85, yagura:1.20, gate:1.10, palisade:0.55 };
 // 投石1回あたり、隣接する塁1マスが寄手に与える損耗率（寄手の兵数比）
-const RAMPART_VOLLEY_RATE = { stonewall:0.024, wall:0.021, earthwork:0.019, gate:0.018, palisade:0.010 };
+const RAMPART_VOLLEY_RATE = { stonewall:0.024, wall:0.021, earthwork:0.019, yagura:0.030, gate:0.018, palisade:0.010 };
 // 投石の上限（寄手1隊が1ラウンドに失う兵数比）。取り付いているだけと、塁へ乗り込んだ迎撃で分ける
 const RAMPART_VOLLEY_CAP = 0.085, RAMPART_INTERCEPT_CAP = 0.15;
-const RAMPART_LABEL = { stonewall:'石垣', wall:'城壁', earthwork:'土塁', gate:'城門', palisade:'柵', drymoat:'空堀' };
+const RAMPART_LABEL = { stonewall:'石垣', wall:'城壁', earthwork:'土塁', yagura:'櫓', gate:'城門', palisade:'柵', drymoat:'空堀' };
+/* ══ ヘックスの侵入可否（3分類）══
+   城郭の各要素を「侵入出来る／破壊すれば侵入出来る／侵入出来ない」の3つへ正規化する。
+   盤面の枠の描き分け・凡例・進入判定(isCastleBlocked)がこの1つの表を共有するので、
+   「見た目は通れそうなのに進入できない」という食い違いが起きない。
+     open      侵入出来る       … 曲輪(二ノ丸・三ノ丸)・通路・馬出・空堀・天守／破壊済みの塁
+     breakable 破壊すれば侵入可 … 城門・柵・城壁・石垣・土塁・櫓（坑道や打ち壊しで突破口になる）
+     blocked   侵入出来ない     … 水堀（埋め立てられないため戦闘中は決して通れない） */
+const CASTLE_PASSABILITY = {
+  moat:'blocked',
+  gate:'breakable', palisade:'breakable', wall:'breakable', stonewall:'breakable',
+  earthwork:'breakable', yagura:'breakable',
+  drymoat:'open', keep:'open',
+};
+function castleCellPassability(cell){
+  if (!cell) return 'open';                       // 城郭要素のないマス＝曲輪・通路
+  const base=CASTLE_PASSABILITY[cell.kind] || 'open';
+  return (base==='breakable' && cell.destroyed) ? 'open' : base; // 破れば通れる
+}
+// 侵入可否を示す枠の色。塗り(何であるか)とは別チャンネルで、枠(通れるか)を統一して示す。
+const PASSABILITY_STROKE = {
+  blocked:  'rgba(130,198,236,0.92)', // 水色＝侵入出来ない
+  breakable:'rgba(226,178,96,0.92)',  // 橙 ＝破壊すれば侵入出来る
+};
 // 野戦の地形セル配置（戦場画像別）。各背景画像(assets/sengoku/gpt/battles/*.png)をヘックス座標へ
 // 画像解析でトレースしたもの（生成: scripts/trace-battlefield-hexes.mjs、デバッグ描画で目視検証済み）。
 // 攻城戦の CASTLE_HEX_LAYOUTS と同じ方式の野戦版。
@@ -14327,6 +14462,7 @@ class BattleScene extends GameKit.Scene {
     BGM.setMood(this.battleType==='siege' ? 'siege' : 'field'); BGM.start();
     this.castleLevel=c.defender.castleLevel||1;
     this.castleType=c.castleType || castleTypeForProvince(c.dstId, this.state.provinces[c.dstId]);
+    this.siegeImageKey=siegeImageKeyFor(this.castleType, c.dstId);
     this.castleName=(DATA.provById[c.dstId]?castleNameForProvince(DATA.provById[c.dstId]):'');
     this.castleLayout=Array.isArray(c.castleLayout)?c.castleLayout:[];
     this.weather=(c.weather&&c.weather.id)||c.weather||weatherForState(this.state).id;
@@ -14469,16 +14605,33 @@ class BattleScene extends GameKit.Scene {
     leader.col=kc; leader.row=kr; leader.castlePost='keep';
     defenders.forEach(s=>{
       if (s===leader) return;
-      if (this._cellObstructs(s.col,s.row) || this.stackAt(s.col,s.row)!==s){ const spot=this._findGarrisonSpot(); if (spot){ s.col=spot[0]; s.row=spot[1]; } }
+      if (this._cellObstructs(s.col,s.row) || this._cellOutsideCastle(s.col,s.row) || this.stackAt(s.col,s.row)!==s){
+        const spot=this._findGarrisonSpot(); if (spot){ s.col=spot[0]; s.row=spot[1]; }
+      }
     });
   }
   // 守備隊を置きたくない(通過不可 or 渡河ペナルティ)マスか。天守は可。
   _cellObstructs(c,r){ const cell=this.castleCells && this.castleCells[c+','+r]; return !!(cell && cell.kind!=='keep'); }
+  // 外堀リングより外＝城外。_buildStacks の籠城布陣は行6-7固定なので、天守が盤上部にある
+  // 特別城では城外の野原へ守備隊が湧く。生成レイアウトの城だけ城内へ引き戻す。
+  _cellOutsideCastle(c,r){
+    if (this.castleOuterDist==null || !this.keepHex) return false;
+    return hexDist(c,r,this.keepHex[0],this.keepHex[1]) >= this.castleOuterDist;
+  }
+  // 籠城する空きマスを天守に近い順（本丸→二の丸→三の丸）で探す。行5-9の固定走査では
+  // 天守の位置によって城外を指してしまうため、天守からの距離で探索する。
   _findGarrisonSpot(){
-    for (let r=5;r<=9;r++) for (let c=3;c<HEX.cols-3;c++){
-      if (this.stackAt(c,r)) continue; if (this._cellObstructs(c,r)) continue; return [c,r];
+    if (!this.keepHex) return null;
+    const [kc,kr]=this.keepHex;
+    const cells=[];
+    for (let r=0;r<HEX.rows;r++) for (let c=0;c<HEX.cols;c++){
+      if (c===kc && r===kr) continue;
+      if (this.stackAt(c,r) || this._cellObstructs(c,r) || this._cellOutsideCastle(c,r)) continue;
+      cells.push([c,r,hexDist(c,r,kc,kr)]);
     }
-    return null;
+    if (!cells.length) return null;
+    cells.sort((a,b)=> a[2]-b[2] || b[1]-a[1] || a[0]-b[0]);
+    return [cells[0][0], cells[0][1]];
   }
   _deploySiegeCannon(){
     let col=Math.floor(HEX.cols/2), row=HEX.rows-1;
@@ -14509,27 +14662,32 @@ class BattleScene extends GameKit.Scene {
     const set=(c,r,kind)=>{
       if (c<0||c>=HEX.cols||r<0||r>=HEX.rows) return;
       const k=c+','+r; if (cells[k] && cells[k].kind==='keep') return;
-      const hp = kind==='gate'?gateHp : kind==='palisade'?palHp : 0;
+      // 櫓は塁上の物見・射撃拠点。門より堅いが打ち壊せる（＝破壊すれば侵入出来る側）
+      const hp = kind==='gate'?gateHp : kind==='yagura'?Math.round(gateHp*1.3) : kind==='palisade'?palHp : 0;
       const g = RAMPART_GARRISON[kind] ? Math.round(garrisonBase*RAMPART_GARRISON[kind]) : 0;
       cells[k]={kind, hp, maxHp:hp, destroyed:false, flameT:0, garrison:g, garrison0:g, volleyT:0};
     };
-    // 専用画像の特別城(castleType==='special')は同心輪郭の平城レイアウトを既定とする
-    const spec=CASTLE_HEX_LAYOUTS[this.castleType] || CASTLE_HEX_LAYOUTS.hirajiro;
+    // 専用画像の特別城(castleType==='special')は、画像ごとにトレースした天守ヘックスを中心に
+    // 輪郭式の城郭を生成する（天守マーカーを絵の天守閣に一致させたうえで攻城手順を保つ）。
+    // 優先順: ①その城の絵をトレース済みなら CASTLE_TRACED_LAYOUTS
+    //         ②特別城は天守中心の生成リング（トレース未了の暫定レイアウト）
+    //         ③城タイプ別のトレース済みレイアウト
+    const keepHex=this.castleType==='special' ? SPECIAL_CASTLE_KEEP_HEX[this.siegeImageKey] : null;
+    const drawn=CASTLE_TRACED_LAYOUTS[this.siegeImageKey];
+    this.castleOuterDist = (keepHex && !drawn) ? SPECIAL_CASTLE_OUTER_DIST : null;
+    const spec = drawn ? ensureKeepSealed(JSON.parse(JSON.stringify(drawn)), drawn.keep[0])
+      : keepHex ? buildSpecialCastleLayout(keepHex)
+      : (CASTLE_HEX_LAYOUTS[this.castleType] || CASTLE_HEX_LAYOUTS.hirajiro);
     for (const kind in spec){ if (kind!=='keep') spec[kind].forEach(([c,r])=>set(c,r,kind)); }
     const [kc,kr]=spec.keep[0];
     cells[kc+','+kr]={kind:'keep', hp:0, maxHp:0, destroyed:false, flameT:0, garrison:0, garrison0:0, volleyT:0};
     return cells;
   }
   isWall(c,r){ const cell=this.castleCells && this.castleCells[c+','+r]; return !!(cell && cell.kind==='wall'); }
-  // 通過可否。城壁/石垣/土塁/堀＝不可、城門/柵＝未破壊なら不可(破壊で可)、空堀/天守＝可。
+  // 通過可否は CASTLE_PASSABILITY の3分類に従う（盤面の枠の描き分け・凡例と同じ定義）。
+  // 水堀＝常に不可、城門/柵/城壁/石垣/土塁/櫓＝破壊すれば可、空堀/天守/曲輪＝可。
   isCastleBlocked(c,r){
-    const cell=this.castleCells && this.castleCells[c+','+r];
-    if (!cell) return false;
-    if (cell.kind==='drymoat' || cell.kind==='keep') return false;
-    if (cell.kind==='gate' || cell.kind==='palisade') return !cell.destroyed;
-    // 石垣/城壁/土塁は本来通過不可だが、坑道戦（穴掘り）で崩落すれば突破口として通れる
-    if (cell.kind==='wall' || cell.kind==='stonewall' || cell.kind==='earthwork') return !cell.destroyed;
-    return true; // moat
+    return castleCellPassability(this.castleCells && this.castleCells[c+','+r]) !== 'open';
   }
   /* ══ 塁の登坂（機動力の制限）══
      石垣・土塁は急な坂。崩して突破口を開いても駆け上がるには手間がかかるため、
@@ -15797,13 +15955,7 @@ class BattleScene extends GameKit.Scene {
 
   /* ---- 描画 ---- */
   draw(ctx, game){
-    let siegeKey='siegeHirajiro';
-    if (this.castleType==='special'){
-      const cn=castleNameForProvince(DATA.provById[this.ctx.dstId]||{id:this.ctx.dstId});
-      siegeKey=SPECIAL_CASTLE_IMAGE_BY_NAME[cn]||'siegeHirajiro';
-    } else if (this.castleType==='yamajiro') siegeKey='siegeYamajiro';
-    else if (this.castleType==='hirayamajiro') siegeKey='siegeHirayamajiro';
-    else if (this.castleType==='umajiro') siegeKey='siegeUmajiro';
+    const siegeKey=this.siegeImageKey || siegeImageKeyFor(this.castleType, this.ctx.dstId);
     const backdrop=this.battleType==='siege' ? ASSETS.img[siegeKey] : (ASSETS.img[this.battlefieldKey] || ASSETS.img.battle);
     // 攻城戦の背景は常に等倍。城郭セル(CASTLE_HEX_LAYOUTS)は背景画像の水堀・城壁位置へ
     // トレースしてあるため、城レベルによる拡大を掛けると堀・石垣ヘックスが画像とずれる。
@@ -15858,7 +16010,11 @@ class BattleScene extends GameKit.Scene {
       if (siege && this.wallTargets && this.wallTargets[key]){ this._hexPath(ctx,x,y); ctx.save(); ctx.lineWidth=4; ctx.strokeStyle='rgba(251,191,36,0.9)'; ctx.stroke(); ctx.restore(); }
       // トレース済み戦場は背景画像の上に映える明るめの枠線（内側に淡い陰影を敷いて可読性を確保）。
       // 従来型（生成地形）の野戦は淡い枠のまま。
-      if (traced){
+      if (siege){
+        // 攻城戦の枠は「侵入可否」を示す統一チャンネル。塗り(何であるか)と分けることで、
+        // 城郭の見た目を問わず 通れる/破れば通れる/通れない が一目で分かる。
+        this._drawPassabilityFrame(ctx, cell, x, y);
+      } else if (traced){
         this._hexPath(ctx,x,y);
         ctx.lineWidth=2.4; ctx.strokeStyle='rgba(8,12,20,0.28)'; ctx.stroke();
         ctx.lineWidth=1.2; ctx.strokeStyle='rgba(233,240,250,0.34)'; ctx.stroke();
@@ -15866,6 +16022,29 @@ class BattleScene extends GameKit.Scene {
         ctx.lineWidth=1; ctx.strokeStyle='rgba(120,150,180,0.18)'; this._hexPath(ctx,x,y); ctx.stroke();
       }
     }
+  }
+  // 侵入可否の枠。3分類を「線の色・太さ・実線/破線」で描き分ける（凡例と対応）。
+  //   侵入出来ない（水堀）      : 水色の二重枠（内側にもう一本引いて"閉じている"ことを示す）
+  //   破壊すれば侵入出来る      : 橙の太い実線枠
+  //   侵入出来る（破壊済み含む） : 淡い白の細枠。破壊済みの塁は破線にして"開いた"ことを示す
+  _drawPassabilityFrame(ctx, cell, x, y){
+    const pass=castleCellPassability(cell);
+    ctx.save();
+    this._hexPath(ctx,x,y);
+    ctx.lineWidth=3.0; ctx.strokeStyle='rgba(8,12,20,0.34)'; ctx.stroke(); // 背景から浮かせる下敷き
+    if (pass==='blocked'){
+      ctx.lineWidth=4.5; ctx.strokeStyle=PASSABILITY_STROKE.blocked; ctx.stroke();
+      ctx.save(); ctx.translate(x,y); ctx.scale(0.78,0.78); ctx.translate(-x,-y);
+      this._hexPath(ctx,x,y); ctx.lineWidth=2.0; ctx.strokeStyle=PASSABILITY_STROKE.blocked; ctx.stroke();
+      ctx.restore();
+    } else if (pass==='breakable'){
+      ctx.lineWidth=4.5; ctx.strokeStyle=PASSABILITY_STROKE.breakable; ctx.stroke();
+    } else if (cell && CASTLE_PASSABILITY[cell.kind]==='breakable'){
+      ctx.setLineDash([6,5]); ctx.lineWidth=2.0; ctx.strokeStyle='rgba(233,240,250,0.55)'; ctx.stroke(); ctx.setLineDash([]);
+    } else {
+      ctx.lineWidth=1.2; ctx.strokeStyle='rgba(233,240,250,0.34)'; ctx.stroke();
+    }
+    ctx.restore();
   }
   // 野戦の地形をヘックスマーカーで描画（戦場グラフィックの手前に控えめに重ねる）。
   // _drawCastleCell と同じ流儀: 森=緑、山=土色、川=水色、水面=青の枠＋淡い塗りで背景画像と一致させる。
@@ -15895,33 +16074,27 @@ class BattleScene extends GameKit.Scene {
     if (k==='keep') return; // 天守は_drawCastleで強調
     ctx.save();
     this._hexPath(ctx,x,y);
-    if (k==='moat'){
-      // 水堀の青塗りは「背景の城グラフィックが透けて見えること」を優先して薄く敷く。
-      // 塗りを最小限にした分、識別は水色の枠線側で担保する（枠線も背景を潰さない濃さに留める）。
-      ctx.fillStyle='rgba(24,72,116,0.13)'; ctx.fill();
-      ctx.lineWidth=2.4; ctx.strokeStyle='rgba(130,198,236,0.52)'; ctx.stroke();
+    // 塗り＝「何であるか」だけを示す。枠＝「侵入可否」は _drawPassabilityFrame が統一して描く
+    // （以前は要素ごとに枠の色・太さが違い、水堀の"通れない"と石垣の"破れば通れる"が
+    //   見分けにくかった。2チャンネルに分けて役割を固定する）。
+    if (cell.destroyed){
+      // 崩した塁・破った門＝瓦礫。通れるようになったことは枠(破線)側で示す
+      ctx.fillStyle='rgba(70,64,58,0.26)'; ctx.fill();
+    } else if (k==='moat'){
+      // 水堀の青塗りは「背景の城グラフィックが透けて見えること」を優先して薄く敷く
+      ctx.fillStyle='rgba(24,72,116,0.16)'; ctx.fill();
     } else if (k==='drymoat'){
       ctx.fillStyle='rgba(120,96,58,0.20)'; ctx.fill();
-      ctx.setLineDash([6,5]); ctx.lineWidth=2; ctx.strokeStyle='rgba(210,180,120,0.52)'; ctx.stroke(); ctx.setLineDash([]);
-    } else if (k==='wall' || k==='stonewall'){
-      if (cell.destroyed){ // 坑道で崩した石垣＝突破口（瓦礫の破線）
-        ctx.fillStyle='rgba(70,64,58,0.28)'; ctx.fill();
-        ctx.setLineDash([5,5]); ctx.lineWidth=2; ctx.strokeStyle='rgba(200,180,150,0.5)'; ctx.stroke(); ctx.setLineDash([]);
-      } else {
-        ctx.fillStyle = k==='stonewall' ? 'rgba(96,92,86,0.48)' : 'rgba(80,86,96,0.48)'; ctx.fill();
-        ctx.lineWidth=4.5; ctx.strokeStyle = k==='stonewall' ? 'rgba(198,188,168,0.92)' : 'rgba(182,188,198,0.92)'; ctx.stroke();
-        ctx.lineWidth=1.5; ctx.strokeStyle='rgba(18,20,26,0.55)'; ctx.stroke();
-      }
+    } else if (k==='stonewall'){
+      ctx.fillStyle='rgba(96,92,86,0.44)'; ctx.fill();
+    } else if (k==='wall'){
+      ctx.fillStyle='rgba(80,86,96,0.44)'; ctx.fill();
     } else if (k==='earthwork'){
-      if (cell.destroyed){ ctx.fillStyle='rgba(90,72,44,0.28)'; ctx.fill(); ctx.setLineDash([5,5]); ctx.lineWidth=2; ctx.strokeStyle='rgba(180,150,100,0.5)'; ctx.stroke(); ctx.setLineDash([]); }
-      else { ctx.fillStyle='rgba(120,96,56,0.24)'; ctx.fill(); ctx.lineWidth=4; ctx.strokeStyle='rgba(160,128,80,0.78)'; ctx.stroke(); }
-    } else if (k==='palisade' || k==='gate'){
-      if (cell.destroyed){
-        ctx.setLineDash([5,5]); ctx.lineWidth=2; ctx.strokeStyle='rgba(180,150,100,0.45)'; ctx.stroke(); ctx.setLineDash([]);
-      } else {
-        ctx.fillStyle = k==='gate' ? 'rgba(74,52,30,0.32)' : 'rgba(120,84,44,0.24)'; ctx.fill();
-        ctx.lineWidth = k==='gate'?4.5:3.2; ctx.strokeStyle = k==='gate'?'rgba(216,170,98,0.88)':'rgba(198,152,86,0.78)'; ctx.stroke();
-      }
+      ctx.fillStyle='rgba(120,96,56,0.30)'; ctx.fill();
+    } else if (k==='gate'){
+      ctx.fillStyle='rgba(74,52,30,0.34)'; ctx.fill();
+    } else if (k==='palisade' || k==='yagura'){
+      ctx.fillStyle='rgba(120,84,44,0.26)'; ctx.fill();
     }
     ctx.restore();
     // 塁の表示はすべてヘックスの内側へ収める（外へはみ出すと隣のマスの駒名・守兵表示と重なる）。
@@ -16119,12 +16292,18 @@ class BattleScene extends GameKit.Scene {
   }
   _drawHUD(ctx){
     const c=this.ctx;
-    GameKit.UI.glassPanel(ctx,16,16,660,236,{radius:14,fill:'rgba(10,16,28,0.85)'});
+    GameKit.UI.glassPanel(ctx,16,16,660,(this.battleType==='siege'?282:236),{radius:14,fill:'rgba(10,16,28,0.85)'});
     const targetName=castleNameForProvince(DATA.provById[c.dstId]);
     const battleTitle=this.battleType==='siege'?targetName+'\u306e\u653b\u57ce\u6226':(this.naval?DATA.provById[c.dstId].nameJP+'\u6c96\u306e\u6d77\u6226':DATA.provById[c.dstId].nameJP+'\u4ed8\u8fd1\u306e\u6226\u3044');
     T(ctx,battleTitle,36,42,{size:30,weight:'bold',color:'#f2c879'});
      if(this.naval) T(ctx,'\u9752\u3044\u6c34\u9762= \u8239\u56e3\u306e\u79fb\u52d5\u30a8\u30ea\u30a2',36,218,{size:16,color:'#7dd3fc'});
-     else if(this.battleType==='siege') T(ctx,'青=堀 / 白=石垣・土塁（急坂：崩しても登坂に手間・坂上は移動半減）/ 兵=塁上の守備兵（隣接した寄手へ投石・乗り込めば迎撃／射撃で減らせる）/ 門・柵=破壊可 / 金枠=天守',36,218,{size:14,color:'#dbe4ee'});
+     else if(this.battleType==='siege'){
+       // 枠の色＝侵入可否の3分類（_drawPassabilityFrame と対応）。日英併記
+       T(ctx,'枠＝侵入可否  水色二重=侵入出来ない（水堀）  橙=破壊すれば侵入出来る（門・柵・城壁・石垣・土塁・櫓）',36,204,{size:14,color:'#dbe4ee'});
+       T(ctx,'細白=侵入出来る（曲輪・通路・馬出・空堀・天守）  白破線=破壊済み（侵入出来る）',36,224,{size:14,color:'#dbe4ee'});
+       T(ctx,'Frame: cyan=impassable / amber=breakable / white=passable / dashed=breached',36,243,{size:13,color:'#9fb2c6'});
+       T(ctx,'兵=塁上の守備兵  坂N=登坂コスト  金枠=天守',36,262,{size:14,color:'#dbe4ee'});
+     }
      else if(this.fieldLayout) T(ctx,'緑=森(守備+・移動遅)  /  土色=山(守備+・移動遅)  /  水色=川(移動遅)  /  青=水面(通行不可)',36,218,{size:16,color:'#dbe4ee'});
     T(ctx,'\u30e9\u30a6\u30f3\u30c9 '+this.round+' / '+this.maxRounds+'  '+(this.phase==='player'?(this.delegated?'\u81ea\u8ecd\u30bf\u30fc\u30f3\uff08\u59d4\u4efb\u4e2d\uff09':'\u81ea\u8ecd\u30bf\u30fc\u30f3'):'\u6575\u8ecd\u30bf\u30fc\u30f3'),36,82,{size:22,color:this.delegated?'#67e8f9':'#9fb2c6'});
     if(this.isNaval) T(ctx,'\u2693 \u6d77\u6226\u30fb\u6c34\u8ecd\u652f\u63f4 +'+Math.round(this.navalBonus*100)+'% / Naval support',W/2-180,42,{size:22,weight:'bold',color:'#7dd3fc'});
