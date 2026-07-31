@@ -87,6 +87,16 @@ const html = `<!doctype html>
  canvas{width:100%;max-width:1280px;height:auto;display:block;cursor:crosshair;touch-action:none}
  pre{white-space:pre-wrap;background:rgba(148,163,184,.1);padding:9px;border-radius:8px;font-size:12px;max-height:220px;overflow:auto}
  #prog{font-size:12px;color:#cbd5e1}
+ label{font-size:12px;color:#cbd5e1;display:flex;gap:4px;align-items:center;cursor:pointer}
+ .idx{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;max-height:104px;overflow:auto}
+ .idx a{font-size:11px;color:#cbd5e1;text-decoration:none;padding:3px 7px;border-radius:6px;
+   background:rgba(148,163,184,.1);display:flex;gap:5px;align-items:center}
+ .idx a:hover{background:rgba(148,163,184,.24)}
+ .dot{width:8px;height:8px;border-radius:50%;background:#64748b;flex:none}
+ .dot.ok{background:#4ade80} .dot.warn{background:#fbbf24} .dot.ng{background:#f87171}
+ .dot.todo{background:transparent;box-shadow:inset 0 0 0 1px #94a3b8}
+ body.zoom canvas{max-width:none;width:2560px}
+ .card.hidden{display:none}
 </style></head><body>
 <header>
  <h1>攻城ヘックス 侵入可否トレース / Castle Hex Passability Trace</h1>
@@ -96,7 +106,15 @@ const html = `<!doctype html>
    <button id="clearAll">保存した編集を全部捨てる</button>
    <span id="prog"></span>
  </div>
- <p class="hint">種別を選んでヘックスをクリックして塗る。右クリックで「侵入出来る」に戻す。編集はブラウザに自動保存される。<br>
+ <div class="row act" style="margin-top:6px">
+   <button id="undo">元に戻す (Ctrl+Z)</button>
+   <label><input type="checkbox" id="onlyTodo"> 未トレースの城だけ表示</label>
+   <label><input type="checkbox" id="hideGrid"> 空きマスの枠を隠す（絵を見やすく）</label>
+   <label><input type="checkbox" id="zoomOn"> 拡大（原寸2560px・横スクロール）</label>
+ </div>
+ <div class="idx" id="idx"></div>
+ <p class="hint">種別を選んで（数字キー1〜0でも選べる）ヘックスをクリック、または<b>ドラッグでなぞって連続で塗る</b>。
+ 右ドラッグで「侵入出来る」に戻す。Ctrl+Z で元に戻す。編集はブラウザに自動保存される。<br>
  枠の意味はゲーム内と同じ: <b style="color:#82c6ec">水色二重＝侵入出来ない</b> /
  <b style="color:#e2b260">橙＝破壊すれば侵入出来る</b> / 細白＝侵入出来る。<br>
  保存したJSONは <code>node scripts/apply-castle-layouts.mjs &lt;JSON&gt;</code> で sengoku.html へ反映し、
@@ -199,24 +217,47 @@ const saved=JSON.parse(localStorage.getItem(LS)||'{}');
 
 let cur='moat';
 const pal=document.getElementById('pal');
-for(const [k,label] of KINDS){
-  const b=document.createElement('button'); b.textContent=label; b.dataset.k=k;
-  b.onclick=()=>{cur=k;[...pal.children].forEach(x=>x.classList.toggle('on',x.dataset.k===k));};
+const selectKind=k=>{cur=k;[...pal.children].forEach(x=>x.classList.toggle('on',x.dataset.k===k));};
+KINDS.forEach(([k,label],i)=>{
+  const b=document.createElement('button');
+  b.textContent=((i+1)%10)+'. '+label; b.dataset.k=k;
+  b.onclick=()=>selectKind(k);
   pal.append(b);
-}
-[...pal.children].find(x=>x.dataset.k===cur).classList.add('on');
+});
+selectKind(cur);
+// 数字キー1〜0でパレットを切り替える（塗る手を止めずに種別を変えられる）
+addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT') return;
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z'){ e.preventDefault(); undo(); return; }
+  const n=e.key==='0'?10:(e.key>='1'&&e.key<='9'?Number(e.key):0);
+  if(n && KINDS[n-1]) selectKind(KINDS[n-1][0]);
+});
 
 const state={};   // id -> cells
 const touched={}; // id -> 編集済みか
+// 未トレース＝CASTLE_TRACED_LAYOUTS に無く、まだ塗っていない城（＝生成リングのまま）
+const isTodo=cas=>!cas.layout && !touched[cas.id];
 function persist(){
   const out={};
   for(const id in state) if(touched[id]) out[id]=state[id];
   localStorage.setItem(LS,JSON.stringify(out));
   const n=Object.keys(out).length;
-  document.getElementById('prog').textContent='編集済み '+n+' / '+CASTLES.length+' 城';
+  const done=typeof cards!=='undefined' ? cards.filter(e=>!isTodo(e.cas)).length : n;
+  document.getElementById('prog').textContent=
+    '編集済み '+n+' 城 / トレース済み '+done+' の '+CASTLES.length+' 城';
 }
 
 const list=document.getElementById('list');
+const cards=[];              // 索引・一括再描画・Undo から参照する
+const undoStack=[];          // {id,key,prev} を最大500件
+function pushUndo(id,key,prev){ undoStack.push({id,key,prev}); if(undoStack.length>500) undoStack.shift(); }
+function undo(){
+  const u=undoStack.pop(); if(!u) return;
+  const cells=state[u.id];
+  if(u.prev) cells[u.key]=u.prev; else delete cells[u.key];
+  persist();
+  const e=cards.find(x=>x.cas.id===u.id); if(e) e.draw();
+}
 for(const cas of CASTLES){
   const base=cas.layout?fromLayout(cas.layout):ringLayout(cas.keep);
   const cells=saved[cas.id]?{...saved[cas.id]}:base;
@@ -239,12 +280,15 @@ for(const cas of CASTLES){
     for(let i=0;i<6;i++){const a=Math.PI/180*(60*i-90),px=x+HEX.size*Math.cos(a),py=y+HEX.size*Math.sin(a);
       i?ctx.lineTo(px,py):ctx.moveTo(px,py);}
     ctx.closePath();};
+  const entry={cas,cells,card,dot:null,draw:null};
+  cards.push(entry);
   const refreshCheck=()=>{
     const {level,msgs}=checkCells(cells);
     chk.className='chk '+level;
     chk.textContent = level==='ok' ? '閉じている・落城可能'
       : level==='warn' ? ('注意: '+msgs.join(' / '))
       : ('要修正: '+msgs.join(' / '));
+    if(entry.dot) entry.dot.className='dot '+level+(isTodo(cas)?' todo':'');
   };
   const draw=()=>{
     if(img.complete&&img.naturalWidth){
@@ -256,14 +300,17 @@ for(const cas of CASTLES){
       hexPath(x,y);
       if(FILL[kind]){ctx.fillStyle=FILL[kind];ctx.fill();}
       const pass=PASS[kind]||'open';
-      ctx.lineWidth=3;ctx.strokeStyle='rgba(8,12,20,0.34)';ctx.stroke();
+      if(!(pass==='open' && !kind && document.body.classList.contains('hidegrid'))){
+        ctx.lineWidth=3;ctx.strokeStyle='rgba(8,12,20,0.34)';ctx.stroke();}
       if(pass==='blocked'){ctx.lineWidth=4.5;ctx.strokeStyle='rgba(130,198,236,0.92)';ctx.stroke();}
       else if(pass==='breakable'){ctx.lineWidth=4.5;ctx.strokeStyle='rgba(226,178,96,0.92)';ctx.stroke();}
-      else {ctx.lineWidth=1.2;ctx.strokeStyle='rgba(233,240,250,0.34)';ctx.stroke();}
+      else if(!document.body.classList.contains('hidegrid')){
+        ctx.lineWidth=1.2;ctx.strokeStyle='rgba(233,240,250,0.34)';ctx.stroke();}
       if(kind==='keep'){ctx.lineWidth=4;ctx.strokeStyle='rgba(242,200,121,0.95)';ctx.stroke();}
     }
     refreshCheck();
   };
+  entry.draw=draw;
   img.onload=draw;
   img.onerror=()=>{ctx.fillStyle='#301018';ctx.fillRect(0,0,W,H);ctx.fillStyle='#fca5a5';
     ctx.font='40px sans-serif';ctx.textAlign='center';ctx.fillText('画像が読めない: '+cas.file,W/2,H/2);};
@@ -281,13 +328,56 @@ for(const cas of CASTLES){
     if(kind) cells[c+','+r]=kind; else delete cells[c+','+r];
     touched[cas.id]=true; persist(); draw();
   };
-  cv.addEventListener('click',e=>{const [c,r]=pick(e); edit(c,r,cur);});
-  cv.addEventListener('contextmenu',e=>{e.preventDefault();const [c,r]=pick(e); edit(c,r,'');});
+  // ドラッグでなぞって連続で塗る。堀や城壁は線状に続くので1マスずつのクリックだと手数が多い
+  let painting=null;                       // 'paint' | 'erase'
+  const applyAt=e=>{
+    const [c,r]=pick(e), key=c+','+r;
+    const want = painting==='erase' ? '' : cur;
+    const prev = cells[key]||'';
+    if(prev===want) return;                // 同じ内容の再塗りはUndo履歴を汚さない
+    pushUndo(cas.id,key,prev);
+    edit(c,r,want);
+  };
+  cv.addEventListener('pointerdown',e=>{
+    if(e.button!==0 && e.button!==2) return;
+    painting = e.button===2 ? 'erase' : 'paint';
+    try{ cv.setPointerCapture(e.pointerId); }catch(_){}
+    applyAt(e); e.preventDefault();
+  });
+  cv.addEventListener('pointermove',e=>{ if(painting) applyAt(e); });
+  const stopPaint=()=>{ painting=null; };
+  cv.addEventListener('pointerup',stopPaint);
+  cv.addEventListener('pointercancel',stopPaint);
+  cv.addEventListener('contextmenu',e=>e.preventDefault());
   resetBtn.onclick=()=>{for(const k in cells)delete cells[k];Object.assign(cells,base);
     delete touched[cas.id];persist();draw();};
   outBtn.onclick=()=>{out.hidden=!out.hidden; out.textContent=blockFor(cas.id);};
 }
 persist();
+
+/* ---- 城の索引（進捗の丸印つき）。39城を延々スクロールせずに飛べるようにする ---- */
+const idx=document.getElementById('idx');
+for(const e of cards){
+  const a=document.createElement('a'); a.href='#';
+  const dot=document.createElement('span'); dot.className='dot todo';
+  a.append(dot, document.createTextNode(e.cas.label));
+  a.onclick=ev=>{ ev.preventDefault(); e.card.scrollIntoView({behavior:'smooth',block:'start'}); };
+  idx.append(a); e.dot=dot;
+}
+const redrawAll=()=>{ for(const e of cards) if(e.draw) e.draw(); };
+const applyFilter=()=>{
+  const only=document.getElementById('onlyTodo').checked;
+  for(const e of cards) e.card.classList.toggle('hidden', only && !isTodo(e.cas));
+};
+document.getElementById('onlyTodo').onchange=applyFilter;
+document.getElementById('hideGrid').onchange=ev=>{
+  document.body.classList.toggle('hidegrid', ev.target.checked); redrawAll();
+};
+document.getElementById('zoomOn').onchange=ev=>{
+  document.body.classList.toggle('zoom', ev.target.checked);
+};
+document.getElementById('undo').onclick=undo;
+redrawAll();   // 丸印を初期状態に合わせる
 
 function blockFor(id){
   const cells=state[id],by={};
