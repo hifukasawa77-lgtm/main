@@ -7278,6 +7278,26 @@ function scenarioIntroImage(id){
   if (!_scenarioIntroImgCache[id]){ const im = new Image(); im.src = src; _scenarioIntroImgCache[id] = im; }
   return _scenarioIntroImgCache[id];
 }
+// 導入画面ステージの背景（絵をぼかして暗くしたもの）。contain 配置した絵の左右に残る余白を埋める。
+// ぼかし＋cover描画は毎フレームだと重いので、低解像度のオフスクリーンに一度だけ焼いて使い回す。
+const _scenarioIntroBackdropCache = {};
+function scenarioIntroBackdrop(id, img, w, h){
+  const iw = img ? (img.naturalWidth||img.width) : 0, ih = img ? (img.naturalHeight||img.height) : 0;
+  if (!iw || !ih) return null;
+  const key = id+'@'+Math.round(w)+'x'+Math.round(h);
+  if (_scenarioIntroBackdropCache[key]) return _scenarioIntroBackdropCache[key];
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(w/4)); cv.height = Math.max(1, Math.round(h/4)); // ぼかし用途なので1/4解像度で足りる
+  const g = cv.getContext('2d');
+  if (!g) return null;
+  try { g.filter = 'blur(10px)'; } catch(e){}   // filter 未対応環境ではぼかしなしの暗い背景になる
+  // ぼかしで縁が透ける分だけ外側へはみ出して敷く
+  drawCoverImage(g, img, -12, -12, cv.width+24, cv.height+24);
+  g.filter = 'none';
+  g.fillStyle = 'rgba(5,7,13,0.66)'; g.fillRect(0, 0, cv.width, cv.height);
+  _scenarioIntroBackdropCache[key] = cv;
+  return cv;
+}
 class ScenarioSelectScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
@@ -7450,32 +7470,46 @@ class ScenarioSelectScene extends GameKit.Scene {
   // 三国志風のシナリオ導入画面（グラフィック＋年代＋タイトル＋説明）
   _drawScenarioIntro(ctx){
     const s=this.scn; if(!s) return;
-    const px=220, pw=W-440, artY=104, artH=660;   // 横長バナー（cover表示）
-    // グラフィック枠
+    // ステージ（横長の枠）は画面幅いっぱいだが、絵は 16:9 なので cover で敷くと上下が切れて
+    // 主役（騎馬武者の頭など）が欠ける。絵は必ず全体が入る contain 配置にし、
+    // 左右に残る余白は同じ絵をぼかして暗くしたものでシネマ風に埋める。
+    const stageX=220, stageW=W-440, stageY=64, stageH=782;
     ctx.save();
-    ctx.beginPath(); ctx.roundRect(px, artY, pw, artH, 22); ctx.clip();
+    ctx.beginPath(); ctx.roundRect(stageX, stageY, stageW, stageH, 22); ctx.clip();
     const img=scenarioIntroImage(s.id);
-    const ok = img && drawCoverImage(ctx, img, px, artY, pw, artH);
-    if (!ok){
-      const g=ctx.createLinearGradient(px, artY, px+pw, artY+artH);
+    const iw = img ? (img.naturalWidth||img.width) : 0, ih = img ? (img.naturalHeight||img.height) : 0;
+    if (!iw || !ih){
+      const g=ctx.createLinearGradient(stageX, stageY, stageX+stageW, stageY+stageH);
       g.addColorStop(0,'rgba(30,41,59,0.6)'); g.addColorStop(1,'rgba(24,18,34,0.6)');
-      ctx.fillStyle=g; ctx.fillRect(px, artY, pw, artH);
-      T(ctx,'読み込み中… / Loading', px+pw/2, artY+artH/2-16, {size:32, color:'#9fb2c6', align:'center'});
+      ctx.fillStyle=g; ctx.fillRect(stageX, stageY, stageW, stageH);
+      T(ctx,'読み込み中… / Loading', stageX+stageW/2, stageY+stageH/2-16, {size:32, color:'#9fb2c6', align:'center'});
     } else {
+      // 余白（背景）：ぼかし済みのオフスクリーンを焼き直さずに貼るだけ
+      const bd = scenarioIntroBackdrop(s.id, img, stageW, stageH);
+      if (bd) ctx.drawImage(bd, stageX, stageY, stageW, stageH);
+      else { ctx.fillStyle='rgba(5,7,13,0.85)'; ctx.fillRect(stageX, stageY, stageW, stageH); }
+      // 絵本体（contain＝全体表示）
+      const ar=iw/ih;
+      const aH=Math.min(stageH, stageW/ar), aW=aH*ar;
+      const aX=stageX+(stageW-aW)/2, aY=stageY+(stageH-aH)/2;
+      ctx.drawImage(img, 0, 0, iw, ih, aX, aY, aW, aH);
+      // 絵と背景の境目を締める細い縁
+      ctx.save(); ctx.beginPath(); ctx.rect(aX, aY, aW, aH);
+      ctx.strokeStyle='rgba(5,7,13,0.55)'; ctx.lineWidth=2; ctx.stroke(); ctx.restore();
       // 下部を軽く暗くして枠との境界を締める
-      const g=ctx.createLinearGradient(0, artY+artH-180, 0, artY+artH);
+      const g=ctx.createLinearGradient(0, stageY+stageH-180, 0, stageY+stageH);
       g.addColorStop(0,'rgba(5,7,13,0)'); g.addColorStop(1,'rgba(5,7,13,0.55)');
-      ctx.fillStyle=g; ctx.fillRect(px, artY+artH-180, pw, 180);
+      ctx.fillStyle=g; ctx.fillRect(stageX, stageY+stageH-180, stageW, 180);
     }
     ctx.restore();
-    ctx.save(); ctx.beginPath(); ctx.roundRect(px, artY, pw, artH, 22);
+    ctx.save(); ctx.beginPath(); ctx.roundRect(stageX, stageY, stageW, stageH, 22);
     ctx.strokeStyle='rgba(232,192,122,0.5)'; ctx.lineWidth=2.6; ctx.stroke(); ctx.restore();
     // 年代（eyebrow）＋タイトル＋英題＋説明
-    const tx=px+6, ey=artY+artH+54;
+    const tx=stageX+6, ey=stageY+stageH+52;
     T(ctx, s.year+'年  /  OPENING STORY', tx, ey, {size:32, weight:'bold', color:'#c9a86a'});
     T(ctx, s.nameJP, tx, ey+52, {size:88, weight:'bold', color:'#e8c07a', shadow:true});
     if (s.nameEN) T(ctx, s.nameEN, tx, ey+168, {size:34, color:'#a78bfa'});
-    this._wrapText(ctx, s.descJP||'', tx, ey+232, pw-12, 50, {size:34, color:'#cbd5e1'});
+    this._wrapText(ctx, s.descJP||'', tx, ey+232, stageW-12, 50, {size:34, color:'#cbd5e1'});
   }
   // 日本語向けの簡易ワードラップ（文字単位で幅に折り返す）。戻り値は次の行のy。
   _wrapText(ctx, text, x, y, maxW, lineH, opts){
