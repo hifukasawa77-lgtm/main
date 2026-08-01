@@ -76,6 +76,15 @@ function parseCsv(text) {
 const CASTLE_TYPE_FROM_JP = { '平城': 'hirajiro', '山城': 'yamajiro', '平山城': 'hirayamajiro', '館': 'yakata', '海城': 'umajiro', '特別': 'special' };
 const CASTLE_CLASS_FROM_JP = { '本城': 'honjo', '支城': 'shijo' };
 
+// 深澤が承認済みの、CSVとゲーム内データの意図的な差異。
+// 検査は続けるが FAIL ではなく「承認済みの差異」として報告し、終了コードには数えない。
+// キー: `<城名>|シナリオ<番号>領有`
+const APPROVED_DEVIATIONS = {
+  // 六角家は1568年(シナリオ3「信長上洛」)の大名一覧から外れている（滅亡済み）ため反映されず、
+  // 実際は織田領のまま動く。CSVの表記は深澤の判断で六角のまま残す（2026-08-02）。
+  '伊賀上野城|シナリオ3領有': '六角'
+};
+
 async function main() {
   const csvRows = parseCsv(fs.readFileSync(CSV_FILE, 'utf8'));
   const { server, port } = await serve(ROOT);
@@ -134,6 +143,7 @@ async function main() {
 
   const fails = [];
   const warns = [];
+  const approved = [];
   const matchedIds = new Set();
 
   csvRows.forEach(r => {
@@ -158,7 +168,9 @@ async function main() {
       const gotId = s.own[g.id];
       const got = gotId ? (s.daimyoNames[gotId] || dump.allDaimyoNames[gotId] || gotId) : '(なし)';
       if (got !== want && got !== want + '家' && got + '家' !== want) {
-        fails.push(`L${r.row} ${r.castleName}: シナリオ${i + 1}領有 期待=${want} 実際=${got}`);
+        const msg = `L${r.row} ${r.castleName}: シナリオ${i + 1}領有 期待=${want} 実際=${got}`;
+        if (APPROVED_DEVIATIONS[`${r.castleName}|シナリオ${i + 1}領有`] === want) approved.push(msg);
+        else fails.push(msg);
       } else if (gotId && !s.daimyoNames[gotId]) {
         warns.push(`L${r.row} ${r.castleName}: シナリオ${i + 1}の領有大名「${want}」がこのシナリオの大名一覧に不在`);
       }
@@ -175,6 +187,10 @@ async function main() {
     pageErrors.slice(0, 20).forEach(e => console.log('  - ' + e));
   } else {
     console.log('[PASS] pageerror 0件');
+  }
+  if (approved.length) {
+    console.log(`\n[承認済みの差異] ${approved.length}件（深澤判断・不合格には数えない）`);
+    approved.forEach(a => console.log('  - ' + a));
   }
   if (warns.length) {
     console.log(`\n[WARN] ${warns.length}件`);
