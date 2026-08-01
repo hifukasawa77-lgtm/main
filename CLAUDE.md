@@ -49,6 +49,20 @@ node scripts/verify-castle-layouts.mjs                      # 全39城を機械�
 検査内容: 天守が盤内で1マス／無傷なら天守へ到達不能／破壊可能な塁を全部破れば到達可能／城内に空きマスが十分。
 トレースが天守を囲みきれない場合は `ensureKeepSealed()` が本丸石垣＋虎口を自動で足す（素通り落城の防止）。
 
+## 戦国風雲記の武装勢力と棟梁
+
+武装勢力（`NAVAL_FORCES` / `NINJA_GROUPS` / `KOKUJIN_FORCES` / `RELIGIOUS_FORCES`、計64）は
+全勢力が `leader`（武将ID）を持ち、施設パネル右下に棟梁のグラフィックを表示する。
+割り当ての正本は `applyArmedForceLeaders()`（追加勢力が出揃った後に実行すること）。
+
+- **人物の選定方針**: 年代込みで実在を確認できた人物のみ実名登録。確認できない勢力は役職名のみの頭領とする
+  （例: 戸隠衆頭領・塩飽衆年寄・彌彦神社大宮司）。既に大名当主になっている武将を頭領に充てないこと
+- **肖像**: `buildPortraitSlots()` は `DATA.generals` 全員に連番でアトラス枠を配るため、実画像の無い武将は
+  `noAtlas:true` を付けて対象外にする（付け忘れると無関係な顔・空セルが写る）。
+  代わりに `portraitKind`（`ninja`/`monk`/`shinto`/`naval`/`kokujin`）で `drawProceduralPortrait()` の手描き風肖像に落ちる
+- **マーカーと勢力の対応はID照合**。マーカーIDは `<勢力ID>_marker` / `_pirates` / `_ninja_marker` の規約。
+  名前一致に頼ると勢力名の改称で対応が無言で切れる（軒猿→軒猿衆の改称で実際に切れていた）
+
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
 - スターター: `gamekit/template.html` をリポジトリ直下にコピーして開始する
