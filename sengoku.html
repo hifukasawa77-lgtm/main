@@ -4450,11 +4450,25 @@ async function loadOptionalImages(map, onLoad, timeoutMs=0){
   );
   return Object.fromEntries(pairs.filter(([,img])=>!!img));
 }
+// 背景読み込みの同時要求数。全アセットは300枚超・計600MB超あるため、一斉に要求すると
+// HTTP/2 の1本の接続を全員で分け合って個々が極端に遅くなり、そのとき前面で必要な画像
+// （シナリオ導入絵など）が「読み込み中…」のまま何分も待たされる。少数ずつ流して帯域を空ける。
+const DEFERRED_LOAD_CONCURRENCY = 4;
+// 後読み画像にも上限を設ける。無制限に待つと、応答の返らない1枚が同時実行枠を永久に占有し、
+// 後ろに並んだ画像が一切読み込まれなくなる（枠が空かないため）。
+const DEFERRED_LOAD_TIMEOUT_MS = 60000;
 // 背景読み込み: 各画像は完了した時点で ASSETS.img へ即時反映する（描画側が未ロードを安全に扱うため画面には順次表示される）。
-function loadImagesIntoAssets(map){
-  return Promise.all(Object.entries(map).map(([name, url]) =>
-    loadOneImage(name, url).then(([n, img]) => { if (img) ASSETS.img[n] = img; return [n, img]; })
-  ));
+async function loadImagesIntoAssets(map, concurrency=DEFERRED_LOAD_CONCURRENCY){
+  const queue = Object.entries(map);
+  let next = 0;
+  const worker = async () => {
+    while (next < queue.length){
+      const [name, url] = queue[next++];
+      const [n, img] = await loadOneImage(name, url, null, DEFERRED_LOAD_TIMEOUT_MS);
+      if (img) ASSETS.img[n] = img;
+    }
+  };
+  await Promise.all(Array.from({length: Math.min(concurrency, queue.length)}, worker));
 }
 // タイトル遷移後に、残りのアセットを優先度順（まもなく使う→後で使う）で非同期プリロードする。
 function preloadDeferredAssets(map, soon, later){
@@ -6043,6 +6057,9 @@ const RESOURCE_MARKER_STYLE = {
   church:{color:'#d7a5ed'}, in:{color:'#c59de8'}, nanban:{color:'#e7a7cf'}, tsu:{color:'#9bd8e8'}, horsefarm:{color:'#9ee6c0'}, pirate:{color:'#8fc9d8'}, kunijin:{color:'#f2c879'}, ninja:{color:'#a5b4fc'}
 };
 // GPT-image2.0 marker assets. Atlas source rectangles exclude the white gutters around the generated tiles.
+// 切り出し矩形は「原寸（生成時の解像度）」で持ち、描画時に実際の画像サイズへスケールする。
+// 直に画素値で持つと、アセットを軽量化（縮小）した瞬間に切り出しが画像外へ出て何も描かれなくなる。
+const RESOURCE_MARKER_ATLAS_REF = [1774, 887];
 const RESOURCE_MARKER_ATLAS_CELLS = {
   port:[60,46,377,382], onsen:[481,46,377,382], mine:[905,46,378,382], temple:[1329,46,378,382],
   shrine:[60,459,377,381], kunijin:[481,459,377,381], church:[905,459,378,381], nanban:[1329,459,378,381]
@@ -6051,11 +6068,19 @@ const RESOURCE_MARKER_ATLAS_KIND = {
   port:'port', tsu:'port', onsen:'onsen', gold:'mine', silver:'mine', copper:'mine',
   temple:'temple', in:'temple', shrine:'shrine', kunijin:'kunijin', church:'church', nanban:'church'
 };
+// [アセットキー, 原寸での切り出し矩形, その矩形を測った原寸サイズ]
 const RESOURCE_MARKER_SINGLE_ASSETS = {
-  pirate:['pirateMarker',[80,80,1094,1094]],
-  horsefarm:['horsefarmMarker',[80,80,1094,1094]],
-  kunijin:['kunijinMarker',[39,39,1176,1176]]
+  pirate:['pirateMarker',[80,80,1094,1094],[1254,1254]],
+  horsefarm:['horsefarmMarker',[80,80,1094,1094],[1254,1254]],
+  kunijin:['kunijinMarker',[39,39,1176,1176],[1254,1254]]
 };
+// 原寸基準の切り出し矩形を、実際に読み込まれた画像の解像度へ合わせ直す。
+function scaleSrcRect(img, rect, ref){
+  const iw=img.naturalWidth||img.width, ih=img.naturalHeight||img.height;
+  if (!ref || !ref[0] || !ref[1] || !iw || !ih) return rect;
+  const kx=iw/ref[0], ky=ih/ref[1];
+  return [rect[0]*kx, rect[1]*ky, rect[2]*kx, rect[3]*ky];
+}
 // 勢力施設は固有アイコンではなく、意味に対応する GPT-image2 アセットを表示する。
 // 砦=国人領主の砦、牧場=馬牧、海城=海城。画像が未ロードの間は既存のマーカーへフォールバックする。
 const FORCE_FACILITY_GRAPHICS = {
@@ -6147,9 +6172,11 @@ function drawResourceAtlasIcon(ctx, kind, x, y, size){
   if (siteKey && drawMapSiteImage(ctx, siteKey, x, y, size)) return true;
   const single=RESOURCE_MARKER_SINGLE_ASSETS[kind];
   const atlasKind=RESOURCE_MARKER_ATLAS_KIND[kind];
-  const src=single ? single[1] : RESOURCE_MARKER_ATLAS_CELLS[atlasKind];
+  const rect=single ? single[1] : RESOURCE_MARKER_ATLAS_CELLS[atlasKind];
+  const ref=single ? single[2] : RESOURCE_MARKER_ATLAS_REF;
   const img=single ? ASSETS.img[single[0]] : ASSETS.img.resourceMarkerAtlas;
-  if (!src || !img || !(img.naturalWidth||img.width)) return false;
+  if (!rect || !img || !(img.naturalWidth||img.width)) return false;
+  const src=scaleSrcRect(img, rect, ref);
   const d=Math.max(11,size*1.8);
   ctx.save();
   ctx.translate(x,y);
@@ -7638,6 +7665,21 @@ function scenarioIntroImage(id){
   if (!_scenarioIntroImgCache[id]){ const im = new Image(); im.src = src; _scenarioIntroImgCache[id] = im; }
   return _scenarioIntroImgCache[id];
 }
+// 導入絵は1枚2〜3MBある。6枚を一斉に要求すると帯域を6等分してしまい、実際に表示中の1枚が
+// 「読み込み中…」のまま待たされる。1枚ずつ順に温めて、表示中の絵が最速で埋まるようにする。
+function prefetchScenarioIntroArt(ids){
+  let i = 0;
+  const step = () => {
+    while (i < ids.length && !SCENARIO_INTRO_ART[ids[i]]) i++;
+    if (i >= ids.length) return;
+    const im = scenarioIntroImage(ids[i++]);
+    if (!im) return step();
+    if (im.complete) return step();
+    im.addEventListener('load', step, {once:true});
+    im.addEventListener('error', step, {once:true});
+  };
+  step();
+}
 class ScenarioSelectScene extends GameKit.Scene {
   enter(game){
     setCanvasViewportMode('fit');
@@ -7645,8 +7687,8 @@ class ScenarioSelectScene extends GameKit.Scene {
     this.particles = new GameKit.Particles(W, H, {count:56, colors:['#e8c07a','#a78bfa','#22d3ee']});
     this.t=0; this.step='scenario'; this.scn=null; this.scenarioPage=0; this.scrollDaimyo=0; this.difficulty='normal';
     this.buttons=[]; this._daimyoMaxScroll=0; this._daimyoViewport=null;
-    // 導入画面のグラフィックを先読み（表示時のちらつき防止）
-    (DATA.scenarios||[]).forEach(s=>scenarioIntroImage(s.id));
+    // 導入画面のグラフィックを先読み（表示時のちらつき防止）。1枚ずつ順に温める。
+    prefetchScenarioIntroArt((DATA.scenarios||[]).map(s=>s.id));
     this._onWheel=(e)=>{
       if (this.step!=='daimyo' || !this._daimyoViewport) return;
       const p=clientToCanvasXY(e.clientX,e.clientY);
