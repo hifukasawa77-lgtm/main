@@ -2155,8 +2155,9 @@ const GPT_ASSETS = {
 const ASSETS = { img:{}, portraitSlots:{}, portraitCols:6, portraitRows:6, kamonCols:5, kamonRows:5, extraKamonCols:4, extraKamonRows:2 };
 // 初回ロード高速化: タイトル/マップ表示に必要な最小限だけを先読みし、残りは背景で遅延読み込みする。
 // 描画側は未ロード画像を安全にフォールバックするため、遅延分は読み込み完了次第そのまま反映される。
-// CRITICAL = タイトル画像 + 日本地図 + 家紋アトラス（マップ上の家紋表示に必要）。約10MB。
-const CRITICAL_ASSET_KEYS = ['title','map','resourceMarkerAtlas','pirateMarker','horsefarmMarker','kamon','kamonRequested','kamonUserClansA','kamonUserClansB','kamonAkizukiMaritani','kamonExtra','kamonExtraWest','kamonExtraCentral','kamonRegional','kamonRedraw','kamonRedrawSix','religiousTempleKamon','religiousShrineKamon','templeKamonHieizan','templeKamonKoyasan','templeKamonKofukuji','templeKamonZuisenji','templeKamonHonshoji','templeKamonGanshoji','templeKamonYoshizaki','templeKamonNegoro','mapSiteCastle','mapCastleHirajiro','mapCastleHirayamajiro','mapCastleYamajiro','mapCastleYakata','mapCastleOdawara','mapSiteTown','mapSiteVillage','mapSiteFishingVillage','mapSitePortTown','mapSiteMine','mapSiteOnsen','mapSiteShrine','mapSiteTaisha','mapSiteTemple','mapSiteResidence','mapSiteYakata','mapSitePagoda','facilityFort','facilityPasture','facilitySeaCastle','mapCheckpoint','mapSiteNanban','mapSiteNinja'];
+// CRITICAL = タイトル画像と日本地図のみ。重い家紋・施設・城郭画像はタイトル表示後に読み込む。
+// GitHub Pages の初回アクセスで多数の大容量画像を待つと、タイトルへ遷移できず停止したように見えるため。
+const CRITICAL_ASSET_KEYS = ['title','map'];
 // 遅延分の読み込み優先度: まもなく使う（大名選択の顔画像・野戦）→ 後で使う（攻城戦の城・城郭タイル）の順。
 const DEFERRED_ASSET_PRIORITY = ['portrait','unit','battle','historicalEvents'];
 function splitAssetsByPriority(){
@@ -4396,9 +4397,20 @@ function loadSengokuJSON(key, url){
 }
 function loadOneImage(name, url, onLoad){
   return new Promise(resolve=>{
+    let settled=false;
+    let timer=0;
+    const finish=(img)=>{
+      if (settled) return;
+      settled=true;
+      if (timer) clearTimeout(timer);
+      if(onLoad) onLoad();
+      resolve([name, img]);
+    };
     const img = new Image();
-    img.onload = () => { if(onLoad) onLoad(); resolve([name, img]); };
-    img.onerror = err => { console.warn('Optional image failed:', url, err); if(onLoad) onLoad(); resolve([name, null]); };
+    img.onload = () => finish(img);
+    img.onerror = err => { console.warn('Optional image failed:', url, err); finish(null); };
+    // 接続不良やCDN応答待ちの画像一枚で起動全体を止めない。
+    timer=setTimeout(()=>{ console.warn('Optional image timed out:', url); finish(null); }, 15000);
     img.src = url;
   });
 }
