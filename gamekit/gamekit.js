@@ -15,6 +15,26 @@
 (function (global) {
   'use strict';
 
+  // CanvasRenderingContext2D.roundRect は古い Edge / WebView では未実装のため互換実装を用意する。
+  // UI描画が最初のパネルで例外停止し、背景画像だけが残る問題を防ぐ。
+  if (global.CanvasRenderingContext2D && !global.CanvasRenderingContext2D.prototype.roundRect) {
+    global.CanvasRenderingContext2D.prototype.roundRect = function (x, y, width, height, radius) {
+      const r0 = Array.isArray(radius) ? radius[0] : (radius == null ? 0 : radius);
+      const r = Math.max(0, Math.min(Number(r0) || 0, Math.abs(width) / 2, Math.abs(height) / 2));
+      const right = x + width, bottom = y + height;
+      this.moveTo(x + r, y);
+      this.lineTo(right - r, y);
+      this.quadraticCurveTo(right, y, right, y + r);
+      this.lineTo(right, bottom - r);
+      this.quadraticCurveTo(right, bottom, right - r, bottom);
+      this.lineTo(x + r, bottom);
+      this.quadraticCurveTo(x, bottom, x, bottom - r);
+      this.lineTo(x, y + r);
+      this.quadraticCurveTo(x, y, x + r, y);
+      return this;
+    };
+  }
+
   const GameKit = {};
 
   /* ----------------------------------------------------------------------

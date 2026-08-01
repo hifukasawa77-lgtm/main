@@ -2175,14 +2175,16 @@ const GPT_ASSETS = {
   facilityFort: 'assets/sengoku/gpt/map-sites/sengoku-map-kunijin-fort-gpt-image-2.png',
   facilityPasture: 'assets/sengoku/gpt/map-sites/village.png',
   facilitySeaCastle: 'assets/sengoku/gpt/sengoku-map-sea-castle-gpt-image-2.png',
+  mapCheckpoint: 'assets/sengoku/gpt/map-sites/sengoku-map-checkpoint-gpt-image-2.png',
   mapSiteNanban: 'assets/sengoku/gpt/sengoku-map-nanbando-seminario-gpt-image-2.png',
   mapSiteNinja: 'assets/sengoku/gpt/sengoku-map-ninja-residence-gpt-image-2.png',
 };
 const ASSETS = { img:{}, portraitSlots:{}, portraitCols:6, portraitRows:6, kamonCols:5, kamonRows:5, extraKamonCols:4, extraKamonRows:2 };
 // 初回ロード高速化: タイトル/マップ表示に必要な最小限だけを先読みし、残りは背景で遅延読み込みする。
 // 描画側は未ロード画像を安全にフォールバックするため、遅延分は読み込み完了次第そのまま反映される。
-// CRITICAL = タイトル画像 + 日本地図 + 家紋アトラス（マップ上の家紋表示に必要）。約10MB。
-const CRITICAL_ASSET_KEYS = ['title','map','resourceMarkerAtlas','pirateMarker','horsefarmMarker','kamon','kamonRequested','kamonUserClansA','kamonUserClansB','kamonAkizukiMaritani','kamonExtra','kamonExtraWest','kamonExtraCentral','kamonRegional','kamonRedraw','kamonRedrawSix','religiousTempleKamon','religiousShrineKamon','templeKamonHieizan','templeKamonKoyasan','templeKamonKofukuji','templeKamonZuisenji','templeKamonHonshoji','templeKamonGanshoji','templeKamonYoshizaki','templeKamonNegoro','mapSiteCastle','mapCastleHirajiro','mapCastleHirayamajiro','mapCastleYamajiro','mapCastleYakata','mapCastleOdawara','mapSiteTown','mapSiteVillage','mapSiteFishingVillage','mapSitePortTown','mapSiteMine','mapSiteOnsen','mapSiteShrine','mapSiteTaisha','mapSiteTemple','mapSiteResidence','mapSiteYakata','mapSitePagoda','facilityFort','facilityPasture','facilitySeaCastle','mapSiteNanban','mapSiteNinja'];
+// CRITICAL = タイトル画像と日本地図のみ。重い家紋・施設・城郭画像はタイトル表示後に読み込む。
+// GitHub Pages の初回アクセスで多数の大容量画像を待つと、タイトルへ遷移できず停止したように見えるため。
+const CRITICAL_ASSET_KEYS = ['title','map'];
 // 遅延分の読み込み優先度: まもなく使う（大名選択の顔画像・野戦）→ 後で使う（攻城戦の城・城郭タイル）の順。
 const DEFERRED_ASSET_PRIORITY = ['portrait','unit','battle','historicalEvents'];
 function splitAssetsByPriority(){
@@ -4422,9 +4424,20 @@ function loadSengokuJSON(key, url){
 }
 function loadOneImage(name, url, onLoad){
   return new Promise(resolve=>{
+    let settled=false;
+    let timer=0;
+    const finish=(img)=>{
+      if (settled) return;
+      settled=true;
+      if (timer) clearTimeout(timer);
+      if(onLoad) onLoad();
+      resolve([name, img]);
+    };
     const img = new Image();
-    img.onload = () => { if(onLoad) onLoad(); resolve([name, img]); };
-    img.onerror = err => { console.warn('Optional image failed:', url, err); if(onLoad) onLoad(); resolve([name, null]); };
+    img.onload = () => finish(img);
+    img.onerror = err => { console.warn('Optional image failed:', url, err); finish(null); };
+    // 接続不良やCDN応答待ちの画像一枚で起動全体を止めない。
+    timer=setTimeout(()=>{ console.warn('Optional image timed out:', url); finish(null); }, 15000);
     img.src = url;
   });
 }
@@ -6222,20 +6235,13 @@ function drawCastleIcon(ctx, x, y, size, color, shadow=null){
 }
 // 関所（プレイヤーが街道に設置する検問所）のベクターアイコン。門柱2本＋屋根付き横木。
 function drawCheckpointIcon(ctx, x, y, size, color){
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=4; ctx.shadowOffsetY=2;
-  ctx.fillStyle='rgba(10,14,20,0.92)';
-  ctx.fillRect(-size*0.42,-size*0.50,size*0.16,size*0.90);
-  ctx.fillRect(size*0.26,-size*0.50,size*0.16,size*0.90);
-  ctx.fillStyle=color || '#f2b84b';
-  ctx.beginPath();
-  ctx.moveTo(-size*0.52,-size*0.30); ctx.lineTo(0,-size*0.62); ctx.lineTo(size*0.52,-size*0.30);
-  ctx.lineTo(size*0.52,-size*0.14); ctx.lineTo(0,-size*0.44); ctx.lineTo(-size*0.52,-size*0.14);
-  ctx.closePath(); ctx.fill();
-  ctx.strokeStyle='rgba(2,6,23,0.75)'; ctx.lineWidth=Math.max(1,size*0.06);
-  ctx.beginPath(); ctx.moveTo(-size*0.42,size*0.06); ctx.lineTo(size*0.42,size*0.06); ctx.stroke();
-  ctx.restore();
+  const art=ASSETS.img.mapCheckpoint;
+  if(art&&(art.naturalWidth||art.width)){
+    const s=size*2.7; ctx.save(); ctx.globalCompositeOperation='screen'; ctx.globalAlpha=0.96; ctx.drawImage(art,x-s/2,y-s*.63,s,s); ctx.restore(); return;
+  }
+  ctx.save(); ctx.translate(x, y); ctx.shadowColor='rgba(0,0,0,0.55)'; ctx.shadowBlur=4; ctx.shadowOffsetY=2;
+  ctx.fillStyle='rgba(10,14,20,0.92)'; ctx.fillRect(-size*0.42,-size*0.50,size*0.16,size*0.90); ctx.fillRect(size*0.26,-size*0.50,size*0.16,size*0.90);
+  ctx.fillStyle=color || '#f2b84b'; ctx.beginPath(); ctx.moveTo(-size*0.52,-size*0.30); ctx.lineTo(0,-size*0.62); ctx.lineTo(size*0.52,-size*0.30); ctx.lineTo(size*0.52,-size*0.14); ctx.lineTo(0,-size*0.44); ctx.lineTo(-size*0.52,-size*0.14); ctx.closePath(); ctx.fill(); ctx.restore();
 }
 // 城マーカーのスプライト（Cycle 8）: 家紋（299%以下）を clanId×色 でキー化して1枚に焼き込む。
 // 300%以上のアセット城グラフィックは家紋の2.5倍（世界32.5px）と大きく、この216px焼き込み
@@ -7529,6 +7535,16 @@ function drawButton(ctx, b, t){
       T(ctx, b.label||b.jp||'', b.x+labelX, b.y+b.h/2-sz*0.6, {size:sz, weight:'bold', color:enabled?'#f7ead0':'#756d60'});
     }
     return;
+  }
+  if (b.skin==='roadTool'){
+    const active=(b.tool==='road'&&b.label==='完了')||(b.tool==='checkpoint'&&b.label==='完了');
+    const accent=b.tool==='road'?'#d7a84d':'#d46a3d', accent2=b.tool==='road'?'#6d4320':'#732d1e';
+    ctx.save(); const g=ctx.createLinearGradient(b.x,b.y,b.x+b.w,b.y+b.h); g.addColorStop(0,active?'rgba(91,57,20,0.96)':'rgba(27,22,15,0.94)'); g.addColorStop(1,active?'rgba(41,25,12,0.96)':'rgba(12,16,21,0.96)');
+    ctx.beginPath();ctx.roundRect(b.x,b.y,b.w,b.h,10);ctx.fillStyle=g;ctx.fill();ctx.lineWidth=active?2.8:1.8;ctx.strokeStyle=active?accent:'rgba(220,177,93,0.72)';ctx.stroke();
+    const ix=b.x+26, iy=b.y+b.h/2;
+    if(b.tool==='road'){ ctx.lineCap='round';ctx.strokeStyle='rgba(39,24,12,0.96)';ctx.lineWidth=13;ctx.beginPath();ctx.moveTo(ix-12,iy+16);ctx.bezierCurveTo(ix-3,iy+4,ix-1,iy-5,ix+14,iy-16);ctx.stroke();ctx.strokeStyle=accent;ctx.lineWidth=5;ctx.setLineDash([8,5]);ctx.stroke();ctx.setLineDash([]); }
+    else { ctx.fillStyle='#2b1b12';ctx.fillRect(ix-13,iy-11,26,24);ctx.fillStyle=accent;ctx.fillRect(ix-10,iy-8,20,19);ctx.fillStyle='#1a1210';ctx.fillRect(ix-3,iy+1,6,10);ctx.beginPath();ctx.moveTo(ix-17,iy-9);ctx.lineTo(ix,iy-22);ctx.lineTo(ix+17,iy-9);ctx.closePath();ctx.fillStyle=accent2;ctx.fill(); }
+    T(ctx,b.label||'',b.x+50,b.y+b.h/2-(b.en?15:0),{size:Math.round((b.sz||22)*uiScale),weight:'bold',color:'#fff3d5'}); if(b.en)T(ctx,b.en,b.x+52,b.y+b.h/2+17,{size:Math.max(11,Math.round((b.sz||22)*uiScale*.42)),weight:'bold',color:accent});ctx.restore();return;
   }
   if (b.skin==='topBar'){
     ctx.save();
@@ -10790,8 +10806,8 @@ class MapScene extends GameKit.Scene {
     bs.push({x:colX0, y:rowZoom, w:zW, h:zH, skin:'topBar', label:'＋', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }, noScale:true});
     bs.push({x:colX0+zW+(IS_TOUCH?18:48), y:rowZoom, w:zW, h:zH, skin:'topBar', label:'－', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }, noScale:true});
     bs.push({x:colX0, y:rowDev0, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'大名編集', sz:dSz2, action:g=>this._openDaimyoEditPanel(g), noScale:true});
-    bs.push({x:colX2, y:rowDev0, w:dW, h:dH, skin:'topBar', label:this.roadEdit?'完了':'街道編集', sz:dSz2, action:g=>{ this.roadEdit?this._finishRoadEdit(g):this._startRoadEdit(g); }, noScale:true});
-    bs.push({x:colX3, y:rowDev0, w:dW, h:dH, skin:'topBar', label:this.checkpointEdit?'完了':'関所配置', sz:dSz2, action:g=>{ this.checkpointEdit?this._finishCheckpointEdit(g):this._startCheckpointEdit(g); }, noScale:true});
+    bs.push({x:colX2, y:rowDev0, w:dW, h:dH, skin:'roadTool', tool:'road', label:this.roadEdit?'完了':'街道編集', en:this.roadEdit?'FINISH':'DRAW ROAD', sz:dSz2, action:g=>{ this.roadEdit?this._finishRoadEdit(g):this._startRoadEdit(g); }, noScale:true});
+    bs.push({x:colX3, y:rowDev0, w:dW, h:dH, skin:'roadTool', tool:'checkpoint', label:this.checkpointEdit?'完了':'関所配置', en:this.checkpointEdit?'FINISH':'PLACE CHECKPOINT', sz:dSz2, action:g=>{ this.checkpointEdit?this._finishCheckpointEdit(g):this._startCheckpointEdit(g); }, noScale:true});
     bs.push({x:colX0, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'城編集一覧', sz:dSz2, action:g=>this._openCastleListPanel(g), noScale:true});
     bs.push({x:colX2, y:rowDev1, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'勢力・施設編集一覧', sz:dSz2, action:g=>this._openForceListPanel(g), noScale:true});
     bs.push({x:colX0, y:rowDev2, w:dW, h:dH, skin:'topBar', label:this.castleEdit?'完了':'城位置編集', sz:dSz2, action:g=>{ this.castleEdit?this._finishCastleEdit(g):this._startCastleEdit(g); }, noScale:true});
@@ -11368,6 +11384,7 @@ class MapScene extends GameKit.Scene {
     // 下地（濃い縁取り）→ 路面（明るい土色）の二層で立体感を出す
     ctx.strokeStyle='rgba(58,42,24,0.50)'; ctx.lineWidth=base+1.8; ctx.stroke(path);
     ctx.strokeStyle='rgba(212,182,128,0.60)'; ctx.lineWidth=base; ctx.stroke(path);
+    if(preview){ ctx.strokeStyle='rgba(255,218,128,0.96)'; ctx.lineWidth=base*0.58; ctx.setLineDash([base*2.2,base*1.3]); ctx.stroke(path); ctx.setLineDash([]); }
     // 高ズームでは中央に破線を重ね、街道らしい質感にする
     if (z>=6){
       ctx.strokeStyle='rgba(120,92,54,0.55)';
@@ -11380,7 +11397,7 @@ class MapScene extends GameKit.Scene {
   // 直線・明るめの実線で描く。取り消し（削除）はこの道を _pickRoad で拾うことで行う。
   // 街道はプレイヤーがドラッグで描いた折れ線をそのまま描画する（拠点の位置合わせは開始/終了点のみ）。
   _drawCustomRoads(ctx){
-    if (!CUSTOM_ROADS.length) return;
+    if (!CUSTOM_ROADS.length && !(this.roadEdit&&this.roadDraw&&this.roadDraw.path&&this.roadDraw.path.length>1)) return;
     const clip=MAP.clip, z=this.cam.zoom;
     const path=new Path2D(); let any=false;
     for (const road of CUSTOM_ROADS){
@@ -11391,13 +11408,16 @@ class MapScene extends GameKit.Scene {
       if (maxx<clip.x||minx>clip.x+clip.w||maxy<clip.y||miny>clip.y+clip.h) continue; // 画面外はカリング
       this._catmullPath(path, sp); any=true;
     }
+    const preview=this.roadEdit&&this.roadDraw&&this.roadDraw.path&&this.roadDraw.path.length>1?this._roadScreenPath({path:this.roadDraw.path}):null;
+    if(preview&&preview.length>1){ this._catmullPath(path,preview); any=true; }
     if (!any) return;
     const base=clamp(z*0.42, 1.4, 6);
     ctx.save();
     ctx.beginPath(); ctx.rect(clip.x,clip.y,clip.w,clip.h); ctx.clip();
     ctx.lineCap='round'; ctx.lineJoin='round';
-    ctx.strokeStyle='rgba(30,58,95,0.55)'; ctx.lineWidth=base+1.6; ctx.stroke(path);
-    ctx.strokeStyle='rgba(147,197,253,0.75)'; ctx.lineWidth=base*0.75; ctx.stroke(path);
+    ctx.strokeStyle='rgba(58,42,24,0.62)'; ctx.lineWidth=base+2.2; ctx.stroke(path);
+    ctx.strokeStyle='rgba(224,184,118,0.84)'; ctx.lineWidth=base; ctx.stroke(path);
+    if(preview){ ctx.strokeStyle='rgba(255,226,142,0.98)'; ctx.lineWidth=base*0.58; ctx.setLineDash([base*2.2,base*1.3]); ctx.stroke(path); ctx.setLineDash([]); }
     ctx.restore();
   }
   // 街道に設置された関所（CUSTOM_CHECKPOINTS）。位置は道の折れ線上の弧長割合(frac)から都度算出する。
