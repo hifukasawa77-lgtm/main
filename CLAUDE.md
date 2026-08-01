@@ -49,6 +49,19 @@ node scripts/verify-castle-layouts.mjs                      # 全39城を機械�
 検査内容: 天守が盤内で1マス／無傷なら天守へ到達不能／破壊可能な塁を全部破れば到達可能／城内に空きマスが十分。
 トレースが天守を囲みきれない場合は `ensureKeepSealed()` が本丸石垣＋虎口を自動で足す（素通り落城の防止）。
 
+## 戦国風雲記の必須チェック（sengoku.html を触ったら必ず実行）
+
+```bash
+node scripts/verify-sengoku-boot.mjs   # 起動して遊べるか（タイトル→マップ→街道編集→ターン終了で例外0件）
+node scripts/verify-castle-csv.mjs     # siro_ichi.csv の全行がゲーム内データと一致するか
+node scripts/verify-castle-layouts.mjs # 攻城レイアウト39城
+```
+
+- **タイトル画面が出た＝起動成功ではない**。描画ループの例外は「背景画像だけ残してUIが出ない」形で現れ、タイトルは無事に出る。必ず `verify-sengoku-boot.mjs` でマップ画面まで入って確かめること（2026-08-02: `_drawRoads` の `preview is not defined` を「アセット読込が重い」「roundRect非対応」と誤診して3コミット費やした）
+- GameKit のループは update/draw の例外を捕捉して継続し `engine.errors` に積む。**そのため `pageerror` だけ見る検査は素通りする**。描画系の検査を書くときは必ず `engine.errors` も合算する
+- 城データの正本は `siro_ichi.csv`。取り込みは追加・更新のみで**削除はしない**ため、行を消しても城はゲーム内に残り座標だけ内蔵値へ戻る。差し替え時は `verify-castle-csv.mjs` の「CSV外の城が残存」警告を必ず確認する
+- 地図画像は絵地図で `geoToScreen` の緯度経度換算と一致しない（九州はx方向に約380pxずれる）。**新しい城の座標は近傍城のCSV値から局所アフィン内挿で起こす**。城どうしの最短間隔は11px程度が下限
+
 ## 戦国風雲記の武装勢力と棟梁
 
 武装勢力（`NAVAL_FORCES` / `NINJA_GROUPS` / `KOKUJIN_FORCES` / `RELIGIOUS_FORCES`、計64）は

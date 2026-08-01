@@ -72,14 +72,38 @@
         if (!this._running) return;
         const dt = Math.min((t - this._last) / 1000, 0.1);
         this._last = t;
-        if (!this.isPaused && this.scene) {
-          this.scene.update(dt, this);
-          this.scene.draw(this.ctx, this);
+        // update/draw の例外でループ自体を止めない。止めると次フレームが予約されず、
+        // 描きかけのフレーム（＝背景画像だけ）が固まったまま入力も効かなくなり、
+        // 「ゲームが起動しない」ようにしか見えなくなる（原因の特定が極端に難しくなる）。
+        // 例外は握り潰さず console へ出し、engine.errors に積んで検査から拾えるようにする。
+        try {
+          if (!this.isPaused && this.scene) {
+            this.scene.update(dt, this);
+            this.scene.draw(this.ctx, this);
+          }
+        } catch (e) {
+          this._reportFrameError(e);
         }
-        this.input.endFrame();
+        try { this.input.endFrame(); } catch (e) { this._reportFrameError(e); }
         this._raf = requestAnimationFrame(loop);
       };
       this._raf = requestAnimationFrame(loop);
+    }
+
+    // フレーム内で出た例外の記録。同じメッセージのログ連投は抑えつつ、発生回数は数え続ける。
+    // errors[] は「起動して遊べるか」を見る検査（scripts/verify-sengoku-boot.mjs）が参照する。
+    _reportFrameError(e) {
+      if (!this.errors) this.errors = [];
+      const message = (e && (e.stack || e.message)) ? String(e.stack || e.message) : String(e);
+      const key = message.split('\n').slice(0, 2).join(' | ');
+      let rec = this.errors.find((r) => r.key === key);
+      if (!rec) {
+        rec = { key: key, count: 0 };
+        if (this.errors.length < 50) this.errors.push(rec);
+      }
+      rec.count++;
+      if (rec.count <= 3) console.error('[GameKit] フレーム処理で例外:', e);
+      else if (rec.count === 4) console.error('[GameKit] 同一の例外が続くため以降のログを抑制:', key);
     }
 
     stop() {
