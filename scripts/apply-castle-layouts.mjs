@@ -107,8 +107,24 @@ const body = Object.entries(merged)
   .join('\n');
 const nextSrc = src.replace(blockRe, (_, a, __, c) => a + '\n' + body + c);
 
+/* ---------- SPECIAL_CASTLE_KEEP_HEX の同期 ----------
+   トレースした天守が正。ここがずれたままだと「トレースを外したときの生成リング」が
+   別の場所に城を組み立ててしまい、データが自分自身と矛盾する。 */
+let keepSynced = [];
+let syncSrc = nextSrc;
+for (const [id, layout] of special) {
+  const [c, r] = layout.keep[0];
+  const re = new RegExp(`(\\b${id}\\s*:\\s*)\\[\\s*\\d+\\s*,\\s*\\d+\\s*\\]`);
+  const m2 = syncSrc.match(re);
+  if (!m2) continue;                                  // 特別城として登録されていない画像キー
+  const before = m2[0];
+  const after = `${m2[1]}[${c},${r}]`;
+  if (before !== after) { keepSynced.push(`${id} ${before.replace(/\s+/g, '')} → [${c},${r}]`); }
+  syncSrc = syncSrc.replace(re, after);
+}
+
 /* ---------- CASTLE_HEX_LAYOUTS（城タイプ別4種） ---------- */
-let out = nextSrc;
+let out = syncSrc;
 for (const [id, layout] of types) {
   const type = TYPE_BY_KEY[id];
   const re = new RegExp(`(\\n  ${type}: \\{)[\\s\\S]*?(\\n  \\},?)`);
@@ -122,6 +138,10 @@ for (const [id, layout] of Object.entries(input)) {
   const blocked = (layout.moat || []).length;
   const breakable = KINDS.filter(k => PASSABILITY[k] === 'breakable').reduce((n, k) => n + ((layout[k] || []).length), 0);
   console.log(`${TYPE_BY_KEY[id] ? '[城タイプ] ' : '[特別城] '}${id.padEnd(22)} 侵入不可${String(blocked).padStart(3)} / 破壊で侵入可${String(breakable).padStart(3)}   ${counts}`);
+}
+if (keepSynced.length) {
+  console.log('\nSPECIAL_CASTLE_KEEP_HEX をトレースの天守に合わせて更新:');
+  for (const line of keepSynced) console.log('  ' + line);
 }
 console.log(`\n特別城 ${special.length}城 / 城タイプ ${types.length}種 を反映${dry ? '（--dry のため書き込まない）' : ''}`);
 
