@@ -28,7 +28,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 定義は `sengoku.html` の `CASTLE_PASSABILITY` に一本化してある（進入判定・枠の描き分け・凡例が共有）。
 
 - 城郭レイアウトの優先順: ①`CASTLE_TRACED_LAYOUTS`（絵をトレース済み）→ ②特別城は天守中心の生成リング → ③`CASTLE_HEX_LAYOUTS`（城タイプ別）
-- 天守の位置は `SPECIAL_CASTLE_KEEP_HEX`（特別城35城分、専用画像からトレース済み）
+- 天守の位置は `SPECIAL_CASTLE_KEEP_HEX`（特別城20城分、専用画像からトレース済み）
 - **自動画像分類は使わない**。手トレース済み4城を正解として実測した結果、しきい値方式で水堀の適合率46%/再現率48%（全マスopenと答える基準値と同等以下）、領域成長法でF1 0.22。写実CGのため水堀・石垣・曲輪・遠景の水田の色差が数階調しかない
 
 ### トレース手順
@@ -37,14 +37,14 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 **`sengoku.html` のレイアウトを更新したら、必ず再生成してコミットし直すこと**（初期値が古いままになる）。
 
 ```bash
-node scripts/trace-castle-layout.mjs          # 編集ページを再生成（39城・現在の状態を初期値に）
+node scripts/trace-castle-layout.mjs          # 編集ページを再生成（24城・現在の状態を初期値に）
 node scripts/trace-castle-layout.mjs --serve  # 生成してローカルURLで開く（手元で作業する場合）
 # 絵を見てヘックスを塗る（編集はブラウザに自動保存）
 #   ドラッグでなぞって連続塗り／数字キー1〜0で種別切替／右ドラッグで消去／Ctrl+Zで取り消し
 #   上部の索引から城へジャンプ。丸印が進捗（緑=OK 黄=注意 赤=要修正 白抜き=未トレース）
 #   城ごとに「閉じている・落城可能」を即時判定。要修正（赤）が出たら直す
 node scripts/apply-castle-layouts.mjs castle-layouts.json   # sengoku.html へ反映
-node scripts/verify-castle-layouts.mjs                      # 全39城を機械検査（必須）
+node scripts/verify-castle-layouts.mjs                      # 全24城を機械検査（必須）
 ```
 検査内容: 天守が盤内で1マス／無傷なら天守へ到達不能／破壊可能な塁を全部破れば到達可能／城内に空きマスが十分。
 トレースが天守を囲みきれない場合は `ensureKeepSealed()` が本丸石垣＋虎口を自動で足す（素通り落城の防止）。
@@ -54,7 +54,7 @@ node scripts/verify-castle-layouts.mjs                      # 全39城を機械�
 ```bash
 node scripts/verify-sengoku-boot.mjs   # 起動して遊べるか（タイトル→マップ→街道編集→ターン終了で例外0件）
 node scripts/verify-castle-csv.mjs     # siro_ichi.csv の全行がゲーム内データと一致するか
-node scripts/verify-castle-layouts.mjs # 攻城レイアウト39城
+node scripts/verify-castle-layouts.mjs # 攻城レイアウト24城
 node scripts/verify-map-assets.mjs     # マップアイコンが実際に絵として描かれるか（アセットを差し替えたら必須）
 ```
 
@@ -63,7 +63,8 @@ node scripts/verify-map-assets.mjs     # マップアイコンが実際に絵と
 - 城データの正本は `siro_ichi.csv`。取り込みは追加・更新のみで**削除はしない**ため、行を消しても城はゲーム内に残り座標だけ内蔵値へ戻る。差し替え時は `verify-castle-csv.mjs` の「CSV外の城が残存」警告を必ず確認する
 - 地図画像は絵地図で `geoToScreen` の緯度経度換算と一致しない（九州はx方向に約380pxずれる）。**新しい城の座標は近傍城のCSV値から局所アフィン内挿で起こす**。城どうしの最短間隔は11px程度が下限
 - **アセットを縮小・再エンコードするときは、そのアセットを切り出して使っている箇所を必ず洗う**。`drawImage` の source-rect を画素値で直書きしていると、縮小した瞬間に矩形が画像外へ出て絵が消える。読み込みは成功するので404もエラーも出ず、無言で絵だけが消える（2026-08-02: 1254px→256px でマーカー4種が塗り面積0〜3.5%に）。矩形は「測った原寸サイズ」と対で持ち、描画時に実解像度へスケールする（`scaleSrcRect`）
-- **アセットは300枚超・計638MBある。全部を一度に要求しない**。後読みは同時4枚まで＋1枚60秒上限（`DEFERRED_LOAD_CONCURRENCY` / `DEFERRED_LOAD_TIMEOUT_MS`）。無制限に並列要求すると帯域を食い合い、そのとき前面で必要な画像が「読み込み中…」のまま何分も待たされる
+- **アセットは全てWebP**（2026-08-02に PNG 660MB → WebP q90 89MB へ再エンコード）。追加・差し替えは `python3 scripts/optimize-sengoku-assets.py` を通す。**解像度は変えない**（上記の source-rect が壊れるため）。PNGを直接足すと容量が跳ねるので置かないこと
+- **一度に全部を要求しない**。後読みは同時4枚まで＋1枚60秒上限（`DEFERRED_LOAD_CONCURRENCY` / `DEFERRED_LOAD_TIMEOUT_MS`）。`ASSETS.img` は Proxy で、描画側が未ロードのキーに触れた瞬間そのアセットをキューの最優先へ引き上げる（先読み順の決め打ちに頼らない）
 - **施設・城グラフィックには未ロード時のフォールバック描画がある**（仮のベクター図形＝白い箱）。読み込みが遅いとこれが長時間表示され「画像が壊れている」ように見える。アイコンの不具合を調べるときは、primary が生きていると再現しないので `ASSETS.img` から該当キーを消してフォールバック経路を直接確かめること
 
 ## 戦国風雲記の武装勢力と棟梁
