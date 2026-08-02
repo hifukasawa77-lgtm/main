@@ -22,6 +22,30 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - ライブラリを追加する場合はCDN経由、ビルドツール不使用
 - ゲーム系はCanvas APIのみで完結させる方針
 
+## 画像アセットの方針（全ゲーム共通）
+**アセットは原則WebP**。2026-08-02 に全ゲームを PNG/JPG → WebP q90 へ再エンコードし、
+リポジトリを 1.6GB → 264MB（assets は 1.5GB → 209MB）に縮小した。GitHub Pages の
+公開サイト上限1GBを下回るために必要。新規アセットも WebP で追加すること。
+
+```bash
+python3 scripts/optimize-assets.py --dir assets/<game> --dry-run  # 変換量の確認
+python3 scripts/optimize-assets.py --dir assets/<game>            # 変換＋参照書換＋元削除
+python3 scripts/fix-webp-refs.py                                  # 取りこぼした参照を修復
+node scripts/verify-game-assets.mjs                               # 全ページで404・例外を検査（必須）
+```
+
+- **解像度は変えない**。`drawImage` の source-rect を画素値で直書きしている描画があると、
+  縮小した瞬間に矩形が画像外へ出て**無言で絵が消える**（404もエラーも出ない）
+- **アルファは必ず保つ**。RGBA を RGB で保存すると背景が白い箱になる
+- **実行時に組み立てるパスは一括置換で直らない**。`` `${DIR}/${type}.png` `` や
+  `BASE + id + '.png'` は手で直す。`optimize-assets.py` が該当行を警告する
+- **参照はフルパスとは限らない**。`ASSET_ROOT + 'gpt/foo.png'` のような分割記法や
+  **CSSの `background-image`** も対象。`.css` を検査対象から外すと無言で壊れる
+- **ファイル名の部分一致で置換しない**。`hero.jpg` が `misato-hero.jpg` に当たって
+  別ゲームを壊した実績あり。必ずパス境界を要求する
+- `verify-game-assets.mjs` は「全参照が実在ファイルを指すか」の静的検査と、
+  実際にページを開いた404検出の2段。**静的検査だけでは動的パスを見逃す**
+
 ## 戦国風雲記の攻城ヘックス（侵入可否）
 
 攻城戦のヘックスは「侵入出来る／破壊すれば侵入出来る／侵入出来ない」の3分類で、
