@@ -50,6 +50,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
 - [[static-hosting-security-limits]] — GitHub Pagesのセキュリティ制約・XSS/escHtmlのハマりどころ
 - [[harness-maintenance-patterns]] — ハーネス保守のパターン・ハマりどころ（色ドリフト/スキル/hook2段/bash罠）
+- [[web-audio-singing-synthesis]] — Web Audioでの歌声合成（放射特性/音量正規化/広いCanvasのGrid突き抜け/WAV解析で検証）
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール
