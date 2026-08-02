@@ -86,11 +86,17 @@
   .recbar{display:flex;align-items:center;gap:9px;margin-top:11px;font-size:0.78rem;color:#fca5a5;
     border:1px solid rgba(248,113,113,0.3);background:rgba(248,113,113,0.08);border-radius:12px;padding:8px 12px}
   .recdot{width:9px;height:9px;border-radius:50%;background:#f87171;flex:0 0 auto;animation:pulse 1.1s infinite}
+  .meter{flex:1 1 auto;min-width:52px;height:6px;border-radius:999px;background:rgba(255,255,255,0.10);overflow:hidden}
+  .meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--purple))}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
   #trace{width:100%;height:96px;margin-top:11px;border:1px solid var(--line);border-radius:12px;background:var(--bg2)}
   .toggle{display:flex;align-items:center;gap:9px;font-size:0.8rem;color:var(--text);cursor:pointer;margin-top:11px}
   .toggle input{width:auto;accent-color:var(--cyan)}
   .hint{font-size:0.7rem;color:var(--muted);margin-top:8px;line-height:1.55}
+  details{margin-top:11px;border:1px solid var(--line);border-radius:12px;padding:9px 12px;background:var(--bg2)}
+  details summary{cursor:pointer;font-size:0.76rem;color:var(--cyan);font-weight:600}
+  details summary:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  details[open] summary{margin-bottom:2px}
 
   /* transport */
   .transport{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
@@ -184,6 +190,7 @@
         <div class="recbar" id="recBar" hidden>
           <span class="recdot" aria-hidden="true"></span>
           <span id="recState">録音中 / Recording 0.0s</span>
+          <span class="meter" aria-hidden="true"><i id="recLevel"></i></span>
         </div>
         <canvas id="trace" width="300" height="96" aria-label="検出したピッチの軌跡 / Detected pitch trace"></canvas>
 
@@ -217,6 +224,20 @@
           <button type="button" class="btn ghost" id="btnDetectTempo" disabled>🥁 テンポ推定 / Detect BPM</button>
           <button type="button" class="btn ghost" id="btnRetranscribe" disabled>🔁 再解析 / Re-analyze</button>
         </div>
+        <details>
+          <summary>🎵 配信サービス（LINE MUSIC など）の曲を取り込むには / Streaming services</summary>
+          <div class="hint" style="margin-top:8px">
+            <b style="color:var(--text)">スマホやスピーカーで鳴らして「🎤 マイク」で録るのが確実です。</b>
+            音楽配信サービスの多くは音声がDRMで保護されており、ブラウザの「再生中の音声」では
+            <b style="color:var(--text)">無音になることがあります</b>（保護された音声はタブの音声共有から除外されるため）。
+            無音のときはその旨をお知らせします。<br><br>
+            ① スマホ等でサビなど旋律がはっきりした部分を再生 → ② 端末をマイクに近づける →
+            ③「🎤 マイク」を押して録音（最大60秒）→ ④「■ 録音停止」で自動的に採譜されます。<br>
+            伴奏が厚い場合でも主旋律の帯域を優先して解析します。うまくいかないときは音域を変えて「🔁 再解析」。<br>
+            <span style="opacity:.8">Most streaming audio is DRM-protected and comes through silent on tab capture —
+            play it out loud and record with the mic instead.</span>
+          </div>
+        </details>
         <div class="hint">
           得意なのはボーカル・ハミング・笛など<b style="color:var(--text)">単旋律</b>です。伴奏つきの曲では
           ベースを追ってしまうことがあるため、既定では主旋律の帯域を優先して解析します
@@ -1407,25 +1428,27 @@ function framesToNotes(frames, minLenMs){
     }
     silence = 0;
     const rms = frames[i].rms;
-    if (!curr){ curr = {t0: t, t1: t + HOP_MS / 1000, ms: [m], peak: rms, dipped: false}; continue; }
+    if (!curr){ curr = {t0: t, t1: t + HOP_MS / 1000, ms: [m], peak: rms, dipped: false, dip: 0, si: i}; continue; }
     const ref = median(curr.ms);
     if (Math.abs(m - ref) > 0.75){          // 半音以上ずれたら別の音符
       curr.t1 = t; notes.push(curr);
-      curr = {t0: t, t1: t + HOP_MS / 1000, ms: [m], peak: rms, dipped: false};
+      curr = {t0: t, t1: t + HOP_MS / 1000, ms: [m], peak: rms, dipped: false, dip: 0, si: i};
     } else if (onset[i] && t - curr.t0 > 0.09){
       // 子音のアタックを検出＝歌い直し
       curr.t1 = t; notes.push(curr);
-      curr = {t0: t, t1: t + HOP_MS / 1000, ms: [m], peak: rms, dipped: false};
+      curr = {t0: t, t1: t + HOP_MS / 1000, ms: [m], peak: rms, dipped: false, dip: 0, si: i};
     } else if (rms > curr.peak * 0.72 && curr.dipped && t - curr.t0 > 0.09){
       // 音高が同じままでも、音量がいったん落ちて戻ったら歌い直し（子音の再アタック）とみなして分ける。
       // これがないと「ラララ」のような同音連打が1つの長い音符に融合してしまう。
       curr.t1 = t; notes.push(curr);
-      curr = {t0: t, t1: t + HOP_MS / 1000, ms: [m], peak: rms, dipped: false};
+      curr = {t0: t, t1: t + HOP_MS / 1000, ms: [m], peak: rms, dipped: false, dip: 0, si: i};
     } else {
       // 音量の谷でも歌い直しを拾う。ただし浅い谷まで拾うと、伴奏つきの音源で
       // 細切れになりベース音を拾う区間が増えて逆効果だった（実測: 14/14 → 1/14）。
       // 深い谷（0.42倍）に限定し、取りこぼしはピアノロールで直せるようにしてある。
-      if (rms < curr.peak * 0.42) curr.dipped = true;
+      // 単発の落ち込みは残響やノイズの揺れなので、2フレーム続いたときだけ谷とみなす
+      if (rms < curr.peak * 0.42){ curr.dip = (curr.dip || 0) + 1; if (curr.dip >= 2) curr.dipped = true; }
+      else curr.dip = 0;
       if (rms > curr.peak) curr.peak = rms;
       curr.ms.push(m); curr.t1 = t + HOP_MS / 1000;
     }
@@ -1440,9 +1463,42 @@ function framesToNotes(frames, minLenMs){
     const midi = Math.round(median(n.ms));
     const prev = out[out.length - 1];
     if (prev && prev.midi === midi && n.t0 - prev.t1 < 0.07){ prev.t1 = n.t1; continue; }
-    out.push({t0: n.t0, t1: n.t1, midi: midi});
+    // 雑音の多い録音では、持続音の途中でピッチ追跡が0.1秒ほど途切れ、同じ高さで再取得される
+    // （＝1つの音符が2つに割れる）。歌い直しなら音量がいったん落ちるが、追跡の取りこぼしなら
+    // 音は鳴り続けている。無声と判定された区間の音量で見分けて橋渡しする。
+    // （子音のアタックの有無で見分けようとしたが、アタックは音符の境目でほぼ必ず立つので使えない）
+    if (prev && prev.midi === midi && n.t0 - prev.t1 < 0.15 && gapStillSounding(prev, n, frames)){
+      prev.t1 = n.t1; continue;
+    }
+    // 残響の尾（同じ高さのまま立ち上がらずに減衰していく音）も直前の音符に吸収する
+    if (prev && prev.midi === midi && n.t0 - prev.t1 < 0.35 && isDecayTail(n, frames, onset)){
+      prev.t1 = n.t1; continue;
+    }
+    out.push({t0: n.t0, t1: n.t1, midi: midi, peak: n.peak, si: n.si});
   }
   return out;
+}
+
+/* 2つの音符のあいだ（無声と判定された区間）で、音がまだ鳴り続けているか */
+function gapStillSounding(prev, n, frames){
+  const from = Math.max(0, Math.round(prev.t1 / (HOP_MS / 1000)));
+  const to = Math.min(frames.length - 1, n.si);
+  if (to <= from) return true;
+  let sum = 0, cnt = 0;
+  for (let k = from; k < to; k++){ sum += frames[k].rms; cnt++; }
+  const gapRms = cnt ? sum / cnt : 0;
+  return gapRms > Math.min(prev.peak, n.peak) * 0.6;
+}
+
+/* 立ち上がり（子音のアタックまたは音量の増加）を伴わない＝残響の尾 */
+function isDecayTail(n, frames, onset){
+  const i0 = n.si;
+  for (let k = Math.max(0, i0 - 1); k <= i0 + 2 && k < onset.length; k++){
+    if (onset[k]) return false;                     // 子音のアタックがある＝実音符
+  }
+  const a = frames[i0] ? frames[i0].rms : 0;
+  const b = frames[i0 + 2] ? frames[i0 + 2].rms : 0;
+  return b < a * 0.9;                               // 立ち上がらずに減衰している
 }
 
 /* 音符の開始時刻からテンポを推定する（8分音符グリッドへの当てはまりが最も良いBPMを選ぶ） */
@@ -1539,6 +1595,9 @@ function transcribedToSteps(notes, tempo, quantSteps, minSteps){
   return out;
 }
 
+/* ------------------------------------------------------------------
+   5. UI（ピアノロール・トランスポート・書き出し・音声の取り込み）
+   ------------------------------------------------------------------ */
 const $ = id => document.getElementById(id);
 const el = {
   lyrics:$('lyrics'), key:$('key'), scale:$('scale'), style:$('style'), tempo:$('tempo'),
@@ -1989,7 +2048,8 @@ function syncLabels(){
 /* ---------------- 音声の取り込み（再生中の音声・マイク・ファイル） ---------------- */
 const IMPORT = {
   stream:null, recorder:null, chunks:[], ctx:null, analyser:null, work:null,
-  buffer:null, frames:[], notes:[], live:[], raf:0, startedAt:0, busy:false, firstPass:true
+  buffer:null, frames:[], notes:[], live:[], raf:0, startedAt:0, busy:false, firstPass:true,
+  source:'', quietSince:0
 };
 const MAX_REC_SEC = 60;
 
@@ -2086,6 +2146,7 @@ function beginRecording(stream, label){
   src.connect(IMPORT.analyser);
   IMPORT.work = new Float32Array(IMPORT.analyser.fftSize);
   IMPORT.startedAt = performance.now();
+  IMPORT.quietSince = 0;
   captureButtons(true);
   log('● 録音を開始しました（' + label + '・最長' + MAX_REC_SEC + '秒）/ Recording started', 'ok');
   liveTick();
@@ -2093,7 +2154,6 @@ function beginRecording(stream, label){
 function liveTick(){
   if (!IMPORT.recorder || IMPORT.recorder.state !== 'recording') return;
   const sec = (performance.now() - IMPORT.startedAt) / 1000;
-  setStatus('録音中 / Recording ' + sec.toFixed(1) + 's', true);
   const sr = IMPORT.ctx.sampleRate;
   IMPORT.analyser.getFloatTimeDomainData(IMPORT.work);
   const r = capRange();
@@ -2101,6 +2161,16 @@ function liveTick(){
   let rms = 0;
   for (let i = 0; i < W; i++) rms += IMPORT.work[i] * IMPORT.work[i];
   rms = Math.sqrt(rms / W);
+  // レベル表示（dB風の目盛りにする）
+  const lv = clamp((20 * Math.log10(rms + 1e-6) + 60) / 60, 0, 1);
+  const bar = $('recLevel');
+  if (bar) bar.style.width = Math.round(lv * 100) + '%';
+  if (rms > 0.004) IMPORT.quietSince = 0;
+  else if (!IMPORT.quietSince) IMPORT.quietSince = sec;
+  const quiet = IMPORT.quietSince && (sec - IMPORT.quietSince) > 3;
+  setStatus('録音中 / Recording ' + sec.toFixed(1) + 's' +
+    (quiet ? '　⚠ 音が入っていません / no input' : ''), true);
+
   if (rms > 0.004){
     const tauMin = Math.max(2, Math.floor(sr / r.fmax));
     const tauMax = Math.min(Math.floor(sr / r.fmin), IMPORT.work.length - W - 1);
@@ -2161,9 +2231,11 @@ async function startCapture(kind){
         return;
       }
       // 映像は使わないが、止めると共有ごと終了してしまうので保持したままにする
+      IMPORT.source = 'tab';
       beginRecording(stream, 'タブ/システム音声');
     } else {
       const stream = await navigator.mediaDevices.getUserMedia({audio: audio});
+      IMPORT.source = 'mic';
       beginRecording(stream, 'マイク');
     }
   }catch(err){
@@ -2178,6 +2250,7 @@ async function startCapture(kind){
 function onFilePicked(e){
   const f = e.target.files && e.target.files[0];
   if (!f) return;
+  IMPORT.source = 'file';
   setStatus('ファイルを読み込んでいます… / Decoding file…', false);
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   f.arrayBuffer().then(ab => ctx.decodeAudioData(ab)).then(function(buf){
@@ -2191,6 +2264,20 @@ function onFilePicked(e){
   e.target.value = '';
 }
 
+/* 取り込んだ音の大きさを調べる */
+function bufferPeak(buffer){
+  let peak = 0;
+  for (let c = 0; c < buffer.numberOfChannels; c++){
+    const d = buffer.getChannelData(c);
+    const step = Math.max(1, Math.floor(d.length / 200000));   // 間引いて十分
+    for (let i = 0; i < d.length; i += step){
+      const v = d[i] < 0 ? -d[i] : d[i];
+      if (v > peak) peak = v;
+    }
+  }
+  return peak;
+}
+
 function onAudioReady(buffer, label){
   IMPORT.buffer = buffer;
   IMPORT.firstPass = true;
@@ -2199,6 +2286,24 @@ function onAudioReady(buffer, label){
   log('🎧 取り込みました：' + label + '（' + buffer.duration.toFixed(1) + '秒 / ' + buffer.sampleRate + 'Hz）', 'ok');
   if (buffer.duration > MAX_REC_SEC){
     log('長い音源のため先頭' + MAX_REC_SEC + '秒だけ解析します / Only the first ' + MAX_REC_SEC + 's is analyzed.', 'warn');
+  }
+  // 無音のときは原因ごとに案内する（配信サービスのDRMで無音になるのがいちばん多い）
+  const peak = bufferPeak(buffer);
+  if (peak < 0.004){
+    if (IMPORT.source === 'tab'){
+      log('音が入っていません。音楽配信サービス（LINE MUSIC・Spotify など）の音声はDRMで保護されており、' +
+          'タブ音声の取り込みでは無音になります。スピーカーで再生して「🎤 マイク」で録音してください / ' +
+          'Protected streaming audio cannot be captured from a tab — play it out loud and use the mic.', 'warn');
+    } else if (IMPORT.source === 'mic'){
+      log('音が入っていません。マイクの入力デバイスと音量、ブラウザのマイク権限を確認してください / No mic input.', 'warn');
+    } else {
+      log('このファイルは無音のようです / This file appears to be silent.', 'warn');
+    }
+    setStatus(null);
+    return;
+  }
+  if (peak < 0.02){
+    log('音量が小さいため精度が落ちることがあります。音量を上げるか、端末をマイクに近づけてください / Input level is low.', 'warn');
   }
   transcribe();
 }
