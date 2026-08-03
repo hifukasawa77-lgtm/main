@@ -8,6 +8,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `game.html` — ZELDA QUEST（Canvas APIのみで作ったトップビューRPG）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
+- `teams-chat-notifier/` — Teams Web用のChrome/Edge拡張。選んだチャットだけメンション無しでも通知する（検査: `node scripts/verify-teams-notifier.mjs`）
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。詳細: `claudechord-vault/README.md`）
 
 ## デザイン・スタイルのルール
