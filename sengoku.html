@@ -915,7 +915,7 @@ function pointAtFrac(pts, frac){
 }
 function endpointPoint(ref){
   if (!ref) return null;
-  if (ref.type==='castle'){ const p=DATA.provById[ref.id]; return (p && !isCastleDeleted(ref.id)) ? provinceScreenPoint(p) : null; }
+  if (ref.type==='castle'){ const p=DATA.provById[ref.id]; return (p && !isCastleDeleted(ref.id)) ? castleCrestPoint(p) : null; }
   if (ref.type==='resource'){ const m=RESOURCE_MARKERS.find(v=>v.id===ref.id); return (m && !isMarkerDeleted(ref.id)) ? resourceMarkerPoint(m) : null; }
   if (ref.type==='religious'){ const m=RELIGIOUS_FORCES.find(v=>v.id===ref.id); return (m && !isMarkerDeleted(ref.id)) ? religiousForcePoint(m) : null; }
   return null;
@@ -4388,6 +4388,14 @@ function provinceScreenPoint(p){
   const raw = manual || recorded || (PROVINCE_GEO[p.id] ? geoToScreen(PROVINCE_GEO[p.id][0], PROVINCE_GEO[p.id][1]) : [toScreenX(p.x), toScreenY(p.y)]);
   if (manual && isCastlePositionPinned(p.id)) return raw;
   return snapCastlePointToLand(p.id, raw[0], raw[1]);
+}
+// 城アイコン（家紋）の中心点。provinceScreenPoint() が返す生アンカーは名称ラベルと
+// アイコンの間（_computeCastleLayout() が -5,+9 でアイコン中心へずらす基準点）にあり、
+// そのまま街道の接続点に使うと道が名称ラベルの下から出ているように見える。
+// 街道編集の起点/終点にはアイコン中心を使いたいので、同じオフセットをここでも合わせる。
+function castleCrestPoint(p){
+  const [cx, cy] = provinceScreenPoint(p);
+  return [cx-5, cy+9];
 }
 
 /* ---- 陸/海マスク（オフライン生成: 地図画像をDS=8で縮小したビットマスク。城ラベルを陸側へ寄せる判定に使用） ---- */
@@ -8781,9 +8789,23 @@ class MapScene extends GameKit.Scene {
     const m=this._pickResourceMarker(x,y); if (m) return {type:'resource', id:m.id};
     return null;
   }
+  // \u9053\u306e\u6298\u308c\u7dda\uff08\u30ef\u30fc\u30eb\u30c9\u5ea7\u6a19\uff09\u306e\u59cb\u70b9\u30fb\u7d42\u70b9\u3092\u3001\u62e0\u70b9\u53c2\u7167(a/b)\u304b\u3089\u73fe\u5728\u306e\u30a2\u30a4\u30b3\u30f3\u4e2d\u5fc3\u3078
+  // \u5dee\u3057\u66ff\u3048\u3066\u8fd4\u3059\u3002\u4ee5\u524d\u306f\u59cb\u70b9/\u7d42\u70b9\u306b\u30e9\u30d9\u30eb\u76f4\u4e0b\u306e\u751f\u30a2\u30f3\u30ab\u30fc\u3092\u4fdd\u5b58\u3057\u3066\u304a\u308a\u3001\u65e2\u306b
+  // \u4fdd\u5b58\u6e08\u307f\u306e\u9053\uff08localStorage\uff09\u3082\u672c\u95a2\u6570\u3067\u6bce\u56de\u30b9\u30ca\u30c3\u30d7\u3057\u76f4\u3059\u3053\u3068\u3067\u3001\u30b3\u30fc\u30c9\u66f4\u65b0\u3060\u3051\u3067
+  // \u904e\u53bb\u306b\u5f15\u3044\u305f\u9053\u3082\u5bb6\u7d0b\u30a2\u30a4\u30b3\u30f3\u4e2d\u5fc3\u306b\u3064\u306a\u304c\u3063\u3066\u898b\u3048\u308b\u3088\u3046\u306b\u3059\u308b\u3002
+  _roadWorldPath(road){
+    const path=road && road.path;
+    if (!path || path.length<2) return path;
+    const a=endpointPoint(road.a), b=endpointPoint(road.b);
+    if (!a && !b) return path;
+    const out=path.slice();
+    if (a) out[0]=a;
+    if (b) out[out.length-1]=b;
+    return out;
+  }
   // \u9053\u306e\u6298\u308c\u7dda\u3092\u30b9\u30af\u30ea\u30fc\u30f3\u5ea7\u6a19\u3078\u5909\u63db\u3057\u3066\u8fd4\u3059\uff08\u63cf\u753b\u30fb\u5f53\u305f\u308a\u5224\u5b9a\u3067\u5171\u7528\uff09\u3002
   _roadScreenPath(road){
-    return (road.path||[]).map(w=>{ const s=this._worldToScreen(w[0],w[1]); return [s.x,s.y]; });
+    return (this._roadWorldPath(road)||[]).map(w=>{ const s=this._worldToScreen(w[0],w[1]); return [s.x,s.y]; });
   }
   _pickRoad(x,y){
     if (!CUSTOM_ROADS.length) return null;
@@ -8876,7 +8898,7 @@ class MapScene extends GameKit.Scene {
     let best=null, bestDist=Infinity;
     for (const cp of CUSTOM_CHECKPOINTS){
       const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road || !road.path || road.path.length<2) continue;
-      const w=pointAtFrac(road.path, cp.frac); if (!w) continue;
+      const w=pointAtFrac(this._roadWorldPath(road), cp.frac); if (!w) continue;
       const s=this._worldToScreen(w[0],w[1]);
       const d=Math.hypot(x-s.x,y-s.y);
       if (d<bestDist){ bestDist=d; best=cp; }
@@ -11573,7 +11595,7 @@ class MapScene extends GameKit.Scene {
     const size=Math.max(9, 15*MAP_ICON_SCALE*Math.min(2, this.cam.zoom/2));
     for (const cp of CUSTOM_CHECKPOINTS){
       const road=CUSTOM_ROADS.find(r=>r.id===cp.roadId); if (!road || !road.path || road.path.length<2) continue;
-      const w=pointAtFrac(road.path, cp.frac); if (!w) continue;
+      const w=pointAtFrac(this._roadWorldPath(road), cp.frac); if (!w) continue;
       const s=this._worldToScreen(w[0],w[1]);
       if (!pointInRect(s, clip)) continue;
       drawCheckpointIcon(ctx, s.x, s.y, size);
