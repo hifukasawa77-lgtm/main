@@ -4826,7 +4826,15 @@ function drawTerrainBackdrop(ctx, mapImg, opts={}){
     const sw = src.width || src.naturalWidth || iw, sh = src.height || src.naturalHeight || ih;
     ctx.save();
     ctx.imageSmoothingEnabled=true;
-    ctx.imageSmoothingQuality='high';
+    // 補間品質は「縮小しているときだけ」'high' にする。
+    // mapSharp は元画像の2倍解像度なので、拡大表示（画面画素 >= ソース画素）の局面では
+    // 引き伸ばすだけになり 'high' と 'low' で見た目がほとんど変わらない一方、'high' の
+    // リサンプルは毎フレーム効いてマップ描画時間の大半を占める（実測: 拡大時 約2.5倍の差）。
+    // 縮小時はソース画素を間引くためモアレ・ジャギーが出るので 'high' を維持する。
+    // 変換行列が取れない環境では従来どおり 'high'（安全側）。
+    const mt = (typeof ctx.getTransform==='function') ? ctx.getTransform() : null;
+    const devW = w.w * (mt ? Math.abs(mt.a) : 1), devH = dh * (mt ? Math.abs(mt.d) : 1);
+    ctx.imageSmoothingQuality = (devW>=sw && devH>=sh) ? 'low' : 'high';
     ctx.drawImage(src, 0, 0, sw, sh, w.x, w.y+dy, w.w, dh);
     ctx.restore();
     ctx.fillStyle='rgba(3,7,14,0.08)'; ctx.fillRect(w.x, w.y, w.w, w.h);
@@ -10821,7 +10829,13 @@ class MapScene extends GameKit.Scene {
   _runProvinceCommand(game, fn){
     const pid=this.selected;
     const prov=pid && this.state.provinces[pid];
-    if (!pid || !prov || prov.owner!==this.state.playerDaimyo){ this._flash('自国の城を選択してください', 'Select one of your provinces'); return; }
+    if (!pid || !prov || prov.owner!==this.state.playerDaimyo){
+      this._flash('自国の城を選択してください', 'Select one of your provinces');
+      // 文言だけでは盤上のどれが自国か分からないため、該当城を4秒間光らせる
+      const now=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
+      this._ownHintUntil=now+4000;
+      return;
+    }
     fn.call(this, game);
   }
   _getAllGensSorted(){
@@ -11120,8 +11134,21 @@ class MapScene extends GameKit.Scene {
       menuIconX:IS_TOUCH?62:32, menuLabelX:IS_TOUCH?126:64
     };
   }
-  // スマホでコマンドメニューが開いているか（PCは常時表示）
-  get _menuVisible(){ return !IS_TOUCH || (this.menuOpen && !this.showTools); }
+  // コマンドメニューを描くか。「管理」（製作用ツール）を開いている間は
+  // 同じ左カラムを使うため、PC・スマホとも menu 側を退ける。
+  get _menuVisible(){ return !this.showTools && (!IS_TOUCH || this.menuOpen); }
+  // ズームボタンの寸法・位置・表示可否。_drawZoomReadout() と共有し、
+  // 「拡大率」表示だけがボタンから離れて浮く不整合を防ぐ。
+  _zoomGeom(){
+    const w=IS_TOUCH?140:84, h=IS_TOUCH?140:72, gap=IS_TOUCH?18:48;
+    return {
+      x1:34, x2:34+w+gap, w, h, sz:IS_TOUCH?52:36,
+      // PCではコマンドメニュー11項目の直下へ逃がす。管理を開くとメニューが消えるので元の位置へ戻す
+      y: IS_TOUCH ? H-610 : (this.showTools ? H-426 : H-360),
+      // スマホはメニューを開くと領域が重なるため、畳んでいる間だけ出す
+      visible: !IS_TOUCH || !this._menuVisible
+    };
+  }
   _buttons(){
     const bs=[]; const st=this.state;
     // スマホ（タッチ端末）では左メニューを一回り大きく表示して視認性を確保
@@ -11157,7 +11184,14 @@ class MapScene extends GameKit.Scene {
       bs.push({x:W-(IS_TOUCH?410:296), y:IS_TOUCH?32:18, w:IS_TOUCH?248:150, h:IS_TOUCH?150:52, skin:'topBar', label:'ターン終了', sz:IS_TOUCH?30:21, action:g=>this._endTurn(g), noScale:true});
       bs.push({x:W-(IS_TOUCH?176:132), y:IS_TOUCH?32:18, w:IS_TOUCH?174:104, h:IS_TOUCH?150:52, skin:'topBar', label:'タイトル', sz:IS_TOUCH?29:20, action:()=>game.changeScene(new TitleScene()), noScale:true});
     }
-    if (!this.showClans && IS_TOUCH) bs.push({x:W-626, y:32, w:192, h:150, skin:'topBar', label:this.showTools?'操作へ':'管理', sz:34, action:()=>{ this.showTools=!this.showTools; if (this.showTools) this.menuOpen=false; }, noScale:true});
+    // 「管理」= 城位置編集・街道編集などの製作用ツール。PCでも常設せずここに畳む
+    // （常設していた頃はコマンド「家臣団」にズームボタンが重なっていた）。
+    if (!this.showClans){
+      const tW=IS_TOUCH?192:130, tH=IS_TOUCH?150:52;
+      bs.push({x:IS_TOUCH?W-626:W-434, y:IS_TOUCH?32:18, w:tW, h:tH, skin:'topBar',
+        label:this.showTools?'操作へ':'管理', sz:IS_TOUCH?34:20,
+        action:()=>{ this.showTools=!this.showTools; if (this.showTools) this.menuOpen=false; }, noScale:true});
+    }
     if (this.showClans){
       const L=this._diploLayout(); const me=st.playerDaimyo;
       // タブバー（4タブ）
@@ -11228,15 +11262,20 @@ class MapScene extends GameKit.Scene {
     }
     // 左下ボタン群（ズーム＋城編集ツール＋大名編集）。スマホでは一回り大きく＆行間を広げて視認/操作性を確保
     // 外交モーダル表示中はこれらの地図UIを描かない（パネルと重なるため）
-    if (!this.showClans && (!IS_TOUCH || this.showTools)){
-    const zW=IS_TOUCH?140:84, zH=IS_TOUCH?140:72, zSz=IS_TOUCH?52:36;
-    const dW=IS_TOUCH?280:212, dH=IS_TOUCH?140:86, dSz1=IS_TOUCH?34:28, dSz2=IS_TOUCH?32:26;
+    // ズームは製作用ツールではなくプレイヤー操作。「管理」の開閉に関わらず常設する
+    if (!this.showClans){
+      const Z=this._zoomGeom();
+      if (Z.visible){
+        bs.push({x:Z.x1, y:Z.y, w:Z.w, h:Z.h, skin:'topBar', label:'＋', sz:Z.sz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }, noScale:true});
+        bs.push({x:Z.x2, y:Z.y, w:Z.w, h:Z.h, skin:'topBar', label:'－', sz:Z.sz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }, noScale:true});
+      }
+    }
+    // 以下は製作用の編集ツール。「管理」を開いている間だけ出す
+    if (!this.showClans && this.showTools){
+    const dW=IS_TOUCH?280:212, dH=IS_TOUCH?140:86, dSz2=IS_TOUCH?32:26;
     const colX0=34, colX1=IS_TOUCH?298:260, colX2=IS_TOUCH?562:484, colX3=colX2*2-colX1;
-    const rowZoom=IS_TOUCH?H-610:H-426;
     const rowDev0=IS_TOUCH?H-452:H-326;
     const rowDev1=IS_TOUCH?H-296:H-218, rowDev2=IS_TOUCH?H-140:H-118;
-    bs.push({x:colX0, y:rowZoom, w:zW, h:zH, skin:'topBar', label:'＋', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }, noScale:true});
-    bs.push({x:colX0+zW+(IS_TOUCH?18:48), y:rowZoom, w:zW, h:zH, skin:'topBar', label:'－', sz:zSz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }, noScale:true});
     bs.push({x:colX0, y:rowDev0, w:colX1-colX0+dW, h:dH, skin:'topBar', label:'大名編集', sz:dSz2, action:g=>this._openDaimyoEditPanel(g), noScale:true});
     bs.push({x:colX2, y:rowDev0, w:dW, h:dH, skin:'roadTool', tool:'road', label:this.roadEdit?'完了':'街道編集', en:this.roadEdit?'FINISH':'DRAW ROAD', sz:dSz2, action:g=>{ this.roadEdit?this._finishRoadEdit(g):this._startRoadEdit(g); }, noScale:true});
     bs.push({x:colX3, y:rowDev0, w:dW, h:dH, skin:'roadTool', tool:'checkpoint', label:this.checkpointEdit?'完了':'関所配置', en:this.checkpointEdit?'FINISH':'PLACE CHECKPOINT', sz:dSz2, action:g=>{ this.checkpointEdit?this._finishCheckpointEdit(g):this._startCheckpointEdit(g); }, noScale:true});
@@ -11691,6 +11730,7 @@ class MapScene extends GameKit.Scene {
     ctx.save();
     this._camApply(ctx);
     this._drawCastleLayer(ctx);
+    this._drawOwnProvinceHints(ctx);
     this._drawCastleEditHints(ctx);
     this._drawReligiousEditHints(ctx);
     ctx.restore();
@@ -12044,12 +12084,39 @@ class MapScene extends GameKit.Scene {
   _drawZoomReadout(ctx){
     if (!IS_TOUCH) return; // PCは上部バーに「倍率」欄があるため不要
     if (this.showClans || this.overlay || this.castleEdit || this.religiousEdit || this.castleMetaEdit || this.castleAddOpen) return;
+    const Z=this._zoomGeom();
+    if (!Z.visible) return;  // ボタンが無い状態で読み取りだけ浮かせない
     const pct=Math.round(this.cam.zoom/4.47*100);
-    const zW=120, zH=96, rowZoom=H-466;
-    const x=34+zW+18+zW+24, y=rowZoom, w=280, h=zH; // －ボタンの右隣
+    const x=Z.x2+Z.w+24, y=Z.y, w=280, h=Z.h; // －ボタンの右隣
     GameKit.UI.glassPanel(ctx, x, y, w, h, {radius:14, fill:'rgba(8,13,24,0.88)', stroke:'rgba(56,189,248,0.42)'});
     T(ctx, '拡大率 / Zoom', x+w/2, y+16, {size:22, weight:'bold', color:'#7dd3fc', align:'center'});
     T(ctx, pct+'%', x+w/2, y+46, {size:42, weight:'bold', color:'#e0f2fe', align:'center'});
+  }
+  // 内政・徴兵などを城未選択で押したとき、どれが自国の城かを一定時間だけ光らせる。
+  // 「自国の城を選択してください」と言われても盤上のどれが自国か分からない、を解消する。
+  _drawOwnProvinceHints(ctx){
+    const until=this._ownHintUntil||0;
+    const now=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
+    if (now>=until) return;
+    const st=this.state; if (!st) return;
+    const z=this.cam.zoom;
+    // 残り1秒でフェードし、鼓動のように明滅させて視線を集める
+    const fade=Math.min(1,(until-now)/1000);
+    const pulse=0.55+0.45*Math.sin(now/180);
+    const layoutById=new Map(this._castleLayoutItems().map(item=>[item.id,item]));
+    ctx.save();
+    DATA.provinces.forEach(p=>{
+      const prov=st.provinces[p.id];
+      if (!prov || prov.owner!==st.playerDaimyo) return;
+      const layout=layoutById.get(p.id); if (!layout) return;
+      const cx=layout.cx-5, cy=layout.cy+9;   // _drawCastleEditHints と同一アンカー
+      ctx.globalAlpha=fade;
+      ctx.lineWidth=3.4/z;
+      ctx.strokeStyle='rgba(94,234,212,'+(0.45+0.5*pulse).toFixed(3)+')';
+      ctx.fillStyle='rgba(94,234,212,'+(0.08+0.10*pulse).toFixed(3)+')';
+      ctx.beginPath(); ctx.arc(cx, cy, (30+6*pulse)/z, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+    });
+    ctx.restore();
   }
   _drawCastleEditHints(ctx){
     if (!this.castleEdit) return;
