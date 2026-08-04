@@ -228,6 +228,19 @@
     famine:{desertRate:0.08,loyaltyDrop:4,moraleDrop:12},  // 兵糧枯渇時
     rebel:{threshold:25,garrisonLoss:0.15,defectChance:0.12}
   };
+  // P8 増援：隣接する自軍領へ兵を移す。占領地を増強できないと戦線が作れないため追加した。
+  // 運ぶのは兵だけ。プレイヤーの兵糧 state.food は国庫一括で、都市別の c.food は
+  // tickEconomyAI / aiPolicyChoice / aiMarch だけが使う AI 専用フィールドのため。
+  const REINFORCE={
+    gold:40,                 // 1回あたりの固定費
+    foodPerSoldier:0.6,      // 兵1あたりの兵糧（自領内なので遠征 marchFoodPerSoldier:1.2 の半額）
+    minKeep:15,              // 送り元に必ず残す兵（空城を作らせない）
+    cap:ECON.actions.levy.cap,  // ★徴兵の上限と必ず一致させる（別々に持つと増援で上限を迂回できる）
+    amounts:[20,50,100],
+    loyaltyCost:1            // 到着側の駐屯負担
+  };
+  // AI 版の増援（P10）。AI は金・兵糧を払わない＝既存の AI 経済モデル（aiGrowth で抽象化）に合わせる。
+  const AI_REINFORCE={minSurplus:60,send:40,frontierGap:25};
   // 天候4種。bowRange=弓射程補正 / fireMul=火計倍率 / vision=視界 / moveMul=移動倍率。P4 で参照する。
   const WEATHER={
     clear:{jp:'晴',en:'CLEAR',bowRange:0, fireMul:1.0,vision:99,moveMul:1.0},
@@ -318,6 +331,7 @@
       if(!Array.isArray(c.generals))c.generals=[];
       if(!Array.isArray(c.wild))c.wild=[];
       if(!Array.isArray(c.found))c.found=[];
+      if(typeof c.reinforceTurn!=='number')c.reinforceTurn=0;   // P8: この都市が最後に増援を「送った」巡
       if(!c.plotFlags||typeof c.plotFlags!=='object')c.plotFlags={poisonBy:null,spy:null,target:null,rumorUntil:0};
     });
   }
@@ -484,6 +498,50 @@
   // 遠征に持ち出す兵糧。startBattle / simResolve と同じ commit 計算に揃える。
   function marchCommit(a){const homeKeep=Math.max(10,Math.floor((a.garrison||0)*0.15));return Math.max(12,(a.garrison||0)-homeKeep);}
   function marchFoodCost(a){return Math.round(marchCommit(a)*ECON.marchFoodPerSoldier);}
+
+  // ===== P8 増援（隣接する自軍領へ兵を移す）=====
+  // 実際に送れる兵の上限。UI の option 生成と doReinforce の両方がこれを使う（二重管理を避ける）。
+  function reinforceMax(from,to){
+    if(!from||!to)return 0;
+    return Math.max(0,Math.min((from.garrison||0)-REINFORCE.minKeep,REINFORCE.cap-(to.garrison||0)));
+  }
+  function reinforceCost(n){return {gold:REINFORCE.gold,food:Math.round(n*REINFORCE.foodPerSoldier)};}
+  // 送り先の候補（隣接する自軍領）。
+  function reinforceDests(c){return (c&&c.neighbors||[]).map(n=>cityById[n]).filter(x=>x&&x.owner===state.faction);}
+  // 実行不可の理由（日英併記 / E-05）。構造的な理由 → 一時的な理由 → 資源 の順に並べる。
+  function reinforceWhy(from,to,n){
+    if(!from||!to)return '送り先を選んでください / Choose a destination';
+    if(from.reinforceTurn===state.turn)return '今巡すでに増援を送った / Already reinforced this turn';
+    if((from.garrison||0)-REINFORCE.minKeep<=0)return `送れる兵がない（最低${REINFORCE.minKeep}兵は残す） / No troops to spare`;
+    if(reinforceMax(from,to)<=0)return `${to.name}の兵は上限（${REINFORCE.cap}）に達している / Destination is at troop cap`;
+    const cost=reinforceCost(Math.min(n,reinforceMax(from,to)));
+    if(state.gold<cost.gold)return `金が足りない（${cost.gold}金） / Not enough gold`;
+    if(state.food<cost.food)return `兵糧が足りない（${cost.food}） / Not enough food`;
+    return '';
+  }
+  function doReinforce(fromId,toId,amount){
+    const from=cityById[fromId],to=cityById[toId];
+    if(!from||!to||from===to)return;
+    if(from.owner!==state.faction||to.owner!==state.faction)return;
+    if(!(from.neighbors||[]).includes(to.id))return;
+    // ★UI の disabled は目安。徴兵の自然増や AI の行動で盤面は動くので、実処理側で必ずクランプする。
+    // 数値でない要求（select が空＝選べる刻みが無い等）は「送れるだけ送る」に倒す。
+    const cap=reinforceMax(from,to);
+    const want=Math.floor(Number(amount));
+    const req=(Number.isFinite(want)&&want>0)?want:cap;
+    const why=reinforceWhy(from,to,req);
+    if(why){addLog(`${from.name}から増援を送れない：${why}`);updateUI();return;}
+    const n=Math.min(req,cap);
+    if(!Number.isFinite(n)||n<=0){addLog(`${to.name}へ送れる兵がない。 / No troops could be sent.`);updateUI();return;}
+    const cost=reinforceCost(n);
+    state.gold-=cost.gold;state.food-=cost.food;
+    from.garrison-=n;to.garrison+=n;
+    to.loyalty=clamp((to.loyalty||0)-REINFORCE.loyaltyCost,0,100);
+    from.reinforceTurn=state.turn;
+    const short=(n<req)?`（要請${req}のうち${n}）`:'';
+    addLog(`${from.name}より${to.name}へ${n}の兵を送った${short}。 / Reinforced ${to.name} with ${n} troops.`);
+    sfx('march');updateUI();draw();
+  }
 
   function endTurn(){
     if(state.over)return;                                   // 1
@@ -989,6 +1047,28 @@
     return `<div class="sectionTitle">人事 / PERSONNEL</div>`+scout
       +`<div class="genList">${rows||'<div class="subtle">駐屯武将も発見済みの在野もいません。 / No generals here yet.</div>'}</div>`;
   }
+  // P8: 増援セクション。送り先は c.reinforceTo に控える（updateUI が sidePanel を作り直すため）。
+  function reinforceHtml(c){
+    const head=`<div class="sectionTitle">増援 / REINFORCE（${REINFORCE.gold}金・兵糧 兵数×${REINFORCE.foodPerSoldier}）</div>`;
+    const dest=reinforceDests(c);
+    if(!dest.length)return head+`<div class="subtle">隣接する自軍領がありません。 / No adjacent friendly city.</div>`;
+    const to=dest.find(x=>x.id===c.reinforceTo)||dest[0];
+    const maxN=reinforceMax(c,to);
+    const opts=dest.map(x=>`<option value="${escHtml(x.id)}"${x.id===to.id?' selected':''}>${escHtml(x.name)}（${x.garrison}兵）</option>`).join('');
+    // 送れる兵が最小の刻み（20）にも満たないときは、選べる選択肢が1つも無くなってしまう。
+    // その場合は端数ちょうどを送る選択肢を1つだけ出す（全option disabled で NaN が流れるのを防ぐ）。
+    const steps=REINFORCE.amounts.filter(n=>n<=maxN);
+    if(!steps.length&&maxN>0)steps.push(maxN);
+    const amts=steps.length
+      ?steps.map(n=>`<option value="${n}">${n}兵 ＋糧${reinforceCost(n).food}</option>`).join('')
+      :'<option value="0" disabled>—</option>';
+    const why=reinforceWhy(c,to,REINFORCE.amounts[0]);
+    return head
+      +`<div class="genActs"><select class="miniSel" data-reinf-to="${escHtml(c.id)}">${opts}</select>`
+      +`<select class="miniSel" data-reinf-amt="${escHtml(c.id)}">${amts}</select>`
+      +`<button class="miniBtn" data-reinf="${escHtml(c.id)}"${why?' disabled':''} title="${escHtml(why||`${to.name}へ兵を送る（1巡1回・最大${maxN}） / Send troops to ${to.name}`)}">送る</button></div>`
+      +`<div class="subtle">現在の兵 ${c.garrison} ／ 最低 ${REINFORCE.minKeep} は残す（今回送れる上限 ${maxN}）。 / Keeps ${REINFORCE.minKeep} behind.</div>`;
+  }
   function attack(targetId){const a=cityById[state.selectedCity],d=cityById[targetId];if(!a||!d||a.owner!==state.faction||!a.neighbors.includes(d.id)||state.gold<50)return;if(isAllied(state.faction,d.owner)){addLog(`${factionById[d.owner].name}とは同盟中のため攻撃できない。 / Allied — cannot attack.`);updateUI();return;}if(isTruce(state.faction,d.owner)){addLog(`${factionById[d.owner].name}とは停戦中のため攻撃できない。 / Truce in force — cannot attack.`);updateUI();return;}if(a.garrison<20){addLog(`${a.name}の兵が少なすぎて出陣できない。`);updateUI();return;}const need=marchFoodCost(a);if(state.food<need){addLog(`兵糧が足りず${d.name}へ出陣できない（必要${need}／現在${state.food}）。 / Not enough food to march (need ${need}).`);updateUI();return;}state.gold-=50;state.food-=need;addLog(`${a.name}より${marchCommit(a)}の兵が出陣。兵糧${need}を携行した。 / March: ${need} food carried.`);sfx('march');startBattle(a,d);}
   function nameForGeneral(i){return GENERAL_JP[i]||`武将${i+1}`}
   // 内政ボタン1つぶんのHTML。実行不可の理由は title 属性（日英併記）に入れて disabled にする（E-05）。
@@ -1029,10 +1109,11 @@
       +`<div class="sectionTitle">内政 / DOMESTIC AFFAIRS</div>`
       +`<div class="panelActions">${Object.keys(ECON.actions).map(k=>policyBtnHtml(k,c)).join('')}</div>`
       +personnelHtml(c)
+      +reinforceHtml(c)
       +`<div class="sectionTitle">出陣 / CAMPAIGN（50金・兵糧${need}）</div><div class="targetList">${targets}</div>${pactNote}`
       +tail;
   }
-  function updateUI(){const f=factionById[state.faction];document.getElementById('yearText').textContent=`${state.year}年`;document.getElementById('turnText').textContent=state.turn;document.getElementById('factionText').textContent=f?.name||'—';document.getElementById('cityText').textContent=`${(factionCounts()[state.faction]||0)}/${CITIES.length}`;document.getElementById('goldText').textContent=state.gold;document.getElementById('foodText').textContent=state.food;const _inc=foodIncome(),_up=foodUpkeep(),_net=Math.round(_inc-_up),_sl=seasonLabel(state.season);document.getElementById('foodStat').title=`兵糧 / FOOD：収穫 ${Math.round(_inc)} − 消費 ${Math.round(_up)} = ${_net>=0?'+':''}${_net}／ターン`;document.getElementById('foodText').style.color=(_net<0||state.food<=0)?'var(--red)':'var(--grain)';document.getElementById('seasonText').textContent=_sl.jp;document.getElementById('seasonStat').title=`季節 / SEASON：${_sl.jp} ${_sl.en}`;document.getElementById('sidePanel').innerHTML=cityPanel();document.querySelectorAll('[data-policy]').forEach(b=>b.onclick=()=>doPolicy(b.dataset.policy));bindPersonnel();document.querySelectorAll('[data-target]').forEach(b=>b.onclick=()=>attack(b.dataset.target));if(!state.rosterData)buildRoster()}
+  function updateUI(){const f=factionById[state.faction];document.getElementById('yearText').textContent=`${state.year}年`;document.getElementById('turnText').textContent=state.turn;document.getElementById('factionText').textContent=f?.name||'—';document.getElementById('cityText').textContent=`${(factionCounts()[state.faction]||0)}/${CITIES.length}`;document.getElementById('goldText').textContent=state.gold;document.getElementById('foodText').textContent=state.food;const _inc=foodIncome(),_up=foodUpkeep(),_net=Math.round(_inc-_up),_sl=seasonLabel(state.season);document.getElementById('foodStat').title=`兵糧 / FOOD：収穫 ${Math.round(_inc)} − 消費 ${Math.round(_up)} = ${_net>=0?'+':''}${_net}／ターン`;document.getElementById('foodText').style.color=(_net<0||state.food<=0)?'var(--red)':'var(--grain)';document.getElementById('seasonText').textContent=_sl.jp;document.getElementById('seasonStat').title=`季節 / SEASON：${_sl.jp} ${_sl.en}`;document.getElementById('sidePanel').innerHTML=cityPanel();document.querySelectorAll('[data-policy]').forEach(b=>b.onclick=()=>doPolicy(b.dataset.policy));bindPersonnel();bindReinforce();document.querySelectorAll('[data-target]').forEach(b=>b.onclick=()=>attack(b.dataset.target));if(!state.rosterData)buildRoster()}
   // data-* 属性値（武将ID）で対になる <select> を引く。属性セレクタを組み立てないので任意の値でも安全。
   function selByData(attr,val){const list=document.querySelectorAll('['+attr+']');for(let i=0;i<list.length;i++){if(list[i].getAttribute(attr)===val)return list[i];}return null;}
   // 人事セクションのボタン結線（サイドパネルは毎回 innerHTML で作り直すため updateUI から都度呼ぶ）。
@@ -1041,6 +1122,18 @@
     document.querySelectorAll('[data-recruit]').forEach(b=>b.onclick=()=>{const s=selByData('data-recruit-mult',b.dataset.recruit);doRecruit(b.dataset.recruit,s?parseFloat(s.value):1,state.selectedCity);});
     document.querySelectorAll('[data-reward]').forEach(b=>b.onclick=()=>{const s=selByData('data-reward-amt',b.dataset.reward);rewardGeneral(b.dataset.reward,s?parseInt(s.value,10):PERSONNEL.rewards[0].gold);});
     document.querySelectorAll('[data-move]').forEach(b=>b.onclick=()=>{const s=selByData('data-move-to',b.dataset.move);if(s&&s.value)transferGeneral(b.dataset.move,s.value);});
+  }
+  // P8: 増援の結線。送り先を変えたら「送れる兵数」の disabled を引き直すため updateUI() する。
+  // 選択が既定へ戻らないよう、値を c.reinforceTo に控えてから作り直す（セーブ対象外の一時値）。
+  function bindReinforce(){
+    document.querySelectorAll('[data-reinf-to]').forEach(s=>s.onchange=()=>{
+      const c=cityById[s.dataset.reinfTo];if(!c)return;
+      c.reinforceTo=s.value;updateUI();
+    });
+    document.querySelectorAll('[data-reinf]').forEach(b=>b.onclick=()=>{
+      const id=b.dataset.reinf,to=selByData('data-reinf-to',id),amt=selByData('data-reinf-amt',id);
+      if(to&&to.value)doReinforce(id,to.value,amt?parseInt(amt.value,10):REINFORCE.amounts[0]);
+    });
   }
   // buildRoster() は EXPANDED_PORTRAIT_ATLASES を使う版へ一本化した（T-03: ここにあった旧定義は削除）。
   // 実体は肖像アトラス定義の直後（`function buildRoster()`）。関数宣言なので巻き上げで先に呼べる。
@@ -2344,7 +2437,10 @@
   // ===== セーブ／ロード（localStorage・端末内のみ） =====
   const SAVE_KEY_V1='sanguo_save_v1';   // 読み込み専用（マイグレーション元）
   const SAVE_KEY='sanguo_save_v2';      // 新・読み書き
-  function saveGame(){if(!state.faction)return;try{const data={v:2,scenario:state.scenario,faction:state.faction,year:state.year,turn:state.turn,gold:state.gold,food:state.food,weather:state.weather,season:state.season,selectedCity:state.selectedCity,over:state.over,muted:state.muted,relations:state.relations,victory:state.victory,plotCooldown:state.plotCooldown,rngSeed:state.rngSeed,gen:state.gen,dead:state.dead,difficulty:state.difficulty,aiTraits:state.aiTraits,aiGold:state.aiGold,cities:CITIES.map(c=>({id:c.id,owner:c.owner,garrison:c.garrison,prosperity:c.prosperity,agriculture:c.agriculture,commerce:c.commerce,wall:c.wall,loyalty:c.loyalty,food:c.food,generals:c.generals,wild:c.wild,found:c.found,plotFlags:c.plotFlags}))};localStorage.setItem(SAVE_KEY,JSON.stringify(data));}catch(e){}}
+  // v3 = v2 ＋ 増援(reinforceTurn) ＋ AI目標(aiGoal) ＋ 政務ポイント(ap/apMax)。
+  // v2 の上位互換なので専用の移行関数は作らない（SAVE_KEY も据え置き）。
+  // 欠落フィールドは applySaveData / initCityFields が既定値で補う（E-15）。
+  function saveGame(){if(!state.faction)return;try{const data={v:3,scenario:state.scenario,faction:state.faction,year:state.year,turn:state.turn,gold:state.gold,food:state.food,weather:state.weather,season:state.season,selectedCity:state.selectedCity,over:state.over,muted:state.muted,relations:state.relations,victory:state.victory,plotCooldown:state.plotCooldown,rngSeed:state.rngSeed,gen:state.gen,dead:state.dead,difficulty:state.difficulty,aiTraits:state.aiTraits,aiGold:state.aiGold,cities:CITIES.map(c=>({id:c.id,owner:c.owner,garrison:c.garrison,prosperity:c.prosperity,agriculture:c.agriculture,commerce:c.commerce,wall:c.wall,loyalty:c.loyalty,food:c.food,generals:c.generals,wild:c.wild,found:c.found,plotFlags:c.plotFlags,reinforceTurn:c.reinforceTurn}))};localStorage.setItem(SAVE_KEY,JSON.stringify(data));}catch(e){}}
   function hasSave(){try{return !!(localStorage.getItem(SAVE_KEY)||localStorage.getItem(SAVE_KEY_V1));}catch(e){return false;}}
   function clearSave(){try{localStorage.removeItem(SAVE_KEY);localStorage.removeItem(SAVE_KEY_V1);}catch(e){}}
   // v1（190年固定配置・兵糧なし）セーブを v2 形式へ変換する純粋関数。副作用なし。
@@ -2394,6 +2490,8 @@
       if(Array.isArray(cd.wild))c.wild=cd.wild;
       if(Array.isArray(cd.found))c.found=cd.found;
       if(cd.plotFlags&&typeof cd.plotFlags==='object')c.plotFlags=cd.plotFlags;
+      // P8: 巡と突き合わせる値なので、欠落時は明示的に 0 へ戻す（メモリ上の古い値を引き継がせない）
+      c.reinforceTurn=(typeof cd.reinforceTurn==='number')?cd.reinforceTurn:0;
     });
     initCityFields(); // 欠けたフィールドだけを既定値で補う
     // P0 時点のセーブ（および v1 からの移行データ）は wild/found が空。
