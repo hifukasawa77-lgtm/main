@@ -332,6 +332,17 @@ aiMarch(fid) の目標選択:
 
 ## 6. 検証設計
 
+### 6.0 訂正: 検査用フックは新設不要だった（2026-08-04 追記）
+
+本設計では「`state` が IIFE に閉じていて外から計測できないので `window.__sanguoDebug` を新設する」
+としたが、**`sanguo.html` には既に `window.SANGUO_DEBUG` ブリッジがある**
+（`window.__SANGUO_TEST===true` を `addInitScript` で立てたページでのみ露出。
+第1次拡張 P0〜P7 で整備済みで、200近い関数・定数を公開している）。
+新しいグローバルは追加せず、**このブリッジに P8〜P11 の関数と定数を足す**方針へ改めた。
+
+> 以後、関数や定数を追加したらブリッジにも追加すること。追加し忘れると
+> 検査側が `is not a function` で落ちる（実際に `doReinforce` で1回踏んだ）。
+
 ### 6.1 `scripts/verify-sanguo-boot.mjs`（S-07・新設）
 
 `scripts/verify-sengoku-boot.mjs` と同じ骨格で作る。**GameKit を使っていないため
