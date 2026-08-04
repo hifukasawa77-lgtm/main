@@ -305,6 +305,9 @@
         </div>
         <label class="field" for="porta">ポルタメント <span class="en">/ Portamento</span><span class="val" id="portaVal">45 ms</span></label>
         <input type="range" id="porta" min="0" max="140" step="5" value="45">
+        <label class="field" for="natural">人間らしさ <span class="en">/ Naturalness</span><span class="val" id="naturalVal">78%</span></label>
+        <input type="range" id="natural" min="0" max="100" step="1" value="78">
+        <div class="hint">音程・声量・口の形の細かな揺れを加えます。0にすると従来どおり輪郭のはっきりした歌声です。<br><span class="en">Adds subtle pitch, level, and formant movement. Set to 0 for the original precise sound.</span></div>
       </section>
 
       <section class="card">
@@ -492,14 +495,15 @@ const SMALL_V = {'ぁ':'a','ぃ':'i','ぅ':'u','ぇ':'e','ぉ':'o'};
 
 // 声質プリセット（center = 作曲時の中心音高）
 const VOICES = [
-  {id:'mezzo',  name:'メゾ / Mezzo',        formant:1.14, bright:0.54, breath:0.18, vibRate:5.4, vibDepth:32, center:67},
-  {id:'soprano',name:'ソプラノ / Soprano',  formant:1.26, bright:0.64, breath:0.15, vibRate:5.9, vibDepth:40, center:72},
-  {id:'tenor',  name:'テノール / Tenor',    formant:1.00, bright:0.52, breath:0.16, vibRate:5.2, vibDepth:30, center:60},
-  {id:'bass',   name:'バス / Bass',         formant:0.87, bright:0.40, breath:0.14, vibRate:4.6, vibDepth:24, center:52},
-  {id:'child',  name:'こども / Child',      formant:1.33, bright:0.70, breath:0.22, vibRate:6.3, vibDepth:26, center:74},
-  {id:'whisper',name:'ウィスパー / Whisper',formant:1.16, bright:0.60, breath:0.52, vibRate:5.0, vibDepth:18, center:69},
+  {id:'natural',name:'ナチュラル / Natural',formant:1.10, bright:0.50, breath:0.14, vibRate:5.1, vibDepth:21, center:66, porta:55, natural:0.82},
+  {id:'mezzo',  name:'メゾ / Mezzo',        formant:1.14, bright:0.54, breath:0.18, vibRate:5.4, vibDepth:28, center:67, natural:0.70},
+  {id:'soprano',name:'ソプラノ / Soprano',  formant:1.26, bright:0.64, breath:0.15, vibRate:5.9, vibDepth:34, center:72, natural:0.65},
+  {id:'tenor',  name:'テノール / Tenor',    formant:1.00, bright:0.52, breath:0.16, vibRate:5.2, vibDepth:26, center:60, natural:0.74},
+  {id:'bass',   name:'バス / Bass',         formant:0.87, bright:0.40, breath:0.14, vibRate:4.6, vibDepth:21, center:52, natural:0.72},
+  {id:'child',  name:'こども / Child',      formant:1.33, bright:0.70, breath:0.22, vibRate:6.3, vibDepth:24, center:74, natural:0.62},
+  {id:'whisper',name:'ウィスパー / Whisper',formant:1.16, bright:0.60, breath:0.52, vibRate:5.0, vibDepth:16, center:69, natural:0.78},
   // 機械的にきっちり歌う設定（息成分・ポルタメントを抑え、ビブラートを浅く速く）
-  {id:'vocaloid',name:'ボーカロイド風 / Vocaloid-ish', formant:1.21, bright:0.74, breath:0.07, vibRate:6.3, vibDepth:20, center:71, porta:15}
+  {id:'vocaloid',name:'ボーカロイド風 / Vocaloid-ish', formant:1.21, bright:0.74, breath:0.07, vibRate:6.3, vibDepth:20, center:71, porta:15, natural:0.08}
 ];
 
 // スケール（半音間隔）
@@ -628,10 +632,15 @@ function glottalWave(ctx, brightness){
   const key = 'gw' + Math.round(brightness * 100);
   ctx.__waves = ctx.__waves || {};
   if (ctx.__waves[key]) return ctx.__waves[key];
-  const N = 48;
+  const N = 64;
   const real = new Float32Array(N), imag = new Float32Array(N);
   const tilt = SOURCE_TILT(brightness);
-  for (let n = 1; n < N; n++) imag[n] = Math.pow(n, -tilt);
+  // H1/H2 を少し強め、位相もなだらかにする。単純なノコギリ波より柔らかい声帯閉鎖になる。
+  for (let n = 1; n < N; n++){
+    const amp = Math.pow(n, -tilt) * (1 + 0.30 * Math.exp(-(n - 1) / 2.4));
+    real[n] = amp * 0.18 * Math.sin(n * 0.61);
+    imag[n] = amp * Math.cos(n * 0.23);
+  }
   const w = ctx.createPeriodicWave(real, imag, {disableNormalization:false});
   ctx.__waves[key] = w;
   return w;
@@ -691,6 +700,40 @@ function burstNoise(ctx, dest, t, dur, spec, level){
   src.stop(t + dur + 0.02);
 }
 
+// オフライン書き出しでも毎回同じ表情を再現できる、0〜1の決定的な乱数。
+function humanUnit(seed){
+  const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/* 声帯・息・調音のごく小さな非周期性。音程を大きく揺らさず、
+   「一つのLFOを鳴らしている」感じを避けるため、異なる遅さの揺れを重ねる。 */
+function addHumanDetail(ctx, osc, body, bank, t0, end, rel, P, idx){
+  const amount = clamp(P.natural || 0, 0, 1);
+  if (amount < 0.015) return;
+  const stop = end + rel + 0.04;
+  const makeLfo = (rate, depth, target, type) => {
+    const lfo = ctx.createOscillator(), g = ctx.createGain();
+    lfo.type = type || 'sine'; lfo.frequency.value = rate; g.gain.value = depth;
+    lfo.connect(g); g.connect(target); lfo.start(t0); lfo.stop(stop);
+  };
+  const a = humanUnit(idx + 1), b = humanUnit(idx + 19);
+  // ピッチの漂いは 2〜7 cents 程度。ビブラートとは別に、ゆっくり不規則に動かす。
+  makeLfo(0.42 + a * 0.34, (2.0 + 3.4 * amount) * (0.8 + b * 0.35), osc.detune);
+  makeLfo(1.10 + b * 0.55, (0.8 + 1.7 * amount), osc.detune, 'triangle');
+  // 口の形は完全には固定されない。F1/F2だけをごく僅かに動かして生気を作る。
+  if (bank[0]) makeLfo(0.72 + a * 0.28, (4 + 10 * amount), bank[0].bq.frequency);
+  if (bank[1]) makeLfo(0.56 + b * 0.31, (7 + 16 * amount), bank[1].bq.frequency, 'triangle');
+  // 声量も数%だけ呼吸に合わせて変化させる。
+  body.gain.setValueAtTime(0.97 + humanUnit(idx + 41) * 0.04, t0);
+  const span = Math.max(0.04, end - t0);
+  for (let i = 1; i <= 4; i++){
+    const at = t0 + span * i / 5;
+    const level = 0.955 + humanUnit(idx * 7 + i * 13) * (0.035 + amount * 0.035);
+    body.gain.linearRampToValueAtTime(level, at);
+  }
+}
+
 /* 1音符ぶんのボーカルを組み立てる */
 function buildNote(ctx, dest, ev, P, idx){
   const ph = ev.ph || {c:'', v:'a', closure:0};
@@ -730,15 +773,20 @@ function buildNote(ctx, dest, ev, P, idx){
   const f0 = ev.freq;
   const port = Math.min(P.porta, ev.dur * 0.45);
   if (ev.prevFreq && port > 0.005){
+    // 大きな跳躍まで機械的に滑らせず、近い音程だけを自然につなぐ。
+    const interval = Math.abs(12 * Math.log2(f0 / ev.prevFreq));
+    const glide = interval > 5 ? Math.min(port, 0.032 + 0.018 * (P.natural || 0)) : port;
     osc.frequency.setValueAtTime(ev.prevFreq, voiceStart);
-    osc.frequency.exponentialRampToValueAtTime(f0, voiceStart + port);
+    osc.frequency.exponentialRampToValueAtTime(f0, voiceStart + glide);
   } else {
-    osc.frequency.setValueAtTime(f0 * 0.982, voiceStart);
-    osc.frequency.exponentialRampToValueAtTime(f0, voiceStart + 0.045);
+    // すべての音を同じ幅でしゃくり上げない。ナチュラル時は小さな入りに留める。
+    const scoop = 0.988 + 0.008 * (P.natural || 0);
+    osc.frequency.setValueAtTime(f0 * scoop, voiceStart);
+    osc.frequency.exponentialRampToValueAtTime(f0, voiceStart + 0.040 + 0.025 * (P.natural || 0));
   }
   // 音符ごとの微妙なピッチずれ（機械的になりすぎないように）
-  const jitter = ((idx * 2654435761) % 1000) / 1000 - 0.5;
-  osc.detune.setValueAtTime(jitter * 7, voiceStart);
+  const jitter = humanUnit(idx + 0.5) - 0.5;
+  osc.detune.setValueAtTime(jitter * (5.5 - 2.5 * (P.natural || 0)), voiceStart);
 
   // ビブラート
   if (P.vibDepth > 0.5){
@@ -814,11 +862,14 @@ function buildNote(ctx, dest, ev, P, idx){
   amp.gain.linearRampToValueAtTime(0.0001, sustainEnd + rel);
 
   // 歌声らしさ：3kHz 付近のシンガーズフォルマントを軽く持ち上げる
+  const humanGain = ctx.createGain();
+  humanGain.gain.value = 1;
   const sing = ctx.createBiquadFilter();
   sing.type = 'peaking'; sing.frequency.value = 2900 * shift; sing.Q.value = 1.6; sing.gain.value = 4.5;
   const tilt = ctx.createBiquadFilter();
   tilt.type = 'lowpass'; tilt.frequency.value = 4200 + P.bright * 4200; tilt.Q.value = 0.6;
-  amp.connect(sing); sing.connect(tilt); tilt.connect(dest);
+  amp.connect(humanGain); humanGain.connect(sing); sing.connect(tilt); tilt.connect(dest);
+  addHumanDetail(ctx, osc, humanGain, bank, voiceStart, sustainEnd, rel, P, idx);
 
   osc.start(voiceStart); osc.stop(sustainEnd + rel + 0.05);
 
@@ -1602,7 +1653,7 @@ const $ = id => document.getElementById(id);
 const el = {
   lyrics:$('lyrics'), key:$('key'), scale:$('scale'), style:$('style'), tempo:$('tempo'),
   seed:$('seed'), voice:$('voice'), formant:$('formant'), bright:$('bright'), breath:$('breath'),
-  vibRate:$('vibRate'), vibDepth:$('vibDepth'), porta:$('porta'), harmony:$('harmony'),
+  vibRate:$('vibRate'), vibDepth:$('vibDepth'), porta:$('porta'), natural:$('natural'), harmony:$('harmony'),
   backing:$('backing'), backLevel:$('backLevel'), reverb:$('reverb'), volume:$('volume'),
   roll:$('roll'), keys:$('keys'), rollwrap:$('rollwrap'), log:$('log'),
   metaNotes:$('metaNotes'), metaLen:$('metaLen'),
@@ -1637,6 +1688,7 @@ function params(){
     vibRate: parseFloat(el.vibRate.value),
     vibDepth: parseFloat(el.vibDepth.value),
     porta: parseFloat(el.porta.value) / 1000,
+    natural: parseFloat(el.natural.value) / 100,
     harmony: el.harmony.value,
     backing: el.backing.checked,
     backLevel: parseFloat(el.backLevel.value),
@@ -2023,13 +2075,14 @@ function initSelects(){
     o.value = VOICES[i].id; o.textContent = VOICES[i].name;
     el.voice.appendChild(o);
   }
-  el.voice.value = 'mezzo';
+  el.voice.value = 'natural';
 }
 function applyVoicePreset(){
   const v = currentVoice();
   el.formant.value = v.formant; el.bright.value = v.bright; el.breath.value = v.breath;
   el.vibRate.value = v.vibRate; el.vibDepth.value = v.vibDepth;
   if (v.porta !== undefined) el.porta.value = v.porta;
+  if (v.natural !== undefined) el.natural.value = Math.round(v.natural * 100);
   syncLabels();
 }
 function syncLabels(){
@@ -2040,6 +2093,7 @@ function syncLabels(){
   $('vibRateVal').textContent = parseFloat(el.vibRate.value).toFixed(1);
   $('vibDepthVal').textContent = el.vibDepth.value;
   $('portaVal').textContent = el.porta.value + ' ms';
+  $('naturalVal').textContent = el.natural.value + '%';
   $('backLevelVal').textContent = parseFloat(el.backLevel.value).toFixed(2);
   $('reverbVal').textContent = parseFloat(el.reverb.value).toFixed(2);
   $('volumeVal').textContent = parseFloat(el.volume.value).toFixed(2);
@@ -2407,7 +2461,7 @@ async function transcribe(){
 }
 
 function bind(){
-  const sliders = ['tempo','formant','bright','breath','vibRate','vibDepth','porta','backLevel','reverb','volume'];
+  const sliders = ['tempo','formant','bright','breath','vibRate','vibDepth','porta','natural','backLevel','reverb','volume'];
   for (let i = 0; i < sliders.length; i++){
     el[sliders[i]].addEventListener('input', function(){
       syncLabels();
