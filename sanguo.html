@@ -315,7 +315,9 @@
     gen:{},dead:{},victory:{ratio:0.6,hint:''},plotCooldown:{},rngSeed:0,
     // ===== P7 戦略計略・AI =====
     // difficulty: 'easy'|'normal'|'hard'（勢力選択画面で決める）。aiTraits: 勢力ごとの性格。aiGold: AI 勢力の国庫。
-    difficulty:'normal',aiTraits:{},aiGold:{},aiPolicyLog:{},aiMarchLog:{tries:0,wins:0,vsPlayer:0}};
+    difficulty:'normal',aiTraits:{},aiGold:{},aiPolicyLog:{},aiMarchLog:{tries:0,wins:0,vsPlayer:0},
+    // P10: AI の攻撃目標を数巡保持する。{ [fid]: {city, until} }。毎巡選び直すと攻めが分散して収束しない。
+    aiGoal:{}};
 
   // ===== 都市の国情フィールド・武将ランタイム =====
   // CITIES のリテラルは地理情報のみに保ち、国情（可変）フィールドはここで実行時に注入する。
@@ -653,10 +655,22 @@
     return true;
   }
   // AI の進軍。既存ロジックを踏襲しつつ、性格・難易度・兵糧の制約を加える（4.14 の 6）。
+  // P10: 保持している攻撃目標が今も有効か。無効なら null を返して選び直させる。
+  const AI_GOAL_TURNS=4, AI_GOAL_BONUS=40;
+  function aiGoalCity(fid){
+    const g=state.aiGoal&&state.aiGoal[fid];
+    if(!g||g.until<=state.turn)return null;
+    const t=cityById[g.city];
+    if(!t||t.owner===fid)return null;                                  // 既に取った／消えた
+    if(isAllied(fid,t.owner)||isTruce(fid,t.owner))return null;        // 盟約が結ばれたら諦める
+    const reachable=myCities(fid).some(c=>(c.neighbors||[]).includes(t.id));
+    return reachable?t:null;
+  }
   function aiMarch(fid){
     const t=aiTraitOf(fid),D=diffCfg();
     if(Math.random()>=0.32+t.aggression*0.68)return;
     const edge=Math.max(0.5,D.atkEdge-(1-t.aggression)*0.20);   // 慎重な勢力ほど大きな優位を要求する
+    const goal=aiGoalCity(fid);
     let best=null;
     myCities(fid).forEach(c=>{
       if((c.garrison||0)<40)return;
@@ -668,13 +682,17 @@
         // プレイヤー領を狙うときの閾値・加点は難易度で変える（既存の +12 バイアスは normal に温存）。
         const vsPlayer=(d.owner===state.faction);
         if(cityPower(c)*edge*(vsPlayer?D.playerEdgeMul:1)>cityPower(d)){
-          const score=cityPower(c)-cityPower(d)+(vsPlayer?D.playerBias:0);
+          // 目標は「強い加点」であって強制ではない。絶望的に不利なら諦めて別を狙わせる。
+          const score=cityPower(c)-cityPower(d)+(vsPlayer?D.playerBias:0)+((goal&&d.id===goal.id)?AI_GOAL_BONUS:0);
           if(!best||score>best.score)best={from:c,to:d,score,need};
         }
       });
     });
     if(!best)return;
     const from=best.from,to=best.to,prev=to.owner;
+    // 勝敗によらず、この都市をしばらく狙い続ける（毎巡ぶれるのを止める）
+    if(!state.aiGoal||typeof state.aiGoal!=='object')state.aiGoal={};
+    state.aiGoal[fid]={city:to.id,until:state.turn+AI_GOAL_TURNS};
     // 難易度による AI の戦力補正。プレイヤー領を攻めるときはさらに上乗せする。
     const r=simResolve(from,to,D.aiPower*(prev===state.faction?D.aiPowerVsPlayer:1));
     from.food=Math.max(0,(from.food||0)-best.need);
@@ -683,7 +701,12 @@
     state.aiMarchLog.tries++;if(prev===state.faction)state.aiMarchLog.vsPlayer++;
     if(r.win){
       state.aiMarchLog.wins++;
-      to.owner=fid;to.garrison=Math.max(10,r.atkSurv);to.generals=from.generals.slice();from.generals=[];from.garrison=r.homeKeep;
+      // P10: 随行は統率の高い順に半数まで。ここで全員連れ去ると出撃元の cityPower が急落し、
+      // 次の巡に取り返される——これが「同じ都市が延々と往復する」churn の主因だった。
+      const roster=from.generals.slice().sort((x,y)=>effStat(y).tou-effStat(x).tou);
+      const takeN=Math.max(1,Math.ceil(roster.length/2));   // 1名しかいなければ連れていく（従来どおり）
+      to.owner=fid;to.garrison=Math.max(10,r.atkSurv);
+      to.generals=roster.slice(0,takeN);from.generals=roster.slice(takeN);from.garrison=r.homeKeep;
       if(prev===state.faction)addLog(`⚔ ${factionById[fid].name}が${to.name}を我が手から奪い去った！`);
       else addLog(`${factionById[fid].name}が${to.name}を${factionById[prev].name}から奪った。`);
       const rr=ensureRel(fid,prev);rr.friend=clamp((rr.friend||0)-12,-100,100);
@@ -691,6 +714,39 @@
       from.garrison=r.homeKeep+Math.floor(r.atkSurv*0.7);to.garrison=Math.max(8,r.defSurv);
     }
     syncGenHomes();
+  }
+  // P10: AI 版の増援。脆弱な国境都市を後方から補強する。
+  // 占領直後の守備が薄いまま放置され、すぐ取り返されていたのを能動的な手段で解く。
+  // AI は金・兵糧を払わない＝既存の AI 経済モデル（内政を aiGrowth で抽象化）に合わせた意図的な非対称。
+  // 難易度差は DIFFICULTY のつまみで付ける。
+  function aiReinforce(fid){
+    const cs=myCities(fid);
+    if(cs.length<2)return;
+    // 1. 国境都市のうち、隣接敵との兵力差が最も開いている都市を選ぶ
+    let worst=null;
+    cs.forEach(c=>{
+      const foes=(c.neighbors||[]).map(n=>cityById[n])
+        .filter(x=>x&&x.owner!==fid&&!isAllied(fid,x.owner)&&!isTruce(fid,x.owner));
+      if(!foes.length)return;                                    // 後方都市は対象外
+      let threat=0;foes.forEach(f=>{if((f.garrison||0)>threat)threat=f.garrison||0;});
+      const gap=threat-(c.garrison||0);
+      if(gap>=AI_REINFORCE.frontierGap&&(!worst||gap>worst.gap))worst={city:c,gap};
+    });
+    if(!worst)return;
+    // 2. 隣接する後方自領のうち、最も兵の余っている都市から送る
+    let src=null;
+    (worst.city.neighbors||[]).forEach(n=>{
+      const c=cityById[n];
+      if(!c||c.owner!==fid||(c.garrison||0)<AI_REINFORCE.minSurplus)return;
+      if(!src||c.garrison>src.garrison)src=c;
+    });
+    if(!src)return;
+    const n=Math.floor(Math.min(AI_REINFORCE.send,
+      (src.garrison||0)-AI_REINFORCE.minSurplus/2,
+      REINFORCE.cap-(worst.city.garrison||0)));
+    if(!Number.isFinite(n)||n<=0)return;
+    src.garrison-=n;worst.city.garrison+=n;
+    addLog(`${factionById[fid].name}が${worst.city.name}へ${n}の兵を送った。 / ${factionById[fid].name} reinforces ${worst.city.name}.`);
   }
   // AI の戦略計略（4.14 の 4）。知力85以上の軍師と国庫がある勢力だけが仕掛ける。
   function aiTryPlot(fid){
@@ -820,8 +876,11 @@
       });
       // 兵糧に余裕のある城だけ自然増（旧実装の一律 +3 は兵糧制約と噛み合わないため置換）
       cs.forEach(c=>{if((c.food||0)>(c.garrison||0)*ECON.foodPerSoldier)c.garrison=Math.min(130,(c.garrison||0)+aiGrowth(1));});
+      aiReinforce(f); // 3.5 増援（内政で増えた兵をその巡のうちに前線へ回す）
       aiTryPlot(f);   // 4. 計略
       aiMarch(f);     // 6. 進軍
+      // 攻撃的な勢力は2度目の進軍を試みる。aiMarch 冒頭の確率判定を通るとは限らない。
+      if(t.aggression>=0.8)aiMarch(f);
     });
     aiDiplomacy();    // 5. AI 同士の外交
   }
@@ -2440,7 +2499,7 @@
   // v3 = v2 ＋ 増援(reinforceTurn) ＋ AI目標(aiGoal) ＋ 政務ポイント(ap/apMax)。
   // v2 の上位互換なので専用の移行関数は作らない（SAVE_KEY も据え置き）。
   // 欠落フィールドは applySaveData / initCityFields が既定値で補う（E-15）。
-  function saveGame(){if(!state.faction)return;try{const data={v:3,scenario:state.scenario,faction:state.faction,year:state.year,turn:state.turn,gold:state.gold,food:state.food,weather:state.weather,season:state.season,selectedCity:state.selectedCity,over:state.over,muted:state.muted,relations:state.relations,victory:state.victory,plotCooldown:state.plotCooldown,rngSeed:state.rngSeed,gen:state.gen,dead:state.dead,difficulty:state.difficulty,aiTraits:state.aiTraits,aiGold:state.aiGold,cities:CITIES.map(c=>({id:c.id,owner:c.owner,garrison:c.garrison,prosperity:c.prosperity,agriculture:c.agriculture,commerce:c.commerce,wall:c.wall,loyalty:c.loyalty,food:c.food,generals:c.generals,wild:c.wild,found:c.found,plotFlags:c.plotFlags,reinforceTurn:c.reinforceTurn}))};localStorage.setItem(SAVE_KEY,JSON.stringify(data));}catch(e){}}
+  function saveGame(){if(!state.faction)return;try{const data={v:3,scenario:state.scenario,faction:state.faction,year:state.year,turn:state.turn,gold:state.gold,food:state.food,weather:state.weather,season:state.season,selectedCity:state.selectedCity,over:state.over,muted:state.muted,relations:state.relations,victory:state.victory,plotCooldown:state.plotCooldown,rngSeed:state.rngSeed,gen:state.gen,dead:state.dead,difficulty:state.difficulty,aiTraits:state.aiTraits,aiGold:state.aiGold,aiGoal:state.aiGoal,cities:CITIES.map(c=>({id:c.id,owner:c.owner,garrison:c.garrison,prosperity:c.prosperity,agriculture:c.agriculture,commerce:c.commerce,wall:c.wall,loyalty:c.loyalty,food:c.food,generals:c.generals,wild:c.wild,found:c.found,plotFlags:c.plotFlags,reinforceTurn:c.reinforceTurn}))};localStorage.setItem(SAVE_KEY,JSON.stringify(data));}catch(e){}}
   function hasSave(){try{return !!(localStorage.getItem(SAVE_KEY)||localStorage.getItem(SAVE_KEY_V1));}catch(e){return false;}}
   function clearSave(){try{localStorage.removeItem(SAVE_KEY);localStorage.removeItem(SAVE_KEY_V1);}catch(e){}}
   // v1（190年固定配置・兵糧なし）セーブを v2 形式へ変換する純粋関数。副作用なし。
@@ -2476,6 +2535,7 @@
     state.aiTraits=(d.aiTraits&&typeof d.aiTraits==='object')?d.aiTraits:{};
     state.aiGold=(d.aiGold&&typeof d.aiGold==='object')?d.aiGold:{};
     state.aiPolicyLog={};state.aiMarchLog={tries:0,wins:0,vsPlayer:0};
+    state.aiGoal=(d.aiGoal&&typeof d.aiGoal==='object')?d.aiGoal:{};   // P10（v2 セーブでは欠落 → {}）
     state.rngSeed=typeof d.rngSeed==='number'?d.rngSeed:0;
     state.gen=d.gen||{};
     state.dead=(d.dead&&typeof d.dead==='object')?d.dead:{};   // P5: 討死武将の墓碑（未知フィールドは E-15 どおり無視）
