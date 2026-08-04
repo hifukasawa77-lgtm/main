@@ -98,6 +98,7 @@ node scripts/verify-castle-csv.mjs     # siro_ichi.csv の全行がゲーム内�
 node scripts/verify-castle-layouts.mjs # 攻城レイアウト24城
 node scripts/verify-map-assets.mjs     # マップアイコンが実際に絵として描かれるか（アセットを差し替えたら必須）
 node scripts/verify-force-list.mjs     # force_list.csv の全行がゲーム内マーカーと一致するか
+node scripts/verify-sengoku-balance.mjs # 長期進行（150ターン×3試行）で停止・例外・勢力淘汰の破綻がないか
 ```
 
 - **タイトル画面が出た＝起動成功ではない**。描画ループの例外は「背景画像だけ残してUIが出ない」形で現れ、タイトルは無事に出る。必ず `verify-sengoku-boot.mjs` でマップ画面まで入って確かめること（2026-08-02: `_drawRoads` の `preview is not defined` を「アセット読込が重い」「roundRect非対応」と誤診して3コミット費やした）
@@ -108,6 +109,13 @@ node scripts/verify-force-list.mjs     # force_list.csv の全行がゲーム内
 - 地図画像は絵地図で `geoToScreen` の緯度経度換算と一致しない（九州はx方向に約380pxずれる）。**新しい城の座標は近傍城のCSV値から局所アフィン内挿で起こす**。城どうしの最短間隔は11px程度が下限
 - **アセットを縮小・再エンコードするときは、そのアセットを切り出して使っている箇所を必ず洗う**。`drawImage` の source-rect を画素値で直書きしていると、縮小した瞬間に矩形が画像外へ出て絵が消える。読み込みは成功するので404もエラーも出ず、無言で絵だけが消える（2026-08-02: 1254px→256px でマーカー4種が塗り面積0〜3.5%に）。矩形は「測った原寸サイズ」と対で持ち、描画時に実解像度へスケールする（`scaleSrcRect`）
 - **アセットは全てWebP**（2026-08-02に PNG 660MB → WebP q90 89MB へ再エンコード）。追加・差し替えは `python3 scripts/optimize-sengoku-assets.py` を通す。**解像度は変えない**（上記の source-rect が壊れるため）。PNGを直接足すと容量が跳ねるので置かないこと
+- **武将を追加するときは必ず配列の末尾へ足す**。`buildPortraitSlots()` は `DATA.generals` の
+  **index** で肖像アトラスの枠を連番配布するため、途中に挿入すると後続の武将全員の顔がずれる
+  （例外もエラーも出ず、無言で別人の顔になる）。1枚1人の専用画を使う場合は `KENGO_PORTRAIT_SLOTS`
+  のように `{cols:1,rows:1}` のスロットを作り、`buildPortraitSlots()` の `Object.assign` の
+  **最後**に当てて既存の一括スロットに上書きされないようにする
+- **剣豪など人物の年代ゲートは `GENERAL_BIRTH_DEATH` に `{born,died}` を入れるだけでよい**。
+  元服13歳・没年の判定は既存実装が持っており、シナリオごとの登場可否は自動で決まる
 - **一度に全部を要求しない**。後読みは同時4枚まで＋1枚60秒上限（`DEFERRED_LOAD_CONCURRENCY` / `DEFERRED_LOAD_TIMEOUT_MS`）。`ASSETS.img` は Proxy で、描画側が未ロードのキーに触れた瞬間そのアセットをキューの最優先へ引き上げる（先読み順の決め打ちに頼らない）
 - **施設・城グラフィックには未ロード時のフォールバック描画がある**（仮のベクター図形＝白い箱）。読み込みが遅いとこれが長時間表示され「画像が壊れている」ように見える。アイコンの不具合を調べるときは、primary が生きていると再現しないので `ASSETS.img` から該当キーを消してフォールバック経路を直接確かめること
 
