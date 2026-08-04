@@ -90,7 +90,7 @@
 <section id="gameScreen" class="screen hidden">
   <header class="topbar">
     <div class="brand">三国志・天下三分</div>
-    <div class="topStats"><span>年代 <b id="yearText">190年</b></span><span>第 <b id="turnText">1</b> 巡</span><span>勢力 <b id="factionText">—</b></span><span>領 <b id="cityText">—</b></span><span>金 <b id="goldText">—</b></span><span id="foodStat" title="兵糧 / FOOD">糧 <b id="foodText">—</b></span><span id="seasonStat" title="季節 / SEASON">季 <b id="seasonText">—</b></span></div>
+    <div class="topStats"><span>年代 <b id="yearText">190年</b></span><span>第 <b id="turnText">1</b> 巡</span><span>勢力 <b id="factionText">—</b></span><span>領 <b id="cityText">—</b></span><span id="apStat" title="政務 / ACTIONS">政務 <b id="apText">—</b></span><span>金 <b id="goldText">—</b></span><span id="foodStat" title="兵糧 / FOOD">糧 <b id="foodText">—</b></span><span id="seasonStat" title="季節 / SEASON">季 <b id="seasonText">—</b></span></div>
     <div class="topActions"><button id="plotButton" title="戦略計略 / STRATAGEMS">計略</button><button id="diploButton" title="外交 / DIPLOMACY">外交</button><button id="rosterButton" title="武将名鑑 / ROSTER">武将名鑑</button><button id="muteButton" title="効果音">🔊</button><button id="endTurnButton" class="primary">次のターン</button><button id="resetButton">タイトル</button></div>
   </header>
   <main class="mapShell">
@@ -241,6 +241,23 @@
   };
   // AI 版の増援（P10）。AI は金・兵糧を払わない＝既存の AI 経済モデル（aiGrowth で抽象化）に合わせる。
   const AI_REINFORCE={minSurplus:60,send:40,frontierGap:25};
+  // P11 政務ポイント：1巡に打てる手の数。金だけが制約だと、上限まで内政を連打するのが常に最適になり
+  // 選択が生まれない（実測：1都市放置で金がT57に4,113まで単調増加した）。
+  // 上限 = base + 領地数/perCities + 君主の統率/touDiv を min/max でクランプ。
+  const AP={
+    base:2,perCities:2,touDiv:40,min:3,max:8,
+    cost:{
+      agri:1,trade:1,levy:1,wall:1,relief:1,      // 内政5種
+      grain:1,                                     // 兵糧買付
+      scout:1,recruit:1,transfer:1,reward:0,       // 人事（恩賞は金だけの行為なので0）
+      reinforce:1,                                 // 増援
+      march:2,                                     // 出陣
+      alienate:2,rumor:2,poison:2,                 // 戦略計略
+      alliance:1,truce:1,gift:1,joint:2            // 外交
+    }
+  };
+  // 兵糧買付：金の恒久的なシンク。秋冬（収穫期）は安く、春夏（端境期）は高い。
+  const GRAIN={gold:100,yield:{growth:60,harvest:110}};
   // 天候4種。bowRange=弓射程補正 / fireMul=火計倍率 / vision=視界 / moveMul=移動倍率。P4 で参照する。
   const WEATHER={
     clear:{jp:'晴',en:'CLEAR',bowRange:0, fireMul:1.0,vision:99,moveMul:1.0},
@@ -317,7 +334,9 @@
     // difficulty: 'easy'|'normal'|'hard'（勢力選択画面で決める）。aiTraits: 勢力ごとの性格。aiGold: AI 勢力の国庫。
     difficulty:'normal',aiTraits:{},aiGold:{},aiPolicyLog:{},aiMarchLog:{tries:0,wins:0,vsPlayer:0},
     // P10: AI の攻撃目標を数巡保持する。{ [fid]: {city, until} }。毎巡選び直すと攻めが分散して収束しない。
-    aiGoal:{}};
+    aiGoal:{},
+    // P11: 政務ポイント。endTurn の冒頭で apMax を引き直し、繰り越さず満タンへ戻す。
+    ap:5,apMax:5};
 
   // ===== 都市の国情フィールド・武将ランタイム =====
   // CITIES のリテラルは地理情報のみに保ち、国情（可変）フィールドはここで実行時に注入する。
@@ -464,7 +483,8 @@
     if(state.gold<def.cost){addLog(`金が足りず${lb.jp}を行えない（${def.cost}金必要）。 / Not enough gold.`);updateUI();return;}
     if(def.food>0&&state.food<def.food){addLog(`兵糧が足りず${lb.jp}を行えない（兵糧${def.food}必要）。 / Not enough food.`);updateUI();return;}
     if((c[def.field]||0)>=def.cap){addLog(`${c.name}の${lb.jp}はこれ以上伸びない。 / Already at maximum.`);updateUI();return;}
-    state.gold-=def.cost;if(def.food>0)state.food-=def.food;
+    const ap=apGate(kind);if(!ap.ok){addLog(ap.why);updateUI();return;}   // P11
+    state.gold-=def.cost;if(def.food>0)state.food-=def.food;spendAp(kind);
     const g=policyGain(kind,c),before=c[def.field]||0;
     c[def.field]=Math.min(def.cap,before+g.gain);
     const actual=c[def.field]-before;
@@ -501,6 +521,44 @@
   function marchCommit(a){const homeKeep=Math.max(10,Math.floor((a.garrison||0)*0.15));return Math.max(12,(a.garrison||0)-homeKeep);}
   function marchFoodCost(a){return Math.round(marchCommit(a)*ECON.marchFoodPerSoldier);}
 
+  // ===== P11 政務ポイント =====
+  // 実行可否の窓口はこの3つに一本化する。各コマンドの why 生成に AP 判定を直接書くと、
+  // 5箇所（policyBtnHtml / genRowHtml / cityPanel / openPlotOverlay / buildDiplo）で
+  // 二重管理になり「押せるのに何も起きない」不整合を必ず生む。
+  function apCost(kind){const v=AP.cost[kind];return (typeof v==='number')?v:1;}
+  function apGate(kind){
+    const cost=apCost(kind);
+    if(cost<=0)return {ok:true,why:'',cost:0};
+    if((state.ap||0)>=cost)return {ok:true,why:'',cost};
+    return {ok:false,cost,why:`政務が足りない（${cost}必要／残${state.ap||0}） / Not enough actions (need ${cost}, have ${state.ap||0})`};
+  }
+  function spendAp(kind){state.ap=Math.max(0,(state.ap||0)-apCost(kind));}
+  // 資源の理由を優先し、資源が足りているときだけ AP を見る。全コマンドがこの1本を通る。
+  function gateWhy(kind,resourceWhy){return resourceWhy||apGate(kind).why;}
+  // 上限 = base + 領地数/perCities + 君主の統率/touDiv。領地が増えるほど手数も増える。
+  // 例）190年 魏＝2都市・曹操(統96): clamp(2 + 2/2 + 96/40, 3, 8) = 5
+  function recalcApMax(){
+    const n=factionCounts()[state.faction]||0;
+    const lid=leaderIdOf(state.faction);
+    const tou=lid?(effStat(lid).tou||0):55;      // 君主が討死していたら既定値で凌ぐ
+    state.apMax=clamp(AP.base+Math.floor(n/AP.perCities)+Math.floor(tou/AP.touDiv),AP.min,AP.max);
+    return state.apMax;
+  }
+  function refillAp(){recalcApMax();state.ap=state.apMax;}
+  // 兵糧買付：金 → 兵糧。相場は季節で変わる（秋冬は安い＝同じ100金で多く買える）。
+  function grainYield(){return GRAIN.yield[state.season]||GRAIN.yield.growth;}
+  function buyGrainWhy(){
+    return gateWhy('grain',state.gold<GRAIN.gold?`金が足りない（${GRAIN.gold}金必要） / Not enough gold`:'');
+  }
+  function doBuyGrain(){
+    const why=buyGrainWhy();
+    if(why){addLog(`兵糧を買い付けられない：${why}`);updateUI();return;}
+    const n=grainYield();
+    state.gold-=GRAIN.gold;state.food+=n;spendAp('grain');
+    addLog(`市より兵糧${n}を買い付けた（${GRAIN.gold}金）。 / Bought ${n} grain for ${GRAIN.gold} gold.`);
+    sfx('click');updateUI();
+  }
+
   // ===== P8 増援（隣接する自軍領へ兵を移す）=====
   // 実際に送れる兵の上限。UI の option 生成と doReinforce の両方がこれを使う（二重管理を避ける）。
   function reinforceMax(from,to){
@@ -519,7 +577,7 @@
     const cost=reinforceCost(Math.min(n,reinforceMax(from,to)));
     if(state.gold<cost.gold)return `金が足りない（${cost.gold}金） / Not enough gold`;
     if(state.food<cost.food)return `兵糧が足りない（${cost.food}） / Not enough food`;
-    return '';
+    return apGate('reinforce').why;   // P11
   }
   function doReinforce(fromId,toId,amount){
     const from=cityById[fromId],to=cityById[toId];
@@ -536,7 +594,7 @@
     const n=Math.min(req,cap);
     if(!Number.isFinite(n)||n<=0){addLog(`${to.name}へ送れる兵がない。 / No troops could be sent.`);updateUI();return;}
     const cost=reinforceCost(n);
-    state.gold-=cost.gold;state.food-=cost.food;
+    state.gold-=cost.gold;state.food-=cost.food;spendAp('reinforce');   // P11
     from.garrison-=n;to.garrison+=n;
     to.loyalty=clamp((to.loyalty||0)-REINFORCE.loyaltyCost,0,100);
     from.reinforceTurn=state.turn;
@@ -549,6 +607,10 @@
     if(state.over)return;                                   // 1
     const prevYear=state.year;
     state.turn++;if(state.turn%2===0)state.year++;
+    // P11: 政務ポイントの回復。runAI(11) より前・turn++ の直後に置く。
+    // 後ろに置くと AI の進軍で領地が減った結果が同じ巡の apMax に効き、
+    // 「ターンを終えた瞬間に政務が減る」不可解な挙動になる。繰り越しはしない。
+    refillAp();
     state.season=seasonOf(state.turn);                      // 2
     rollWeather();                                          // 3（P4 で本実装。現状は晴天固定のスタブ）
     const eco=tickEconomy(state.faction);                   // 4
@@ -925,7 +987,8 @@
     if(!c||c.owner!==state.faction)return false;
     if(state.gold<PERSONNEL.scoutCost){addLog(`金が足りず人材を探せない（${PERSONNEL.scoutCost}金必要）。 / Not enough gold to scout.`);updateUI();return false;}
     if(!(c.wild||[]).length){addLog(`${c.name}に在野の人材は見当たらない。 / No talent available in ${c.id}.`);updateUI();return false;}
-    state.gold-=PERSONNEL.scoutCost;
+    const apS=apGate('scout');if(!apS.ok){addLog(apS.why);updateUI();return false;}   // P11
+    state.gold-=PERSONNEL.scoutCost;spendAp('scout');   // 空振りでも消費する（時間を使ったため）
     const p=scoutChance(c);
     if(Math.random()>=p){addLog(`${c.name}で人材を求めたが、めぼしい者に会えなかった（成功率${Math.round(p*100)}%）。 / Search failed.`);sfx('click');updateUI();return false;}
     // 知力が高いほど「逸材を見抜く」確率が上がる。それ以外は一様抽選。
@@ -961,6 +1024,10 @@
     if((g.recruitCd||0)>state.turn){addLog(`${genName(genId)}は返答を待ってほしいという（あと${g.recruitCd-state.turn}巡）。 / Needs time to answer.`);updateUI();return false;}
     const cost=Math.round(recruitCost(genId)*m);
     if(state.gold<cost){addLog(`金が足りず${genName(genId)}を招けない（${cost}金必要）。 / Not enough gold.`);updateUI();return false;}
+    // P11: 交渉は決裂しても消費する。成功時のみの消費にすると、低確率の交渉を残ポイントぶん
+    // 試し続けるのが常に最適になり、判断が消えるため。
+    const apR=apGate('recruit');if(!apR.ok){addLog(apR.why);updateUI();return false;}
+    spendAp('recruit');
     const p=recruitChance(c,genId,m);
     if(Math.random()<p){
       state.gold-=cost;
@@ -988,7 +1055,8 @@
     const g=genOf(genId);
     if(g.movedTurn===state.turn){addLog(`${genName(genId)}は今巡すでに移動している。 / Already moved this turn.`);updateUI();return false;}
     if(state.gold<PERSONNEL.transfer.gold||state.food<PERSONNEL.transfer.food){addLog(`路銀が足りず配置転換できない（${PERSONNEL.transfer.gold}金＋兵糧${PERSONNEL.transfer.food}）。 / Not enough supplies.`);updateUI();return false;}
-    state.gold-=PERSONNEL.transfer.gold;state.food-=PERSONNEL.transfer.food;
+    const apT=apGate('transfer');if(!apT.ok){addLog(apT.why);updateUI();return false;}   // P11
+    state.gold-=PERSONNEL.transfer.gold;state.food-=PERSONNEL.transfer.food;spendAp('transfer');
     from.generals.splice(from.generals.indexOf(genId),1);
     to.generals=(to.generals||[]).concat(genId);
     g.at=to.id;g.service=to.owner;g.movedTurn=state.turn;
@@ -1073,7 +1141,7 @@
     const moveWhy=!dest.length?'隣接する自軍領がない / No adjacent friendly city'
       :(moved?'今巡すでに移動した / Already moved this turn'
       :(state.gold<PERSONNEL.transfer.gold?`金が足りない（${PERSONNEL.transfer.gold}金） / Not enough gold`
-      :(state.food<PERSONNEL.transfer.food?`兵糧が足りない（${PERSONNEL.transfer.food}） / Not enough food`:'')));
+      :(state.food<PERSONNEL.transfer.food?`兵糧が足りない（${PERSONNEL.transfer.food}） / Not enough food`:gateWhy('transfer','')))); // P11
     const opts=dest.map(x=>`<option value="${escHtml(x.id)}">${escHtml(x.name)}</option>`).join('')||'<option value="">—</option>';
     const rw=PERSONNEL.rewards.map(r=>`<option value="${r.gold}"${state.gold<r.gold?' disabled':''}>${r.gold}金 忠+${r.loyalty}</option>`).join('');
     const rwWhy=loy>=100?'忠誠は既に頂点 / Loyalty already at maximum':(state.gold<PERSONNEL.rewards[0].gold?`金が足りない（${PERSONNEL.rewards[0].gold}金） / Not enough gold`:'');
@@ -1090,7 +1158,7 @@
     const cd=(g.recruitCd||0)>state.turn?(g.recruitCd-state.turn):0;
     const rates=PERSONNEL.recruitMults.map(m=>`${m.jp}${Math.round(recruitChance(c,id,m.mult)*100)}%`).join(' / ');
     const opts=PERSONNEL.recruitMults.map(m=>`<option value="${m.mult}">${m.jp} ${Math.round(base*m.mult)}金</option>`).join('');
-    const why=cd?`あと${cd}巡は再交渉できない / Cooling down`:(state.gold<base?`金が足りない（${base}金） / Not enough gold`:'');
+    const why=gateWhy('recruit',cd?`あと${cd}巡は再交渉できない / Cooling down`:(state.gold<base?`金が足りない（${base}金） / Not enough gold`:''));   // P11
     const face=portraitCss(id,34);   // P9
     return `<div class="genRow wildRow"><div class="genHead">${face?`<i class="genFace" style="${face}"></i>`:''}<b>${escHtml(genName(id))}</b><small>${statLabel(id)}</small><span class="tag">在野</span></div>`
       +`<div class="genActs"><select class="miniSel" data-recruit-mult="${escHtml(id)}" title="待遇 / Offer">${opts}</select>`
@@ -1098,8 +1166,9 @@
   }
   function personnelHtml(c){
     const left=(c.wild||[]).length,p=Math.round(scoutChance(c)*100);
-    const why=state.gold<PERSONNEL.scoutCost?`金が足りない（${PERSONNEL.scoutCost}金必要） / Not enough gold`
+    let why=state.gold<PERSONNEL.scoutCost?`金が足りない（${PERSONNEL.scoutCost}金必要） / Not enough gold`
       :(!left?'在野の人材は見当たらない / No talent available':'');       // E-04
+    why=gateWhy('scout',why);   // P11
     const scout=`<div class="panelActions"><button class="policyBtn" data-action="scout"${why?' disabled':''} title="${escHtml(why||`在野探索 / SCOUT：${PERSONNEL.scoutCost}金・成功率${p}%・未発見${left}名`)}"><span>在野探索 ${PERSONNEL.scoutCost}金</span><small>SCOUT ${p}%</small></button>`
       +`<div class="stat" title="未発見の在野 / Undiscovered talent">在野<b>${left}</b></div></div>`;
     const rows=(c.found||[]).map(id=>wildRowHtml(c,id)).join('')+(c.generals||[]).map(id=>genRowHtml(c,id)).join('');
@@ -1128,7 +1197,8 @@
       +`<button class="miniBtn" data-reinf="${escHtml(c.id)}"${why?' disabled':''} title="${escHtml(why||`${to.name}へ兵を送る（1巡1回・最大${maxN}） / Send troops to ${to.name}`)}">送る</button></div>`
       +`<div class="subtle">現在の兵 ${c.garrison} ／ 最低 ${REINFORCE.minKeep} は残す（今回送れる上限 ${maxN}）。 / Keeps ${REINFORCE.minKeep} behind.</div>`;
   }
-  function attack(targetId){const a=cityById[state.selectedCity],d=cityById[targetId];if(!a||!d||a.owner!==state.faction||!a.neighbors.includes(d.id)||state.gold<50)return;if(isAllied(state.faction,d.owner)){addLog(`${factionById[d.owner].name}とは同盟中のため攻撃できない。 / Allied — cannot attack.`);updateUI();return;}if(isTruce(state.faction,d.owner)){addLog(`${factionById[d.owner].name}とは停戦中のため攻撃できない。 / Truce in force — cannot attack.`);updateUI();return;}if(a.garrison<20){addLog(`${a.name}の兵が少なすぎて出陣できない。`);updateUI();return;}const need=marchFoodCost(a);if(state.food<need){addLog(`兵糧が足りず${d.name}へ出陣できない（必要${need}／現在${state.food}）。 / Not enough food to march (need ${need}).`);updateUI();return;}state.gold-=50;state.food-=need;addLog(`${a.name}より${marchCommit(a)}の兵が出陣。兵糧${need}を携行した。 / March: ${need} food carried.`);sfx('march');startBattle(a,d);}
+  function attack(targetId){const a=cityById[state.selectedCity],d=cityById[targetId];if(!a||!d||a.owner!==state.faction||!a.neighbors.includes(d.id)||state.gold<50)return;if(isAllied(state.faction,d.owner)){addLog(`${factionById[d.owner].name}とは同盟中のため攻撃できない。 / Allied — cannot attack.`);updateUI();return;}if(isTruce(state.faction,d.owner)){addLog(`${factionById[d.owner].name}とは停戦中のため攻撃できない。 / Truce in force — cannot attack.`);updateUI();return;}if(a.garrison<20){addLog(`${a.name}の兵が少なすぎて出陣できない。`);updateUI();return;}const need=marchFoodCost(a);if(state.food<need){addLog(`兵糧が足りず${d.name}へ出陣できない（必要${need}／現在${state.food}）。 / Not enough food to march (need ${need}).`);updateUI();return;}const apM=apGate('march');if(!apM.ok){addLog(apM.why);updateUI();return;}   // P11: 出陣は2消費（撤退しても戻さない）
+    state.gold-=50;state.food-=need;spendAp('march');addLog(`${a.name}より${marchCommit(a)}の兵が出陣。兵糧${need}を携行した。 / March: ${need} food carried.`);sfx('march');startBattle(a,d);}
   function nameForGeneral(i){return GENERAL_JP[i]||`武将${i+1}`}
   // 内政ボタン1つぶんのHTML。実行不可の理由は title 属性（日英併記）に入れて disabled にする（E-05）。
   function policyBtnHtml(kind,c){
@@ -1137,9 +1207,16 @@
     if(state.gold<def.cost)why=`金が足りない（${def.cost}金必要） / Not enough gold`;
     else if(def.food>0&&state.food<def.food)why=`兵糧が足りない（${def.food}必要） / Not enough food`;
     else if(cur>=def.cap)why=`上限に達している（${def.cap}） / Maximum reached`;
+    why=gateWhy(kind,why);   // P11: 資源が足りていれば政務ポイントを見る
     const cost=`${def.cost}金${def.food?`＋糧${def.food}`:''}`;
     const tip=why||`${lb.jp} / ${lb.en}：${cost}（現在 ${cur} ／ 上限 ${def.cap}）`;
     return `<button class="policyBtn" data-policy="${escHtml(kind)}"${why?' disabled':''} title="${escHtml(tip)}"><span>${lb.jp} ${cost}</span><small>${lb.en}</small></button>`;
+  }
+  // P11: 兵糧買付。内政セクションの6番目に置く。
+  function grainBtnHtml(){
+    const why=buyGrainWhy(),n=grainYield(),sl=seasonLabel(state.season);
+    const tip=why||`兵糧買付 / BUY GRAIN：${GRAIN.gold}金 → 兵糧+${n}（${sl.jp}の相場）`;
+    return `<button class="policyBtn" data-buygrain="1"${why?' disabled':''} title="${escHtml(tip)}"><span>兵糧買付 ${GRAIN.gold}金</span><small>BUY GRAIN +${n}</small></button>`;
   }
   function cityPanel(){
     const c=cityById[state.selectedCity];if(!c)return '<h2>地図を読み込み中</h2>';
@@ -1158,21 +1235,24 @@
     if(!mine)return head+`<div class="sectionTitle">駐屯武将 / GARRISONED</div><div class="subtle">${escHtml(gens)}</div>`+tail;
     const inc=foodIncome(),up=foodUpkeep(),net=Math.round(inc-up),gi=goldIncome(),sl=seasonLabel(state.season);
     const balance=`<div class="balance">兵糧収支 / FOOD BALANCE（${sl.jp} ${sl.en}）<br>収穫 ${Math.round(inc)} − 消費 ${Math.round(up)} = <b${net<0?' class="neg"':''}>${net>=0?'+':''}${net}</b> ／ 備蓄 <b${state.food<=0?' class="neg"':''}>${state.food}</b><br>金収入 / GOLD +${gi}</div>`;
-    const need=marchFoodCost(c),canMarch=c.garrison>=20&&state.food>=need&&state.gold>=50;
-    const marchWhy=c.garrison<20?'兵が少なすぎる / Too few troops':(state.gold<50?'金が足りない（50金） / Not enough gold':(state.food<need?`兵糧が足りない（必要${need}） / Not enough food`:''));
+    const need=marchFoodCost(c),canMarch=c.garrison>=20&&state.food>=need&&state.gold>=50&&apGate('march').ok;   // P11
+    const marchWhy=gateWhy('march',c.garrison<20?'兵が少なすぎる / Too few troops':(state.gold<50?'金が足りない（50金） / Not enough gold':(state.food<need?`兵糧が足りない（必要${need}） / Not enough food`:'')));   // P11
     const targets=enemy.map(x=>`<button class="targetBtn" data-target="${escHtml(x.id)}"${canMarch?'':' disabled'} title="${escHtml(marchWhy||`${x.name}へ出陣 / March on ${x.id}`)}"><span>${escHtml(x.name)}</span><small>${escHtml(factionById[x.owner].name)}・${x.garrison}兵</small></button>`).join('')
       ||'<div class="subtle">攻撃可能な隣接城はありません。 / No adjacent enemy city.</div>';
     // 同盟・停戦中の隣接城は理由を添えて別表示する（押せるボタンにはしない）。
     const pactNote=pacted.length?`<div class="allyNote">${pacted.map(x=>`${escHtml(x.name)}（${escHtml(factionById[x.owner].name)}・${isAllied(state.faction,x.owner)?'同盟中':'停戦中'}）`).join('、')}<br><span class="subtle">盟約のある勢力へは出陣できません。 / Cannot march on allies or truce partners.</span></div>`:'';
     return head+balance
       +`<div class="sectionTitle">内政 / DOMESTIC AFFAIRS</div>`
-      +`<div class="panelActions">${Object.keys(ECON.actions).map(k=>policyBtnHtml(k,c)).join('')}</div>`
+      +`<div class="panelActions">${Object.keys(ECON.actions).map(k=>policyBtnHtml(k,c)).join('')}${grainBtnHtml()}</div>`
       +personnelHtml(c)
       +reinforceHtml(c)
       +`<div class="sectionTitle">出陣 / CAMPAIGN（50金・兵糧${need}）</div><div class="targetList">${targets}</div>${pactNote}`
       +tail;
   }
-  function updateUI(){const f=factionById[state.faction];document.getElementById('yearText').textContent=`${state.year}年`;document.getElementById('turnText').textContent=state.turn;document.getElementById('factionText').textContent=f?.name||'—';document.getElementById('cityText').textContent=`${(factionCounts()[state.faction]||0)}/${CITIES.length}`;document.getElementById('goldText').textContent=state.gold;document.getElementById('foodText').textContent=state.food;const _inc=foodIncome(),_up=foodUpkeep(),_net=Math.round(_inc-_up),_sl=seasonLabel(state.season);document.getElementById('foodStat').title=`兵糧 / FOOD：収穫 ${Math.round(_inc)} − 消費 ${Math.round(_up)} = ${_net>=0?'+':''}${_net}／ターン`;document.getElementById('foodText').style.color=(_net<0||state.food<=0)?'var(--red)':'var(--grain)';document.getElementById('seasonText').textContent=_sl.jp;document.getElementById('seasonStat').title=`季節 / SEASON：${_sl.jp} ${_sl.en}`;document.getElementById('sidePanel').innerHTML=cityPanel();document.querySelectorAll('[data-policy]').forEach(b=>b.onclick=()=>doPolicy(b.dataset.policy));bindPersonnel();bindReinforce();document.querySelectorAll('[data-target]').forEach(b=>b.onclick=()=>attack(b.dataset.target));if(!state.rosterData)buildRoster()}
+  function updateUI(){const f=factionById[state.faction];document.getElementById('yearText').textContent=`${state.year}年`;document.getElementById('turnText').textContent=state.turn;document.getElementById('factionText').textContent=f?.name||'—';document.getElementById('cityText').textContent=`${(factionCounts()[state.faction]||0)}/${CITIES.length}`;document.getElementById('goldText').textContent=state.gold;document.getElementById('foodText').textContent=state.food;
+    // P11: 政務ポイント。残0は赤で示す（兵糧の色替えと同じ手法）。
+    const _ap=document.getElementById('apText');_ap.textContent=`${state.ap}/${state.apMax}`;_ap.style.color=(state.ap<=0)?'var(--red)':'';
+    document.getElementById('apStat').title='政務 / ACTIONS：内政1・兵糧買付1・増援1・登用1・転換1・探索1・外交1・出陣2・計略2・恩賞0（毎巡回復）';const _inc=foodIncome(),_up=foodUpkeep(),_net=Math.round(_inc-_up),_sl=seasonLabel(state.season);document.getElementById('foodStat').title=`兵糧 / FOOD：収穫 ${Math.round(_inc)} − 消費 ${Math.round(_up)} = ${_net>=0?'+':''}${_net}／ターン`;document.getElementById('foodText').style.color=(_net<0||state.food<=0)?'var(--red)':'var(--grain)';document.getElementById('seasonText').textContent=_sl.jp;document.getElementById('seasonStat').title=`季節 / SEASON：${_sl.jp} ${_sl.en}`;document.getElementById('sidePanel').innerHTML=cityPanel();document.querySelectorAll('[data-policy]').forEach(b=>b.onclick=()=>doPolicy(b.dataset.policy));document.querySelectorAll('[data-buygrain]').forEach(b=>b.onclick=()=>doBuyGrain());bindPersonnel();bindReinforce();document.querySelectorAll('[data-target]').forEach(b=>b.onclick=()=>attack(b.dataset.target));if(!state.rosterData)buildRoster()}
   // data-* 属性値（武将ID）で対になる <select> を引く。属性セレクタを組み立てないので任意の値でも安全。
   function selByData(attr,val){const list=document.querySelectorAll('['+attr+']');for(let i=0;i<list.length;i++){if(list[i].getAttribute(attr)===val)return list[i];}return null;}
   // 人事セクションのボタン結線（サイドパネルは毎回 innerHTML で作り直すため updateUI から都度呼ぶ）。
@@ -2238,10 +2318,10 @@
   function ensureRel(a,b){const k=relKey(a,b);if(!state.relations[k])state.relations[k]={alliance:false,truceUntil:0,friend:0};return state.relations[k];}
   function relStatus(f){if(isAllied(state.faction,f))return {t:'同盟',c:'var(--teal)'};if(isTruce(state.faction,f))return {t:'停戦',c:'var(--blue)'};const r=state.relations[relKey(state.faction,f)];if(r&&r.friend<=-30)return {t:'敵対',c:'var(--red)'};return {t:'中立',c:'var(--muted)'};}
   function decayDiplomacy(){Object.values(state.relations).forEach(r=>{if(r.friend>0)r.friend=Math.max(0,r.friend-1);else if(r.friend<0)r.friend=Math.min(0,r.friend+1);});}
-  function proposeAlliance(f){const r=ensureRel(state.faction,f),pc=factionCounts(),mine=pc[state.faction]||0,theirs=pc[f]||0;const accept=r.friend>=25||(theirs<=mine&&Math.random()<0.55)||(r.friend>=0&&Math.random()<0.3);if(accept){r.alliance=true;r.friend=Math.max(r.friend,30);addLog(`${factionById[f].name}と同盟を結んだ。`);}else addLog(`${factionById[f].name}は同盟を断った。`);sfx('click');buildDiplo();updateUI();saveGame();}
-  function proposeTruce(f){const r=ensureRel(state.faction,f),accept=r.friend>=-15||Math.random()<0.5;if(accept){r.truceUntil=state.turn+6;r.friend=Math.max(r.friend,5);addLog(`${factionById[f].name}と6巡の停戦に合意した。`);}else addLog(`${factionById[f].name}は停戦を拒んだ。`);sfx('click');buildDiplo();updateUI();saveGame();}
-  function giveGift(f){if(state.gold<50){addLog('贈物に充てる資金が足りない。');buildDiplo();return;}state.gold-=50;const r=ensureRel(state.faction,f);r.friend=Math.min(100,r.friend+15);r.alliance=r.alliance;addLog(`${factionById[f].name}へ贈物（50金）を届け、関係が改善した。`);sfx('click');buildDiplo();updateUI();saveGame();}
-  function jointAttack(f){if(state.gold<100){addLog('共同出兵の兵糧（100金）が足りない。');buildDiplo();return;}const allyCities=CITIES.filter(c=>c.owner===f&&c.garrison>=40);let done=false;for(const c of allyCities){for(const nid of c.neighbors){const d=cityById[nid];if(!d||d.owner===f||d.owner===state.faction||isAllied(f,d.owner)||isTruce(f,d.owner))continue;state.gold-=100;const prev=d.owner,r=simResolve(c,d);if(r.win){d.owner=f;d.garrison=Math.max(10,r.atkSurv);d.generals=c.generals.slice();c.generals=[];c.garrison=r.homeKeep;addLog(`同盟軍（${factionById[f].name}）が${d.name}を${factionById[prev].name}から攻略した。`);}else{c.garrison=r.homeKeep+Math.floor(r.atkSurv*0.7);d.garrison=Math.max(8,r.defSurv);addLog(`同盟軍（${factionById[f].name}）の${d.name}攻めは退けられた。`);}done=true;break;}if(done)break;}if(!done)addLog(`${factionById[f].name}には出兵できる戦線がなかった。`);sfx('march');buildDiplo();updateUI();draw();checkVictory();saveGame();}
+  function proposeAlliance(f){const ap=apGate('alliance');if(!ap.ok){addLog(ap.why);buildDiplo();return;}spendAp('alliance');const r=ensureRel(state.faction,f),pc=factionCounts(),mine=pc[state.faction]||0,theirs=pc[f]||0;const accept=r.friend>=25||(theirs<=mine&&Math.random()<0.55)||(r.friend>=0&&Math.random()<0.3);if(accept){r.alliance=true;r.friend=Math.max(r.friend,30);addLog(`${factionById[f].name}と同盟を結んだ。`);}else addLog(`${factionById[f].name}は同盟を断った。`);sfx('click');buildDiplo();updateUI();saveGame();}
+  function proposeTruce(f){const ap=apGate('truce');if(!ap.ok){addLog(ap.why);buildDiplo();return;}spendAp('truce');const r=ensureRel(state.faction,f),accept=r.friend>=-15||Math.random()<0.5;if(accept){r.truceUntil=state.turn+6;r.friend=Math.max(r.friend,5);addLog(`${factionById[f].name}と6巡の停戦に合意した。`);}else addLog(`${factionById[f].name}は停戦を拒んだ。`);sfx('click');buildDiplo();updateUI();saveGame();}
+  function giveGift(f){if(state.gold<50){addLog('贈物に充てる資金が足りない。');buildDiplo();return;}const ap=apGate('gift');if(!ap.ok){addLog(ap.why);buildDiplo();return;}state.gold-=50;spendAp('gift');const r=ensureRel(state.faction,f);r.friend=Math.min(100,r.friend+15);r.alliance=r.alliance;addLog(`${factionById[f].name}へ贈物（50金）を届け、関係が改善した。`);sfx('click');buildDiplo();updateUI();saveGame();}
+  function jointAttack(f){if(state.gold<100){addLog('共同出兵の兵糧（100金）が足りない。');buildDiplo();return;}const ap=apGate('joint');if(!ap.ok){addLog(ap.why);buildDiplo();return;}spendAp('joint');const allyCities=CITIES.filter(c=>c.owner===f&&c.garrison>=40);let done=false;for(const c of allyCities){for(const nid of c.neighbors){const d=cityById[nid];if(!d||d.owner===f||d.owner===state.faction||isAllied(f,d.owner)||isTruce(f,d.owner))continue;state.gold-=100;const prev=d.owner,r=simResolve(c,d);if(r.win){d.owner=f;d.garrison=Math.max(10,r.atkSurv);d.generals=c.generals.slice();c.generals=[];c.garrison=r.homeKeep;addLog(`同盟軍（${factionById[f].name}）が${d.name}を${factionById[prev].name}から攻略した。`);}else{c.garrison=r.homeKeep+Math.floor(r.atkSurv*0.7);d.garrison=Math.max(8,r.defSurv);addLog(`同盟軍（${factionById[f].name}）の${d.name}攻めは退けられた。`);}done=true;break;}if(done)break;}if(!done)addLog(`${factionById[f].name}には出兵できる戦線がなかった。`);sfx('march');buildDiplo();updateUI();draw();checkVictory();saveGame();}
   // P7: 他勢力どうしの関係（プレイヤーが当事者でないもの）。外交画面で盤面全体の勢力図を読ませる。
   function aiRelationLines(){
     const cnt=factionCounts(),out=[];
@@ -2328,7 +2408,8 @@
     const def=PLOT.alienate;
     if(state.gold<def.gold)return false;
     const spy=bestPlotter();if(!spy)return false;
-    state.gold-=def.gold;plotCdSet('alienate');
+    if(!apGate('alienate').ok){addLog(apGate('alienate').why);return false;}   // P11
+    state.gold-=def.gold;spendAp('alienate');plotCdSet('alienate');
     const ok=Math.random()<plotChance(spy.st.chi,Math.max(factionTopChi(a),factionTopChi(b)),def);
     if(ok){
       const r=ensureRel(a,b);r.alliance=false;r.truceUntil=0;r.friend=clamp((r.friend||0)-30,-100,100);
@@ -2349,7 +2430,8 @@
     if(!plotCdReady('rumor'))return false;
     const def=PLOT.rumor;if(state.gold<def.gold)return false;
     const spy=bestPlotter();if(!spy)return false;
-    state.gold-=def.gold;plotCdSet('rumor');
+    if(!apGate('rumor').ok){addLog(apGate('rumor').why);return false;}   // P11
+    state.gold-=def.gold;spendAp('rumor');plotCdSet('rumor');
     const ok=Math.random()<plotChance(spy.st.chi,cityTopChi(c),def);
     if(ok){
       const drop=18+Math.floor(Math.random()*11);
@@ -2378,7 +2460,8 @@
     if(!sid)return false;
     const home=CITIES.find(x=>x.owner===state.faction&&(x.generals||[]).indexOf(sid)>=0);
     if(!home)return false;
-    state.gold-=def.gold;plotCdSet('poison');
+    if(!apGate('poison').ok){addLog(apGate('poison').why);return false;}   // P11
+    state.gold-=def.gold;spendAp('poison');plotCdSet('poison');
     const ok=Math.random()<plotChance(effStat(sid).chi,cityTopChi(c),def);
     home.generals.splice(home.generals.indexOf(sid),1);   // 潜入中は盤上から外れる
     if(ok){
@@ -2499,7 +2582,7 @@
   // v3 = v2 ＋ 増援(reinforceTurn) ＋ AI目標(aiGoal) ＋ 政務ポイント(ap/apMax)。
   // v2 の上位互換なので専用の移行関数は作らない（SAVE_KEY も据え置き）。
   // 欠落フィールドは applySaveData / initCityFields が既定値で補う（E-15）。
-  function saveGame(){if(!state.faction)return;try{const data={v:3,scenario:state.scenario,faction:state.faction,year:state.year,turn:state.turn,gold:state.gold,food:state.food,weather:state.weather,season:state.season,selectedCity:state.selectedCity,over:state.over,muted:state.muted,relations:state.relations,victory:state.victory,plotCooldown:state.plotCooldown,rngSeed:state.rngSeed,gen:state.gen,dead:state.dead,difficulty:state.difficulty,aiTraits:state.aiTraits,aiGold:state.aiGold,aiGoal:state.aiGoal,cities:CITIES.map(c=>({id:c.id,owner:c.owner,garrison:c.garrison,prosperity:c.prosperity,agriculture:c.agriculture,commerce:c.commerce,wall:c.wall,loyalty:c.loyalty,food:c.food,generals:c.generals,wild:c.wild,found:c.found,plotFlags:c.plotFlags,reinforceTurn:c.reinforceTurn}))};localStorage.setItem(SAVE_KEY,JSON.stringify(data));}catch(e){}}
+  function saveGame(){if(!state.faction)return;try{const data={v:3,scenario:state.scenario,faction:state.faction,year:state.year,turn:state.turn,gold:state.gold,food:state.food,weather:state.weather,season:state.season,selectedCity:state.selectedCity,over:state.over,muted:state.muted,relations:state.relations,victory:state.victory,plotCooldown:state.plotCooldown,rngSeed:state.rngSeed,gen:state.gen,dead:state.dead,difficulty:state.difficulty,aiTraits:state.aiTraits,aiGold:state.aiGold,aiGoal:state.aiGoal,ap:state.ap,apMax:state.apMax,cities:CITIES.map(c=>({id:c.id,owner:c.owner,garrison:c.garrison,prosperity:c.prosperity,agriculture:c.agriculture,commerce:c.commerce,wall:c.wall,loyalty:c.loyalty,food:c.food,generals:c.generals,wild:c.wild,found:c.found,plotFlags:c.plotFlags,reinforceTurn:c.reinforceTurn}))};localStorage.setItem(SAVE_KEY,JSON.stringify(data));}catch(e){}}
   function hasSave(){try{return !!(localStorage.getItem(SAVE_KEY)||localStorage.getItem(SAVE_KEY_V1));}catch(e){return false;}}
   function clearSave(){try{localStorage.removeItem(SAVE_KEY);localStorage.removeItem(SAVE_KEY_V1);}catch(e){}}
   // v1（190年固定配置・兵糧なし）セーブを v2 形式へ変換する純粋関数。副作用なし。
@@ -2561,6 +2644,10 @@
       distributeWild(raw?validateSetup(raw).setup:MINIMAL_SETUP);
     }
     syncGenHomes();  // P3: 復元した state.gen の在城・所属を盤面に合わせ直す
+    // P11: 政務ポイント。★必ず都市の所有者を復元したあとに置く（recalcApMax が領地数を数えるため）。
+    // v2 セーブには ap/apMax が無いので、その場合は領地数から引き直して満タンで再開する。
+    if(typeof d.apMax==='number'&&typeof d.ap==='number'){state.apMax=d.apMax;state.ap=clamp(d.ap,0,d.apMax);}
+    else refillAp();
   }
   function loadGame(){
     let migrated=false;
@@ -2782,6 +2869,7 @@
     applyScenario(su);
     rollWeather();
     state.selectedCity=(CITIES.find(c=>c.owner===state.faction)||CITIES[0]).id;
+    refillAp();   // P11: 開始時の政務ポイント（領地数と君主の統率から算出）
     const dc=diffCfg();
     state.log=[`${s.title}：${s.comment}`,`${factionById[state.faction].name}として${su.year}年の乱世に立つ。（難易度：${dc.jp} / ${dc.en}）`];
     scenarioModal.classList.add('hidden');
