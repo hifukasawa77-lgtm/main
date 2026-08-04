@@ -169,7 +169,9 @@ async function main() {
   }
 
   // 6. 拠点長に実在武将を割り当てた史跡
-  const expectLeaders = { erinji: ['快川紹喜', 'kaikawa_shoki'], rinsenji: ['天室光育', 'tenshitsu_koiku'] };
+  // 恵林寺は資源マーカー側（independentSiteLeaderFor の item.leader）、
+  // 林泉寺は統合先の寺社勢力側（armedForceLeader の force.leader）から引かれる。
+  const expectLeaders = { erinji: ['快川紹喜', 'kaikawa_shoki'], linseiji: ['天室光育', 'tenshitsu_koiku'] };
   Object.entries(expectLeaders).forEach(([id, [jp, gid]]) => {
     const m = byId.get(id);
     if (!m) { fails.push(`${id}: マーカーが存在しない`); return; }
