@@ -78,6 +78,17 @@
 .bTop{position:absolute;left:0;right:0;top:0;height:52px;display:flex;align-items:center;gap:14px;padding:0 16px;background:linear-gradient(180deg,rgba(6,10,14,.92),rgba(6,10,14,.55));border-bottom:1px solid var(--line);z-index:3}
 .bTitle{font-family:serif;font-size:19px;color:var(--gold);white-space:nowrap}.bInfo{display:flex;gap:14px;color:var(--muted);font-size:13px;flex:1}.bInfo b{color:var(--ink)}.bActions{display:flex;gap:7px}
 /* 左下ドック: 選択部隊パネル（#bSelect）とその直下の計略バー（#bPlotBar）を縦に積む。 */
+/* P14 攻城戦の開幕カット */
+.siegeCut{position:absolute;inset:0;z-index:8;display:grid;place-items:center;background:rgba(5,9,13,.86);cursor:pointer;animation:siegeIn .35s ease both}
+.siegeCut.hidden{display:none}
+@keyframes siegeIn{from{opacity:0}to{opacity:1}}
+.siegeCutInner{width:min(760px,92vw);border:1px solid rgba(240,221,176,.22);border-radius:14px;overflow:hidden;background:rgba(12,18,25,.94);box-shadow:0 18px 48px rgba(0,0,0,.55)}
+.siegeCutInner img{display:block;width:100%;max-height:46vh;object-fit:cover;background:#111a22}
+.siegeCutMeta{padding:14px 18px 16px}
+.siegeCutMeta h2{margin:4px 0 4px;font-family:serif;font-size:26px;color:var(--gold)}
+.siegeCutSkip{margin-top:9px;font-size:11px;color:var(--muted)}
+@media(max-width:760px){.siegeCutInner img{max-height:34vh}.siegeCutMeta h2{font-size:20px}}
+@media(prefers-reduced-motion:reduce){.siegeCut{animation:none}}
 .bDock{position:absolute;left:14px;bottom:14px;width:min(330px,calc(100% - 28px));display:flex;flex-direction:column;gap:8px;z-index:3;pointer-events:none}
 .bDock>*{pointer-events:auto}
 .bSelect{min-width:210px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);font-size:13px}
@@ -146,6 +157,13 @@
 
 <section id="battleScreen" class="screen hidden">
   <canvas id="battleCanvas" aria-label="ヘックス戦場"></canvas>
+  <!-- P14 攻城戦の開幕カット。castles.json の城郭画を出して、野戦との差を印象づける。 -->
+  <div id="siegeCut" class="siegeCut hidden" aria-hidden="true"><div class="siegeCutInner">
+    <img id="siegeCutArt" alt=""><div class="siegeCutMeta">
+      <div class="eyebrow">SIEGE / 攻城戦</div><h2 id="siegeCutName">—</h2>
+      <p id="siegeCutSub" class="subtle">—</p>
+      <p class="siegeCutSkip">タップ／キーで進む / TAP or KEY to continue</p>
+    </div></div></div>
   <header class="bTop">
     <div class="bTitle" id="bTitle">合戦</div>
     <div class="bInfo"><span>第 <b id="bRound">1</b>/<b id="bMax">12</b> 合</span><span id="bPhase">自軍の手番</span><span id="bWeather" title="天候 / WEATHER">天候 <b>晴 CLEAR</b></span><span id="bSupply" title="攻撃側の残り兵糧 / Besieger supply">兵糧 <b>—</b></span></div>
@@ -1388,6 +1406,52 @@
   function bTerrAt(c,r){return (state.battle.terrain[c+','+r])||'plain';}
   function bCastleBlocked(c,r){const cs=state.battle.castle;return !!(cs&&cs.walls.has(c+','+r));}
   function bStackAt(c,r){return state.battle.stacks.find(s=>s.count>0&&s.col===c&&s.row===r);}
+  // P14 攻城戦の開幕カット。assets/sanguo/castles.json の6枚を、史実の対応が明らかな都市へ割り当て、
+  // 残りは戦場背景の地形に近い城郭で代用する（20都市に対し絵は6枚しかないため）。
+  const SIEGE_ART_PATH=ASSET_ROOT+'gpt/castles/';
+  const SIEGE_ART={
+    xiang_yang:['sanguo-castle-xiangyang-gpt-image-2.webp','襄陽城','城壁都市 / WALLED CITY'],
+    jiang_ling:['sanguo-castle-fan-gpt-image-2.webp','樊城','水城 / RIVER FORTRESS'],
+    jiang_zhou:['sanguo-castle-baidi-gpt-image-2.webp','白帝城','峡谷の要害 / GORGE FORTRESS'],
+    zi_tong:['sanguo-castle-jianmen-pass-gpt-image-2.webp','剣門関','天険の関 / MOUNTAIN PASS'],
+    han_zhong:['sanguo-castle-chencang-gpt-image-2.webp','陳倉城','辺境の堅城 / FRONTIER FORTRESS'],
+    chang_an:['sanguo-castle-ancient-xiangyang-gpt-image-2.webp','古城','古の要塞 / ANCIENT FORTRESS']
+  };
+  // 割り当ての無い都市は、その戦場の地形に近い城郭を借りる。
+  const SIEGE_ART_BY_BG={
+    mountains:'zi_tong',jieting:'zi_tong',tong_pass:'chang_an',wuzhang_plains:'han_zhong',
+    riverbank:'jiang_ling',wetland:'jiang_ling',red_cliffs:'jiang_ling',yiling:'jiang_zhou',
+    changban:'xiang_yang',guandu:'xiang_yang',desert:'han_zhong',grassland:'xiang_yang'
+  };
+  function siegeArtFor(cityId,bgKey){
+    const direct=SIEGE_ART[cityId];
+    if(direct)return {file:direct[0],castle:direct[1],type:direct[2],own:true};
+    const alt=SIEGE_ART[SIEGE_ART_BY_BG[bgKey]||'xiang_yang']||SIEGE_ART.xiang_yang;
+    return {file:alt[0],castle:alt[1],type:alt[2],own:false};
+  }
+  // 開幕カットを出す。画像が読めない場合も onerror で必ず閉じる（盤面を塞がない）。
+  let siegeCutTimer=null;
+  function hideSiegeCut(){
+    const el=document.getElementById('siegeCut');if(!el)return;
+    if(siegeCutTimer){clearTimeout(siegeCutTimer);siegeCutTimer=null;}
+    el.classList.add('hidden');el.setAttribute('aria-hidden','true');
+  }
+  function showSiegeCut(city,bgKey){
+    const el=document.getElementById('siegeCut');if(!el||!city)return;
+    const art=siegeArtFor(city.id,bgKey);
+    const img=document.getElementById('siegeCutArt');
+    img.onerror=()=>hideSiegeCut();          // 絵が無くても合戦は始められる
+    img.src=SIEGE_ART_PATH+art.file;
+    img.alt=`${city.name}の城郭`;
+    document.getElementById('siegeCutName').textContent=city.name;
+    // 借り物の絵のときは、その城の名前を史実として提示しない（誤情報になる）。
+    document.getElementById('siegeCutSub').textContent=art.own
+      ? `${art.castle}　${art.type}`
+      : `${art.type}　城壁 ${city.wall||0} ／ 守兵 ${city.garrison||0}`;
+    el.classList.remove('hidden');el.setAttribute('aria-hidden','false');
+    if(siegeCutTimer)clearTimeout(siegeCutTimer);
+    siegeCutTimer=setTimeout(hideSiegeCut,2600);
+  }
   function bBuildCastle(){const kc=Math.floor(BHEX.cols/2),walls=new Set();for(let c=kc-2;c<=kc+2;c++){if(c===kc)continue;if(c>=0&&c<BHEX.cols)walls.add(c+',1');}state.battle.castle={keep:[kc,0],gate:[kc,1],walls};state.battle.terrain[kc+',0']='plain';state.battle.terrain[kc+',1']='plain';}
   function bIsFree(c,r){return c>=0&&c<BHEX.cols&&r>=0&&r<BHEX.rows&&!bStackAt(c,r)&&bTerrAt(c,r)!=='water'&&!bCastleBlocked(c,r);}
   function bFreeCell(c,rows){for(const rr of rows){if(bIsFree(c,rr))return [c,rr];}for(const rr of rows)for(let dc=1;dc<BHEX.cols;dc++){if(bIsFree(c-dc,rr))return [c-dc,rr];if(bIsFree(c+dc,rr))return [c+dc,rr];}return null;}
@@ -1482,6 +1546,7 @@
     state.screen='battle';bResize();
     bSpread(def,siege?[1,2,0]:[0,1,2]);bSpread(atk,[BHEX.rows-1,BHEX.rows-2,BHEX.rows-3]);
     bLog(`${factionById[aCity.owner].name}軍が${dCity.name}へ${siege?'攻城戦':'野戦'}を仕掛けた。`);bSyncHUD();bTickStart();
+    if(siege)showSiegeCut(dCity,bgKey); else hideSiegeCut();   // P14: 攻城戦だけ開幕カットを出す
   }
   function bHexPath(x,y){const S=state.battle.size;bctx.beginPath();for(let i=0;i<6;i++){const a=Math.PI/180*(60*i-90),px=x+S*Math.cos(a),py=y+S*Math.sin(a);i?bctx.lineTo(px,py):bctx.moveTo(px,py);}bctx.closePath();}
   function bFillHex(k,color){const p=k.split(',').map(Number),xy=bCenter(p[0],p[1]);bHexPath(xy[0],xy[1]);bctx.fillStyle=color;bctx.fill();}
@@ -2376,7 +2441,7 @@
   function bAutoResolve(){const B=state.battle;if(!B||B.over)return;const q=side=>{const arr=B.stacks.filter(s=>s.side===side&&s.count>0&&!s.routed),soldiers=arr.reduce((n,s)=>n+s.count,0),quality=arr.length?arr.reduce((n,s)=>n+(UNITS[s.type].atk*(1+s.st.bu/200)+UNITS[s.type].def*(1+s.st.tou/200))*(0.6+(typeof s.morale==='number'?s.morale:MORALE.init)/125),0)/arr.length/2:1;return {soldiers,quality};};const A=q('atk'),D=q('def');let a=A.soldiers*A.quality*(0.9+Math.random()*0.2),d=D.soldiers*D.quality*(B.siege?1.2:1)*(0.9+Math.random()*0.2);const win=a>=d,atkSurv=win?Math.max(10,Math.round(A.soldiers*clamp(1-d/(a+1),0.15,0.85))):Math.round(A.soldiers*clamp(1-a/(d+1),0,0.4)),defSurv=win?Math.round(D.soldiers*0.12):Math.max(8,Math.round(D.soldiers*clamp(1-a/(d+1),0.2,0.9)));bFinish(win,win?'諸将奮戦し勝利した':'力及ばず退いた',atkSurv,defSurv);}
   function bFinish(win,reason,ovA,ovD){const B=state.battle;if(!B||B.over)return;B.over=true;B.fires={};bPlotAimCancel();const atkSurv=ovA!=null?ovA:B.stacks.filter(s=>s.side==='atk').reduce((n,s)=>n+Math.max(0,s.count),0),defSurv=ovD!=null?ovD:B.stacks.filter(s=>s.side==='def').reduce((n,s)=>n+Math.max(0,s.count),0);bApplyResult(win,atkSurv,defSurv);sfx(win?'win':'lose');const box=document.getElementById('bResult');box.innerHTML=`<div class="bResultBox"><h2 style="color:${win?'var(--gold)':'var(--red)'}">${win?'勝 利':'敗 北'}</h2><p>${reason}。<br>生存兵：自軍 ${atkSurv} ／ 敵軍 ${defSurv}</p><button class="primary" id="bBackBtn">戦略画面へ戻る</button></div>`;box.classList.remove('hidden');document.getElementById('bBackBtn').onclick=bBackToMap;}
   function bApplyResult(win,atkSurv,defSurv){const B=state.battle,a=cityById[B.aCity],d=cityById[B.dCity];if(win){const prev=d.owner;d.owner=a.owner;d.garrison=Math.max(10,atkSurv);d.generals=B.atkGenerals.slice();a.generals=[];a.garrison=B.homeKeep;addLog(`${a.name}より出陣し${d.name}を攻略、${factionById[prev].name}から奪取した。`);state.selectedCity=d.id;}else{a.garrison=B.homeKeep+Math.floor(atkSurv*0.7);a.generals=B.atkGenerals.slice();d.garrison=Math.max(8,defSurv);addLog(`${d.name}攻めは成らず、${a.name}へ退いた。`);}applyBattleLoyalty(win,B.atkGenerals);purgeDeadGenerals();}   // E-09: 討死武将を都市・部隊名簿から恒久除去する
-  function bBackToMap(){state.battle=null;state.screen='game';document.getElementById('bPlotBar').classList.add('hidden');document.getElementById('battleScreen').classList.add('hidden');document.getElementById('gameScreen').classList.remove('hidden');document.getElementById('bResult').classList.add('hidden');resize();updateUI();draw();checkVictory();saveGame();}
+  function bBackToMap(){hideSiegeCut();state.battle=null;state.screen='game';document.getElementById('bPlotBar').classList.add('hidden');document.getElementById('battleScreen').classList.add('hidden');document.getElementById('gameScreen').classList.remove('hidden');document.getElementById('bResult').classList.add('hidden');resize();updateUI();draw();checkVictory();saveGame();}
   function bSyncHUD(){const B=state.battle;if(!B)return;document.getElementById('bTitle').textContent=(B.siege?'攻城戦・':'野戦・')+cityById[B.dCity].name;document.getElementById('bRound').textContent=B.round;document.getElementById('bMax').textContent=B.maxRounds;document.getElementById('bPhase').textContent=B.phase==='player'?'自軍の手番':'敵軍の手番';
     const w=weatherOf();document.getElementById('bWeather').innerHTML=`天候 <b>${w.jp} ${w.en}</b>`;
     const atkS=B.stacks.filter(s=>s.side==='atk'&&s.count>0&&!s.routed),sup=atkS.length?Math.max(...atkS.map(s=>s.supply||0)):0;
@@ -3127,6 +3192,7 @@
   // ボタンの結線は L289 の一箇所のみ（二重ラップ防止）。
   if(hasSave())document.getElementById('continueButton').classList.remove('hidden');
   // 一騎打ちの演出中は、盤面クリックではなく演出スキップとして扱う。
+  document.getElementById('siegeCut').addEventListener('pointerdown',e=>{e.preventDefault();hideSiegeCut();});
   bcanvas.addEventListener('pointerdown',e=>{if(state.battle&&state.battle.duel){bDuelSkip();return;}const r=bcanvas.getBoundingClientRect();bClick(e.clientX-r.left,e.clientY-r.top);});
   document.getElementById('bDuel').onclick=()=>{
     const B=state.battle;
@@ -3184,10 +3250,12 @@
     apCost,apGate,spendAp,gateWhy,recalcApMax,refillAp,grainYield,buyGrainWhy,doBuyGrain,
     // P12 勢力圏・凡例 / P13 好感度・名鑑の絞り込み
     drawTerritory,buildLegend,friendOf,friendLabel,friendBarHtml,
+    SIEGE_ART,SIEGE_ART_BY_BG,siegeArtFor,showSiegeCut,hideSiegeCut,
     rosterEntries,bindRosterTools,ROSTER_SORTS,
     getAp:()=>({ap:state.ap,apMax:state.apMax}),getAiGoal:()=>state.aiGoal,
     getFps:()=>bFps,getDuel:()=>state.battle&&state.battle.duel};
   addEventListener('keydown',e=>{
+    if(state.screen==='battle'&&!document.getElementById('siegeCut').classList.contains('hidden')){hideSiegeCut();return;}   // 開幕カットを送る
     if(state.screen==='battle'&&state.battle&&state.battle.duel){bDuelSkip();return;}   // 任意キーで名乗り演出をスキップ
     if(e.key==='Escape'&&state.screen==='battle'&&state.battle&&state.battle.plotAim){bPlotAimCancel('照準を解除しました / Targeting cancelled.');return;}
     if(e.key==='Escape'){document.getElementById('rosterOverlay').classList.add('hidden');document.getElementById('diploOverlay').classList.add('hidden');document.getElementById('plotOverlay').classList.add('hidden');}});

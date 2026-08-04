@@ -179,6 +179,31 @@ async function run(port) {
   });
   check('5b. 一騎打ちの全フェーズが例外なく描ける', duel.ok && duel.hasGen, JSON.stringify(duel));
 
+  // --- 5c. 攻城戦の開幕カット（P14）。城郭画が実在し、野戦では出ず、必ず閉じられること ---
+  const cut = await page.evaluate(async () => {
+    const D = window.SANGUO_DEBUG, out = {};
+    D.startBattle(D.cityById['xu_chang'], D.cityById['luo_yang']);   // 洛陽は prosperity>=60 で攻城戦
+    const el = document.getElementById('siegeCut'), im = document.getElementById('siegeCutArt');
+    out.siegeShown = !el.classList.contains('hidden');
+    await new Promise(r => { if (im.complete && im.naturalWidth) return r(); im.onload = r; im.onerror = r; });
+    out.artLoaded = !!(im.complete && im.naturalWidth);              // 参照先が実在するか
+    D.hideSiegeCut();
+    out.closes = el.classList.contains('hidden');
+    D.bBackToMap();
+    // 野戦（prosperity<60）ではカットを出さない
+    D.cityById['ping_yuan'].prosperity = 20;
+    D.startBattle(D.cityById['xu_chang'], D.cityById['ping_yuan']);
+    out.fieldHidden = el.classList.contains('hidden');
+    D.bBackToMap();
+    // 全20都市に割り当てが解決すること（絵は6枚しかないので代用を含む）
+    out.unresolved = D.CITIES.filter(c => { const a = D.siegeArtFor(c.id, 'grassland'); return !a || !a.file; }).length;
+    return out;
+  });
+  check('5c. 攻城戦の開幕カットが出て、城郭画が実在し、必ず閉じられる',
+    cut.siegeShown && cut.artLoaded && cut.closes, JSON.stringify(cut));
+  check('5d. 野戦では開幕カットを出さない／全都市に城郭が解決する',
+    cut.fieldHidden && cut.unresolved === 0, JSON.stringify(cut));
+
   // --- 6. AI（占領時に出撃元の武将が全滅しない／増援と目標保持） ---
   const ai = await page.evaluate(() => {
     const D = window.SANGUO_DEBUG, S = D.state;
