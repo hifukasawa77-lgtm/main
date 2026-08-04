@@ -97,11 +97,14 @@ node scripts/verify-sengoku-boot.mjs   # 起動して遊べるか（タイトル
 node scripts/verify-castle-csv.mjs     # siro_ichi.csv の全行がゲーム内データと一致するか
 node scripts/verify-castle-layouts.mjs # 攻城レイアウト24城
 node scripts/verify-map-assets.mjs     # マップアイコンが実際に絵として描かれるか（アセットを差し替えたら必須）
+node scripts/verify-force-list.mjs     # force_list.csv の全行がゲーム内マーカーと一致するか
 ```
 
 - **タイトル画面が出た＝起動成功ではない**。描画ループの例外は「背景画像だけ残してUIが出ない」形で現れ、タイトルは無事に出る。必ず `verify-sengoku-boot.mjs` でマップ画面まで入って確かめること（2026-08-02: `_drawRoads` の `preview is not defined` を「アセット読込が重い」「roundRect非対応」と誤診して3コミット費やした）
 - GameKit のループは update/draw の例外を捕捉して継続し `engine.errors` に積む。**そのため `pageerror` だけ見る検査は素通りする**。描画系の検査を書くときは必ず `engine.errors` も合算する
 - 城データの正本は `siro_ichi.csv`。取り込みは追加・更新のみで**削除はしない**ため、行を消しても城はゲーム内に残り座標だけ内蔵値へ戻る。差し替え時は `verify-castle-csv.mjs` の「CSV外の城が残存」警告を必ず確認する
+- 勢力・施設マーカーの正本は `force_list.csv`。城CSVと違い**行を消す＝削除**で、`MARKER_HIDDEN_SEED` に載せて既定で非表示にする。取込結果は同梱シード（`MARKER_POSITION_SEED` 座標／`MARKER_DAIMYO_SEED` 支配大名／マーカー実体の `nameJP` 名称）へ焼き込むこと。**シードを更新し忘れても例外は出ない**——localStorage 上書きを持つPCだけ正しく見え、初回起動の端末は `geoToScreen` の経緯度近似へ落ちて最大900px以上ずれる。`verify-force-list.mjs` が localStorage を空にして突き合わせる
+- **`force_list.csv` の「近くの城」列は出力専用の派生列**。取込は X,Y を最優先し、この列は X,Y が空欄の行のフォールバックにしか使わない。値は `_nearestCastleId()` が座標から最近傍城を再計算して上書きするので、ここを手で書き換えても反映されない（マーカーを別の城に紐づけたいなら X,Y ごと動かす）
 - 地図画像は絵地図で `geoToScreen` の緯度経度換算と一致しない（九州はx方向に約380pxずれる）。**新しい城の座標は近傍城のCSV値から局所アフィン内挿で起こす**。城どうしの最短間隔は11px程度が下限
 - **アセットを縮小・再エンコードするときは、そのアセットを切り出して使っている箇所を必ず洗う**。`drawImage` の source-rect を画素値で直書きしていると、縮小した瞬間に矩形が画像外へ出て絵が消える。読み込みは成功するので404もエラーも出ず、無言で絵だけが消える（2026-08-02: 1254px→256px でマーカー4種が塗り面積0〜3.5%に）。矩形は「測った原寸サイズ」と対で持ち、描画時に実解像度へスケールする（`scaleSrcRect`）
 - **アセットは全てWebP**（2026-08-02に PNG 660MB → WebP q90 89MB へ再エンコード）。追加・差し替えは `python3 scripts/optimize-sengoku-assets.py` を通す。**解像度は変えない**（上記の source-rect が壊れるため）。PNGを直接足すと容量が跳ねるので置かないこと
