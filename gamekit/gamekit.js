@@ -15,6 +15,76 @@
 (function (global) {
   'use strict';
 
+  /* ----------------------------------------------------------------------
+   * ctx.roundRect 互換実装（旧Edge / 古いWebView / Safari 16.3以前）
+   *
+   * GameKit 自身と各ゲームは角丸パネルを roundRect で描く。未実装の環境では
+   * 描画ループの毎フレームが TypeError で落ち、「背景だけ残ってUIが出ない」
+   * 形で無言に壊れる（タイトル画面は出るので起動成功に見えてしまう）。
+   * 呼び出し側を書き換えるのではなく、ここで一度だけ prototype を補う。
+   * -------------------------------------------------------------------- */
+  (function installRoundRectPolyfill() {
+    // 半径指定を CSS border-radius と同じ短縮記法で [tl,tr,br,bl] の {x,y} 4組へ正規化する
+    const normalizeRadii = (radii) => {
+      const list = Array.isArray(radii) ? radii : [radii === undefined ? 0 : radii];
+      const toXY = (r) => {
+        if (r && typeof r === 'object') {
+          return { x: Math.max(0, Number(r.x) || 0), y: Math.max(0, Number(r.y) || 0) };
+        }
+        const v = Math.max(0, Number(r) || 0);
+        return { x: v, y: v };
+      };
+      const v = list.map(toXY);
+      if (v.length === 1) return [v[0], v[0], v[0], v[0]];
+      if (v.length === 2) return [v[0], v[1], v[0], v[1]];
+      if (v.length === 3) return [v[0], v[1], v[2], v[1]];
+      return [v[0], v[1], v[2], v[3]];
+    };
+
+    function roundRect(x, y, w, h, radii) {
+      x = Number(x); y = Number(y); w = Number(w); h = Number(h);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return;
+
+      let r = normalizeRadii(radii);
+      // 負の幅・高さは矩形を反転させたのと同じ。原点を正規化し、角の対応も入れ替える
+      if (w < 0) { x += w; w = -w; r = [r[1], r[0], r[3], r[2]]; }
+      if (h < 0) { y += h; h = -h; r = [r[3], r[2], r[1], r[0]]; }
+
+      if (w === 0 || h === 0) { this.moveTo(x, y); this.lineTo(x + w, y + h); return; }
+
+      // 隣り合う半径の和が辺を超える場合は仕様どおり全体を等比縮小する
+      const ratio = (sum, len) => (sum > 0 ? len / sum : Infinity);
+      const scale = Math.min(
+        ratio(r[0].x + r[1].x, w), ratio(r[3].x + r[2].x, w),
+        ratio(r[0].y + r[3].y, h), ratio(r[1].y + r[2].y, h),
+        1
+      );
+      if (scale < 1) r = r.map(p => ({ x: p.x * scale, y: p.y * scale }));
+
+      const HALF_PI = Math.PI / 2;
+      this.moveTo(x + r[0].x, y);
+      this.lineTo(x + w - r[1].x, y);
+      this.ellipse(x + w - r[1].x, y + r[1].y, r[1].x, r[1].y, 0, -HALF_PI, 0);
+      this.lineTo(x + w, y + h - r[2].y);
+      this.ellipse(x + w - r[2].x, y + h - r[2].y, r[2].x, r[2].y, 0, 0, HALF_PI);
+      this.lineTo(x + r[3].x, y + h);
+      this.ellipse(x + r[3].x, y + h - r[3].y, r[3].x, r[3].y, 0, HALF_PI, Math.PI);
+      this.lineTo(x, y + r[0].y);
+      this.ellipse(x + r[0].x, y + r[0].y, r[0].x, r[0].y, 0, Math.PI, Math.PI + HALF_PI);
+      this.closePath();
+    }
+
+    // Path2D 側にも同じ実装を配る（街道描画などで new Path2D() を使うため）
+    [global.CanvasRenderingContext2D, global.Path2D, global.OffscreenCanvasRenderingContext2D]
+      .forEach(ctor => {
+        if (ctor && ctor.prototype && typeof ctor.prototype.roundRect !== 'function') {
+          Object.defineProperty(ctor.prototype, 'roundRect', {
+            value: roundRect, writable: true, configurable: true, enumerable: false
+          });
+        }
+      });
+  })();
+
   const GameKit = {};
 
   /* ----------------------------------------------------------------------
