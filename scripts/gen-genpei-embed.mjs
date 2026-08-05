@@ -22,7 +22,6 @@ const END = '/* ==GENPEI_EMBED_END== */';
 
 const provinces = JSON.parse(fs.readFileSync(path.join(ROOT, 'assets/genpei/provinces.json'), 'utf8'));
 const csv = fs.readFileSync(path.join(ROOT, 'kyoten_ichi.csv'), 'utf8');
-const coast = JSON.parse(fs.readFileSync(path.join(ROOT, 'assets/genpei/coastline.json'), 'utf8'));
 
 // 埋め込みでは outline を落とす（描画に使っていないうえ容量が大きい）
 const slim = { version: provinces.version, provinces: provinces.provinces };
@@ -32,7 +31,6 @@ const block = `${START} 以下は自動生成。手で編集しないこと。
 const EMBED = {
   provinces: ${JSON.stringify(slim)},
   kyotenCsv: ${JSON.stringify(csv)},
-  coastline: ${JSON.stringify({ w: coast.w, h: coast.h, land: coast.land, relief: coast.relief })},
 };
 ${END}`;
 
@@ -43,4 +41,4 @@ if (s < 0 || e < 0) {
   process.exit(1);
 }
 fs.writeFileSync(HTML, html.slice(0, s) + block + html.slice(e + END.length), 'utf8');
-console.log(`✓ genpei.html の埋め込みシードを更新 — 国 ${slim.provinces.length} / 拠点 ${csv.trim().split('\n').length - 1} / 海岸線 ${coast.land.length}本 / ${(block.length / 1024).toFixed(0)}KB`);
+console.log(`✓ genpei.html の埋め込みシードを更新 — 国 ${slim.provinces.length} / 拠点 ${csv.trim().split('\n').length - 1} / ${(block.length / 1024).toFixed(0)}KB`);

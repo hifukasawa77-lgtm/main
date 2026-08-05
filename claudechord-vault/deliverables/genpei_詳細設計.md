@@ -34,8 +34,6 @@ tags: [claudechord, 詳細設計, genpei]
 | 8 | **AI の集計値は乱数の種を固定しないと試行ごとに大きく揺れる** | バランスは1回でなく**5試行以上の平均**で見る |
 | 9 | **`sengoku.html` は1行も変更しない**（決定事項B）。コードは読んで移植する | 受入基準に「`sengoku.html` の差分0行」がある |
 | 10 | **`siro_ichi.csv` の X,Y は現行の地図画像の画素座標ではない。** 旧い地図に対して起こされた座標がそのまま残っており、素直に画素として扱うと164城中100城以上が海に落ちる。読み込みは成功し例外も出ない | 較正アフィン `x*1.275, y*1.235−88` を通す（1.3参照）。`verify-genpei-kyoten.mjs` が毎回164城の陸載り率を測り直す |
-| 12 | **拡大図に写真を貼るとぼやける。** 地図素材は1672×941しかなく、国の拡大図は7倍以上の拡大になる。より大きな素材は存在しない | 拡大図・周辺図・拡大した全国図は `coastline.json` の輪郭から**ベクターで描き起こす**。等倍付近の全国図だけ写真を使う |
-| 13 | **ベクター地図を毎フレーム描き直すと 60fps を割る**（1万点超のパス構築） | カメラが動かない限り同じ絵なので**オフスクリーンに焼いて使い回す** |
 | 11 | **陸/海の判定を生成側と検査側で別々に書くと永久に直らない。** 片方が単一画素・片方が近傍平均だと、細い地峡で「生成は陸・検査は海」と食い違う | 両者を同一規則（`g > b+4` の3×3近傍平均）に揃える |
 
 ---
@@ -104,9 +102,6 @@ tags: [claudechord, 詳細設計, genpei]
 | `scripts/genpei-kyoten-anchors.mjs` | 拠点147のアンカー定義（生成の入力。生成後の正本は CSV 側）|
 | `scripts/gen-genpei-kyoten.mjs` | `kyoten_ichi.csv` を生成（`--force` / `--dry-run`）|
 | `scripts/verify-genpei-kyoten.mjs` | 機械検査（第9節）|
-| `scripts/gen-genpei-coastline.mjs` | 地図画像から海岸線と標高帯を抽出し `assets/genpei/coastline.json` を作る（拡大図のベクター描画用）|
-| `scripts/gen-genpei-embed.mjs` | `genpei.html` の埋め込みシード（`file://` 用フォールバック）を正本から再生成する |
-| `scripts/verify-genpei-boot.mjs` | 起動検査13項目。`pageerror` と `engine.errors` を合算し、`http` と `file://` の両方で走る |
 | `scripts/render-genpei-kyoten-map.mjs` | 全拠点を地図に重ねた目視確認用の画像を出力。**「相模国衙が相模にあるか」は機械では分からないので人が見る** |
 
 ---
