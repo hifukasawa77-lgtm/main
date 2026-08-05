@@ -22,7 +22,9 @@ printf '%-52s %-8s %-8s %-8s %-8s %-9s %-9s\n' "FILE" "og:title" "og:desc" "og:i
 while IFS= read -r f; do
   [ -f "$f" ] || continue
   TOTAL=$((TOTAL+1))
-  HEAD_PART=$(head -c 20000 "$f")
+  # ★ </head> までを見る。固定バイト数で切ると、巨大な JSON-LD を head に持つページ
+  #   （index.html は og:* が 27KB 目にある）で「OGPなし」と誤判定する。
+  HEAD_PART=$(awk 'BEGIN{IGNORECASE=1}{print}/<\/head>/{exit}' "$f" | head -c 200000)
   ROW=""
   BAD=0
   for pat in 'og:title' 'og:description' 'og:image' 'twitter:card' 'name="description"' 'rel="canonical"'; do
