@@ -95,6 +95,31 @@ const RULE = {
   // 1ターンに1勢力が起こせる出兵は maxActions 件まで。上限を置かないと、拠点を
   // 100以上持つ平氏が毎ターン全戦線で同時攻撃し、弱小勢力が初手で消える。
   ai: { attackRatio: 1.25, famineBlock: true, minGarrison: 200, maxActions: 3 },
+  /* 評判（名分の可変分）。毎ターン 0 へ 5% 減衰する */
+  rep: {
+    seizeJisha: -25, pillage: -60, donateJisha: 15, donateCourt: 20,
+    greatVictory: 30, purge: -40, bloodlessOpen: 10,
+  },
+  /* 院影響力（朝敵認定の前提） */
+  court: { donate: 12, donateCost: 80, kinaiKokufu: 0.5, holdIn: 2.0, pillage: -25, decay: 0.03, max: 100 },
+  /* 無血開城（国府のみ） */
+  open: { kakakuMul: 3, bandMul: 4, garrisonDiv: 100, jitter: 0.15, retryTurns: 3 },
+  /* 朝敵認定 */
+  choteki: { needInfluence: 60, costGold: 200, cooldown: 12, duration: 24, maxPerScenario: 2 },
+  /* 奉公度と恩賞 */
+  hoko: {
+    base: 1.0, debtMul: 8, chotekiAdd: 3.0, homeLostAdd: 2.5, andoSub: 1.0, meibunSub: 1.5,
+    defectBelow: 20, defectDiv: 40,
+    andoCost: 15, andoGain: 12, shinonGain: 35, shinonShare: 0.30, joinHoko: 45,
+  },
+  debt: { perTurn: 0.02, victory: 0.5, capture: 1.0, onJoin: 0.3 },
+  /* 勧誘 */
+  recruit: {
+    meibunDiv: 10, kakakuMul: 4, sameProvince: 25, adjacent: 10,
+    // 閾値。開始時の頼朝（名分276・家格78）が「同じ国なら口説けるが、
+    // 隣国だけでは贈与か名分の上積みが要る」あたりに置いてある。
+    giftDiv: 20, giftCap: 25, threshold: 45, jitter: 0.2,
+  },
 };
 
 /* 権威（名分の源）— 基本設計 3.5 */
@@ -109,12 +134,17 @@ const AUTHORITY = {
 
 /* 勢力 — 基本設計 3.1。色はデータ側の値で、UIクロームの配色とは分離する */
 const FACTIONS = {
-  taira:       { jp: '平氏',       en: 'Taira',        color: '#c0392b', playable: true,  ai: 'aggressive',  victory: 'survive_regime' },
+  // ★paperRule: 知行国主ではあるが在地武士の主人ではない。
+  //   平氏は全国の国衙を握るが、坂東・東山・北陸の武士団は「平氏の家人」ではない。
+  //   これが「版図は最大なのに動員が伸びない」という平氏の史実の弱点になる。
+  taira:       { jp: '平氏',       en: 'Taira',        color: '#c0392b', playable: true,  ai: 'aggressive',  victory: 'survive_regime',
+                 paperRule: true, heartland: ['kinai', 'sanyodo', 'nankaido', 'saikaido'], heartlandProvinces: ['iga', 'ise', 'shima'] },
   kamakura:    { jp: '源頼朝',     en: 'Kamakura',     color: '#e8eef5', playable: true,  ai: 'opportunist', victory: 'bakufu' },
   kiso:        { jp: '木曽義仲',   en: 'Kiso',         color: '#6ab04c', playable: true,  ai: 'aggressive',  victory: 'seitai_shogun' },
   kai:         { jp: '甲斐源氏',   en: 'Kai Genji',    color: '#7f8c8d', playable: true,  ai: 'defensive',   victory: 'independent' },
   oshu:        { jp: '奥州藤原氏', en: 'Oshu Fujiwara',color: '#9b59b6', playable: true,  ai: 'defensive',   victory: 'hiraizumi' },
-  goshirakawa: { jp: '朝廷',       en: 'The Court',    color: '#ecd9a0', playable: false, ai: 'court',       victory: null },
+  goshirakawa: { jp: '朝廷',       en: 'The Court',    color: '#ecd9a0', playable: false, ai: 'court',       victory: null,
+                 paperRule: true, heartland: ['kinai'], heartlandProvinces: [] },
   yoshitsune:  { jp: '源義経',     en: 'Yoshitsune',   color: '#3aa7c9', playable: true,  ai: 'aggressive',  victory: 'independent' },
 };
 
@@ -344,6 +374,53 @@ function convexHull(pts) {
 }
 
 /* ============================================================================
+ * 2.5 武士団（基本設計 3.4）
+ *
+ * 軍事の最小単位。武将ではなく「団」が兵を持ち、勢力に所属するのではなく契約する。
+ * ★ 別ファイルは作らず拠点データから決定論的に起こす。館・城柵・武家領の荘園が本領。
+ *   こうすると拠点を足すだけで武士団も増え、データの二重管理が起きない。
+ * ========================================================================== */
+const BAND_HOME_TYPES = ['tachi', 'kisaku'];
+/* 名の通った党の呼び名。載っていない拠点は「〈拠点名〉衆」になる */
+const BAND_NAMES = {
+  tachi_kinugasa: '三浦党', tachi_chiba: '千葉党', tachi_kazusa: '上総党',
+  tachi_oba: '大庭党', tachi_kanasa: '佐竹党', tachi_nitta: '新田党',
+  tachi_takeda: '甲斐源氏', tachi_yoda: '木曽党', tachi_kiso: '中原党',
+  tachi_jo: '越後城氏', tachi_hiraizumi: '奥州藤原', tachi_koromogawa: '衣川衆',
+  tachi_rokuhara: '六波羅の郎党', tachi_fukuhara: '福原の郎党', tachi_hojo: '北条党',
+  shoen_miura: '三浦の郎党', shoen_chichibu: '秩父党', shoen_kodama: '児玉党',
+  shoen_nasu: '那須党', shoen_ashikaga: '足利党', shoen_satake: '佐竹の郎党',
+  shoen_ogata: '緒方党', shoen_kanzaki: '肥前の郎党', shoen_oe: '阿波の郎党',
+  kisaku_kikuchi: '菊池党', kisaku_kawagoe: '河越党', kisaku_utsunomiya: '宇都宮党',
+};
+/* その勢力が、その国の武士団の「主人」たりうるか。
+   知行国主にすぎない勢力（平氏・朝廷）は、本貫の外では主従関係を持たない。 */
+function holdsAllegiance(fid, provinceId) {
+  const f = FACTIONS[fid];
+  if (!f) return false;
+  if (!f.paperRule) return true;
+  const p = DATA.provById[provinceId];
+  return !!p && (f.heartland.includes(p.circuit) || f.heartlandProvinces.includes(p.id));
+}
+function buildBands() {
+  const out = [];
+  for (const k of DATA.kyoten) {
+    const isHome = BAND_HOME_TYPES.includes(k.type) || (k.type === 'shoen' && k.holder === 'buke');
+    if (!isHome) continue;
+    const nameJP = BAND_NAMES[k.id] || `${k.jp}衆`;
+    out.push({
+      id: 'band_' + k.id, nameJP, nameEN: (k.en || k.jp) + ' Band',
+      home: k.id, province: k.province,
+      // 兵数は本領の規模から。館は収容兵力、荘園は田数なので係数を変える
+      troops: Math.round(k.type === 'shoen' ? k.scale * 12 : k.scale * 0.45) + 120,
+      // 独立志向。名の通った党ほど靡きにくい
+      independence: 22 + (BAND_NAMES[k.id] ? 16 : 0) + (k.defense % 11),
+    });
+  }
+  return out;
+}
+
+/* ============================================================================
  * 3. ルール層（純粋関数。state を書き換えず値を返す）
  * ========================================================================== */
 const Rule = {
@@ -447,6 +524,82 @@ const Rule = {
     return acts;
   },
 
+  /* ---------- 名分の行動（基本設計 4.2 / 4.3） ---------- */
+
+  /* 無血開城。国府のみ。★本作の最重要ルール——名分だけで国が開く */
+  canOpenBloodless(state, fid, kyotenId) {
+    const k = DATA.kyotenById[kyotenId], st = state.kyoten[kyotenId];
+    if (!k || k.type !== 'kokufu') return { ok: false, why: '国府にしか使えない' };
+    if (st.owner === fid) return { ok: false, why: 'すでに自勢力の拠点' };
+    if ((st.openRetryUntil || 0) > state.turn) return { ok: false, why: `${st.openRetryUntil - state.turn}ヶ月は再説得できない` };
+    const f = state.factions[fid];
+    const near = Rule.ownedKyoten(state, fid).filter((o) => Rule.adjacent(o, k)).length;
+    if (!near) return { ok: false, why: '隣接する自勢力の拠点がない' };
+    const atk = Rule.calcMeibun(state, fid) / RULE.open.garrisonDiv * 10
+      + (LORD_KAKAKU[f.lord] || 40) * RULE.open.kakakuMul + near * RULE.open.bandMul;
+    const dm = st.owner ? Rule.calcMeibun(state, st.owner) : 0;
+    const def = dm / 10 + k.defense + st.garrison / RULE.open.garrisonDiv;
+    return { ok: true, atk: Math.round(atk), def: Math.round(def), p: clamp(atk / Math.max(1, atk + def), 0.02, 0.95) };
+  },
+  /* 朝敵認定の可否 */
+  canDeclareChoteki(state, fid, targetId) {
+    const f = state.factions[fid], t = state.factions[targetId];
+    if (!t || !t.alive) return { ok: false, why: 'その勢力は存在しない' };
+    if (t.choteki) return { ok: false, why: 'すでに朝敵' };
+    if (f.courtInfluence < RULE.choteki.needInfluence) return { ok: false, why: `朝廷支持が ${RULE.choteki.needInfluence} に足りない` };
+    if (f.gold < RULE.choteki.costGold) return { ok: false, why: '金が足りない' };
+    if ((f.chotekiCooldown || 0) > state.turn) return { ok: false, why: `${f.chotekiCooldown - state.turn}ヶ月は奏請できない` };
+    if ((state.chotekiCount || 0) >= RULE.choteki.maxPerScenario * 3) return { ok: false, why: '奏請の回数を使い切った' };
+    const p = clamp((Rule.calcMeibun(state, fid) - Rule.calcMeibun(state, targetId)) / 600
+      + f.courtInfluence / 200 - 0.10, 0.05, 0.90);
+    return { ok: true, p };
+  },
+
+  /* ---------- 御恩と奉公（基本設計 4.4） ---------- */
+
+  /* 奉公度の毎ターン減衰。★内訳も返す（なぜ落ちているかを画面で説明するため） */
+  hokoDecay(state, bandId) {
+    const b = state.bands[bandId];
+    const f = b.faction ? state.factions[b.faction] : null;
+    if (!f) return { total: 0, parts: [] };
+    const H = RULE.hoko;
+    const total0 = Math.max(1, Rule.ownedKyoten(state, b.faction).reduce((s2, k) => s2 + state.kyoten[k.id].garrison, 0));
+    const homeLost = state.kyoten[b.home] && state.kyoten[b.home].owner !== b.faction;
+    const parts = [
+      ['基本', H.base],
+      ['恩賞の未払い', (b.debt / total0) * H.debtMul],
+      ['朝敵', f.choteki ? H.chotekiAdd : 0],
+      ['本領が敵手に', homeLost ? H.homeLostAdd : 0],
+      ['本領安堵', b.ando ? -H.andoSub : 0],
+      ['名分', -(Rule.calcMeibun(state, b.faction) / RULE.meibun.max) * H.meibunSub],
+    ].filter((x) => x[1] !== 0);
+    return { total: parts.reduce((s2, x) => s2 + x[1], 0), parts };
+  },
+  bandsOf(state, fid) { return Object.values(state.bands).filter((b) => b.faction === fid); },
+  totalDebt(state, fid) { return Rule.bandsOf(state, fid).reduce((s2, b) => s2 + b.debt, 0); },
+
+  /* 中立武士団の勧誘（基本設計 4.5） */
+  recruitChance(state, fid, bandId, gift) {
+    const b = state.bands[bandId];
+    if (!b) return { ok: false, why: 'その武士団はいない' };
+    if (b.faction === fid) return { ok: false, why: 'すでに麾下にある' };
+    const f = state.factions[fid], R = RULE.recruit;
+    const mine = Rule.ownedKyoten(state, fid);
+    const same = mine.some((k) => k.province === b.province);
+    const adj = mine.some((k) => Rule.adjacent(k, DATA.kyotenById[b.home]));
+    if (!same && !adj) return { ok: false, why: '手の届く場所にいない' };
+    const parts = [
+      ['名分', Rule.calcMeibun(state, fid) / R.meibunDiv],
+      ['家格', (LORD_KAKAKU[f.lord] || 40) * R.kakakuMul / 10],
+      ['地縁', same ? R.sameProvince : R.adjacent],
+      ['贈与', Math.min(R.giftCap, (gift || 0) / R.giftDiv)],
+      ['独立志向', -b.independence],
+    ];
+    const score = parts.reduce((s2, x) => s2 + x[1], 0);
+    return { ok: true, score: Math.round(score), threshold: R.threshold, parts,
+             p: clamp(score / (R.threshold * 2), 0.02, 0.95) };
+  },
+
   checkVictory(state) {
     const f = state.factions[state.faction];
     const owned = Rule.ownedKyoten(state, state.faction);
@@ -472,7 +625,7 @@ function buildState(scenarioId, factionId) {
     version: SAVE_VERSION, scenario: scenarioId, faction: factionId,
     year: scn.start[0], month: scn.start[1], turn: 1,
     endYear: scn.end[0], endMonth: scn.end[1],
-    factions: {}, kyoten: {}, log: [], result: null,
+    factions: {}, kyoten: {}, bands: {}, log: [], result: null, chotekiCount: 0,
   };
   for (const fid of Object.keys(FACTIONS)) {
     state.factions[fid] = {
@@ -489,6 +642,17 @@ function buildState(scenarioId, factionId) {
                   jinja: 3, sekisho: 1.2, machi: 2, mura: 4, minato: 3 }[k.type] || 1;
     state.kyoten[k.id] = { owner, garrison: Math.round(k.scale * mul + k.defense * 3) };
     if (owner) state.factions[owner].alive = true;
+  }
+  // 武士団。本領の持ち主に従い、無主の地の団は中立から始まる
+  for (const b of buildBands()) {
+    const home = state.kyoten[b.home];
+    state.bands[b.id] = {
+      id: b.id, nameJP: b.nameJP, nameEN: b.nameEN, home: b.home, province: b.province,
+      troops: b.troops, independence: b.independence,
+      faction: home && home.owner && holdsAllegiance(home.owner, b.province) ? home.owner : null,
+      hoko: 0, ando: false, debt: 0,
+    };
+    if (state.bands[b.id].faction) state.bands[b.id].hoko = 55;
   }
   for (const fid of Object.keys(FACTIONS)) state.factions[fid].food = Rule.income(state, fid).food * 3;
   pushLog(state, `${scn.jp} — ${state.year}年${state.month}月、乱世はじまる`);
@@ -515,6 +679,13 @@ function applyActions(state, fid, acts) {
       dst.owner = fid;
       dst.garrison = Math.max(1, act.troops - defence);
       state.factions[fid].alive = true;
+      // 勝てば恩賞を約束したことになる。配れなければ後で効いてくる
+      for (const b of Rule.bandsOf(state, fid)) b.debt += b.troops * RULE.debt.capture * 0.02;
+      // 寺社領・摂関家領を武力で接収すると名分が下がる
+      if (target.holder === 'jisha' || target.holder === 'sekkanke') {
+        addRep(state, fid, RULE.rep.seizeJisha,
+          fid === state.faction ? `${target.jp}を接収した——${HOLDER_JP[target.holder]}を侵したと京で沙汰される` : null);
+      }
       if (prev === state.faction || fid === state.faction) pushLog(state, `${FACTIONS[fid].jp}が${target.jp}を落とした`);
     } else {
       dst.garrison = Math.max(0, dst.garrison - Math.floor(act.troops * 0.6));
@@ -538,6 +709,138 @@ function levy(state, fid, kyotenId, want) {
 }
 const LEVY_COST = 0.5;   // 兵1あたりの金
 
+/* 評判を動かす。★名分は毎回 calcMeibun で算出するので、ここは評判だけを触る */
+function addRep(state, fid, delta, why) {
+  const f = state.factions[fid];
+  if (!f) return;
+  f.reputation = clamp(f.reputation + delta, -600, 600);
+  if (fid === state.faction && why) pushLog(state, why);
+}
+
+/* 無血開城を試みる（基本設計 4.2） */
+function tryBloodlessOpen(state, fid, kyotenId) {
+  const c = Rule.canOpenBloodless(state, fid, kyotenId);
+  if (!c.ok) return { ok: false, why: c.why };
+  const k = DATA.kyotenById[kyotenId], st = state.kyoten[kyotenId];
+  const roll = c.def * (1 + (Math.random() * 2 - 1) * RULE.open.jitter);
+  if (c.atk > roll) {
+    st.owner = fid; st.garrison = Math.max(1, Math.round(st.garrison * 0.4));
+    state.factions[fid].alive = true;
+    addRep(state, fid, RULE.rep.bloodlessOpen);
+    pushLog(state, `${k.jp}の在庁官人が門を開いた——${FACTIONS[fid].jp}、戦わずして国を得る`);
+    return { ok: true, opened: true };
+  }
+  st.openRetryUntil = state.turn + RULE.open.retryTurns;
+  if (fid === state.faction) pushLog(state, `${k.jp}は門を開かなかった`);
+  return { ok: true, opened: false };
+}
+
+/* 朝敵認定を奏請する（基本設計 4.3） */
+function declareChoteki(state, fid, targetId) {
+  const c = Rule.canDeclareChoteki(state, fid, targetId);
+  if (!c.ok) return { ok: false, why: c.why };
+  const f = state.factions[fid];
+  f.gold -= RULE.choteki.costGold;
+  f.chotekiCooldown = state.turn + RULE.choteki.cooldown;
+  state.chotekiCount = (state.chotekiCount || 0) + 1;
+  if (Math.random() < c.p) {
+    const t = state.factions[targetId];
+    t.choteki = true; t.chotekiUntil = state.turn + RULE.choteki.duration;
+    pushLog(state, `院宣くだる——${FACTIONS[targetId].jp}、朝敵となる`);
+    return { ok: true, done: true };
+  }
+  if (fid === state.faction) pushLog(state, '奏請は容れられなかった');
+  return { ok: true, done: false };
+}
+
+/* 院への献納。朝廷支持と評判を買う */
+function donateCourt(state, fid) {
+  const f = state.factions[fid];
+  if (f.gold < RULE.court.donateCost) return { ok: false, why: '金が足りない' };
+  f.gold -= RULE.court.donateCost;
+  f.courtInfluence = clamp(f.courtInfluence + RULE.court.donate, 0, RULE.court.max);
+  addRep(state, fid, RULE.rep.donateCourt);
+  return { ok: true };
+}
+
+/* 本領安堵・新恩給与・粛清（基本設計 4.4） */
+function grantAndo(state, fid, bandId) {
+  const b = state.bands[bandId];
+  if (!b || b.faction !== fid) return { ok: false, why: '麾下の武士団ではない' };
+  if (b.ando) return { ok: false, why: 'すでに安堵している' };
+  const f = state.factions[fid];
+  if (Rule.calcMeibun(state, fid) < RULE.hoko.andoCost) return { ok: false, why: '名分が足りない' };
+  f.reputation -= RULE.hoko.andoCost;
+  b.ando = true; b.hoko = clamp(b.hoko + RULE.hoko.andoGain, 0, 100);
+  pushLog(state, `${b.nameJP}の本領を安堵した`);
+  return { ok: true };
+}
+function grantShinon(state, fid, bandId, kyotenId) {
+  const b = state.bands[bandId], st = state.kyoten[kyotenId];
+  if (!b || b.faction !== fid) return { ok: false, why: '麾下の武士団ではない' };
+  if (!st || st.owner !== fid) return { ok: false, why: '自勢力の拠点ではない' };
+  if (Object.values(state.bands).some((x) => x.shinon === kyotenId)) return { ok: false, why: 'その所領は他の団へ与えている' };
+  b.shinon = kyotenId; b.debt = 0;
+  b.hoko = clamp(b.hoko + RULE.hoko.shinonGain, 0, 100);
+  pushLog(state, `${b.nameJP}に${DATA.kyotenById[kyotenId].jp}を宛て行った`);
+  return { ok: true };
+}
+function purgeBand(state, fid, bandId) {
+  const b = state.bands[bandId];
+  if (!b || b.faction !== fid) return { ok: false, why: '麾下の武士団ではない' };
+  b.faction = null; b.hoko = 0; b.debt = 0; b.ando = false; b.shinon = null;
+  addRep(state, fid, RULE.rep.purge);
+  for (const o of Rule.bandsOf(state, fid)) o.hoko = clamp(o.hoko - 5, 0, 100);
+  pushLog(state, `${b.nameJP}を誅した——味方の胸に疑いが残る`);
+  return { ok: true };
+}
+function tryRecruit(state, fid, bandId, gift) {
+  const c = Rule.recruitChance(state, fid, bandId, gift);
+  if (!c.ok) return { ok: false, why: c.why };
+  const f = state.factions[fid], b = state.bands[bandId];
+  if (f.gold < (gift || 0)) return { ok: false, why: '金が足りない' };
+  f.gold -= (gift || 0);
+  if (c.score > RULE.recruit.threshold * (1 + (Math.random() * 2 - 1) * RULE.recruit.jitter)) {
+    b.faction = fid; b.hoko = RULE.hoko.joinHoko; b.debt = b.troops * RULE.debt.onJoin;
+    f.alive = true;
+    pushLog(state, `${b.nameJP}が${FACTIONS[fid].jp}に与した`);
+    return { ok: true, joined: true };
+  }
+  if (fid === state.faction) pushLog(state, `${b.nameJP}は動かなかった`);
+  return { ok: true, joined: false };
+}
+
+/* AI の政治行動（基本設計 第5節）。出兵と同じ優先度で名分・恩賞を運用する。
+   ★これがないと「AIは殴るだけ」になり、名分を軸にしたゲームが player 側でしか回らない */
+function aiPolitics(state, fid) {
+  const f = state.factions[fid];
+  // 離反寸前の団を安堵する（最も安い延命）
+  const risky = Rule.bandsOf(state, fid).filter((b) => !b.ando && b.hoko < 35)
+    .sort((a, b) => a.hoko - b.hoko)[0];
+  if (risky && Rule.calcMeibun(state, fid) > RULE.hoko.andoCost * 3) grantAndo(state, fid, risky.id);
+  // 隣の国府を名分で開ける見込みがあれば試す
+  for (const k of DATA.kyoten) {
+    if (k.type !== 'kokufu' || state.kyoten[k.id].owner === fid) continue;
+    const c = Rule.canOpenBloodless(state, fid, k.id);
+    if (c.ok && c.p > 0.6) { tryBloodlessOpen(state, fid, k.id); break; }
+  }
+  // 献納で朝廷支持を買い、最大勢力を朝敵に落とす
+  if (f.gold > RULE.court.donateCost * 3 && f.courtInfluence < RULE.choteki.needInfluence) donateCourt(state, fid);
+  const rival = Object.keys(FACTIONS)
+    .filter((x) => x !== fid && state.factions[x].alive)
+    .sort((a, b) => Rule.ownedKyoten(state, b).length - Rule.ownedKyoten(state, a).length)[0];
+  if (rival && Rule.ownedKyoten(state, rival).length > Rule.ownedKyoten(state, fid).length) {
+    const c = Rule.canDeclareChoteki(state, fid, rival);
+    if (c.ok && c.p > 0.45) declareChoteki(state, fid, rival);
+  }
+  // 手の届く中立の団を勧誘する
+  const neutral = Object.values(state.bands).filter((b) => !b.faction);
+  for (const b of neutral) {
+    const c = Rule.recruitChance(state, fid, b.id, 0);
+    if (c.ok && c.score > RULE.recruit.threshold) { tryRecruit(state, fid, b.id, 0); break; }
+  }
+}
+
 /* ターン終了（詳細設計 第5節のシーケンス。Phase 1 で実装済みの段のみ） */
 function endTurn(state) {
   // 1. 時代イベントの発火
@@ -557,12 +860,61 @@ function endTurn(state) {
       if (fid === state.faction) pushLog(state, '兵糧が尽き、兵が逃散した');
     }
   }
+  // 5. 院影響力（献納・畿内の国府・院の身柄・自然減衰）
+  for (const fid of Object.keys(FACTIONS)) {
+    const f = state.factions[fid];
+    if (!f.alive) continue;
+    let d = -f.courtInfluence * RULE.court.decay;
+    for (const k of Rule.ownedKyoten(state, fid)) {
+      const p = DATA.provById[k.province];
+      if (k.type === 'kokufu' && p && p.circuit === 'kinai') d += RULE.court.kinaiKokufu;
+    }
+    if (f.authority.includes('in')) d += RULE.court.holdIn;
+    f.courtInfluence = clamp(f.courtInfluence + d, 0, RULE.court.max);
+  }
+  // 6. 評判の減衰（名分は calcMeibun が都度算出するので、動かすのは評判だけ）
+  for (const fid of Object.keys(FACTIONS)) {
+    const f = state.factions[fid];
+    f.reputation = Math.abs(f.reputation) < 1 ? 0 : f.reputation * (1 - RULE.meibun.reputationDecay);
+  }
+  // 7. 奉公度の減衰と離反
+  //    ★6より後に置くこと。逆だと名分の変化が1ヶ月遅れて効き、朝敵になった直後に
+  //      離反が起きず、プレイヤーに因果が伝わらない。
+  for (const b of Object.values(state.bands)) {
+    if (!b.faction) continue;
+    b.debt += b.troops * RULE.debt.perTurn;
+    b.hoko = clamp(b.hoko - Rule.hokoDecay(state, b.id).total, 0, 100);
+    if (b.hoko >= RULE.hoko.defectBelow) continue;
+    if (Math.random() >= (RULE.hoko.defectBelow - b.hoko) / RULE.hoko.defectDiv) continue;
+    const was = b.faction, home = DATA.kyotenById[b.home];
+    // 近くに名分の高い勢力がいればそちらへ寝返る。いなければ中立へ戻る
+    let to = null, best = Rule.calcMeibun(state, was);
+    for (const fid of Object.keys(FACTIONS)) {
+      if (fid === was || !state.factions[fid].alive) continue;
+      if (!Rule.ownedKyoten(state, fid).some((k) => Rule.adjacent(k, home))) continue;
+      const m = Rule.calcMeibun(state, fid);
+      if (m > best) { best = m; to = fid; }
+    }
+    b.faction = to; b.hoko = to ? 35 : 0; b.ando = false; b.debt = 0; b.shinon = null;
+    if (was === state.faction || to === state.faction) {
+      pushLog(state, to ? `${b.nameJP}が${FACTIONS[to].jp}へ寝返った` : `${b.nameJP}が離反した`);
+    }
+  }
+  // 8. 朝敵の期限切れ
+  for (const fid of Object.keys(FACTIONS)) {
+    const f = state.factions[fid];
+    if (f.choteki && state.turn >= f.chotekiUntil) {
+      f.choteki = false;
+      if (fid === state.faction) pushLog(state, '朝敵の宣を解かれた');
+    }
+  }
   // 9. AI の行動
   for (const fid of Object.keys(FACTIONS)) {
     if (fid === state.faction) continue;
     const f = state.factions[fid];
     if (!f.alive || !FACTIONS[fid].playable) continue;
     applyActions(state, fid, Rule.aiActions(state, fid));
+    aiPolitics(state, fid);
   }
   for (const fid of Object.keys(FACTIONS)) state.factions[fid].alive = Rule.ownedKyoten(state, fid).length > 0;
   // 12. 月を進める
@@ -1025,6 +1377,7 @@ const L = {
   events: { x: 486, y: 608, w: 414, h: 162 },
   side:   { x: 906, y: 608, w: W - 906 - 6, h: 162 },
   cmd:    { x: 6, y: 776, w: W - 12, h: 30 },
+  panel:  { x: 150, y: 60, w: W - 300, h: 700 },   // コマンドのモーダル
 };
 const COMMANDS = [
   { id: 'naisei',  jp: '内政', phase: 2 },
@@ -1036,6 +1389,8 @@ const COMMANDS = [
   { id: 'kino',    jp: '機能', phase: 1 },
   { id: 'endTurn', jp: 'ターン終了', phase: 1 },
 ];
+/* 開通済みのコマンド。Phase を進めるたびにここへ足す */
+const OPEN_COMMANDS = new Set(['naisei', 'jinji', 'gaiko', 'keiryaku', 'joho', 'kino', 'endTurn']);
 
 class MapScene extends GameKit.Scene {
   constructor(state) { super(); this.state = state; }
@@ -1054,6 +1409,7 @@ class MapScene extends GameKit.Scene {
     this.sel = mine.length ? mine[0].id : null;
     this.listScroll = 0;
     this.notice = null; this.noticeT = 0;
+    this.panel = null; this.panelScroll = 0; this.panelButtons = [];
     this.cmdButtons = this._layoutCommands();
     this._bindWheel(g);
   }
@@ -1139,6 +1495,16 @@ class MapScene extends GameKit.Scene {
     const p = g.input.pointer;
     if (this.noticeT > 0) this.noticeT -= dt;
 
+    if (p.justPressed && this.panel) {
+      // 開いているパネルの操作を最優先で拾う（背後の地図に吸われないように）
+      for (const b of this.panelButtons) {
+        if (!hit(b, p)) continue;
+        this._runPanelAction(b, g);
+        return;
+      }
+      if (!inRect(L.panel, p)) { this.panel = null; return; }
+      return;
+    }
     if (p.justPressed) {
       // コマンドバー
       for (const b of this.cmdButtons) {
@@ -1146,7 +1512,7 @@ class MapScene extends GameKit.Scene {
         if (b.id === 'endTurn') {
           if (!this.state.result) { endTurn(this.state); g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]); }
         } else if (b.id === 'kino') { g.changeScene(new TitleScene()); return; }
-        else if (b.id === 'joho') this._notice(`拠点 ${DATA.kyoten.length}／国 ${DATA.provinces.length}／${DATA.source === 'embed' ? '埋め込みデータ' : '外部データ'}`);
+        else if (OPEN_COMMANDS.has(b.id)) { this.panel = this.panel === b.id ? null : b.id; this.panelScroll = 0; }
         else this._notice(`「${b.jp}」は Phase ${b.phase} で開きます / coming in Phase ${b.phase}`);
         return;
       }
@@ -1157,6 +1523,9 @@ class MapScene extends GameKit.Scene {
         if (b.id === 'levy') {
           const res = levy(this.state, this.state.faction, k.id, 500);
           this._notice(res.ok ? `${k.jp} で ${res.n} 名を徴発した` : `徴兵できない — ${res.why}`);
+        } else if (b.id === 'open') {
+          const res = tryBloodlessOpen(this.state, this.state.faction, k.id);
+          this._notice(res.ok ? (res.opened ? `${k.jp}の門が開いた——戦わずして国を得る` : `${k.jp}は門を開かなかった`) : `試みられない — ${res.why}`);
         } else if (b.id === 'attack') {
           const src = this._attackSource(k);
           if (!src) { this._notice('隣接する自勢力の拠点に兵がいない'); return; }
@@ -1239,6 +1608,7 @@ class MapScene extends GameKit.Scene {
       txt(ctx, this.notice, W / 2, H - 112, { font: '13px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
       ctx.restore();
     }
+    if (this.panel) this._drawPanel(ctx, g);
     if (this.state.result) this._drawResult(ctx);
   }
 
@@ -1479,7 +1849,7 @@ class MapScene extends GameKit.Scene {
     drawSiteIcon(ctx, ty.icon, r.x + r.w / 2, r.y + 62, 22, ty.color);
     ctx.restore();
     let y = r.y + 96;
-    const rowLimit = r.y + r.h - 48;      // 命令ボタンの上端まで
+    const rowLimit = r.y + r.h - 82;      // 命令ボタン（最大2段）の上端まで
     const row = (jp, v, color) => {
       if (y > rowLimit) return;
       txt(ctx, jp, r.x + 12, y, { font: '11px "Hiragino Mincho ProN", serif', color: '#8a7a58' });
@@ -1499,10 +1869,18 @@ class MapScene extends GameKit.Scene {
     // 命令ボタン
     this.actionButtons = [];
     const bw = r.w - 20, by = r.y + r.h - 40;
+    const F = '600 14px "Hiragino Mincho ProN", serif';
     if (st.owner === this.state.faction) {
-      this.actionButtons.push({ id: 'levy', x: r.x + 10, y: by, w: bw, h: 30, jp: '徴 兵', font: '600 14px "Hiragino Mincho ProN", serif', radius: 4 });
-    } else if (this._attackSource(k)) {
-      this.actionButtons.push({ id: 'attack', x: r.x + 10, y: by, w: bw, h: 30, jp: '出 兵', font: '600 14px "Hiragino Mincho ProN", serif', radius: 4 });
+      this.actionButtons.push({ id: 'levy', x: r.x + 10, y: by, w: bw, h: 30, jp: '徴 兵', font: F, radius: 4 });
+    } else {
+      // ★国府は名分だけで開くことがある。出兵より上に置いて、まず試させる
+      const open = Rule.canOpenBloodless(this.state, this.state.faction, k.id);
+      const canAtk = !!this._attackSource(k);
+      if (open.ok) {
+        this.actionButtons.push({ id: 'open', x: r.x + 10, y: by - (canAtk ? 34 : 0), w: bw, h: 30,
+          jp: `無血開城 ${Math.round(open.p * 100)}%`, font: F, radius: 4 });
+      }
+      if (canAtk) this.actionButtons.push({ id: 'attack', x: r.x + 10, y: by, w: bw, h: 30, jp: '出 兵', font: F, radius: 4 });
     }
     for (const b of this.actionButtons) button(ctx, b, false);
   }
@@ -1589,6 +1967,133 @@ class MapScene extends GameKit.Scene {
     }
   }
 
+  /* ---------- コマンドのモーダル（内政・人事・外交・計略） ---------- */
+  _runPanelAction(b, g) {
+    const st = this.state, me = st.faction;
+    let r = null;
+    switch (b.act) {
+      case 'close':   this.panel = null; return;
+      case 'levy':    r = levy(st, me, b.arg, 500); this._notice(r.ok ? `${DATA.kyotenById[b.arg].jp} で ${r.n} 名を徴発した` : `徴兵できない — ${r.why}`); break;
+      case 'ando':    r = grantAndo(st, me, b.arg); this._notice(r.ok ? `${st.bands[b.arg].nameJP}の本領を安堵した` : `安堵できない — ${r.why}`); break;
+      case 'shinon':  r = grantShinon(st, me, b.arg, b.arg2); this._notice(r.ok ? '新恩を宛て行った' : `与えられない — ${r.why}`); break;
+      case 'purge':   r = purgeBand(st, me, b.arg); this._notice(r.ok ? '誅した' : `できない — ${r.why}`); break;
+      case 'donate':  r = donateCourt(st, me); this._notice(r.ok ? `院へ献納した（朝廷支持 ${Math.round(st.factions[me].courtInfluence)}）` : `献納できない — ${r.why}`); break;
+      case 'choteki': r = declareChoteki(st, me, b.arg); this._notice(r.ok ? (r.done ? `${FACTIONS[b.arg].jp}を朝敵に落とした` : '奏請は容れられなかった') : `奏請できない — ${r.why}`); break;
+      case 'recruit': r = tryRecruit(st, me, b.arg, 200); this._notice(r.ok ? (r.joined ? `${st.bands[b.arg].nameJP}が与した` : `${st.bands[b.arg].nameJP}は動かなかった`) : `勧誘できない — ${r.why}`); break;
+      case 'open':    r = tryBloodlessOpen(st, me, b.arg); this._notice(r.ok ? (r.opened ? `${DATA.kyotenById[b.arg].jp}が門を開いた` : `${DATA.kyotenById[b.arg].jp}は門を開かなかった`) : `試みられない — ${r.why}`); break;
+      case 'scroll':  this.panelScroll = Math.max(0, this.panelScroll + b.arg); return;
+      default: return;
+    }
+    g.audio.jingle(r && (r.opened || r.joined || r.done || r.ok) ? [{ f: 523, d: 0.08 }, { f: 659, d: 0.12 }] : [{ f: 262, d: 0.12 }]);
+  }
+
+  _drawPanel(ctx, g) {
+    const r = L.panel;
+    ctx.fillStyle = 'rgba(5,7,11,0.72)'; ctx.fillRect(0, 0, W, H);
+    frame(ctx, r.x, r.y, r.w, r.h, { fill: 'rgba(10,15,22,0.97)', radius: 8 });
+    const cmd = COMMANDS.find((c) => c.id === this.panel);
+    frameTitle(ctx, r.x, r.y, r.w, cmd.jp, this.panel);
+    this.panelButtons = [{ act: 'close', x: r.x + r.w - 78, y: r.y + 30, w: 66, h: 24, jp: '閉じる', font: '600 12px "Hiragino Mincho ProN", serif', radius: 4 }];
+    const st = this.state, me = st.faction, f = st.factions[me];
+    const rows = [];       // { cells:[…], buttons:[{jp,act,arg,arg2,w}] }
+    let head = [], note = '';
+
+    if (this.panel === 'naisei') {
+      const inc = Rule.income(st, me);
+      note = `収穫 +${inc.food} ／ 兵の扶持 −${inc.upkeep} ／ 差引 ${inc.net >= 0 ? '+' : ''}${inc.net}　`
+           + `税収 +${inc.gold}　動員上限 ${inc.levyCap}（現有 ${inc.troops}）`
+           + (Rule.famineActive(st) ? '　※養和の飢饉のため収穫が落ちている' : '');
+      head = ['拠点', '種類', '兵士', '規模', ''];
+      for (const k of Rule.ownedKyoten(st, me).sort((a, b) => b.scale - a.scale)) {
+        rows.push({ cells: [k.jp, KYOTEN_TYPE[k.type].jp, String(st.kyoten[k.id].garrison), String(k.scale)],
+                    buttons: [{ jp: '徴兵', act: 'levy', arg: k.id, w: 62 }] });
+      }
+    } else if (this.panel === 'jinji') {
+      const debt = Rule.totalDebt(st, me);
+      note = `麾下の武士団 ${Rule.bandsOf(st, me).length}　恩賞の未払い ${Math.round(debt)}　`
+           + '※奉公度が20を切ると離反する。安堵は名分を、新恩は所領を要する';
+      head = ['武士団', '本領', '兵', '奉公', '未払', ''];
+      for (const b of Rule.bandsOf(st, me).sort((a, b2) => a.hoko - b2.hoko)) {
+        const free = Rule.ownedKyoten(st, me).find((k) => !Object.values(st.bands).some((x) => x.shinon === k.id));
+        rows.push({
+          cells: [b.nameJP + (b.ando ? '（安堵）' : ''), DATA.kyotenById[b.home] ? DATA.kyotenById[b.home].jp : '—',
+                  String(b.troops), String(Math.round(b.hoko)), String(Math.round(b.debt))],
+          hot: b.hoko < RULE.hoko.defectBelow + 10,
+          buttons: [
+            { jp: '安堵', act: 'ando', arg: b.id, w: 52, off: b.ando },
+            { jp: '新恩', act: 'shinon', arg: b.id, arg2: free && free.id, w: 52, off: !free || !!b.shinon },
+            { jp: '誅殺', act: 'purge', arg: b.id, w: 52 },
+          ],
+        });
+      }
+    } else if (this.panel === 'gaiko') {
+      const bd = Rule.meibunBreakdown(st, me);
+      note = `名分 ${bd.total}（権威 ${bd.authority} ＋ 家格 ${bd.kakaku} ＋ 評判 ${Math.round(bd.reputation)}`
+           + `${bd.choteki ? ' − 朝敵 400' : ''}）　朝廷支持 ${Math.round(f.courtInfluence)}　金 ${f.gold}`;
+      head = ['勢力', '名分', '拠点', '状態', ''];
+      this.panelButtons.push({ act: 'donate', x: r.x + 14, y: r.y + 78, w: 190, h: 26,
+        jp: `院へ献納（金${RULE.court.donateCost}）`, font: '600 12px "Hiragino Mincho ProN", serif', radius: 4 });
+      for (const fid of Object.keys(FACTIONS)) {
+        if (fid === me || !st.factions[fid].alive) continue;
+        const c = Rule.canDeclareChoteki(st, me, fid);
+        rows.push({
+          cells: [FACTIONS[fid].jp, String(Rule.calcMeibun(st, fid)), String(Rule.ownedKyoten(st, fid).length),
+                  st.factions[fid].choteki ? '朝敵' : '—'],
+          buttons: [{ jp: c.ok ? `朝敵に奏請 ${Math.round(c.p * 100)}%` : '奏請不可', act: 'choteki', arg: fid, w: 118, off: !c.ok }],
+        });
+      }
+    } else if (this.panel === 'keiryaku') {
+      note = '中立の武士団を勧誘する。名分と家格と地縁で決まる。'
+           + `贈与200は断られても戻らない　金 ${f.gold}`;
+      head = ['武士団', '国', '兵', '見込み', ''];
+      const cands = Object.values(st.bands).filter((b) => b.faction !== me)
+        .map((b) => ({ b, c: Rule.recruitChance(st, me, b.id, 200) }))
+        .sort((a, b) => (b.c.score || -999) - (a.c.score || -999));
+      for (const x of cands) {
+        rows.push({
+          cells: [x.b.nameJP, DATA.provById[x.b.province] ? DATA.provById[x.b.province].nameJP : x.b.province,
+                  String(x.b.troops), x.c.ok ? `${x.c.score} / ${x.c.threshold}` : (x.c.why || '—')],
+          hot: x.c.ok && x.c.score > x.c.threshold,
+          buttons: [{ jp: '勧誘', act: 'recruit', arg: x.b.id, w: 62, off: !x.c.ok }],
+        });
+      }
+    } else if (this.panel === 'joho') {
+      note = `拠点 ${DATA.kyoten.length}／国 ${DATA.provinces.length}／武士団 ${Object.keys(st.bands).length}／`
+           + `${DATA.source === 'embed' ? '埋め込みデータ' : '外部データ'}　${st.year}年${st.month}月（${st.turn}ターン目）`;
+      head = ['年月', '出来事', '', '', ''];
+      for (const l of st.log) rows.push({ cells: [`${l.y}年${l.m}月`, l.text], buttons: [] });
+    }
+
+    txt(ctx, note, r.x + 14, r.y + 34, { font: '12px "Hiragino Mincho ProN", serif', color: '#c8b78c' });
+    const top = r.y + (this.panel === 'gaiko' ? 116 : 62);
+    const cols = [14, 260, 400, 470, 545];
+    head.forEach((h, i) => h && txt(ctx, h, r.x + cols[i], top, { font: '10px "Hiragino Mincho ProN", serif', color: '#8a7a58' }));
+    const rowH = 26, visible = Math.floor((r.y + r.h - 46 - top - 16) / rowH);
+    this.panelScroll = clamp(this.panelScroll, 0, Math.max(0, rows.length - visible));
+    for (let i = 0; i < visible && i + this.panelScroll < rows.length; i++) {
+      const row = rows[i + this.panelScroll], y = top + 18 + i * rowH;
+      if (row.hot) frame(ctx, r.x + 8, y - 4, r.w - 16, rowH - 2, { fill: 'rgba(249,212,35,0.10)', stroke: 'rgba(249,212,35,0.28)', radius: 3 });
+      row.cells.forEach((c, ci) => txt(ctx, ci === 1 && this.panel === 'joho' ? fitText(ctx, c, r.w - 200, '13px "Hiragino Mincho ProN", serif') : c,
+        r.x + cols[ci], y, { font: '13px "Hiragino Mincho ProN", serif', color: ci === 0 ? '#e8eef5' : '#b9c4d2' }));
+      let bx = r.x + r.w - 14;
+      for (const b of (row.buttons || []).slice().reverse()) {
+        bx -= b.w + 6;
+        const btn = { ...b, x: bx, y: y - 5, h: 22, disabled: b.off, font: '600 12px "Hiragino Mincho ProN", serif', radius: 4 };
+        button(ctx, btn, false);
+        if (!b.off) this.panelButtons.push(btn);
+      }
+    }
+    if (rows.length > visible) {
+      const up = { act: 'scroll', arg: -visible, x: r.x + r.w - 78, y: r.y + r.h - 40, w: 32, h: 26, jp: '▲', font: '12px sans-serif', radius: 4 };
+      const dn = { act: 'scroll', arg: visible, x: r.x + r.w - 42, y: r.y + r.h - 40, w: 32, h: 26, jp: '▼', font: '12px sans-serif', radius: 4 };
+      button(ctx, up, false); button(ctx, dn, false);
+      this.panelButtons.push(up, dn);
+      txt(ctx, `${this.panelScroll + 1}–${Math.min(rows.length, this.panelScroll + visible)} / ${rows.length}`,
+        r.x + 14, r.y + r.h - 34, { font: '11px sans-serif', color: '#8a7a58' });
+    }
+    for (const b of this.panelButtons) if (b.act === 'close' || b.act === 'donate') button(ctx, b, hit(b, g.input.pointer));
+  }
+
   _drawResult(ctx) {
     ctx.fillStyle = 'rgba(5,7,11,0.86)'; ctx.fillRect(0, 0, W, H);
     const r = this.state.result;
@@ -1615,6 +2120,7 @@ game.start();
 window.GENPEI_DEBUG = {
   game, save, DATA, RULE, FACTIONS, SCENARIOS, AUTHORITY, KYOTEN_TYPE, TIMELINE, Rule,
   buildState, endTurn, waReki, applyActions, levy, ZOOM_CAP,
+  tryBloodlessOpen, declareChoteki, donateCourt, grantAndo, grantShinon, purgeBand, tryRecruit, aiPolitics, buildBands,
   scene: () => (game.scene ? game.scene.constructor.name : null),
   errors: () => game.errors || [],
   gotoMap: (scnId, fid) => { game.changeScene(new MapScene(buildState(scnId, fid))); return true; },

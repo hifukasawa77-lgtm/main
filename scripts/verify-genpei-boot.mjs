@@ -31,6 +31,7 @@ const MIME = {
   '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
 };
 
+const RULE_DEFECT = 20;   // genpei.html の RULE.hoko.defectBelow と同値
 const fails = [];
 const checks = [];
 function check(name, ok, detail) {
@@ -158,6 +159,79 @@ const famine = await page.evaluate(() => {
   return { during: acts, after: acts2 };
 });
 check('9. 飢饉中は AI が出兵しない', famine.during === 0, JSON.stringify(famine));
+
+/* --- Phase 2: 受入基準 5.3「遊びの成立」を測る --- */
+const phase2 = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG, R = D.Rule;
+  const out = {};
+
+  // (a) 武士団が起きているか
+  const st0 = D.buildState('s1180', 'kamakura');
+  out.bands = Object.keys(st0.bands).length;
+  out.bandsMine = R.bandsOf(st0, 'kamakura').length;
+  out.bandsNeutral = Object.values(st0.bands).filter((b) => !b.faction).length;
+
+  // (b) ★名分だけで国府が開くか（本作の最重要ルール）
+  let opened = 0, tried = 0;
+  for (let t = 0; t < 40 && opened === 0; t++) {
+    for (const k of D.DATA.kyoten) {
+      if (k.type !== 'kokufu') continue;
+      const c = R.canOpenBloodless(st0, 'kamakura', k.id);
+      if (!c.ok) continue;
+      tried++;
+      if (D.tryBloodlessOpen(st0, 'kamakura', k.id).opened) { opened++; break; }
+    }
+    D.endTurn(st0);
+  }
+  out.bloodless = { tried, opened };
+
+  // (c) ★恩賞が尽きると離反するか（安堵も新恩も与えずに放置する）
+  const st1 = D.buildState('s1180', 'kamakura');
+  const before = R.bandsOf(st1, 'kamakura').length;
+  let minHoko = 100;
+  for (let t = 0; t < 48; t++) {
+    D.endTurn(st1);
+    for (const b of R.bandsOf(st1, 'kamakura')) minHoko = Math.min(minHoko, b.hoko);
+  }
+  out.neglect = { before, after: R.bandsOf(st1, 'kamakura').length, minHoko: Math.round(minHoko),
+                  debt: Math.round(R.totalDebt(st1, 'kamakura')) };
+
+  // (d) ★朝敵になると崩れるか（同条件で朝敵ありとなしを比べる）
+  const run = (choteki) => {
+    const st = D.buildState('s1180', 'kamakura');
+    if (choteki) { st.factions.kamakura.choteki = true; st.factions.kamakura.chotekiUntil = 999; }
+    for (let t = 0; t < 24; t++) D.endTurn(st);
+    const bs = R.bandsOf(st, 'kamakura');
+    return { bands: bs.length, hoko: Math.round(bs.reduce((s2, b) => s2 + b.hoko, 0) / Math.max(1, bs.length)),
+             meibun: R.calcMeibun(st, 'kamakura') };
+  };
+  out.choteki = { normal: run(false), outlawed: run(true) };
+
+  // (e) 勧誘が成立するか。
+  //     ★贈与は断られても戻らないので、軍資金が尽きると以降は「金が足りない」で
+  //       全滅する。検査で見たいのは判定式なので、金は潤沢にして見込みの高い順に試す。
+  const st2 = D.buildState('s1180', 'kamakura');
+  st2.factions.kamakura.gold = 20000;
+  let joined = 0, tried2 = 0;
+  const cands = Object.values(st2.bands).filter((b) => !b.faction)
+    .map((b) => ({ b, c: R.recruitChance(st2, 'kamakura', b.id, 200) }))
+    .filter((x) => x.c.ok).sort((a, b) => b.c.score - a.c.score);
+  for (const x of cands) {
+    tried2++;
+    if (D.tryRecruit(st2, 'kamakura', x.b.id, 200).joined) joined++;
+  }
+  out.recruit = { tried: tried2, joined, best: cands.length ? cands[0].c.score : null };
+  return out;
+});
+check('14. 武士団が起きている', phase2.bands >= 60 && phase2.bandsNeutral > 0, JSON.stringify({ 総数: phase2.bands, 自勢力: phase2.bandsMine, 中立: phase2.bandsNeutral }));
+check('15. ★名分だけで国府が開く（無血開城）', phase2.bloodless.opened > 0, JSON.stringify(phase2.bloodless));
+check('16. ★恩賞を配らないと奉公度が崩れる', phase2.neglect.minHoko < RULE_DEFECT, JSON.stringify(phase2.neglect));
+// 名分は 0 で下げ止まるので「差が300以上」では測れない。落ち幅と結果の両方を見る
+check('17. ★朝敵になると名分が急落し武士団が減る',
+  phase2.choteki.outlawed.meibun <= Math.max(0, phase2.choteki.normal.meibun - 300)
+  && phase2.choteki.outlawed.bands < phase2.choteki.normal.bands,
+  JSON.stringify(phase2.choteki));
+check('18. 勧誘が成立する', phase2.recruit.joined > 0, JSON.stringify(phase2.recruit));
 
 /* 11. ★例外の合算（pageerror だけでは素通りする） */
 const engineErrors = await page.evaluate(() => window.GENPEI_DEBUG.errors().map((e) => `${e.key} ×${e.count}`));
