@@ -233,6 +233,65 @@ check('17. ★朝敵になると名分が急落し武士団が減る',
   JSON.stringify(phase2.choteki));
 check('18. 勧誘が成立する', phase2.recruit.joined > 0, JSON.stringify(phase2.recruit));
 
+/* --- Phase 3: ヘックス合戦（要件 M-27〜M-32） --- */
+const phase3 = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG, B = D.Battle;
+  const st = D.buildState('s1180', 'kamakura');
+  const out = {};
+
+  // (a) 盤面が組めるか（野戦と攻城の両方）
+  const field = D.initBattle(st, { fid: 'kamakura', from: 'tachi_kamakura', to: 'kokufu_suruga', troops: 3000 });
+  const siege = D.initBattle(st, { fid: 'kamakura', from: 'tachi_kamakura', to: 'kisaku_odawara', troops: 3000 });
+  out.modes = { field: field.mode, siege: siege.mode };
+  out.units = { field: field.units.length, siege: siege.units.length };
+  out.walls = siege.terrain.flat().filter((t) => t === 'saku' || t === 'sakamogi').length;
+
+  // (b) ★騎射の間合い — 距離1の威力が距離2の半分以下に落ちること
+  const b = field;
+  const k = b.units.find((u) => u.type === 'kisha' && u.side === 'atk');
+  const t = b.units.find((u) => u.side === 'def');
+  const at = (d) => { k.hx = 0; k.hy = 4; t.hx = d; t.hy = 4; return B.damage(b, k, t); };
+  const d1 = [], d2 = [];
+  for (let i = 0; i < 40; i++) { d1.push(at(1)); d2.push(at(2)); }
+  const avg = (a) => a.reduce((s2, v) => s2 + v, 0) / a.length;
+  out.kisha = { melee: Math.round(avg(d1)), ranged: Math.round(avg(d2)) };
+
+  // (c) ★士気で決着すること（全滅を待たずに終わる）
+  const runs = [];
+  for (let s2 = 0; s2 < 5; s2++) {
+    const bb = D.initBattle(st, { fid: 'kamakura', from: 'tachi_kamakura', to: 'kokufu_suruga', troops: 3000 + s2 * 300 });
+    let rounds = 0;
+    while (!B.over(bb).done && rounds < 40) {
+      B.aiTurn(bb, 'atk'); B.aiTurn(bb, 'def'); B.tickMorale(bb);
+      for (const u of bb.units) u.acted = false;
+      bb.round++; rounds++;
+    }
+    const o = B.over(bb);
+    runs.push({ rounds, winner: o.winner, why: o.why,
+                left: bb.units.filter((u) => u.troops > 0).length });
+  }
+  out.runs = runs;
+
+  // (d) ★名乗りと一騎討ちが成立すること
+  const b2 = D.initBattle(st, { fid: 'kamakura', from: 'tachi_kamakura', to: 'kokufu_suruga', troops: 3000 });
+  const a = b2.units.find((u) => u.side === 'atk' && u.gen);
+  const dfd = b2.units.find((u) => u.side === 'def' && u.gen);
+  a.hx = 4; a.hy = 4; dfd.hx = 5; dfd.hy = 4;
+  const can = B.canDuel(b2, a, dfd);
+  const res = can.ok ? B.resolveDuel(b2, a, dfd) : null;
+  out.duel = { can: can.ok, why: can.why, accepted: res && res.accepted, gens: [a.gen, dfd.gen] };
+  return out;
+});
+check('19. 合戦の盤面が組める（野戦・攻城）',
+  phase3.modes.field === 'field' && phase3.modes.siege === 'siege' && phase3.walls > 0,
+  JSON.stringify({ ...phase3.modes, 柵: phase3.walls, 隊: phase3.units }));
+// ★騎射の間合いが効いていること。密着で威力が落ちないなら「近づかせない」戦術が消える
+check('20. ★騎射は密着すると威力が落ちる',
+  phase3.kisha.melee < phase3.kisha.ranged * 0.6, JSON.stringify(phase3.kisha));
+check('21. ★士気で決着し全滅まで行かない',
+  phase3.runs.every((r) => r.rounds < 40 && r.winner), JSON.stringify(phase3.runs.slice(0, 3)));
+check('22. ★名乗りと一騎討ちが成立する', phase3.duel.can === true, JSON.stringify(phase3.duel));
+
 /* 11. ★例外の合算（pageerror だけでは素通りする） */
 const engineErrors = await page.evaluate(() => window.GENPEI_DEBUG.errors().map((e) => `${e.key} ×${e.count}`));
 check('10. pageerror が0件', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / '));
