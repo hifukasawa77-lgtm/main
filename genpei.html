@@ -581,7 +581,16 @@ function endTurn(state) {
  * 5. 描画のユーティリティ
  * ========================================================================== */
 const ASSETS = { map: null, mapReady: false };
-const MAP_ASPECT = 941 / 1672;
+const MAP_NATIVE_W = 1672;
+const MAP_ASPECT = 941 / MAP_NATIVE_W;
+
+/* 拡大率の上限（地図素材の原寸の何倍まで引き伸ばすか）。
+ * 素材は 1672×941 しかなく、これを超えて拡大するとぼやけが目に見えて増える。
+ * 各段の寄りはこの上限に合わせて自動的に浅くなる。数値を上げれば寄れるがぼやける。 */
+const ZOOM_CAP = { nation: 2.0, prov: 3.0, local: 4.5 };
+function maxMapScale(cap) {
+  return (ASSETS.map && ASSETS.map.naturalWidth ? ASSETS.map.naturalWidth : MAP_NATIVE_W) * cap;
+}
 
 function loadMap() {
   return new Promise((resolve) => {
@@ -1035,6 +1044,8 @@ class MapScene extends GameKit.Scene {
     // 幅に合わせて列島全体を見せる。枠を覆う倍率まで寄せると東西が切れてしまう。
     // 余る上下は海として塗る（地図の周囲はもともと外洋なので違和感がない）。
     this.minZoom = 1;
+    // 原寸の ZOOM_CAP.nation 倍を超えて引き伸ばさない
+    this.maxZoom = Math.max(this.minZoom, maxMapScale(ZOOM_CAP.nation) / L.nation.w);
     this.cam = { cx: 0.5, cy: 0.5, zoom: this.minZoom };
     this.drag = null;
     // 選択: 自勢力の本拠がある国を初期選択にする
@@ -1062,7 +1073,7 @@ class MapScene extends GameKit.Scene {
       if (!inRect(L.nation, p)) return;
       e.preventDefault();
       const before = this._n2m(p);
-      this.cam.zoom = clamp(this.cam.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), this.minZoom, this.minZoom * 5);
+      this.cam.zoom = clamp(this.cam.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), this.minZoom, this.maxZoom);
       const after = this._n2m(p);
       this.cam.cx += before.x - after.x; this.cam.cy += before.y - after.y;
       this._clampCam();
@@ -1107,16 +1118,21 @@ class MapScene extends GameKit.Scene {
       }),
     };
   }
+  /* 表示半幅の下限＝拡大率の上限。これより寄せると素材の原寸を超えて引き伸ばすことになる */
+  _minHalfW(rect, cap) { return rect.w / (2 * maxMapScale(cap)); }
+
   _provView() {
     const b = DATA.provBox[this.province];
-    const halfW = Math.max(0.035, (b.x1 - b.x0) / 2 + 0.022);
+    const want = Math.max(0.035, (b.x1 - b.x0) / 2 + 0.022);
+    const halfW = Math.max(want, this._minHalfW(L.prov, ZOOM_CAP.prov));
     return this._viewFor(L.prov, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, halfW);
   }
   _localView() {
     const k = this.sel ? DATA.kyotenById[this.sel] : null;
     const b = DATA.provBox[this.province];
     const cx = k ? k.mx : b.cx, cy = k ? k.my : b.cy;
-    return this._viewFor(L.local, cx, cy, 0.016);
+    const halfW = Math.max(0.016, this._minHalfW(L.local, ZOOM_CAP.local));
+    return this._viewFor(L.local, cx, cy, halfW);
   }
 
   update(dt, g) {
@@ -1338,12 +1354,18 @@ class MapScene extends GameKit.Scene {
     }
     // 街道: 同国内の拠点を国府から結ぶ＋隣国の国府へ伸ばす
     this._drawRoads(ctx, view);
-    for (const k of DATA.kyoten) {
-      const ty = KYOTEN_TYPE[k.type];
-      if (ty.tier > 1) continue;
+    const boxes = [];
+    // 選択中 → 国府・館 → その他 の順に描く。先に置いた札が優先される
+    const order = DATA.kyoten
+      .filter((k) => KYOTEN_TYPE[k.type].tier <= 1)
+      .sort((a, b) => (this.sel === b.id) - (this.sel === a.id)
+        || (a.province === this.province ? 0 : 1) - (b.province === this.province ? 0 : 1)
+        || KYOTEN_TYPE[a.type].tier - KYOTEN_TYPE[b.type].tier
+        || b.scale - a.scale);
+    for (const k of order) {
       const s = view.toScreen(k.mx, k.my);
       if (s.x < r.x - 20 || s.x > r.x + r.w + 20 || s.y < r.y || s.y > r.y + r.h) continue;
-      this._drawSite(ctx, k, s, 8, k.province === this.province);
+      this._drawSite(ctx, k, s, 8, k.province === this.province, boxes);
     }
     ctx.restore();
     frameTitle(ctx, r.x, r.y, r.w, `拡大図（${prov ? prov.nameJP : this.province}国）`, prov ? prov.nameEN : '');
@@ -1380,7 +1402,17 @@ class MapScene extends GameKit.Scene {
     ctx.restore();
   }
 
-  _drawSite(ctx, k, s, size, inFocus) {
+  /* 地名の重なりを避ける。拡大率に上限を掛けたぶん一画面に入る拠点が増えるので、
+     置けない札は落とす。優先順位は tier（国府・館 → その他 → 村）。 */
+  _labelFits(boxes, x, y, w, h) {
+    for (const b of boxes) {
+      if (x < b.x + b.w && x + w > b.x && y < b.y + b.h && y + h > b.y) return false;
+    }
+    boxes.push({ x, y, w, h });
+    return true;
+  }
+
+  _drawSite(ctx, k, s, size, inFocus, labelBoxes) {
     const ty = KYOTEN_TYPE[k.type];
     const st = this.state.kyoten[k.id];
     const owner = st && st.owner ? FACTIONS[st.owner] : null;
@@ -1396,9 +1428,14 @@ class MapScene extends GameKit.Scene {
     }
     if (inFocus) {
       ctx.font = '10px "Hiragino Mincho ProN", serif'; ctx.textAlign = 'center';
-      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.92)';
-      ctx.strokeText(k.jp, s.x, s.y + size * 1.9);
-      ctx.fillStyle = '#e8eef5'; ctx.fillText(k.jp, s.x, s.y + size * 1.9);
+      const tw = ctx.measureText(k.jp).width, ty = s.y + size * 1.9;
+      const ok = !labelBoxes || this.sel === k.id
+        || this._labelFits(labelBoxes, s.x - tw / 2 - 2, ty - 2, tw + 4, 13);
+      if (ok) {
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+        ctx.strokeText(k.jp, s.x, ty);
+        ctx.fillStyle = '#e8eef5'; ctx.fillText(k.jp, s.x, ty);
+      }
     }
     ctx.restore();
   }
@@ -1416,10 +1453,13 @@ class MapScene extends GameKit.Scene {
       ctx.drawImage(ASSETS.map, o.x, o.y, view.s, view.s * mapAspect());
       ctx.fillStyle = 'rgba(5,7,11,0.24)'; ctx.fillRect(r.x, r.y, r.w, r.h);
     }
-    for (const kk of DATA.kyoten) {
+    const boxes = [];
+    const order = DATA.kyoten.slice().sort((a, b) => (this.sel === b.id) - (this.sel === a.id)
+      || KYOTEN_TYPE[a.type].tier - KYOTEN_TYPE[b.type].tier || b.scale - a.scale);
+    for (const kk of order) {
       const s = view.toScreen(kk.mx, kk.my);
       if (s.x < r.x - 30 || s.x > r.x + r.w + 30 || s.y < r.y || s.y > r.y + r.h) continue;
-      this._drawSite(ctx, kk, s, 13, true);
+      this._drawSite(ctx, kk, s, 12, true, boxes);
     }
     ctx.restore();
     frameTitle(ctx, r.x, r.y, r.w, k ? `${k.jp} 周辺` : '周辺図', 'Local Map');
@@ -1574,7 +1614,7 @@ game.start();
 // ★ 新しい関数・定数を足したらここにも追加する（追加し忘れると検査側が落ちる）。
 window.GENPEI_DEBUG = {
   game, save, DATA, RULE, FACTIONS, SCENARIOS, AUTHORITY, KYOTEN_TYPE, TIMELINE, Rule,
-  buildState, endTurn, waReki, applyActions, levy,
+  buildState, endTurn, waReki, applyActions, levy, ZOOM_CAP,
   scene: () => (game.scene ? game.scene.constructor.name : null),
   errors: () => game.errors || [],
   gotoMap: (scnId, fid) => { game.changeScene(new MapScene(buildState(scnId, fid))); return true; },
