@@ -128,6 +128,13 @@ const RULE = {
   },
   /* 攻城戦（基本設計 4.10）。石垣も天守もないので短期決戦になるよう低く置く */
   siege: { defBonus: 0.25, maxTurns: 10, starveMorale: -10 },
+  /* 渡海・海戦・潮流（基本設計 4.11）。★潮の反転が戦況をひっくり返す */
+  naval: {
+    tidePeriod: 4, withTideMove: 2, withTideRange: 1, againstTideMove: -1,
+    crossFailBase: 0.05, crossWinterAdd: 0.25, crossShipDiv: 50, crossLoss: 0.10,
+    defectMax: 0.25, defectMeibunDiv: 1500, defectWeakMul: 0.10,
+    suirenDiv: 240,
+  },
   /* 勧誘 */
   recruit: {
     meibunDiv: 10, kakakuMul: 4, sameProvince: 25, adjacent: 10,
@@ -472,6 +479,26 @@ const BAND_NAMES = {
   shoen_ogata: '緒方党', shoen_kanzaki: '肥前の郎党', shoen_oe: '阿波の郎党',
   kisaku_kikuchi: '菊池党', kisaku_kawagoe: '河越党', kisaku_utsunomiya: '宇都宮党',
 };
+/* 水軍（基本設計 4.11）。湊の「水軍」列から起こす。
+ * ★去就が海戦の勝敗を直接決める。壇ノ浦は阿波水軍の離反で決まった。 */
+const SUIGUN = {
+  suigun_kumano:  { jp: '熊野水軍', en: 'Kumano Fleet',  leader: '湛増',       ships: 45 },
+  suigun_kono:    { jp: '河野水軍', en: 'Kono Fleet',    leader: '河野通信',   ships: 45, gen: 'kono_michinobu' },
+  suigun_awa:     { jp: '阿波水軍', en: 'Awa Fleet',     leader: '田口成良',   ships: 50, gen: 'taguchi_shigeyoshi' },
+  suigun_matsura: { jp: '松浦党',   en: 'Matsura Fleet', leader: '松浦党の党首', ships: 40 },
+};
+/* 島の別。国をまたぐ移動が渡海になるかを決める */
+function islandOf(provinceId) {
+  const p = DATA.provById[provinceId];
+  if (!p) return 'honshu';
+  if (p.id === 'sado') return 'sado';
+  if (p.id === 'awaji') return 'awaji';
+  if (p.id === 'oki') return 'oki';
+  if (p.circuit === 'saikaido') return 'kyushu';
+  if (p.circuit === 'nankaido' && p.id !== 'kii') return 'shikoku';
+  return 'honshu';
+}
+
 /* その勢力が、その国の武士団の「主人」たりうるか。
    知行国主にすぎない勢力（平氏・朝廷）は、本貫の外では主従関係を持たない。 */
 function holdsAllegiance(fid, provinceId) {
@@ -634,6 +661,47 @@ const Rule = {
     return { ok: true, p };
   },
 
+  /* ---------- 渡海と水軍（基本設計 4.11） ---------- */
+
+  /* 海を越える必要があるか（島が違えば渡海） */
+  needsSeaCrossing(a, b) { return islandOf(a.province) !== islandOf(b.province); },
+
+  /* 使える船。自勢力の湊＋麾下の水軍 */
+  ships(state, fid) {
+    let n = 0;
+    for (const k of Rule.ownedKyoten(state, fid)) if (k.type === 'minato') n += k.scale;
+    for (const [sid, s2] of Object.entries(state.suigun || {})) {
+      if (s2.faction === fid) n += SUIGUN[sid].ships;
+    }
+    return n;
+  },
+
+  /* 渡海の可否（要件 M-33）。★湊を1つも持たない勢力は海を越えられない */
+  canCrossSea(state, fid, from, to) {
+    const a = DATA.kyotenById[from], b = DATA.kyotenById[to];
+    if (!Rule.needsSeaCrossing(a, b)) return { ok: true, sea: false, failRate: 0 };
+    const ports = Rule.ownedKyoten(state, fid).filter((k) => k.type === 'minato');
+    if (!ports.length) return { ok: false, sea: true, why: '湊を持たないので海を越えられない' };
+    const need = Math.ceil(state.kyoten[from].garrison / RULE.naval.crossShipDiv);
+    const have = Rule.ships(state, fid);
+    const N = RULE.naval;
+    const winter = state.month >= 11 || state.month <= 2;
+    const shortage = Math.max(0, 1 - have / Math.max(1, need));
+    return {
+      ok: true, sea: true, ships: have, need,
+      failRate: clamp(N.crossFailBase + (winter ? N.crossWinterAdd : 0) + shortage * 0.4, 0, 0.9),
+    };
+  },
+
+  /* 水軍の離反（要件 M-36）。劣勢なほど、相手の名分が高いほど寝返る */
+  suigunDefectChance(state, suigunId, myFid, foeFid, weak) {
+    const N = RULE.naval;
+    const s2 = state.suigun[suigunId];
+    if (!s2 || s2.faction !== myFid) return 0;
+    return clamp((Rule.calcMeibun(state, foeFid) - Rule.calcMeibun(state, myFid)) / N.defectMeibunDiv
+      + (weak || 0) * N.defectWeakMul, 0, N.defectMax);
+  },
+
   /* ---------- 御恩と奉公（基本設計 4.4） ---------- */
 
   /* 奉公度の毎ターン減衰。★内訳も返す（なぜ落ちているかを画面で説明するため） */
@@ -704,7 +772,7 @@ function buildState(scenarioId, factionId) {
     version: SAVE_VERSION, scenario: scenarioId, faction: factionId,
     year: scn.start[0], month: scn.start[1], turn: 1,
     endYear: scn.end[0], endMonth: scn.end[1],
-    factions: {}, kyoten: {}, bands: {}, log: [], result: null, chotekiCount: 0,
+    factions: {}, kyoten: {}, bands: {}, suigun: {}, log: [], result: null, chotekiCount: 0,
   };
   for (const fid of Object.keys(FACTIONS)) {
     state.factions[fid] = {
@@ -732,6 +800,15 @@ function buildState(scenarioId, factionId) {
       hoko: 0, ando: false, debt: 0,
     };
     if (state.bands[b.id].faction) state.bands[b.id].hoko = 55;
+  }
+  // 水軍は母港の持ち主に従うが、平氏の知行国であっても在地の海の民は中立から始まる
+  for (const [sid] of Object.entries(SUIGUN)) {
+    const port = DATA.kyoten.find((k) => k.suigun === sid);
+    const owner = port ? state.kyoten[port.id].owner : null;
+    state.suigun[sid] = {
+      faction: port && owner && holdsAllegiance(owner, port.province) ? owner : null,
+      home: port ? port.id : null,
+    };
   }
   for (const fid of Object.keys(FACTIONS)) state.factions[fid].food = Rule.income(state, fid).food * 3;
   pushLog(state, `${scn.jp} — ${state.year}年${state.month}月、乱世はじまる`);
@@ -1611,6 +1688,15 @@ class MapScene extends GameKit.Scene {
           if (!src) { this._notice('隣接する自勢力の拠点に兵がいない'); return; }
           const troops = Math.floor(this.state.kyoten[src.id].garrison * 0.7);
           const st = this.state, me = st.faction;
+          // ★渡海の判定。湊を持たない勢力は海を越えられない
+          const cross = Rule.canCrossSea(st, me, src.id, k.id);
+          if (!cross.ok) { this._notice(cross.why); return; }
+          if (cross.sea && Math.random() < cross.failRate) {
+            st.kyoten[src.id].garrison = Math.round(st.kyoten[src.id].garrison * (1 - RULE.naval.crossLoss));
+            pushLog(st, `${k.jp}へ渡ろうとして時化に遭い、引き返した`);
+            this._notice('時化に阻まれ渡海できなかった');
+            return;
+          }
           // ★プレイヤーの出兵はヘックス合戦へ。AI 同士は applyActions の自動解決のまま
           g.changeScene(new BattleScene(st, { fid: me, from: src.id, to: k.id, troops }, (res) => {
             st.kyoten[src.id].garrison -= troops;
@@ -1968,7 +2054,13 @@ class MapScene extends GameKit.Scene {
     } else {
       // ★国府は名分だけで開くことがある。出兵より上に置いて、まず試させる
       const open = Rule.canOpenBloodless(this.state, this.state.faction, k.id);
-      const canAtk = !!this._attackSource(k);
+      const src0 = this._attackSource(k);
+      const sea = src0 ? Rule.canCrossSea(this.state, this.state.faction, src0.id, k.id) : null;
+      const canAtk = !!src0 && (!sea || sea.ok);
+      if (sea && sea.sea) {
+        txt(ctx, sea.ok ? `渡海（船 ${sea.ships}／要 ${sea.need}・失敗 ${Math.round(sea.failRate * 100)}%）` : sea.why,
+          r.x + 12, r.y + r.h - 96, { font: '11px "Hiragino Mincho ProN", serif', color: sea.ok ? '#4dd0e1' : '#fca5a5' });
+      }
       if (open.ok) {
         this.actionButtons.push({ id: 'open', x: r.x + 10, y: by - (canAtk ? 34 : 0), w: bw, h: 30,
           jp: `無血開城 ${Math.round(open.p * 100)}%`, font: F, radius: 4 });
@@ -2225,6 +2317,8 @@ const TERRAIN = {
   river:  { jp: '川',   color: '#2d5a72', cost: 3, def: 1.15 },
   saku:   { jp: '柵',   color: '#7a5a34', cost: 99, def: 1.00, wall: true },
   sakamogi:{ jp: '逆茂木', color: '#6b4a2a', cost: 99, def: 1.00, wall: true },
+  sea:    { jp: '海',   color: '#123a52', cost: 1, def: 1.00, water: true },
+  shore:  { jp: '岸',   color: '#3a4a3a', cost: 1, def: 0.95, water: true },
 };
 
 /* odd-r offset のヘックス */
@@ -2259,14 +2353,20 @@ function mulberry(seed) {
 function initBattle(state, spec) {
   const rng = mulberry(state.turn * 7919 + spec.to.length * 31 + state.year);
   const target = DATA.kyotenById[spec.to];
-  const mode = ['tachi', 'kisaku', 'toride'].includes(target.type) ? 'siege' : 'field';
+  const from = DATA.kyotenById[spec.from];
+  // ★海を越える出兵は海戦になる。屋島も壇ノ浦もここを通る
+  const mode = (from && Rule.needsSeaCrossing(from, target)) ? 'naval'
+    : ['tachi', 'kisaku', 'toride'].includes(target.type) ? 'siege' : 'field';
   const terrain = [];
   for (let y = 0; y < HEX.rows; y++) {
     terrain[y] = [];
     for (let x = 0; x < HEX.cols; x++) {
       const r = rng();
       let t = 'plain';
-      if (r < 0.14) t = 'forest'; else if (r < 0.24) t = 'hill'; else if (r < 0.29) t = 'river';
+      if (mode === 'naval') {
+        // 海戦は一面の海。両端だけ岸（上陸できる足場）にする
+        t = (x <= 1 || x >= HEX.cols - 2) ? 'shore' : 'sea';
+      } else if (r < 0.14) t = 'forest'; else if (r < 0.24) t = 'hill'; else if (r < 0.29) t = 'river';
       terrain[y][x] = t;
     }
   }
@@ -2280,8 +2380,8 @@ function initBattle(state, spec) {
   }
   const mk = (fid, troops, side) => {
     const gens = GENERALS.filter((g) => g.faction === fid && g.born <= state.year && g.died >= state.year);
-    const mix = mode === 'siege' && side === 'def'
-      ? ['yumi', 'tate', 'roto', 'kisha']
+    const mix = mode === 'naval' ? ['kako', 'yumi', 'kisha', 'kako', 'yumi']
+      : mode === 'siege' && side === 'def' ? ['yumi', 'tate', 'roto', 'kisha']
       : ['kisha', 'kisha', 'roto', 'yumi', 'tate'];
     const n = Math.min(5, Math.max(2, Math.round(troops / 700)));
     const units = [];
@@ -2307,6 +2407,9 @@ function initBattle(state, spec) {
   return {
     mode, spec, target, terrain, rng,
     round: 1, maxRounds: mode === 'siege' ? RULE.siege.maxTurns : 14,
+    // 潮。開始の向きは月で決まり、以後 tidePeriod 合ごとに反転する
+    tide: (state.month % 2) ? 'east' : 'west',
+    defected: [],
     phase: 'atk', duels: 0, log: [],
     units: [...mk(spec.fid, spec.troops, 'atk'), ...mk(defFid, defTroops, 'def')],
   };
@@ -2322,11 +2425,33 @@ const Battle = {
     return u.injured > 0 ? Math.round(v * (1 - RULE.duel.injurePenalty)) : v;
   },
 
+  /* 潮の向きと隊の進む向きが合っているか。★順潮なら速く遠くまで届く */
+  withTide(b, u) {
+    if (b.mode !== 'naval') return 0;
+    const goingEast = u.side === 'atk';                 // 寄手は左（西）から右（東）へ進む
+    return (b.tide === 'east') === goingEast ? 1 : -1;
+  },
+  moveOf(b, u) {
+    const N = RULE.naval, t = Battle.withTide(b, u);
+    return Math.max(1, TROOP_TYPES[u.type].move + (t > 0 ? N.withTideMove : t < 0 ? N.againstTideMove : 0));
+  },
+  rangeOf(b, u) {
+    const [lo, hi] = TROOP_TYPES[u.type].range;
+    return [lo, hi + (Battle.withTide(b, u) > 0 ? RULE.naval.withTideRange : 0)];
+  },
+  tickTide(b) {
+    if (b.mode !== 'naval') return false;
+    if ((b.round - 1) % RULE.naval.tidePeriod !== 0 || b.round === 1) return false;
+    b.tide = b.tide === 'east' ? 'west' : 'east';
+    b.log.unshift(`潮が変わった——${b.tide === 'east' ? '東へ' : '西へ'}流れる`);
+    return true;
+  },
+
   /* 移動できるヘックス（コスト付き幅優先） */
   reachable(b, u) {
     const out = new Map([[`${u.hx},${u.hy}`, 0]]);
     const q = [{ hx: u.hx, hy: u.hy, c: 0 }];
-    const mv = TROOP_TYPES[u.type].move;
+    const mv = Battle.moveOf(b, u);
     while (q.length) {
       const cur = q.shift();
       for (const n of hexNeighbors(cur.hx, cur.hy)) {
@@ -2345,7 +2470,7 @@ const Battle = {
   },
 
   canShoot(b, u, t) {
-    const [lo, hi] = TROOP_TYPES[u.type].range;
+    const [lo, hi] = Battle.rangeOf(b, u);
     const d = hexDistance(u, t);
     if (d < 1 || d > hi) return false;
     // 騎射は密着でも撃てる（威力が落ちるだけ）。弓兵は最短射程を割ると撃てない
@@ -2366,7 +2491,11 @@ const Battle = {
     const shield = TROOP_TYPES[def.type].shield && d > 1 ? (1 - TROOP_TYPES[def.type].shield) : 1;
     const siege = b.mode === 'siege' && def.side === 'def' ? (1 - RULE.siege.defBonus) : 1;
     const jitter = 1 - B.jitter / 2 + b.rng() * B.jitter;
-    return Math.max(1, Math.round(T.power * (atk.troops / 100) * sotsu * skill * dist * terr * shield * siege * jitter));
+    // 海戦では水練が命中を左右し、順潮なら押し込める
+    const naval = b.mode === 'naval'
+      ? (0.75 + Battle.stat(atk, 'suiren') / RULE.naval.suirenDiv) * (Battle.withTide(b, atk) > 0 ? 1.15 : 0.92)
+      : 1;
+    return Math.max(1, Math.round(T.power * (atk.troops / 100) * sotsu * skill * dist * terr * shield * siege * naval * jitter));
   },
 
   applyHit(b, atk, def, dmg) {
@@ -2424,6 +2553,34 @@ const Battle = {
     b.log.unshift(`${Battle.gen(win) ? Battle.gen(win).jp : '寄手'}、${sa > sd ? sa + '対' + sd : sd + '対' + sa}にて勝つ`
       + `——${death ? '相手は討死' : '相手は手負い'}`);
     return { accepted: true, win: win.side, death };
+  },
+
+  /* 水軍の離反（要件 M-36）。★壇ノ浦は阿波水軍の離反で決まった */
+  tickSuigunDefect(b, state) {
+    if (b.mode !== 'naval') return;
+    const atkFid = b.spec.fid;
+    const defFid = b.units.find((u) => u.side === 'def');
+    if (!defFid) return;
+    const foe = defFid.faction;
+    for (const [side, mine, other] of [['def', foe, atkFid], ['atk', atkFid, foe]]) {
+      const alive = Battle.alive(b, side), all = b.units.filter((u) => u.side === side);
+      const weak = 1 - alive.length / Math.max(1, all.length);
+      for (const sid of Object.keys(SUIGUN)) {
+        if (b.defected.includes(sid)) continue;
+        const p = Rule.suigunDefectChance(state, sid, mine, other, weak);
+        if (p <= 0 || b.rng() >= p) continue;
+        state.suigun[sid].faction = other;
+        b.defected.push(sid);
+        // 離反した水軍の船に乗る隊が寝返る
+        const flip = alive[alive.length - 1];
+        if (flip) {
+          flip.side = side === 'atk' ? 'def' : 'atk';
+          flip.faction = other;
+          flip.morale = Math.max(40, flip.morale);
+        }
+        b.log.unshift(`${SUIGUN[sid].jp}が寝返った——${FACTIONS[other] ? FACTIONS[other].jp : ''}へ`);
+      }
+    }
   },
 
   /* 崩れ・退却（士気で決着する） */
@@ -2556,8 +2713,10 @@ class BattleScene extends GameKit.Scene {
     const b = this.b;
     Battle.aiTurn(b, 'def');
     Battle.tickMorale(b);
+    Battle.tickSuigunDefect(b, this.state);
     for (const u of b.units) u.acted = false;
     b.round++;
+    if (Battle.tickTide(b)) g.audio.jingle([{ f: 196, d: 0.16 }, { f: 262, d: 0.2 }]);
     this.sel = null; this.reach = null;
     const o = Battle.over(b);
     if (o.done) {
@@ -2572,10 +2731,28 @@ class BattleScene extends GameKit.Scene {
     ctx.fillStyle = '#05070b'; ctx.fillRect(0, 0, W, H);
     // 見出し
     frame(ctx, 20, 12, W - 40, 42, { fill: 'rgba(216,178,106,0.10)', stroke: 'rgba(216,178,106,0.30)', radius: 5 });
-    txt(ctx, `${b.target.jp} ${b.mode === 'siege' ? '攻め' : 'の野戦'}`, 34, 20,
+    txt(ctx, `${b.target.jp} ${b.mode === 'siege' ? '攻め' : b.mode === 'naval' ? 'の海戦' : 'の野戦'}`, 34, 20,
       { font: '600 19px "Hiragino Mincho ProN", serif', color: '#f0e2c0' });
     txt(ctx, `${b.round} / ${b.maxRounds} 合目　寄手 ${FACTIONS[b.spec.fid].jp}　城方 ${FACTIONS[b.units.find((u) => u.side === 'def').faction].jp}`
       + `　名乗り ${b.duels}/${RULE.duel.maxPerBattle}`, 260, 24, { font: '13px "Hiragino Mincho ProN", serif', color: '#c8b78c' });
+    if (b.mode === 'naval') {
+      // ★潮の向き。順潮の側が移動力＋2・射程＋1。4合ごとに反転する
+      const nx = W - 300;
+      frame(ctx, nx, 16, 280, 34, { fill: 'rgba(77,208,225,0.14)', stroke: 'rgba(77,208,225,0.5)', radius: 5 });
+      const east = b.tide === 'east';
+      txt(ctx, `潮目 ${east ? '東流' : '西流'}（${east ? '寄手に順' : '城方に順'}）`, nx + 14, 24,
+        { font: '600 13px "Hiragino Mincho ProN", serif', color: '#a5e9f2' });
+      const ax = nx + 190, ay = 33;
+      ctx.save(); ctx.strokeStyle = '#4dd0e1'; ctx.lineWidth = 2; ctx.beginPath();
+      ctx.moveTo(ax - 34 * (east ? 1 : -1), ay); ctx.lineTo(ax + 34 * (east ? 1 : -1), ay);
+      ctx.moveTo(ax + 34 * (east ? 1 : -1), ay);
+      ctx.lineTo(ax + 22 * (east ? 1 : -1), ay - 6);
+      ctx.moveTo(ax + 34 * (east ? 1 : -1), ay);
+      ctx.lineTo(ax + 22 * (east ? 1 : -1), ay + 6);
+      ctx.stroke(); ctx.restore();
+      txt(ctx, `あと${RULE.naval.tidePeriod - ((b.round - 1) % RULE.naval.tidePeriod)}合で変わる`,
+        nx + 14, 38, { font: '10px "Segoe UI", sans-serif', color: '#7ba7b0' });
+    }
 
     // 盤面。★地形は動かないので毎フレーム 117 個のパスを組み直さず、焼いたものを貼る
     frame(ctx, BL.board.x, BL.board.y, BL.board.w, BL.board.h, { fill: '#0a1119' });
@@ -2695,8 +2872,13 @@ class BattleScene extends GameKit.Scene {
         txt(ctx, String(v), r.x + r.w - 12, y - 1, { font: '600 12px "Segoe UI", sans-serif', color: c || '#e8eef5', align: 'right' }); y += 17; };
       row('兵', `${u.troops} / ${u.max}`);
       row('士気', Math.round(u.morale), u.morale > 50 ? '#5eead4' : u.morale > 25 ? '#f9d423' : '#fca5a5');
-      row('射程', T.range[0] === T.range[1] ? `${T.range[0]}` : `${T.range[0]}〜${T.range[1]}`);
-      row('移動', T.move);
+      const rg = Battle.rangeOf(this.b, u), mv = Battle.moveOf(this.b, u);
+      row('射程', rg[0] === rg[1] ? `${rg[0]}` : `${rg[0]}〜${rg[1]}`, rg[1] > T.range[1] ? '#4dd0e1' : null);
+      row('移動', mv, mv !== T.move ? (mv > T.move ? '#4dd0e1' : '#fca5a5') : null);
+      if (this.b.mode === 'naval') {
+        const t = Battle.withTide(this.b, u);
+        row('潮', t > 0 ? '順潮' : t < 0 ? '逆潮' : '—', t > 0 ? '#4dd0e1' : t < 0 ? '#fca5a5' : null);
+      }
       if (g) { row('統率', g.sotsu); row('騎射', g.kisha); row('太刀', g.tachi); row('家格', g.kakaku); }
       if (u.injured > 0) row('手負い', `あと${u.injured}合`, '#fca5a5');
       y += 8;
@@ -2744,7 +2926,7 @@ window.GENPEI_DEBUG = {
   game, save, DATA, RULE, FACTIONS, SCENARIOS, AUTHORITY, KYOTEN_TYPE, TIMELINE, Rule,
   buildState, endTurn, waReki, applyActions, levy, ZOOM_CAP,
   tryBloodlessOpen, declareChoteki, donateCourt, grantAndo, grantShinon, purgeBand, tryRecruit, aiPolitics, buildBands,
-  GENERALS, TROOP_TYPES, TERRAIN, HEX, Battle, initBattle, hexDistance, BattleScene,
+  GENERALS, TROOP_TYPES, TERRAIN, HEX, Battle, initBattle, hexDistance, BattleScene, SUIGUN, islandOf,
   gotoBattle: (scnId, fid, from, to) => { const st = buildState(scnId, fid);
     game.changeScene(new BattleScene(st, { fid, from, to, troops: 3000 }, () => {})); return true; },
   scene: () => (game.scene ? game.scene.constructor.name : null),

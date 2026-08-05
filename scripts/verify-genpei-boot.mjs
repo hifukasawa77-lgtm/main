@@ -292,6 +292,59 @@ check('21. ★士気で決着し全滅まで行かない',
   phase3.runs.every((r) => r.rounds < 40 && r.winner), JSON.stringify(phase3.runs.slice(0, 3)));
 check('22. ★名乗りと一騎討ちが成立する', phase3.duel.can === true, JSON.stringify(phase3.duel));
 
+/* --- Phase 4: 水軍・渡海・潮流（要件 M-33〜M-36） --- */
+const phase4 = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG, R = D.Rule, B = D.Battle;
+  const out = {};
+  const st = D.buildState('s1185a', 'kamakura');
+
+  // (a) 水軍が起きているか
+  out.suigun = Object.entries(st.suigun).map(([k, v]) => `${D.SUIGUN[k].jp}:${v.faction || '中立'}`);
+
+  // (b) ★湊を持たない勢力は海を越えられない
+  const noPort = D.buildState('s1185a', 'kamakura');
+  for (const k of D.DATA.kyoten) if (k.type === 'minato' && noPort.kyoten[k.id].owner === 'kamakura') noPort.kyoten[k.id].owner = 'taira';
+  const acrossFrom = D.DATA.kyoten.find((k) => k.type === 'kokufu' && D.islandOf(k.province) === 'honshu' && noPort.kyoten[k.id].owner === 'kamakura');
+  const acrossTo = D.DATA.kyoten.find((k) => D.islandOf(k.province) === 'shikoku');
+  out.noPort = acrossFrom && acrossTo ? R.canCrossSea(noPort, 'kamakura', acrossFrom.id, acrossTo.id) : null;
+  out.withPort = acrossFrom && acrossTo ? R.canCrossSea(st, 'kamakura', acrossFrom.id, acrossTo.id) : null;
+
+  // (c) ★海を越える出兵は海戦になる
+  const nav = D.initBattle(st, { fid: 'kamakura', from: acrossFrom.id, to: acrossTo.id, troops: 4000 });
+  out.mode = nav.mode;
+  out.sea = nav.terrain.flat().filter((t) => t === 'sea').length;
+
+  // (d) ★潮が反転し、順潮側の移動力と射程が伸びる
+  const u = nav.units.find((x) => x.side === 'atk');
+  const before = { tide: nav.tide, move: B.moveOf(nav, u), range: B.rangeOf(nav, u)[1] };
+  nav.round = 1 + 4; B.tickTide(nav);
+  const after = { tide: nav.tide, move: B.moveOf(nav, u), range: B.rangeOf(nav, u)[1] };
+  out.tide = { before, after };
+
+  // (e) ★水軍が離反しうる（名分差が開いた劣勢側から寝返る）
+  const st2 = D.buildState('s1185a', 'taira');
+  for (const sid of Object.keys(D.SUIGUN)) st2.suigun[sid].faction = 'taira';
+  st2.factions.taira.choteki = true;               // 名分を落として差を作る
+  const p = R.suigunDefectChance(st2, 'suigun_awa', 'taira', 'kamakura', 0.8);
+  out.defect = { p: Number(p.toFixed(3)) };
+  const nb = D.initBattle(st2, { fid: 'kamakura', from: acrossFrom.id, to: acrossTo.id, troops: 4000 });
+  let flips = 0;
+  for (let i = 0; i < 30; i++) { B.tickSuigunDefect(nb, st2); flips = nb.defected.length; if (flips) break; }
+  out.defect.flips = flips;
+  return out;
+});
+check('23. 水軍が起きている', phase4.suigun.length === 4, phase4.suigun.join(' / '));
+check('24. ★湊を持たない勢力は海を越えられない',
+  phase4.noPort && phase4.noPort.ok === false && phase4.withPort && phase4.withPort.ok === true,
+  JSON.stringify({ 湊なし: phase4.noPort, 湊あり: phase4.withPort }));
+check('25. ★海を越える出兵は海戦になる', phase4.mode === 'naval' && phase4.sea > 0,
+  JSON.stringify({ mode: phase4.mode, 海マス: phase4.sea }));
+check('26. ★潮が反転し順潮側の移動力と射程が伸びる',
+  phase4.tide.before.tide !== phase4.tide.after.tide
+  && (phase4.tide.before.move !== phase4.tide.after.move || phase4.tide.before.range !== phase4.tide.after.range),
+  JSON.stringify(phase4.tide));
+check('27. ★水軍が離反しうる', phase4.defect.p > 0 && phase4.defect.flips > 0, JSON.stringify(phase4.defect));
+
 /* 11. ★例外の合算（pageerror だけでは素通りする） */
 const engineErrors = await page.evaluate(() => window.GENPEI_DEBUG.errors().map((e) => `${e.key} ×${e.count}`));
 check('10. pageerror が0件', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / '));
