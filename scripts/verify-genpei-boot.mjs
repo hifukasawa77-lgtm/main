@@ -1,0 +1,180 @@
+#!/usr/bin/env node
+/*
+ * verify-genpei-boot.mjs — genpei.html が「起動して遊べるか」を機械検査する
+ *
+ * 要件 M-50 / 受入基準 5.1。
+ *
+ * ★ タイトル画面が出た＝起動成功ではない。描画ループの例外は「背景だけ残って
+ *   UIが出ない」形で現れ、タイトルは無事に出る。必ずマップ画面まで入って確かめる。
+ * ★ GameKit は update/draw の例外を捕捉して継続し engine.errors に積む。
+ *   そのため pageerror だけ見る検査は素通りする。必ず両方を合算すること。
+ * ★ ブラウザは favicon.ico を勝手に取りに行く。404 を返すと console.error が出て
+ *   検査が常に落ちるので 204 を返して黙らせる（本物のアセット404は response で拾う）。
+ *
+ * 使い方:
+ *   node scripts/verify-genpei-boot.mjs           # http 経由（本番相当）
+ *   node scripts/verify-genpei-boot.mjs --file    # file:// 経由（埋め込みシード経路）
+ * 終了コード: 全PASS=0 / FAILあり=1
+ */
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { chromium } from 'playwright';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const USE_FILE = process.argv.includes('--file');
+const MIME = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.csv': 'text/csv; charset=utf-8',
+  '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
+};
+
+const fails = [];
+const checks = [];
+function check(name, ok, detail) {
+  checks.push({ name, ok, detail });
+  if (!ok) fails.push(`${name}${detail ? ' — ' + detail : ''}`);
+}
+
+/* ---- テストサーバ ---- */
+async function serve() {
+  const server = http.createServer((req, res) => {
+    const url = decodeURIComponent(req.url.split('?')[0]);
+    if (url === '/favicon.ico') { res.writeHead(204); res.end(); return; }   // ★204で黙らせる
+    const file = path.join(ROOT, url === '/' ? 'genpei.html' : url.replace(/^\//, ''));
+    if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      res.writeHead(404); res.end('not found'); return;
+    }
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    fs.createReadStream(file).pipe(res);
+  });
+  await new Promise((r) => server.listen(0, r));
+  return { server, port: server.address().port };
+}
+
+const ctxServer = USE_FILE ? null : await serve();
+const browser = await chromium.launch({
+  executablePath: process.env.CHROMIUM_PATH
+    || (fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined),
+});
+const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
+
+const pageErrors = [], consoleErrors = [], notFound = [];
+page.on('pageerror', (e) => pageErrors.push(String(e && (e.stack || e.message) || e)));
+page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+page.on('response', (r) => { if (r.status() === 404) notFound.push(r.url()); });
+
+const target = USE_FILE
+  ? pathToFileURL(path.join(ROOT, 'genpei.html')).href
+  : `http://127.0.0.1:${ctxServer.port}/genpei.html`;
+await page.goto(target, { waitUntil: 'load' });
+
+/* 1. ブリッジが張られているか */
+await page.waitForFunction(() => !!window.GENPEI_DEBUG, null, { timeout: 15000 }).catch(() => {});
+check('1. GENPEI_DEBUG ブリッジが露出している', await page.evaluate(() => !!window.GENPEI_DEBUG));
+
+/* 2. データが読めているか */
+await page.waitForFunction(() => window.GENPEI_DEBUG && window.GENPEI_DEBUG.DATA.kyoten, null, { timeout: 20000 }).catch(() => {});
+const data = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG.DATA;
+  return { source: D.source, kyoten: D.kyoten ? D.kyoten.length : 0, provinces: D.provinces ? D.provinces.length : 0 };
+});
+check('2. 拠点データを読み込めた', data.kyoten >= 200, `${data.kyoten}件 (${data.source})`);
+check('3. 令制国データを読み込めた', data.provinces === 66, `${data.provinces}国`);
+if (USE_FILE) check('3b. file:// では埋め込みシードへ落ちる', data.source === 'embed', `source=${data.source}`);
+
+/* 4. タイトル画面まで到達 */
+await page.waitForFunction(() => window.GENPEI_DEBUG.scene() === 'TitleScene', null, { timeout: 20000 }).catch(() => {});
+check('4. タイトル画面へ到達', await page.evaluate(() => window.GENPEI_DEBUG.scene()) === 'TitleScene');
+
+/* 5. ★マップ画面まで入る（タイトルが出た＝起動成功ではない） */
+const entered = await page.evaluate(() => window.GENPEI_DEBUG.gotoMap('s1180', 'kamakura'));
+await page.waitForTimeout(700);
+check('5. マップ画面へ入れた', entered && (await page.evaluate(() => window.GENPEI_DEBUG.scene())) === 'MapScene');
+
+/* 6. 描画が回っているか（数フレーム進めて例外が出ないこと） */
+await page.waitForTimeout(900);
+
+/* 7. ターン終了が通る（12ヶ月ぶん） */
+const afterYear = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG;
+  const st = D.state();
+  for (let i = 0; i < 12; i++) D.endTurn(st);
+  return { year: st.year, month: st.month, turn: st.turn, log: st.log.length };
+});
+check('6. ターン終了を12回進められた', afterYear.turn === 13, JSON.stringify(afterYear));
+
+/* 8. 長期進行（シナリオ最終ターンまで） */
+const longRun = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG;
+  const out = {};
+  for (const fid of ['kamakura', 'taira', 'kiso', 'oshu']) {
+    const st = D.buildState('s1180', fid);
+    let n = 0;
+    // ★プレイヤー側も AI と同じ方針で手を打つ。無操作で放置した結果を
+    //   「バランス」と呼ぶと、弱小勢力が必ず落第することになる。
+    while (!st.result && n < 200) {
+      D.applyActions(st, fid, D.Rule.aiActions(st, fid));
+      D.endTurn(st); n++;
+    }
+    out[fid] = { turns: n, sites: D.Rule.ownedKyoten(st, fid).length, win: st.result && st.result.win };
+  }
+  return out;
+});
+// ★「1ターンで全滅」を PASS にしない。弱小勢力でも最低2年は戦えること。
+const tooShort = Object.entries(longRun).filter(([, v]) => v.turns < 24);
+check('7. 最終ターンまで停止せず進行した', Object.values(longRun).every((v) => v.turns < 200), JSON.stringify(longRun));
+check('7b. どの勢力も24ターン未満で消えない', tooShort.length === 0, tooShort.map(([k, v]) => `${k}:${v.turns}`).join(', '));
+
+/* 9. 全シナリオ×全プレイ可能勢力で state を作れる */
+const allStates = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG;
+  const out = [];
+  for (const s of D.SCENARIOS) {
+    for (const fid of s.playable) {
+      try {
+        const st = D.buildState(s.id, fid);
+        const owned = D.Rule.ownedKyoten(st, fid).length;
+        out.push({ s: s.id, f: fid, owned });
+      } catch (e) { out.push({ s: s.id, f: fid, error: String(e.message || e) }); }
+    }
+  }
+  return out;
+});
+const broken = allStates.filter((r) => r.error || r.owned === 0);
+check('8. 全シナリオ×勢力で開始できる（拠点0で始まらない）', broken.length === 0,
+  broken.map((b) => `${b.s}/${b.f}:${b.error || '拠点0'}`).join(', '));
+
+/* 10. 飢饉が実際に軍事行動を止める（要件 M-39 の骨組み） */
+const famine = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG;
+  const st = D.buildState('s1180', 'kamakura');
+  st.year = 1181; st.month = 8;                       // 飢饉のまっただ中
+  const acts = D.Rule.aiActions(st, 'taira').length;
+  st.year = 1183; st.month = 8;                       // 飢饉明け
+  const acts2 = D.Rule.aiActions(st, 'taira').length;
+  return { during: acts, after: acts2 };
+});
+check('9. 飢饉中は AI が出兵しない', famine.during === 0, JSON.stringify(famine));
+
+/* 11. ★例外の合算（pageerror だけでは素通りする） */
+const engineErrors = await page.evaluate(() => window.GENPEI_DEBUG.errors().map((e) => `${e.key} ×${e.count}`));
+check('10. pageerror が0件', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / '));
+check('11. engine.errors が0件（描画ループの例外）', engineErrors.length === 0, engineErrors.slice(0, 3).join(' / '));
+check('12. console.error が0件', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' / '));
+check('13. 404 のアセットがない', notFound.length === 0, notFound.slice(0, 3).join(' / '));
+
+/* スクリーンショット */
+const shot = path.join(ROOT, 'genpei-boot.png');
+await page.screenshot({ path: shot });
+
+await browser.close();
+if (ctxServer) ctxServer.server.close();
+
+console.log(`\n源平争乱記 起動検査（${USE_FILE ? 'file://' : 'http'}）`);
+for (const c of checks) console.log(`  ${c.ok ? '✓' : '✗'} ${c.name}${c.detail ? ` — ${c.detail}` : ''}`);
+console.log(`  スクリーンショット: ${path.relative(ROOT, shot)}`);
+if (fails.length) { console.error(`\n✗ FAIL ${fails.length}件`); process.exit(1); }
+console.log('\n✓ PASS — 起動して遊べる');

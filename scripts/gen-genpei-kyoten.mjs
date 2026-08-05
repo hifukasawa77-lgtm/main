@@ -19,7 +19,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SCENARIOS, PROVINCE_OWNER, KOKUGA_ANCHOR, SHOEN, TACHI, MINATO } from './genpei-kyoten-anchors.mjs';
+import {
+  SCENARIOS, PROVINCE_OWNER, KOKUGA_ANCHOR, SHOEN, TACHI, MINATO,
+  KISAKU, TORIDE, TERA, JINJA, SEKISHO, MACHI, MURA, MINATO_EXTRA, OWNER_OVERRIDE,
+} from './genpei-kyoten-anchors.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CASTLE_CSV = path.join(ROOT, 'siro_ichi.csv');
@@ -79,8 +82,8 @@ for (const s of SCENARIOS) {
   }
   ownerByScenario[s.key] = map;
 }
-const ownerOf = (scenarioKey, provinceId, override) =>
-  override?.[scenarioKey] ?? ownerByScenario[scenarioKey].get(provinceId) ?? '';
+const ownerOf = (scenarioKey, provinceId, override, id) =>
+  OWNER_OVERRIDE[id]?.[scenarioKey] ?? override?.[scenarioKey] ?? ownerByScenario[scenarioKey].get(provinceId) ?? '';
 
 /* ---- 拠点の組み立て ---- */
 const errors = [];
@@ -96,44 +99,50 @@ function anchorPoint(castleName, dx, dy, who) {
   return { x: Math.round(a.x + dx * CALIB.sx), y: Math.round(a.y + dy * CALIB.sy) };
 }
 
-// 国衙66
+// 国府66（旧称・国衙。UIの表記は「国府」に揃える）
 for (const [pid, spec] of Object.entries(KOKUGA_ANCHOR)) {
   const p = provinces.get(pid);
-  if (!p) { errors.push(`国衙: 存在しない国 ${pid}`); continue; }
+  if (!p) { errors.push(`国府: 存在しない国 ${pid}`); continue; }
   const [castle, dx, dy] = spec;
-  const pt = anchorPoint(castle, dx, dy, `${p.nameJP}国衙`);
+  const pt = anchorPoint(castle, dx, dy, `${p.nameJP}国府`);
   if (!pt) continue;
   rows.push({
-    id: `kokuga_${pid}`, nameJP: `${p.nameJP}国衙`, nameEN: `${p.nameEN} Provincial Seat`,
-    type: 'kokuga', province: pid, ...pt,
+    id: `kokufu_${pid}`, nameJP: `${p.nameJP}国府`, nameEN: `${p.nameEN} Provincial Seat`,
+    type: 'kokufu', province: pid, ...pt,
     scale: p.tasu, defense: 20 + Math.round(p.tasu / 25), holder: '', suigun: '',
     own: {}, note: '',
   });
 }
-// 荘園40
-for (const [id, jp, en, pid, holder, castle, dx, dy, scale] of SHOEN) {
-  const pt = anchorPoint(castle, dx, dy, jp);
-  if (!pt) continue;
-  if (!provinces.has(pid)) { errors.push(`${jp}: 存在しない国 ${pid}`); continue; }
-  rows.push({ id, nameJP: jp, nameEN: en, type: 'shoen', province: pid, ...pt,
-              scale, defense: 10, holder, suigun: '', own: {}, note: '' });
-}
-// 館・城郭25
-for (const [id, jp, en, pid, castle, dx, dy, scale, defense, own] of TACHI) {
-  const pt = anchorPoint(castle, dx, dy, jp);
-  if (!pt) continue;
-  if (!provinces.has(pid)) { errors.push(`${jp}: 存在しない国 ${pid}`); continue; }
-  rows.push({ id, nameJP: jp, nameEN: en, type: 'tachi', province: pid, ...pt,
-              scale, defense, holder: '', suigun: '', own, note: '' });
-}
-// 湊16
-for (const [id, jp, en, pid, castle, dx, dy, scale, suigun, riverPort] of MINATO) {
-  const pt = anchorPoint(castle, dx, dy, jp);
-  if (!pt) continue;
-  if (!provinces.has(pid)) { errors.push(`${jp}: 存在しない国 ${pid}`); continue; }
-  rows.push({ id, nameJP: jp, nameEN: en, type: 'minato', province: pid, ...pt,
-              scale, defense: 20, holder: '', suigun: suigun ?? '', own: {},
-              note: riverPort ? 'riverPort' : '' });
+
+/* 種別ごとの一括登録。並びは [id, 日本語, 英語, 国, アンカー, dx, dy, 規模, ...] で、
+   種別によって末尾の意味が変わる（下の pick で吸収する）。 */
+const GROUPS = [
+  { type: 'shoen',   list: SHOEN,        pick: (r) => ({ holder: r[4], castle: r[5], dx: r[6], dy: r[7], scale: r[8], defense: 10 }) },
+  { type: 'tachi',   list: TACHI,        pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], defense: r[8], own: r[9] }) },
+  { type: 'minato',  list: MINATO,       pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], suigun: r[8], riverPort: r[9] }) },
+  { type: 'minato',  list: MINATO_EXTRA, pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], suigun: r[8] }) },
+  { type: 'kisaku',  list: KISAKU,       pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], defense: r[8] }) },
+  { type: 'toride',  list: TORIDE,       pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], defense: r[8] }) },
+  { type: 'tera',    list: TERA,         pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], defense: r[8], holder: 'jisha' }) },
+  { type: 'jinja',   list: JINJA,        pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], defense: r[8], holder: 'jisha' }) },
+  { type: 'sekisho', list: SEKISHO,      pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], defense: r[8] }) },
+  { type: 'machi',   list: MACHI,        pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], defense: r[8] }) },
+  { type: 'mura',    list: MURA,         pick: (r) => ({ castle: r[4], dx: r[5], dy: r[6], scale: r[7], defense: r[8] }) },
+];
+for (const grp of GROUPS) {
+  for (const r of grp.list) {
+    const [id, jp, en, pid] = r;
+    const v = grp.pick(r);
+    if (!provinces.has(pid)) { errors.push(`${jp}: 存在しない国 ${pid}`); continue; }
+    const pt = anchorPoint(v.castle, v.dx, v.dy, jp);
+    if (!pt) continue;
+    rows.push({
+      id, nameJP: jp, nameEN: en, type: grp.type, province: pid, ...pt,
+      scale: v.scale, defense: v.defense ?? 20,
+      holder: v.holder ?? '', suigun: v.suigun ?? '',
+      own: v.own ?? {}, note: v.riverPort ? 'riverPort' : '',
+    });
+  }
 }
 
 if (errors.length) {
@@ -248,7 +257,7 @@ for (const r of rows) {
     r.id, r.nameJP, r.nameEN, r.type, r.province,
     (r.x / MAP_W).toFixed(6), (r.y / MAP_H).toFixed(6),
     r.scale, r.defense, r.holder, r.suigun,
-    ...SCENARIOS.map(s => ownerOf(s.key, r.province, r.own)),
+    ...SCENARIOS.map(s => ownerOf(s.key, r.province, r.own, r.id)),
     r.note,
   ].join(','));
 }
@@ -264,6 +273,8 @@ if (!DRY) fs.writeFileSync(OUT, csv, 'utf8');
 const byType = {};
 for (const r of rows) byType[r.type] = (byType[r.type] ?? 0) + 1;
 console.log(`${DRY ? '(dry-run) ' : '✓ '}${path.relative(ROOT, OUT)} — ${rows.length}拠点`);
-console.log(`   国衙 ${byType.kokuga} / 荘園 ${byType.shoen} / 館・城郭 ${byType.tachi} / 湊 ${byType.minato}`);
+const TYPE_JP = { kokufu:'国府', tachi:'館', kisaku:'城柵', toride:'砦', shoen:'荘園',
+                  tera:'寺', jinja:'神社', sekisho:'関所', machi:'町', mura:'村', minato:'湊' };
+console.log('   ' + Object.entries(TYPE_JP).map(([t, jp]) => `${jp} ${byType[t] || 0}`).join(' / '));
 console.log(`   海から陸へ寄せた拠点: ${snapped} / 重なり解消で動かした拠点: ${nudged}`);
 for (const w of warnList) console.log(`   ⚠ ${w}`);

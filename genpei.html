@@ -1,0 +1,1585 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>源平争乱記 | Genpei Souranki</title>
+<meta name="description" content="源平合戦（治承・寿永の乱 1180-1189）の歴史シミュレーション。城ではなく「名分」を獲るゲーム。Canvas API のみ・フレームワーク不使用。">
+<meta property="og:title" content="源平争乱記 | Genpei Souranki">
+<meta property="og:description" content="平氏は全国の官位を握りながら滅び、頼朝は一度も京で戦わずに勝った。中核資源は兵力ではなく名分。">
+<meta property="og:type" content="website">
+<style>
+  :root {
+    --bg: #0a0d12;
+    --gold: #d8b26a;
+    --line: rgba(216,178,106,0.34);
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --cyan: #5eead4;
+    --purple: #a78bfa;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(1100px 600px at 20% -10%, rgba(94,234,212,0.06), transparent 60%),
+      radial-gradient(900px 520px at 85% 110%, rgba(167,139,250,0.06), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Mincho ProN", "Yu Mincho", "Segoe UI", serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; padding: 10px; overflow: hidden;
+  }
+  canvas {
+    max-width: 99vw; max-height: 88vh;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: #05070b;
+    box-shadow: 0 18px 60px rgba(0,0,0,0.7);
+    touch-action: none;
+  }
+  .hint { font-size: 12px; color: var(--muted); letter-spacing: .04em; text-align: center; }
+  .hint b { color: var(--gold); font-weight: 600; }
+  #boot-error {
+    display: none; max-width: 720px; padding: 14px 18px;
+    border: 1px solid rgba(248,113,113,0.5); border-radius: 12px;
+    background: rgba(248,113,113,0.08); color: #fecaca; font-size: 13px; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" aria-label="源平争乱記 / Genpei Souranki"></canvas>
+<p class="hint">
+  全国図で<b>国</b>をクリック → 拡大図で<b>拠点</b>をクリック ・ ホイールで全国図を拡大 &nbsp;|&nbsp;
+  Click a <b>province</b>, then a <b>site</b>. Wheel to zoom the national map.
+</p>
+<div id="boot-error" role="alert"></div>
+
+<script src="gamekit/gamekit.js"></script>
+<script>
+'use strict';
+
+/* ============================================================================
+ * 源平争乱記 / Genpei Souranki — Phase 1
+ *
+ * 設計: claudechord-vault/deliverables/genpei_{基本構想,要件定義,基本設計,詳細設計}.md
+ *
+ * ★ sengoku.html には一切手を入れない（決定事項B）。地図は assets/sengoku/ を参照するのみ。
+ * ★ 拠点座標は正規化 MX,MY(0..1)。絶対画素値で持たない（地図の再エンコードで壊れるため）。
+ * ========================================================================== */
+
+const W = 1440, H = 810;
+const SAVE_VERSION = 2;
+const MAP_ASSET = 'assets/sengoku/gpt/sengoku-japan-map-user-v1.webp';
+
+const canvas = document.getElementById('game');
+const game = new GameKit.Engine(canvas, { width: W, height: H });
+const save = new GameKit.Save('genpei');
+const clamp = GameKit.MathX.clamp;
+
+/* ============================================================================
+ * 1. 定数テーブル（基本設計 第3節 RULE）
+ *    ★ 式にマジックナンバーを直書きしない。調整は必ずここで行う。
+ * ========================================================================== */
+const RULE = {
+  meibun: { chotekiPenalty: 400, reputationDecay: 0.05, kakakuMul: 2, max: 1000 },
+  econ: {
+    foodPerTroop: 0.01, taxRate: 0.05, levyMul: 8,
+    harvest: { spring: 0.15, summer: 0.15, autumn: 1.0, winter: 0.05 },
+    starveTroop: 0.05,
+  },
+  famine: {
+    from: { y: 1181, m: 6 }, to: { y: 1182, m: 12 },
+    coef: { saikoku: 0.70, kinai: 0.60, tokai: 0.40, hokuriku: 0.35, bando: 0.30, ou: 0.15 },
+  },
+  // 1ターンに1勢力が起こせる出兵は maxActions 件まで。上限を置かないと、拠点を
+  // 100以上持つ平氏が毎ターン全戦線で同時攻撃し、弱小勢力が初手で消える。
+  ai: { attackRatio: 1.25, famineBlock: true, minGarrison: 200, maxActions: 3 },
+};
+
+/* 権威（名分の源）— 基本設計 3.5 */
+const AUTHORITY = {
+  ryoji:   { jp: '以仁王の令旨', en: "Prince's Edict",         value: 120 },
+  inzen:   { jp: '院宣',         en: "Cloister's Decree",      value: 200 },
+  senji:   { jp: '宣旨',         en: 'Imperial Rescript',      value: 150 },
+  jingi:   { jp: '三種の神器',   en: 'Sacred Treasures',       value: 180 },
+  emperor: { jp: '帝の身柄',     en: 'The Emperor',            value: 150 },
+  in:      { jp: '院の身柄',     en: 'The Cloistered Emperor', value: 120 },
+};
+
+/* 勢力 — 基本設計 3.1。色はデータ側の値で、UIクロームの配色とは分離する */
+const FACTIONS = {
+  taira:       { jp: '平氏',       en: 'Taira',        color: '#c0392b', playable: true,  ai: 'aggressive',  victory: 'survive_regime' },
+  kamakura:    { jp: '源頼朝',     en: 'Kamakura',     color: '#e8eef5', playable: true,  ai: 'opportunist', victory: 'bakufu' },
+  kiso:        { jp: '木曽義仲',   en: 'Kiso',         color: '#6ab04c', playable: true,  ai: 'aggressive',  victory: 'seitai_shogun' },
+  kai:         { jp: '甲斐源氏',   en: 'Kai Genji',    color: '#7f8c8d', playable: true,  ai: 'defensive',   victory: 'independent' },
+  oshu:        { jp: '奥州藤原氏', en: 'Oshu Fujiwara',color: '#9b59b6', playable: true,  ai: 'defensive',   victory: 'hiraizumi' },
+  goshirakawa: { jp: '朝廷',       en: 'The Court',    color: '#ecd9a0', playable: false, ai: 'court',       victory: null },
+  yoshitsune:  { jp: '源義経',     en: 'Yoshitsune',   color: '#3aa7c9', playable: true,  ai: 'aggressive',  victory: 'independent' },
+};
+
+const VICTORY_TEXT = {
+  survive_regime: { jp: '帝を奉じたまま朝敵とならず、国府20以上を保って終幕を迎える', en: 'Keep the Emperor, avoid outlawry, hold 20+ seats' },
+  bakufu:         { jp: '平氏を滅ぼし宣旨を得て、国府35以上（守護・地頭の設置）', en: 'Destroy the Taira, gain the Rescript, hold 35+ seats' },
+  seitai_shogun:  { jp: '京を占め宣旨を得て、朝敵とならず12ヶ月保つ（高難度）', en: 'Take the capital and hold it 12 months unoutlawed (hard)' },
+  independent:    { jp: '併呑されず独立勢力として終幕まで存続する', en: 'Survive as an independent power' },
+  hiraizumi:      { jp: '1189年9月まで平泉を保持する（籠城型）', en: 'Hold Hiraizumi until the 9th month of 1189' },
+};
+
+/* 拠点種別11 — 拡大すると現れるもの（2026-08-05 深澤の指示）
+ * tier: 0=全国図から見える / 1=国の拡大図から / 2=周辺図でのみ */
+const KYOTEN_TYPE = {
+  kokufu:  { jp: '国府',   en: 'Provincial Seat', color: '#f9d423', tier: 0, icon: 'kokufu' },
+  tachi:   { jp: '館',     en: 'Residence',       color: '#ff6b6b', tier: 0, icon: 'tachi' },
+  kisaku:  { jp: '城柵',   en: 'Stockade',        color: '#ff9f43', tier: 1, icon: 'kisaku' },
+  toride:  { jp: '砦',     en: 'Fort',            color: '#e17055', tier: 1, icon: 'toride' },
+  shoen:   { jp: '荘園',   en: 'Estate',          color: '#7ed957', tier: 1, icon: 'shoen' },
+  tera:    { jp: '寺',     en: 'Temple',          color: '#c792ea', tier: 1, icon: 'tera' },
+  jinja:   { jp: '神社',   en: 'Shrine',          color: '#f78fb3', tier: 1, icon: 'jinja' },
+  sekisho: { jp: '関所',   en: 'Barrier',         color: '#b0bec5', tier: 1, icon: 'sekisho' },
+  minato:  { jp: '湊',     en: 'Harbor',          color: '#4dd0e1', tier: 1, icon: 'minato' },
+  machi:   { jp: '町',     en: 'Town',            color: '#ffd479', tier: 1, icon: 'machi' },
+  mura:    { jp: '村',     en: 'Village',         color: '#a5d6a7', tier: 2, icon: 'mura' },
+};
+const HOLDER_JP = { jisha: '寺社領', sekkanke: '摂関家領', kuge: '公家領', buke: '武家領' };
+
+/* 元号 — 上部バーの和暦表示 */
+const ERA = [
+  [1177, '治承', 1], [1181, '養和', 1], [1182, '寿永', 1], [1184, '元暦', 1],
+  [1185, '文治', 1], [1190, '建久', 1],
+];
+function waReki(year) {
+  let e = ERA[0];
+  for (const r of ERA) if (year >= r[0]) e = r;
+  return `${e[1]}${numJP(year - e[0] + e[2])}年`;
+}
+function numJP(n) {
+  const d = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  if (n < 10) return d[n];
+  if (n < 20) return '十' + (n % 10 ? d[n % 10] : '');
+  return d[Math.floor(n / 10)] + '十' + (n % 10 ? d[n % 10] : '');
+}
+const SEASON_JP = { spring: '春', summer: '夏', autumn: '秋', winter: '冬' };
+
+/* シナリオ — 基本設計 3.7 */
+const SCENARIOS = [
+  { id: 's1180', col: 'S1180', jp: '令旨、東国に至る', en: "The Prince's Call",
+    start: [1180, 10], end: [1190, 3], playable: ['kamakura', 'taira', 'kiso', 'kai', 'oshu'],
+    recommended: ['kamakura', 'taira'],
+    authority: { taira: ['jingi', 'emperor'], goshirakawa: ['in'], kamakura: ['ryoji'], kiso: ['ryoji'], kai: ['ryoji'] },
+    lords: { taira: '平清盛', kamakura: '源頼朝', kiso: '源義仲', kai: '武田信義', oshu: '藤原秀衡', goshirakawa: '後白河法皇' },
+    opening: '治承四年十月。\n以仁王の令旨は諸国の源氏へ流れ、宇治平等院に頼政は果てた。\n'
+           + '八月、伊豆の流人・源頼朝は山木館を襲って旗を挙げる。\n'
+           + '石橋山に敗れ安房へ落ちたが、坂東の武士は次々と麾下に集った。\n\n'
+           + '十月六日、頼朝は鎌倉に入る。平氏の追討軍は富士川に迫っていた。\n'
+           + '甲斐に武田信義、信濃に木曽義仲——源氏の旗は各地に立つ。\n\n'
+           + '——だが平氏はなお全国の知行国を握り、帝と神器を奉じている。\n'
+           + '——兵の多寡では、この乱は決まらない。' },
+  { id: 's1183', col: 'S1183', jp: '倶利伽羅の落日', en: 'Sunset at Kurikara',
+    start: [1183, 5], end: [1190, 3], playable: ['taira', 'kamakura', 'kiso', 'kai', 'oshu'],
+    recommended: ['kiso', 'taira'],
+    authority: { taira: ['jingi', 'emperor'], goshirakawa: ['in'], kamakura: ['ryoji'], kiso: ['ryoji'] },
+    lords: { taira: '平宗盛', kamakura: '源頼朝', kiso: '源義仲', kai: '武田信義', oshu: '藤原秀衡', goshirakawa: '後白河法皇' },
+    opening: '寿永二年五月。\n木曽義仲は倶利伽羅峠で平氏の大軍を谷底へ落とした。\n'
+           + '北陸道は源氏の手に落ち、京は目前にある。\n\n'
+           + '頼朝は東国を固め、朝廷との駆け引きを始めた。\n'
+           + '——源氏は、ひとつではない。' },
+  { id: 's1184', col: 'S1184', jp: '鵯越、一ノ谷', en: 'Ichinotani',
+    start: [1184, 2], end: [1190, 3], playable: ['kamakura', 'taira', 'oshu'],
+    recommended: ['taira'],
+    authority: { taira: ['jingi', 'emperor'], goshirakawa: ['in'], kamakura: ['senji'] },
+    lords: { taira: '平宗盛', kamakura: '源頼朝', oshu: '藤原秀衡', goshirakawa: '後白河法皇' },
+    opening: '寿永三年二月。\n宇治川に義仲は敗れ、粟津の松原に果てた。\n'
+           + '平氏は福原に城郭を構え、京の奪還を狙う。\n\n'
+           + '範頼・義経の東国軍が西へ向かう。\n'
+           + '——鵯越の坂は、馬が越えられぬほど険しい。' },
+  { id: 's1185a', col: 'S1185A', jp: '壇ノ浦、潮の変わり目', en: 'The Turn of the Tide',
+    start: [1185, 2], end: [1190, 3], playable: ['kamakura', 'taira'],
+    recommended: ['taira'],
+    authority: { taira: ['jingi', 'emperor'], goshirakawa: ['in'], kamakura: ['senji'] },
+    lords: { taira: '平宗盛', kamakura: '源頼朝', oshu: '藤原秀衡', goshirakawa: '後白河法皇' },
+    opening: '元暦二年二月。\n屋島を追われた平氏は、長門の彦島に本営を移した。\n'
+           + '残るは瀬戸内の水軍のみ。熊野も、河野も、阿波も、まだ去就を決めていない。\n\n'
+           + '——潮は、一日に二度向きを変える。' },
+  { id: 's1185b', col: 'S1185B', jp: '判官、都を落つ', en: 'The Flight of the Judge',
+    start: [1185, 11], end: [1190, 3], playable: ['kamakura', 'yoshitsune', 'oshu'],
+    recommended: ['yoshitsune'],
+    authority: { goshirakawa: ['in'], kamakura: ['senji'], yoshitsune: ['inzen'] },
+    lords: { kamakura: '源頼朝', yoshitsune: '源義経', oshu: '藤原秀衡', goshirakawa: '後白河法皇' },
+    opening: '文治元年十一月。\n平氏は壇ノ浦に滅び、宝剣は海に沈んだ。\n'
+           + '義経は院宣を賜り、兄に反旗を翻す——が、従う武士はいない。\n\n'
+           + '——院宣は紙である。兵を養うのは土地である。' },
+  { id: 'sif', col: 'SIF', jp: 'もし清盛が死なざれば', en: 'If Kiyomori Had Lived',
+    start: [1181, 3], end: [1191, 3], playable: ['taira', 'kamakura', 'kiso', 'kai', 'oshu'],
+    recommended: ['taira'], unlockable: true,
+    authority: { taira: ['jingi', 'emperor'], goshirakawa: ['in'], kamakura: ['ryoji'], kiso: ['ryoji'] },
+    lords: { taira: '平清盛', kamakura: '源頼朝', kiso: '源義仲', kai: '武田信義', oshu: '藤原秀衡', goshirakawa: '後白河法皇' },
+    opening: '養和元年三月。\n熱病に伏した清盛は——生き延びた。\n'
+           + '平氏の統制は保たれ、坂東の反乱は長い持久戦へ入る。\n\n'
+           + '——史実にはない乱世が始まる。' },
+];
+
+/* 時代イベント（参照UIの「時代イベント」欄）。年月で発火し年代記に載る */
+const TIMELINE = [
+  { y: 1180, m: 8,  jp: '源頼朝挙兵、石橋山の戦いが起こる' },
+  { y: 1180, m: 10, jp: '富士川の戦い。平氏軍、水鳥の羽音に退く' },
+  { y: 1180, m: 12, jp: '平重衡、南都を焼く。東大寺・興福寺炎上' },
+  { y: 1181, m: 2,  jp: '平清盛、熱病に倒れる' },
+  { y: 1181, m: 6,  jp: '養和の飢饉はじまる。諸国に餓死者あふれる' },
+  { y: 1183, m: 5,  jp: '倶利伽羅峠の戦い。木曽義仲、平氏の大軍を破る' },
+  { y: 1183, m: 7,  jp: '平氏都落ち。安徳天皇と三種の神器、西国へ' },
+  { y: 1183, m: 10, jp: '寿永二年十月宣旨。頼朝の東国支配を朝廷が認める' },
+  { y: 1184, m: 1,  jp: '宇治川・粟津の戦い。木曽義仲、討たれる' },
+  { y: 1184, m: 2,  jp: '一ノ谷の戦い。鵯越の逆落とし' },
+  { y: 1185, m: 2,  jp: '屋島の戦い。那須与一、扇の的を射る' },
+  { y: 1185, m: 3,  jp: '壇ノ浦の戦い。平氏滅亡、宝剣は海に沈む' },
+  { y: 1185, m: 11, jp: '文治の勅許。守護・地頭が置かれる' },
+  { y: 1189, m: 4,  jp: '源義経、衣川館に自害する' },
+  { y: 1189, m: 9,  jp: '奥州合戦。奥州藤原氏滅ぶ' },
+];
+
+/* 当主の家格（名分の獲得効率と勧誘可否に効く。基本設計 3.6） */
+const LORD_KAKAKU = {
+  '平清盛': 95, '平宗盛': 74, '源頼朝': 78, '源義仲': 62, '武田信義': 58,
+  '藤原秀衡': 70, '源義経': 62, '後白河法皇': 100,
+};
+
+/* ============================================================================
+ * 2. データ読み込み（要件 M-46）
+ *    fetch → 失敗したら埋め込みシードへ落ちる。file:// で開いても動くこと。
+ *    ★ 埋め込みシードは scripts/gen-genpei-embed.mjs が正本から再生成する。
+ *      手で書き換えないこと（CSVと食い違っても例外は出ない）。
+ * ========================================================================== */
+const DATA = { provinces: null, provById: {}, kyoten: null, source: null };
+
+/* ==GENPEI_EMBED_START== 以下は自動生成。手で編集しないこと。
+   scripts/gen-genpei-embed.mjs が provinces.json と kyoten_ichi.csv から作る。 */
+const EMBED = {
+  provinces: {"version":1,"provinces":[{"id":"mutsu","nameJP":"陸奥","nameEN":"Mutsu","circuit":"tosando","region":"東山道","famineZone":"ou","x":760,"y":70,"terrain":"mountain","tasu":752,"neighbors":["dewa","echigo","hitachi","shimotsuke"]},{"id":"dewa","nameJP":"出羽","nameEN":"Dewa","circuit":"tosando","region":"東山道","famineZone":"ou","x":680,"y":95,"terrain":"mountain","tasu":392,"neighbors":["echigo","mutsu"]},{"id":"hitachi","nameJP":"常陸","nameEN":"Hitachi","circuit":"tokaido","region":"東海道","famineZone":"bando","x":800,"y":255,"terrain":"plain","tasu":572,"neighbors":["mutsu","shimotsuke","shimousa"]},{"id":"shimotsuke","nameJP":"下野","nameEN":"Shimotsuke","circuit":"tosando","region":"東山道","famineZone":"bando","x":725,"y":225,"terrain":"plain","tasu":370,"neighbors":["hitachi","kozuke","musashi","mutsu","shimousa"]},{"id":"kozuke","nameJP":"上野","nameEN":"Kozuke","circuit":"tosando","region":"東山道","famineZone":"bando","x":655,"y":245,"terrain":"mountain","tasu":446,"neighbors":["echigo","musashi","shimotsuke","shinano"]},{"id":"shimousa","nameJP":"下総","nameEN":"Shimousa","circuit":"tokaido","region":"東海道","famineZone":"bando","x":795,"y":300,"terrain":"plain","tasu":424,"neighbors":["hitachi","kazusa","musashi","shimotsuke"]},{"id":"kazusa","nameJP":"上総","nameEN":"Kazusa","circuit":"tokaido","region":"東海道","famineZone":"bando","x":815,"y":345,"terrain":"coast","tasu":391,"neighbors":["awa_kanto","sagami","shimousa"]},{"id":"awa_kanto","nameJP":"安房","nameEN":"Awa(Boso)","circuit":"tokaido","region":"東海道","famineZone":"bando","x":800,"y":390,"terrain":"coast","tasu":41,"neighbors":["kazusa","sagami"]},{"id":"musashi","nameJP":"武蔵","nameEN":"Musashi","circuit":"tokaido","region":"東海道","famineZone":"bando","x":720,"y":300,"terrain":"plain","tasu":720,"neighbors":["kai","kozuke","sagami","shimotsuke","shimousa"]},{"id":"sagami","nameJP":"相模","nameEN":"Sagami","circuit":"tokaido","region":"東海道","famineZone":"bando","x":700,"y":350,"terrain":"coast","tasu":175,"neighbors":["awa_kanto","izu","kai","kazusa","musashi","suruga"]},{"id":"echigo","nameJP":"越後","nameEN":"Echigo","circuit":"hokurikudo","region":"北陸道","famineZone":"hokuriku","x":615,"y":165,"terrain":"plain","tasu":263,"neighbors":["dewa","etchu","kozuke","mutsu","sado","shinano"]},{"id":"sado","nameJP":"佐渡","nameEN":"Sado","circuit":"hokurikudo","region":"北陸道","famineZone":"hokuriku","x":555,"y":130,"terrain":"coast","tasu":15,"neighbors":["echigo"]},{"id":"etchu","nameJP":"越中","nameEN":"Etchu","circuit":"hokurikudo","region":"北陸道","famineZone":"hokuriku","x":560,"y":220,"terrain":"mountain","tasu":342,"neighbors":["echigo","hida","kaga","noto","shinano"]},{"id":"noto","nameJP":"能登","nameEN":"Noto","circuit":"hokurikudo","region":"北陸道","famineZone":"hokuriku","x":500,"y":190,"terrain":"coast","tasu":189,"neighbors":["etchu","kaga"]},{"id":"kaga","nameJP":"加賀","nameEN":"Kaga","circuit":"hokurikudo","region":"北陸道","famineZone":"hokuriku","x":500,"y":245,"terrain":"plain","tasu":320,"neighbors":["echizen","etchu","noto"]},{"id":"echizen","nameJP":"越前","nameEN":"Echizen","circuit":"hokurikudo","region":"北陸道","famineZone":"hokuriku","x":470,"y":295,"terrain":"plain","tasu":449,"neighbors":["kaga","mino","omi","wakasa"]},{"id":"wakasa","nameJP":"若狭","nameEN":"Wakasa","circuit":"hokurikudo","region":"北陸道","famineZone":"hokuriku","x":450,"y":315,"terrain":"coast","tasu":77,"neighbors":["echizen","omi","tanba"]},{"id":"shinano","nameJP":"信濃","nameEN":"Shinano","circuit":"tosando","region":"東山道","famineZone":"tokai","x":600,"y":300,"terrain":"mountain","tasu":294,"neighbors":["echigo","etchu","hida","kai","kozuke","mikawa","mino","totomi"]},{"id":"kai","nameJP":"甲斐","nameEN":"Kai","circuit":"tokaido","region":"東海道","famineZone":"tokai","x":660,"y":340,"terrain":"mountain","tasu":164,"neighbors":["musashi","sagami","shinano","suruga"]},{"id":"hida","nameJP":"飛騨","nameEN":"Hida","circuit":"tosando","region":"東山道","famineZone":"tokai","x":560,"y":280,"terrain":"mountain","tasu":24,"neighbors":["etchu","mino","shinano"]},{"id":"mino","nameJP":"美濃","nameEN":"Mino","circuit":"tosando","region":"東山道","famineZone":"tokai","x":540,"y":350,"terrain":"plain","tasu":413,"neighbors":["echizen","hida","ise","omi","owari","shinano"]},{"id":"totomi","nameJP":"遠江","nameEN":"Totomi","circuit":"tokaido","region":"東海道","famineZone":"tokai","x":645,"y":390,"terrain":"plain","tasu":230,"neighbors":["mikawa","shinano","suruga"]},{"id":"suruga","nameJP":"駿河","nameEN":"Suruga","circuit":"tokaido","region":"東海道","famineZone":"tokai","x":680,"y":380,"terrain":"coast","tasu":135,"neighbors":["izu","kai","sagami","totomi"]},{"id":"izu","nameJP":"伊豆","nameEN":"Izu","circuit":"tokaido","region":"東海道","famineZone":"tokai","x":702,"y":415,"terrain":"coast","tasu":62,"neighbors":["sagami","suruga"]},{"id":"mikawa","nameJP":"三河","nameEN":"Mikawa","circuit":"tokaido","region":"東海道","famineZone":"tokai","x":600,"y":392,"terrain":"plain","tasu":261,"neighbors":["owari","shinano","totomi"]},{"id":"owari","nameJP":"尾張","nameEN":"Owari","circuit":"tokaido","region":"東海道","famineZone":"tokai","x":558,"y":392,"terrain":"plain","tasu":412,"neighbors":["ise","mikawa","mino"]},{"id":"ise","nameJP":"伊勢","nameEN":"Ise","circuit":"tokaido","region":"東海道","famineZone":"kinai","x":530,"y":412,"terrain":"coast","tasu":510,"neighbors":["iga","kii","mino","omi","owari","shima"]},{"id":"shima","nameJP":"志摩","nameEN":"Shima","circuit":"tokaido","region":"東海道","famineZone":"kinai","x":552,"y":432,"terrain":"coast","tasu":16,"neighbors":["ise"]},{"id":"omi","nameJP":"近江","nameEN":"Omi","circuit":"tosando","region":"東山道","famineZone":"kinai","x":485,"y":342,"terrain":"plain","tasu":792,"neighbors":["echizen","iga","ise","mino","tanba","wakasa","yamashiro"]},{"id":"yamashiro","nameJP":"山城","nameEN":"Yamashiro","circuit":"kinai","region":"畿内","famineZone":"kinai","x":452,"y":382,"terrain":"plain","tasu":203,"neighbors":["iga","kawachi","omi","settsu","tanba","yamato"]},{"id":"yamato","nameJP":"大和","nameEN":"Yamato","circuit":"kinai","region":"畿内","famineZone":"kinai","x":452,"y":422,"terrain":"mountain","tasu":403,"neighbors":["iga","kawachi","kii","yamashiro"]},{"id":"kawachi","nameJP":"河内","nameEN":"Kawachi","circuit":"kinai","region":"畿内","famineZone":"kinai","x":422,"y":412,"terrain":"plain","tasu":218,"neighbors":["izumi","settsu","yamashiro","yamato"]},{"id":"izumi","nameJP":"和泉","nameEN":"Izumi","circuit":"kinai","region":"畿内","famineZone":"kinai","x":412,"y":432,"terrain":"coast","tasu":127,"neighbors":["awaji","kawachi","kii","settsu"]},{"id":"settsu","nameJP":"摂津","nameEN":"Settsu","circuit":"kinai","region":"畿内","famineZone":"kinai","x":402,"y":392,"terrain":"coast","tasu":272,"neighbors":["awaji","harima","izumi","kawachi","tanba","yamashiro"]},{"id":"iga","nameJP":"伊賀","nameEN":"Iga","circuit":"tokaido","region":"東海道","famineZone":"kinai","x":490,"y":400,"terrain":"mountain","tasu":90,"neighbors":["ise","omi","yamashiro","yamato"]},{"id":"kii","nameJP":"紀伊","nameEN":"Kii","circuit":"nankaido","region":"南海道","famineZone":"saikoku","x":440,"y":470,"terrain":"mountain","tasu":219,"neighbors":["awa_shikoku","ise","izumi","yamato"]},{"id":"tanba","nameJP":"丹波","nameEN":"Tanba","circuit":"sanindo","region":"山陰道","famineZone":"saikoku","x":410,"y":350,"terrain":"mountain","tasu":237,"neighbors":["harima","omi","settsu","tajima","tango","wakasa","yamashiro"]},{"id":"tango","nameJP":"丹後","nameEN":"Tango","circuit":"sanindo","region":"山陰道","famineZone":"saikoku","x":400,"y":318,"terrain":"coast","tasu":99,"neighbors":["tajima","tanba"]},{"id":"tajima","nameJP":"但馬","nameEN":"Tajima","circuit":"sanindo","region":"山陰道","famineZone":"saikoku","x":360,"y":320,"terrain":"mountain","tasu":103,"neighbors":["harima","inaba","tanba","tango"]},{"id":"harima","nameJP":"播磨","nameEN":"Harima","circuit":"sanyodo","region":"山陽道","famineZone":"saikoku","x":360,"y":390,"terrain":"plain","tasu":275,"neighbors":["bizen","mimasaka","sanuki","settsu","tajima","tanba"]},{"id":"mimasaka","nameJP":"美作","nameEN":"Mimasaka","circuit":"sanyodo","region":"山陽道","famineZone":"saikoku","x":330,"y":368,"terrain":"mountain","tasu":167,"neighbors":["bitchu","bizen","harima","hoki","inaba"]},{"id":"bizen","nameJP":"備前","nameEN":"Bizen","circuit":"sanyodo","region":"山陽道","famineZone":"saikoku","x":320,"y":400,"terrain":"plain","tasu":201,"neighbors":["bitchu","harima","mimasaka","sanuki"]},{"id":"bitchu","nameJP":"備中","nameEN":"Bitchu","circuit":"sanyodo","region":"山陽道","famineZone":"saikoku","x":290,"y":400,"terrain":"plain","tasu":158,"neighbors":["bingo","bizen","hoki","mimasaka"]},{"id":"bingo","nameJP":"備後","nameEN":"Bingo","circuit":"sanyodo","region":"山陽道","famineZone":"saikoku","x":250,"y":400,"terrain":"mountain","tasu":167,"neighbors":["aki","bitchu","izumo"]},{"id":"inaba","nameJP":"因幡","nameEN":"Inaba","circuit":"sanindo","region":"山陰道","famineZone":"saikoku","x":320,"y":322,"terrain":"coast","tasu":80,"neighbors":["hoki","mimasaka","tajima"]},{"id":"hoki","nameJP":"伯耆","nameEN":"Hoki","circuit":"sanindo","region":"山陰道","famineZone":"saikoku","x":290,"y":332,"terrain":"mountain","tasu":90,"neighbors":["bitchu","inaba","izumo","mimasaka","oki"]},{"id":"izumo","nameJP":"出雲","nameEN":"Izumo","circuit":"sanindo","region":"山陰道","famineZone":"saikoku","x":220,"y":350,"terrain":"coast","tasu":168,"neighbors":["bingo","hoki","iwami","oki"]},{"id":"iwami","nameJP":"石見","nameEN":"Iwami","circuit":"sanindo","region":"山陰道","famineZone":"saikoku","x":180,"y":380,"terrain":"mountain","tasu":100,"neighbors":["aki","izumo","suo"]},{"id":"aki","nameJP":"安芸","nameEN":"Aki","circuit":"sanyodo","region":"山陽道","famineZone":"saikoku","x":200,"y":420,"terrain":"coast","tasu":175,"neighbors":["bingo","iwami","iyo","suo"]},{"id":"suo","nameJP":"周防","nameEN":"Suo","circuit":"sanyodo","region":"山陽道","famineZone":"saikoku","x":150,"y":440,"terrain":"coast","tasu":150,"neighbors":["aki","iwami","iyo","nagato"]},{"id":"nagato","nameJP":"長門","nameEN":"Nagato","circuit":"sanyodo","region":"山陽道","famineZone":"saikoku","x":110,"y":450,"terrain":"coast","tasu":117,"neighbors":["buzen","suo"]},{"id":"awa_shikoku","nameJP":"阿波","nameEN":"Awa(Shikoku)","circuit":"nankaido","region":"南海道","famineZone":"saikoku","x":330,"y":480,"terrain":"mountain","tasu":165,"neighbors":["awaji","iyo","kii","sanuki","tosa"]},{"id":"sanuki","nameJP":"讃岐","nameEN":"Sanuki","circuit":"nankaido","region":"南海道","famineZone":"saikoku","x":300,"y":460,"terrain":"coast","tasu":113,"neighbors":["awa_shikoku","awaji","bizen","harima","iyo"]},{"id":"iyo","nameJP":"伊予","nameEN":"Iyo","circuit":"nankaido","region":"南海道","famineZone":"saikoku","x":230,"y":470,"terrain":"coast","tasu":329,"neighbors":["aki","awa_shikoku","bungo","sanuki","suo","tosa"]},{"id":"tosa","nameJP":"土佐","nameEN":"Tosa","circuit":"nankaido","region":"南海道","famineZone":"saikoku","x":280,"y":522,"terrain":"mountain","tasu":88,"neighbors":["awa_shikoku","iyo"]},{"id":"buzen","nameJP":"豊前","nameEN":"Buzen","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":120,"y":472,"terrain":"coast","tasu":145,"neighbors":["bungo","chikuzen","nagato"]},{"id":"bungo","nameJP":"豊後","nameEN":"Bungo","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":110,"y":510,"terrain":"mountain","tasu":376,"neighbors":["buzen","chikugo","higo","hyuga","iyo"]},{"id":"chikuzen","nameJP":"筑前","nameEN":"Chikuzen","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":70,"y":472,"terrain":"coast","tasu":333,"neighbors":["buzen","chikugo","hizen"]},{"id":"chikugo","nameJP":"筑後","nameEN":"Chikugo","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":80,"y":510,"terrain":"plain","tasu":239,"neighbors":["bungo","chikuzen","higo","hizen"]},{"id":"hizen","nameJP":"肥前","nameEN":"Hizen","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":32,"y":490,"terrain":"coast","tasu":278,"neighbors":["chikugo","chikuzen","higo"]},{"id":"higo","nameJP":"肥後","nameEN":"Higo","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":62,"y":550,"terrain":"mountain","tasu":307,"neighbors":["bungo","chikugo","hizen","hyuga","osumi","satsuma"]},{"id":"hyuga","nameJP":"日向","nameEN":"Hyuga","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":110,"y":560,"terrain":"mountain","tasu":140,"neighbors":["bungo","higo","osumi"]},{"id":"osumi","nameJP":"大隅","nameEN":"Osumi","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":80,"y":600,"terrain":"coast","tasu":181,"neighbors":["higo","hyuga","satsuma"]},{"id":"satsuma","nameJP":"薩摩","nameEN":"Satsuma","circuit":"saikaido","region":"西海道","famineZone":"saikoku","x":40,"y":592,"terrain":"coast","tasu":258,"neighbors":["higo","osumi"]},{"id":"awaji","nameJP":"淡路","nameEN":"Awaji","circuit":"nankaido","region":"南海道","famineZone":"saikoku","x":372,"y":442,"terrain":"coast","tasu":56,"neighbors":["awa_shikoku","izumi","sanuki","settsu"]},{"id":"oki","nameJP":"隠岐","nameEN":"Oki","circuit":"sanindo","region":"山陰道","famineZone":"saikoku","x":214,"y":292,"terrain":"coast","tasu":16,"neighbors":["hoki","izumo"]}]},
+  kyotenCsv: "ID,拠点名,英名,種別,国,MX,MY,規模,防御,荘園領主,水軍,S1180,S1183,S1184,S1185A,S1185B,SIF,備考\nkokufu_yamashiro,山城国府,Yamashiro Provincial Seat,kokufu,yamashiro,0.469498,0.626993,203,28,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_yamato,大和国府,Yamato Provincial Seat,kokufu,yamato,0.474282,0.675877,403,36,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_kawachi,河内国府,Kawachi Provincial Seat,kokufu,kawachi,0.443780,0.667375,218,29,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_izumi,和泉国府,Izumi Provincial Seat,kokufu,izumi,0.427033,0.686504,127,25,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_settsu,摂津国府,Settsu Provincial Seat,kokufu,settsu,0.438397,0.645058,272,31,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_iga,伊賀国府,Iga Provincial Seat,kokufu,iga,0.497010,0.650372,90,24,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_ise,伊勢国府,Ise Provincial Seat,kokufu,ise,0.528708,0.676939,510,40,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_shima,志摩国府,Shima Provincial Seat,kokufu,shima,0.547249,0.698193,16,21,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_owari,尾張国府,Owari Provincial Seat,kokufu,owari,0.557416,0.611052,412,36,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_mikawa,三河国府,Mikawa Provincial Seat,kokufu,mikawa,0.578947,0.653560,261,30,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_totomi,遠江国府,Totomi Provincial Seat,kokufu,totomi,0.601675,0.682253,230,29,,,taira,kai,kamakura,kamakura,kamakura,taira,\nkokufu_suruga,駿河国府,Suruga Provincial Seat,kokufu,suruga,0.670455,0.669501,135,25,,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_izu,伊豆国府,Izu Provincial Seat,kokufu,izu,0.709330,0.698193,62,22,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_kai,甲斐国府,Kai Provincial Seat,kokufu,kai,0.689593,0.594049,164,27,,,kai,kai,kamakura,kamakura,kamakura,kai,\nkokufu_sagami,相模国府,Sagami Provincial Seat,kokufu,sagami,0.742225,0.649309,175,27,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_musashi,武蔵国府,Musashi Provincial Seat,kokufu,musashi,0.770335,0.606801,720,49,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_awa_kanto,安房国府,Awa(Boso) Provincial Seat,kokufu,awa_kanto,0.789474,0.704570,41,22,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_kazusa,上総国府,Kazusa Provincial Seat,kokufu,kazusa,0.796651,0.666312,391,36,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_shimousa,下総国府,Shimousa Provincial Seat,kokufu,shimousa,0.793062,0.620616,424,37,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_hitachi,常陸国府,Hitachi Provincial Seat,kokufu,hitachi,0.834330,0.564293,572,43,,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_omi,近江国府,Omi Provincial Seat,kokufu,omi,0.487440,0.616366,792,52,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_mino,美濃国府,Mino Provincial Seat,kokufu,mino,0.548445,0.591923,413,37,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_hida,飛騨国府,Hida Provincial Seat,kokufu,hida,0.598684,0.509033,24,21,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_shinano,信濃国府,Shinano Provincial Seat,kokufu,shinano,0.649522,0.515409,294,32,,,kiso,kiso,kamakura,kamakura,kamakura,kiso,\nkokufu_kozuke,上野国府,Kozuke Provincial Seat,kokufu,kozuke,0.728469,0.521785,446,38,,,taira,kiso,kamakura,kamakura,kamakura,kiso,\nkokufu_shimotsuke,下野国府,Shimotsuke Provincial Seat,kokufu,shimotsuke,0.759569,0.535600,370,35,,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nkokufu_mutsu,陸奥国府,Mutsu Provincial Seat,kokufu,mutsu,0.875598,0.347503,752,50,,,oshu,oshu,oshu,oshu,oshu,oshu,\nkokufu_dewa,出羽国府,Dewa Provincial Seat,kokufu,dewa,0.800837,0.266738,392,36,,,oshu,oshu,oshu,oshu,oshu,oshu,\nkokufu_wakasa,若狭国府,Wakasa Provincial Seat,kokufu,wakasa,0.489833,0.552604,77,23,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_echizen,越前国府,Echizen Provincial Seat,kokufu,echizen,0.527512,0.499469,449,38,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkokufu_kaga,加賀国府,Kaga Provincial Seat,kokufu,kaga,0.571172,0.437832,320,33,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkokufu_noto,能登国府,Noto Provincial Seat,kokufu,noto,0.591507,0.393199,189,28,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkokufu_etchu,越中国府,Etchu Provincial Seat,kokufu,etchu,0.607656,0.437832,342,34,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkokufu_echigo,越後国府,Echigo Provincial Seat,kokufu,echigo,0.682416,0.421892,263,31,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkokufu_sado,佐渡国府,Sado Provincial Seat,kokufu,sado,0.709330,0.332625,15,21,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_tanba,丹波国府,Tanba Provincial Seat,kokufu,tanba,0.455742,0.582359,237,29,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkokufu_tango,丹後国府,Tango Provincial Seat,kokufu,tango,0.440191,0.522848,99,24,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_tajima,但馬国府,Tajima Provincial Seat,kokufu,tajima,0.410885,0.514346,103,24,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_inaba,因幡国府,Inaba Provincial Seat,kokufu,inaba,0.374402,0.522848,80,23,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_hoki,伯耆国府,Hoki Provincial Seat,kokufu,hoki,0.340311,0.519660,90,24,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_izumo,出雲国府,Izumo Provincial Seat,kokufu,izumo,0.284689,0.522848,168,27,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_iwami,石見国府,Iwami Provincial Seat,kokufu,iwami,0.249402,0.543039,100,24,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_oki,隠岐国府,Oki Provincial Seat,kokufu,oki,0.282895,0.433581,16,21,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_harima,播磨国府,Harima Provincial Seat,kokufu,harima,0.389952,0.606801,275,31,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_mimasaka,美作国府,Mimasaka Provincial Seat,kokufu,mimasaka,0.340909,0.553666,167,27,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_bizen,備前国府,Bizen Provincial Seat,kokufu,bizen,0.342105,0.603613,201,28,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_bitchu,備中国府,Bitchu Provincial Seat,kokufu,bitchu,0.319378,0.594049,158,26,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_bingo,備後国府,Bingo Provincial Seat,kokufu,bingo,0.302632,0.622742,167,27,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_aki,安芸国府,Aki Provincial Seat,kokufu,aki,0.266746,0.622742,175,27,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_suo,周防国府,Suo Provincial Seat,kokufu,suo,0.205144,0.606801,150,26,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_nagato,長門国府,Nagato Provincial Seat,kokufu,nagato,0.174043,0.602550,117,25,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_kii,紀伊国府,Kii Provincial Seat,kokufu,kii,0.427033,0.727949,219,29,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_awaji,淡路国府,Awaji Provincial Seat,kokufu,awaji,0.383373,0.669501,56,22,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_awa_shikoku,阿波国府,Awa(Shikoku) Provincial Seat,kokufu,awa_shikoku,0.372010,0.693943,165,27,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_sanuki,讃岐国府,Sanuki Provincial Seat,kokufu,sanuki,0.333732,0.658874,113,25,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_iyo,伊予国府,Iyo Provincial Seat,kokufu,iyo,0.257775,0.696068,329,33,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_tosa,土佐国府,Tosa Provincial Seat,kokufu,tosa,0.303230,0.737513,88,24,,,taira,taira,taira,kamakura,kamakura,taira,\nkokufu_buzen,豊前国府,Buzen Provincial Seat,kokufu,buzen,0.156100,0.669501,145,26,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_bungo,豊後国府,Bungo Provincial Seat,kokufu,bungo,0.166866,0.725824,376,35,,,taira,taira,taira,,kamakura,taira,\nkokufu_chikuzen,筑前国府,Chikuzen Provincial Seat,kokufu,chikuzen,0.118421,0.671626,333,33,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_chikugo,筑後国府,Chikugo Provincial Seat,kokufu,chikugo,0.108852,0.686504,239,30,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_hizen,肥前国府,Hizen Provincial Seat,kokufu,hizen,0.093900,0.696068,278,31,,,taira,taira,taira,taira,kamakura,taira,\nkokufu_higo,肥後国府,Higo Provincial Seat,kokufu,higo,0.114234,0.750266,307,32,,,taira,taira,taira,,kamakura,taira,\nkokufu_hyuga,日向国府,Hyuga Provincial Seat,kokufu,hyuga,0.141746,0.884166,140,26,,,taira,taira,taira,,kamakura,taira,\nkokufu_osumi,大隅国府,Osumi Provincial Seat,kokufu,osumi,0.101675,0.904357,181,27,,,taira,taira,taira,,kamakura,taira,\nkokufu_satsuma,薩摩国府,Satsuma Provincial Seat,kokufu,satsuma,0.074163,0.889479,258,30,,,taira,taira,taira,,kamakura,taira,\nshoen_kamakura_mikuriya,鎌倉御厨,Kamakura Estate,shoen,sagami,0.752990,0.655685,45,10,jisha,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_oba_mikuriya,大庭御厨,Oba Estate,shoen,sagami,0.748804,0.645058,55,10,jisha,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_miura,三浦荘,Miura Estate,shoen,sagami,0.767344,0.669501,50,10,buke,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_chichibu,秩父牧,Chichibu Pasture,shoen,musashi,0.748206,0.570670,40,10,buke,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_kodama,児玉荘,Kodama Estate,shoen,musashi,0.760167,0.552604,35,10,buke,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_soma_mikuriya,相馬御厨,Soma Estate,shoen,shimousa,0.799043,0.597237,45,10,jisha,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_chiba,千葉荘,Chiba Estate,shoen,shimousa,0.812201,0.638682,55,10,buke,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_satake,佐竹荘,Satake Estate,shoen,hitachi,0.848086,0.528162,50,10,buke,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_nasu,那須荘,Nasu Estate,shoen,shimotsuke,0.809211,0.492030,35,10,buke,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_nitta,新田荘,Nitta Estate,shoen,kozuke,0.747608,0.533475,45,10,buke,,taira,kiso,kamakura,kamakura,kamakura,kiso,\nshoen_ashikaga,足利荘,Ashikaga Estate,shoen,shimotsuke,0.774522,0.521785,40,10,buke,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_ichijo,一条荘,Ichijo Estate,shoen,kai,0.679426,0.599362,35,10,buke,,kai,kai,kamakura,kamakura,kamakura,kai,\nshoen_shioda,塩田荘,Shioda Estate,shoen,shinano,0.666268,0.538789,40,10,sekkanke,,kiso,kiso,kamakura,kamakura,kamakura,kiso,\nshoen_kanbara,蒲原荘,Kanbara Estate,shoen,suruga,0.686603,0.655685,35,10,kuge,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_fuji_omiya,富士大宮,Fuji Grand Shrine,shoen,suruga,0.675837,0.637620,30,10,jisha,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nshoen_kawai,河合荘,Kawai Estate,shoen,echizen,0.538876,0.483528,40,10,jisha,,taira,kiso,kamakura,kamakura,kamakura,taira,\nshoen_kuratsuki,倉月荘,Kuratsuki Estate,shoen,kaga,0.561005,0.442083,35,10,sekkanke,,taira,kiso,kamakura,kamakura,kamakura,taira,\nshoen_hakusan,白山宮領,Hakusan Shrine Land,shoen,kaga,0.557416,0.452710,40,10,jisha,,taira,kiso,kamakura,kamakura,kamakura,taira,\nshoen_byodoin,平等院領,Byodoin Estate,shoen,yamashiro,0.477273,0.639745,45,10,sekkanke,,taira,taira,kamakura,kamakura,kamakura,taira,\nshoen_tobadono,鳥羽殿領,Toba Palace Estate,shoen,yamashiro,0.473086,0.616366,40,10,kuge,,taira,taira,kamakura,kamakura,kamakura,taira,\nshoen_iwashimizu,石清水八幡宮領,Iwashimizu Shrine,shoen,yamashiro,0.460526,0.642933,45,10,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\nshoen_kasuga,春日社領,Kasuga Shrine Land,shoen,yamato,0.465311,0.659936,55,10,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\nshoen_kuroda,黒田荘,Kuroda Estate,shoen,yamato,0.482057,0.681190,45,10,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\nshoen_oyama,大山荘,Oyama Estate,shoen,tanba,0.441986,0.574920,40,10,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\nshoen_koyasan,高野山領,Mt. Koya Estate,shoen,kii,0.466507,0.725824,55,10,jisha,,taira,taira,taira,kamakura,kamakura,taira,\nshoen_kumano,熊野三山領,Kumano Shrine Land,shoen,kii,0.488038,0.746015,60,10,jisha,,taira,taira,taira,kamakura,kamakura,taira,\nshoen_ota,大田荘,Ota Estate,shoen,bingo,0.293660,0.600425,45,10,jisha,,taira,taira,taira,kamakura,kamakura,taira,\nshoen_itsukushima,厳島社領,Itsukushima Shrine,shoen,aki,0.257177,0.631243,60,10,jisha,,taira,taira,taira,taira,kamakura,taira,\nshoen_yuge,弓削島荘,Yuge Island Estate,shoen,iyo,0.299043,0.691817,30,10,jisha,,taira,taira,taira,taira,kamakura,taira,\nshoen_oe,麻植荘,Oe Estate,shoen,awa_shikoku,0.357656,0.695005,40,10,buke,,taira,taira,taira,taira,kamakura,taira,\nshoen_yashima,屋島荘,Yashima Estate,shoen,sanuki,0.345096,0.645058,35,10,jisha,,taira,taira,taira,taira,kamakura,taira,\nshoen_kanzaki,神埼荘,Kanzaki Estate,shoen,hizen,0.097488,0.679065,60,10,buke,,taira,taira,taira,taira,kamakura,taira,\nshoen_usa,宇佐宮領,Usa Shrine Land,shoen,buzen,0.165670,0.684378,55,10,jisha,,taira,taira,taira,taira,kamakura,taira,\nshoen_ogata,緒方荘,Ogata Estate,shoen,bungo,0.157895,0.736451,45,10,buke,,taira,taira,taira,,kamakura,taira,\nshoen_aso,阿蘇社領,Aso Shrine Land,shoen,higo,0.130383,0.777896,50,10,jisha,,taira,taira,taira,,kamakura,taira,\nshoen_shimazu,島津荘,Shimazu Estate,shoen,hyuga,0.128589,0.890542,90,10,sekkanke,,taira,taira,taira,,kamakura,taira,\nshoen_hiraizumi,平泉領,Hiraizumi Estate,shoen,mutsu,0.878589,0.231668,80,10,buke,,oshu,oshu,oshu,oshu,oshu,oshu,\nshoen_kesen,気仙荘,Kesen Estate,shoen,mutsu,0.896531,0.308183,45,10,buke,,oshu,oshu,oshu,oshu,oshu,oshu,\nshoen_shirakawa,白河荘,Shirakawa Estate,shoen,mutsu,0.825359,0.483528,40,10,buke,,oshu,oshu,oshu,oshu,oshu,oshu,\nshoen_yusa,遊佐荘,Yusa Estate,shoen,dewa,0.793062,0.279490,40,10,buke,,oshu,oshu,oshu,oshu,oshu,oshu,\ntachi_kamakura,鎌倉大倉御所,Kamakura Palace,tachi,sagami,0.739833,0.660999,3000,45,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_kinugasa,衣笠城,Kinugasa Fort,tachi,sagami,0.766746,0.682253,800,35,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_ishibashi,石橋山,Ishibashiyama,tachi,sagami,0.735048,0.669501,400,25,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_oba,大庭館,Oba Residence,tachi,sagami,0.759569,0.653560,900,30,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_yamaki,山木館,Yamaki Residence,tachi,izu,0.713517,0.679065,300,20,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_hojo,北条館,Hojo Residence,tachi,izu,0.699761,0.682253,500,25,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_chiba,千葉館,Chiba Residence,tachi,shimousa,0.825957,0.617428,1200,30,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_kazusa,上総一宮館,Kazusa Ichinomiya,tachi,kazusa,0.790072,0.673751,2000,30,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_kanasa,金砂城,Kanasa Fort,tachi,hitachi,0.837321,0.510096,1000,40,,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\ntachi_nitta,新田館,Nitta Residence,tachi,kozuke,0.736842,0.518597,800,28,,,taira,kiso,kamakura,kamakura,kamakura,kiso,\ntachi_takeda,武田館,Takeda Residence,tachi,kai,0.691388,0.578108,1500,35,,,kai,kai,kamakura,kamakura,kamakura,kai,\ntachi_yoda,依田城,Yoda Fort,tachi,shinano,0.656100,0.520723,700,30,,,kiso,kiso,kamakura,kamakura,kamakura,kiso,\ntachi_kiso,木曽館,Kiso Residence,tachi,shinano,0.630383,0.553666,600,25,,,kiso,kiso,kamakura,kamakura,kamakura,kiso,\ntachi_jo,城氏館,Jo Residence,tachi,echigo,0.672847,0.402763,1200,32,,,taira,kiso,kamakura,kamakura,kamakura,taira,\ntachi_kurikara,倶利伽羅陣,Kurikara Camp,tachi,etchu,0.593301,0.442083,1000,30,,,taira,kiso,kamakura,kamakura,kamakura,taira,\ntachi_rokuhara,六波羅館,Rokuhara Palace,tachi,yamashiro,0.479067,0.624867,4000,55,,,taira,taira,kamakura,kamakura,yoshitsune,taira,\ntachi_byodoin,宇治平等院,Byodoin Temple,tachi,yamashiro,0.483852,0.645058,600,30,,,taira,taira,kamakura,kamakura,kamakura,taira,\ntachi_hojuji,法住寺殿,Hojuji Palace,tachi,yamashiro,0.466507,0.637620,800,28,,,goshirakawa,goshirakawa,goshirakawa,goshirakawa,goshirakawa,goshirakawa,\ntachi_fukuhara,福原京,Fukuhara Capital,tachi,settsu,0.422249,0.639745,3500,45,,,taira,taira,kamakura,kamakura,kamakura,taira,\ntachi_ichinotani,一ノ谷城郭,Ichinotani Fort,tachi,settsu,0.408493,0.648247,2500,42,,,taira,taira,kamakura,kamakura,kamakura,taira,\ntachi_yashima,屋島陣,Yashima Camp,tachi,sanuki,0.332536,0.634431,2000,38,,,taira,taira,taira,taira,kamakura,taira,\ntachi_hikoshima,彦島,Hikoshima,tachi,nagato,0.163876,0.617428,1800,35,,,taira,taira,taira,taira,kamakura,taira,\ntachi_dazaifu,太宰府,Dazaifu,tachi,chikuzen,0.125000,0.666312,1500,40,,,taira,taira,taira,taira,kamakura,taira,\ntachi_hiraizumi,柳之御所,Yanaginogosho,tachi,mutsu,0.890550,0.213603,3000,50,,,oshu,oshu,oshu,oshu,oshu,oshu,\ntachi_koromogawa,衣川館,Koromogawa,tachi,mutsu,0.872608,0.257173,400,22,,,oshu,oshu,oshu,oshu,oshu,oshu,\nminato_watanabe,渡辺津,Watanabe Harbor,minato,settsu,0.449163,0.654623,40,20,,,taira,taira,kamakura,kamakura,kamakura,taira,\nminato_owada,大輪田泊,Owada Harbor,minato,settsu,0.430622,0.634431,60,20,,,taira,taira,kamakura,kamakura,kamakura,taira,\nminato_yodo,淀津,Yodo Harbor,minato,yamashiro,0.469498,0.650372,25,20,,,taira,taira,kamakura,kamakura,kamakura,taira,riverPort\nminato_atsuta,熱田湊,Atsuta Harbor,minato,owari,0.556818,0.645058,30,20,,,taira,taira,kamakura,kamakura,kamakura,taira,\nminato_kuwana,桑名湊,Kuwana Harbor,minato,ise,0.546651,0.609989,25,20,,,taira,taira,kamakura,kamakura,kamakura,taira,\nminato_shinagawa,品川湊,Shinagawa Harbor,minato,musashi,0.788278,0.631243,20,20,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nminato_miura,三浦湊,Miura Harbor,minato,sagami,0.773325,0.679065,30,20,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nminato_naoetsu,直江津,Naoetsu Harbor,minato,echigo,0.669258,0.420829,20,20,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nminato_tsuruga,敦賀津,Tsuruga Harbor,minato,echizen,0.522727,0.546227,30,20,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nminato_mikuni,三国湊,Mikuni Harbor,minato,echizen,0.520933,0.481403,25,20,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nminato_shingu,新宮湊,Shingu Harbor,minato,kii,0.495813,0.743889,45,20,,suigun_kumano,taira,taira,taira,kamakura,kamakura,taira,\nminato_muya,撫養湊,Muya Harbor,minato,awa_shikoku,0.377392,0.676939,50,20,,suigun_awa,taira,taira,taira,taira,kamakura,taira,\nminato_yashima,屋島湊,Yashima Harbor,minato,sanuki,0.343301,0.626993,35,20,,,taira,taira,taira,taira,kamakura,taira,\nminato_mitsuhama,三津浜,Mitsuhama Harbor,minato,iyo,0.244617,0.698193,45,20,,suigun_kono,taira,taira,taira,taira,kamakura,taira,\nminato_ushimado,牛窓,Ushimado Harbor,minato,bizen,0.352273,0.612115,25,20,,,taira,taira,taira,kamakura,kamakura,taira,\nminato_hakata,博多津,Hakata Harbor,minato,chikuzen,0.114234,0.655685,40,20,,suigun_matsura,taira,taira,taira,taira,kamakura,taira,\nminato_yuigahama,由比ヶ浜湊,Yuigahama Harbor,minato,sagami,0.768541,0.652497,30,20,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_tsukui,津久井城柵,Tsukui Stockade,kisaku,sagami,0.745215,0.634431,1800,34,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_odawara,小田原城柵,Odawara Stockade,kisaku,sagami,0.733852,0.650372,2500,38,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_kawagoe,河越城柵,Kawagoe Stockade,kisaku,musashi,0.776316,0.586610,1600,32,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_chichibu,秩父城柵,Chichibu Stockade,kisaku,musashi,0.742225,0.578108,1200,30,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_shiroi,白井城柵,Shiroi Stockade,kisaku,kozuke,0.731459,0.480340,1100,28,,,taira,kiso,kamakura,kamakura,kamakura,kiso,\nkisaku_utsunomiya,宇都宮城柵,Utsunomiya Stockade,kisaku,shimotsuke,0.791268,0.526036,1400,30,,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_satake,佐竹城柵,Satake Stockade,kisaku,hitachi,0.854067,0.533475,1500,33,,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_yuki,結城城柵,Yuki Stockade,kisaku,shimousa,0.799641,0.577046,1300,29,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_ichinomiya,一宮城柵,Ichinomiya Stockade,kisaku,kazusa,0.809809,0.688629,1200,28,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nkisaku_ichijo,一条城柵,Ichijo Stockade,kisaku,kai,0.726077,0.606801,1000,27,,,kai,kai,kamakura,kamakura,kamakura,kai,\nkisaku_hiraharu,平原城柵,Hirahara Stockade,kisaku,shinano,0.690191,0.509033,1100,28,,,kiso,kiso,kamakura,kamakura,kamakura,kiso,\nkisaku_kiso,木曽城柵,Kiso Stockade,kisaku,shinano,0.620215,0.558980,900,26,,,kiso,kiso,kamakura,kamakura,kamakura,kiso,\nkisaku_jo,城長茂城柵,Jo Stockade,kisaku,echigo,0.741029,0.407014,1400,31,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkisaku_hannyano,般若野城柵,Hannyano Stockade,kisaku,etchu,0.623206,0.437832,1000,27,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkisaku_ataka,安宅城柵,Ataka Stockade,kisaku,kaga,0.550837,0.451647,900,26,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkisaku_hiuchi,燧ヶ城柵,Hiuchi Stockade,kisaku,echizen,0.507177,0.519660,1200,33,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nkisaku_seta,瀬田城柵,Seta Stockade,kisaku,omi,0.499402,0.622742,1300,32,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkisaku_uji,宇治城柵,Uji Stockade,kisaku,yamashiro,0.486842,0.655685,1400,34,,,taira,taira,kamakura,kamakura,yoshitsune,taira,\nkisaku_ikutanomori,生田森城柵,Ikuta Stockade,kisaku,settsu,0.414474,0.639745,2200,40,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkisaku_wadamisaki,和田岬城柵,Wada Stockade,kisaku,settsu,0.402512,0.658874,1800,36,,,taira,taira,kamakura,kamakura,kamakura,taira,\nkisaku_mikusayama,三草山城柵,Mikusa Stockade,kisaku,harima,0.398923,0.583422,1100,29,,,taira,taira,taira,kamakura,kamakura,taira,\nkisaku_fujito,藤戸城柵,Fujito Stockade,kisaku,bitchu,0.330742,0.605739,1000,27,,,taira,taira,taira,kamakura,kamakura,taira,\nkisaku_nuta,沼田城柵,Nuta Stockade,kisaku,aki,0.275120,0.609989,1100,28,,,taira,taira,taira,taira,kamakura,taira,\nkisaku_kikuchi,菊池城柵,Kikuchi Stockade,kisaku,higo,0.132177,0.729012,1300,31,,,taira,taira,taira,,kamakura,taira,\ntoride_ishibashi,石橋山砦,Ishibashiyama Fort,toride,sagami,0.730263,0.682253,400,22,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntoride_soutou,走湯山砦,Soutouzan Fort,toride,izu,0.718301,0.705632,350,20,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntoride_fujikawa,富士川砦,Fujikawa Fort,toride,suruga,0.674043,0.658874,600,25,,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\ntoride_hashimoto,橋本砦,Hashimoto Fort,toride,totomi,0.615431,0.688629,400,20,,,taira,kai,kamakura,kamakura,kamakura,taira,\ntoride_sunomata,墨俣砦,Sunomata Fort,toride,mino,0.556220,0.589798,700,26,,,taira,taira,kamakura,kamakura,kamakura,taira,\ntoride_kurikara,倶利伽羅砦,Kurikara Fort,toride,etchu,0.585526,0.447396,800,28,,,taira,kiso,kamakura,kamakura,kamakura,taira,\ntoride_mikusa,三草砦,Mikusa Fort,toride,tanba,0.424641,0.563231,450,21,,,taira,taira,kamakura,kamakura,kamakura,taira,\ntoride_ichinotani,一谷西城砦,Ichinotani W. Fort,toride,harima,0.407895,0.624867,900,30,,,taira,taira,taira,kamakura,kamakura,taira,\ntoride_shido,志度砦,Shido Fort,toride,sanuki,0.349880,0.636557,500,22,,,taira,taira,taira,taira,kamakura,taira,\ntoride_dannoura,壇之浦砦,Dannoura Fort,toride,nagato,0.172847,0.590861,700,24,,,taira,taira,taira,taira,kamakura,taira,\ntoride_kashii,香椎砦,Kashii Fort,toride,chikuzen,0.122010,0.655685,550,23,,,taira,taira,taira,taira,kamakura,taira,\ntoride_atsukashi,阿津賀志山砦,Atsukashi Fort,toride,mutsu,0.847488,0.387885,900,30,,,oshu,oshu,oshu,oshu,oshu,oshu,\ntera_enryakuji,延暦寺,Enryakuji,tera,omi,0.508971,0.597237,90,40,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_onjoji,園城寺,Onjoji,tera,omi,0.485646,0.628055,60,32,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_ishiyama,石山寺,Ishiyamadera,tera,omi,0.494617,0.631243,40,26,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_kurama,鞍馬寺,Kuramadera,tera,yamashiro,0.471292,0.595112,35,24,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_daigoji,醍醐寺,Daigoji,tera,yamashiro,0.480263,0.613177,40,25,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_toji,東寺,Toji,tera,yamashiro,0.461124,0.629118,45,26,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_kofukuji,興福寺,Kofukuji,tera,yamato,0.473086,0.662062,85,38,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_todaiji,東大寺,Todaiji,tera,yamato,0.477273,0.651435,80,36,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_horyuji,法隆寺,Horyuji,tera,yamato,0.459330,0.681190,35,24,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_shitenno,四天王寺,Shitennoji,tera,settsu,0.452153,0.667375,45,26,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\ntera_kongobuji,金剛峯寺,Kongobuji,tera,kii,0.457536,0.740701,75,35,jisha,,taira,taira,taira,kamakura,kamakura,taira,\ntera_oyamadera,大山寺,Oyamadera,tera,sagami,0.735048,0.634431,35,24,jisha,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntera_sensoji,浅草寺,Sensoji,tera,musashi,0.791268,0.597237,30,20,jisha,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\ntera_chusonji,中尊寺,Chusonji,tera,mutsu,0.882775,0.200850,70,32,jisha,,oshu,oshu,oshu,oshu,oshu,oshu,\ntera_motsuji,毛越寺,Motsuji,tera,mutsu,0.895335,0.202976,55,28,jisha,,oshu,oshu,oshu,oshu,oshu,oshu,\ntera_haguro,羽黒山,Mt. Haguro,tera,dewa,0.806818,0.297556,60,30,jisha,,oshu,oshu,oshu,oshu,oshu,oshu,\ntera_heisenji,平泉寺,Heisenji,tera,echizen,0.542464,0.504782,65,31,jisha,,taira,kiso,kamakura,kamakura,kamakura,taira,\ntera_daishoin,大聖院,Daishoin,tera,aki,0.261962,0.640808,40,25,jisha,,taira,taira,taira,taira,kamakura,taira,\ntera_mirokuji,弥勒寺,Mirokuji,tera,buzen,0.156100,0.682253,50,27,jisha,,taira,taira,taira,taira,kamakura,taira,\ntera_rengeji,蓮華寺,Rengeji,tera,higo,0.104665,0.759830,35,23,jisha,,taira,taira,taira,,kamakura,taira,\njinja_tsurugaoka,鶴岡八幡宮,Tsurugaoka Hachimangu,jinja,sagami,0.756579,0.641870,55,22,jisha,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\njinja_ise,伊勢神宮,Ise Grand Shrine,jinja,ise,0.538876,0.684378,70,24,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\njinja_iwashimizu,石清水八幡宮,Iwashimizu,jinja,yamashiro,0.459330,0.654623,60,23,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\njinja_kamo,賀茂社,Kamo Shrine,jinja,yamashiro,0.477273,0.602550,45,20,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\njinja_kasuga,春日大社,Kasuga Taisha,jinja,yamato,0.467703,0.672689,55,22,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\njinja_kumano,熊野本宮,Kumano Hongu,jinja,kii,0.477273,0.720510,65,25,jisha,,taira,taira,taira,kamakura,kamakura,taira,\njinja_hinokuma,日前宮,Hinokuma Shrine,jinja,kii,0.432416,0.712009,40,18,jisha,,taira,taira,taira,kamakura,kamakura,taira,\njinja_itsukushima,厳島神社,Itsukushima,jinja,aki,0.267943,0.647184,60,22,jisha,,taira,taira,taira,taira,kamakura,taira,\njinja_suwa,諏訪大社,Suwa Taisha,jinja,shinano,0.654306,0.541977,50,21,jisha,,kiso,kiso,kamakura,kamakura,kamakura,kiso,\njinja_katori,香取神宮,Katori Jingu,jinja,shimousa,0.831938,0.622742,45,20,jisha,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\njinja_kashima,鹿島神宮,Kashima Jingu,jinja,hitachi,0.852273,0.602550,50,21,jisha,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\njinja_munakata,宗像大社,Munakata Taisha,jinja,chikuzen,0.108254,0.649309,45,20,jisha,,taira,taira,taira,taira,kamakura,taira,\njinja_sumiyoshi_c,筑前住吉,Chikuzen Sumiyoshi,jinja,chikuzen,0.111244,0.670563,35,17,jisha,,taira,taira,taira,taira,kamakura,taira,\njinja_usa,宇佐八幡宮,Usa Hachimangu,jinja,buzen,0.172847,0.685441,65,25,jisha,,taira,taira,taira,taira,kamakura,taira,\njinja_sumiyoshi,住吉大社,Sumiyoshi Taisha,jinja,settsu,0.438995,0.675877,50,21,jisha,,taira,taira,kamakura,kamakura,kamakura,taira,\njinja_izumo,出雲大社,Izumo Taisha,jinja,izumo,0.273923,0.510096,55,22,jisha,,taira,taira,taira,kamakura,kamakura,taira,\njinja_yahiko,彌彦神社,Yahiko Shrine,jinja,echigo,0.712321,0.399575,40,18,jisha,,taira,kiso,kamakura,kamakura,kamakura,taira,\njinja_asama,浅間神社,Asama Shrine,jinja,kai,0.676435,0.581296,40,18,jisha,,kai,kai,kamakura,kamakura,kamakura,kai,\njinja_nukisaki,貫前神社,Nukisaki Shrine,jinja,kozuke,0.715909,0.531350,35,17,jisha,,taira,kiso,kamakura,kamakura,kamakura,kiso,\njinja_shiogama,塩竈神社,Shiogama Shrine,jinja,mutsu,0.881579,0.342189,45,20,jisha,,oshu,oshu,oshu,oshu,oshu,oshu,\nsekisho_osaka,逢坂関,Osaka Barrier,sekisho,omi,0.485646,0.603613,500,30,,,taira,taira,kamakura,kamakura,kamakura,taira,\nsekisho_fuwa,不破関,Fuwa Barrier,sekisho,mino,0.535287,0.571732,550,32,,,taira,taira,kamakura,kamakura,kamakura,taira,\nsekisho_suzuka,鈴鹿関,Suzuka Barrier,sekisho,ise,0.534689,0.636557,480,29,,,taira,taira,kamakura,kamakura,kamakura,taira,\nsekisho_shirakawa,白河関,Shirakawa Barrier,sekisho,mutsu,0.815789,0.492030,520,31,,,oshu,oshu,oshu,oshu,oshu,oshu,\nsekisho_nakoso,勿来関,Nakoso Barrier,sekisho,mutsu,0.868421,0.487779,450,28,,,oshu,oshu,oshu,oshu,oshu,oshu,\nsekisho_ashigara,足柄関,Ashigara Barrier,sekisho,sagami,0.742225,0.623804,480,29,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nsekisho_yamakita,山北の関,Yamakita Barrier,sekisho,sagami,0.733852,0.619554,380,25,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nsekisho_usui,碓氷関,Usui Barrier,sekisho,kozuke,0.720694,0.499469,420,27,,,taira,kiso,kamakura,kamakura,kamakura,kiso,\nsekisho_arachi,愛発関,Arachi Barrier,sekisho,echizen,0.516148,0.548353,460,28,,,taira,kiso,kamakura,kamakura,kamakura,taira,\nsekisho_akashi,明石関,Akashi Barrier,sekisho,harima,0.402512,0.617428,400,26,,,taira,taira,taira,kamakura,kamakura,taira,\nsekisho_akama,赤間関,Akama Barrier,sekisho,nagato,0.165670,0.604676,520,30,,,taira,taira,taira,taira,kamakura,taira,\nsekisho_dazaifu,大宰府関,Dazaifu Barrier,sekisho,chikuzen,0.131579,0.667375,480,29,,,taira,taira,taira,taira,kamakura,taira,\nsekisho_mitsu,三津関,Mitsu Barrier,sekisho,iyo,0.236842,0.671626,360,24,,,taira,taira,taira,taira,kamakura,taira,\nsekisho_kiyomi,清見関,Kiyomi Barrier,sekisho,suruga,0.687799,0.642933,420,27,,,taira,kamakura,kamakura,kamakura,kamakura,kamakura,\nmachi_kyo,京,The Capital,machi,yamashiro,0.466507,0.611052,140,22,,,taira,taira,kamakura,kamakura,yoshitsune,taira,\nmachi_shirakawa,白河,Shirakawa Quarter,machi,yamashiro,0.494019,0.608927,80,18,,,taira,taira,kamakura,kamakura,kamakura,taira,\nmachi_otsu,大津,Otsu,machi,omi,0.493421,0.597237,90,19,,,taira,taira,kamakura,kamakura,kamakura,taira,\nmachi_watanabe,渡辺,Watanabe,machi,settsu,0.453349,0.643996,85,18,,,taira,taira,kamakura,kamakura,kamakura,taira,\nmachi_sakai,堺,Sakai,machi,izumi,0.433612,0.668438,80,18,,,taira,taira,kamakura,kamakura,kamakura,taira,\nmachi_anotsu,安濃津,Anotsu,machi,ise,0.532895,0.656748,70,17,,,taira,taira,kamakura,kamakura,kamakura,taira,\nmachi_atsuta,熱田,Atsuta,machi,owari,0.563995,0.645058,75,17,,,taira,taira,kamakura,kamakura,kamakura,taira,\nmachi_kawagoe,河越,Kawagoe,machi,musashi,0.765550,0.570670,60,15,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nmachi_hiraizumi,平泉,Hiraizumi Town,machi,mutsu,0.878589,0.215728,130,24,,,oshu,oshu,oshu,oshu,oshu,oshu,\nmachi_akita,秋田,Akita,machi,dewa,0.825359,0.179596,55,15,,,oshu,oshu,oshu,oshu,oshu,oshu,\nmachi_fukuoka,福岡,Fukuoka Market,machi,bizen,0.357057,0.600425,65,16,,,taira,taira,taira,kamakura,kamakura,taira,\nmachi_utazu,宇多津,Utazu,machi,sanuki,0.321770,0.645058,60,15,,,taira,taira,taira,taira,kamakura,taira,\nmachi_kanzaki,神埼,Kanzaki Town,machi,hizen,0.104067,0.671626,70,17,,,taira,taira,taira,taira,kamakura,taira,\nmachi_bonotsu,坊津,Bonotsu,machi,satsuma,0.062799,0.901169,60,16,,,taira,taira,taira,,kamakura,taira,\nmura_oba,大庭郷,Oba Village,mura,sagami,0.754785,0.629118,32,8,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nmura_kajiwara,梶原郷,Kajiwara Village,mura,sagami,0.727871,0.663124,28,8,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nmura_kumagai,熊谷郷,Kumagai Village,mura,musashi,0.758373,0.572795,30,8,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nmura_hatakeyama,畠山郷,Hatakeyama Village,mura,musashi,0.755383,0.584485,34,9,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nmura_chiba,千葉郷,Chiba Village,mura,shimousa,0.804426,0.621679,32,8,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nmura_mobara,藻原郷,Mobara Village,mura,kazusa,0.804426,0.660999,28,8,,,kamakura,kamakura,kamakura,kamakura,kamakura,kamakura,\nmura_yoda,依田郷,Yoda Village,mura,shinano,0.648325,0.533475,26,7,,,kiso,kiso,kamakura,kamakura,kamakura,kiso,\nmura_kagami,加賀美郷,Kagami Village,mura,kai,0.686005,0.604676,26,7,,,kai,kai,kamakura,kamakura,kamakura,kai,\nmura_aohaka,青墓,Aohaka Village,mura,mino,0.543062,0.564293,30,8,,,taira,taira,kamakura,kamakura,kamakura,taira,\nmura_inaminon,印南野,Inamino Village,mura,harima,0.396531,0.595112,34,9,,,taira,taira,taira,kamakura,kamakura,taira,\nmura_nuta,沼田郷,Nuta Village,mura,aki,0.282895,0.599362,28,8,,,taira,taira,taira,taira,kamakura,taira,\nmura_kono,河野郷,Kono Village,mura,iyo,0.261364,0.676939,30,8,,,taira,taira,taira,taira,kamakura,taira,\nmura_kami,香美郷,Kami Village,mura,tosa,0.310407,0.736451,26,7,,,taira,taira,taira,kamakura,kamakura,taira,\nmura_ono,大野郷,Ono Village,mura,bungo,0.156100,0.712009,30,8,,,taira,taira,taira,,kamakura,taira,\nmura_yamaga,山鹿郷,Yamaga Village,mura,higo,0.119617,0.714134,30,8,,,taira,taira,taira,,kamakura,taira,\nmura_yoshima,好島郷,Yoshima Village,mura,mutsu,0.856459,0.466525,28,8,,,oshu,oshu,oshu,oshu,oshu,oshu,\nmura_oizumi,大泉郷,Oizumi Village,mura,dewa,0.806818,0.310308,28,8,,,oshu,oshu,oshu,oshu,oshu,oshu,\nmura_kunitomi,国富郷,Kunitomi Village,mura,hyuga,0.127392,0.869288,30,8,,,taira,taira,taira,,kamakura,taira,\n",
+};
+/* ==GENPEI_EMBED_END== */
+
+function parseKyotenCsv(text) {
+  const lines = text.replace(/^﻿/, '').trim().split(/\r?\n/);
+  const head = lines[0].split(',');
+  const idx = (n) => head.indexOf(n);
+  const I = {
+    id: idx('ID'), jp: idx('拠点名'), en: idx('英名'), type: idx('種別'), prov: idx('国'),
+    mx: idx('MX'), my: idx('MY'), scale: idx('規模'), def: idx('防御'),
+    holder: idx('荘園領主'), suigun: idx('水軍'), note: idx('備考'),
+  };
+  const cols = {};
+  for (const s of SCENARIOS) cols[s.col] = idx(s.col);
+  return lines.slice(1).map((line) => {
+    const c = line.split(',');
+    const own = {};
+    for (const s of SCENARIOS) own[s.col] = c[cols[s.col]] || null;
+    return {
+      id: c[I.id], jp: c[I.jp], en: c[I.en], type: c[I.type], province: c[I.prov],
+      mx: Number(c[I.mx]), my: Number(c[I.my]),
+      scale: Number(c[I.scale]) || 0, defense: Number(c[I.def]) || 0,
+      holder: c[I.holder] || null, suigun: c[I.suigun] || null, note: c[I.note] || '',
+      own,
+    };
+  });
+}
+
+async function loadData() {
+  let provinces = null, kyotenCsv = null, source = 'fetch';
+  // file:// では fetch が CORS で必ず失敗する。試すと console.error が出て
+  // 動的テストの「console.error 0件」を毎回落とすので、最初から埋め込みへ行く。
+  const isFile = location.protocol === 'file:';
+  try {
+    if (isFile) throw new Error('file protocol');
+    const [p, k] = await Promise.all([
+      fetch('assets/genpei/provinces.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('kyoten_ichi.csv', { cache: 'no-store' }).then((r) => (r.ok ? r.text() : null)).catch(() => null),
+    ]);
+    provinces = p; kyotenCsv = k;
+  } catch (e) { /* file:// / CORS / オフライン。下でシードへ落ちる */ }
+
+  if (!provinces || !kyotenCsv) {
+    provinces = provinces || EMBED.provinces;
+    kyotenCsv = kyotenCsv || EMBED.kyotenCsv;
+    source = 'embed';
+    console.info('[genpei] 外部データを取得できないため埋め込みシードを使用します（file:// では正常）');
+  }
+  if (!provinces || !kyotenCsv) throw new Error('拠点・令制国データを読み込めませんでした');
+
+  DATA.provinces = provinces.provinces;
+  DATA.provById = Object.fromEntries(DATA.provinces.map((p) => [p.id, p]));
+  DATA.kyoten = parseKyotenCsv(kyotenCsv);
+  DATA.kyotenById = Object.fromEntries(DATA.kyoten.map((k) => [k.id, k]));
+  DATA.byProvince = {};
+  for (const k of DATA.kyoten) (DATA.byProvince[k.province] = DATA.byProvince[k.province] || []).push(k);
+  // 国の範囲（拡大図のカメラ用）と重心
+  DATA.provBox = {};
+  for (const [pid, list] of Object.entries(DATA.byProvince)) {
+    const xs = list.map((k) => k.mx), ys = list.map((k) => k.my);
+    DATA.provBox[pid] = {
+      x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys),
+      cx: xs.reduce((a, b) => a + b, 0) / xs.length, cy: ys.reduce((a, b) => a + b, 0) / ys.length,
+      hull: convexHull(list.map((k) => [k.mx, k.my])),
+    };
+  }
+  DATA.source = source;
+}
+
+/* 凸包（単調鎖法）。国の領域を塗るための近似輪郭に使う */
+function convexHull(pts) {
+  if (pts.length < 3) return pts.slice();
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const build = (arr) => {
+    const st = [];
+    for (const q of arr) {
+      while (st.length >= 2 && cross(st[st.length - 2], st[st.length - 1], q) <= 0) st.pop();
+      st.push(q);
+    }
+    st.pop();
+    return st;
+  };
+  return build(p).concat(build(p.slice().reverse()));
+}
+
+/* ============================================================================
+ * 3. ルール層（純粋関数。state を書き換えず値を返す）
+ * ========================================================================== */
+const Rule = {
+  seasonOf(month) {
+    if (month >= 8 && month <= 10) return 'autumn';
+    if (month >= 11 || month <= 1) return 'winter';
+    if (month <= 4) return 'spring';
+    return 'summer';
+  },
+  monthIndex(y, m) { return y * 12 + (m - 1); },
+  famineActive(state) {
+    const now = Rule.monthIndex(state.year, state.month), f = RULE.famine;
+    return now >= Rule.monthIndex(f.from.y, f.from.m) && now <= Rule.monthIndex(f.to.y, f.to.m);
+  },
+  famineCoef(state, provinceId) {
+    if (!Rule.famineActive(state)) return 0;
+    const p = DATA.provById[provinceId];
+    return RULE.famine.coef[p && p.famineZone] || 0;
+  },
+
+  /* 名分（基本設計 4.1）。権威 + 家格 + 評判 − 朝敵 */
+  calcMeibun(state, fid) {
+    const f = state.factions[fid];
+    if (!f) return 0;
+    let v = 0;
+    for (const a of f.authority) v += (AUTHORITY[a] ? AUTHORITY[a].value : 0);
+    v += (LORD_KAKAKU[f.lord] || 40) * RULE.meibun.kakakuMul;
+    v += f.reputation;
+    if (f.choteki) v -= RULE.meibun.chotekiPenalty;
+    return clamp(Math.round(v), 0, RULE.meibun.max);
+  },
+  meibunBreakdown(state, fid) {
+    const f = state.factions[fid];
+    return {
+      authority: f.authority.reduce((s, a) => s + (AUTHORITY[a] ? AUTHORITY[a].value : 0), 0),
+      kakaku: (LORD_KAKAKU[f.lord] || 40) * RULE.meibun.kakakuMul,
+      reputation: f.reputation,
+      choteki: f.choteki ? -RULE.meibun.chotekiPenalty : 0,
+      total: Rule.calcMeibun(state, fid),
+    };
+  },
+
+  adjacent(a, b) {
+    if (!a || !b || a.id === b.id) return false;
+    if (a.province === b.province) return true;
+    const p = DATA.provById[a.province];
+    return !!(p && p.neighbors.includes(b.province));
+  },
+  ownedKyoten(state, fid) { return DATA.kyoten.filter((k) => state.kyoten[k.id].owner === fid); },
+
+  /* 国の支配勢力 = その国の国府の持ち主 */
+  provinceOwner(state, pid) {
+    const k = DATA.kyotenById['kokufu_' + pid];
+    return k ? state.kyoten[k.id].owner : null;
+  },
+
+  income(state, fid) {
+    const hv = RULE.econ.harvest[Rule.seasonOf(state.month)];
+    let food = 0, gold = 0, levy = 0, troops = 0;
+    for (const k of Rule.ownedKyoten(state, fid)) {
+      const famine = 1 - Rule.famineCoef(state, k.province);
+      if (k.type === 'shoen' || k.type === 'mura') food += k.scale * hv * famine;
+      if (k.type === 'machi') gold += k.scale * 0.4;
+      if (k.type === 'sekisho') gold += k.scale * 0.02;
+      if (k.type === 'kokufu') { gold += k.scale * RULE.econ.taxRate; levy += k.scale * RULE.econ.levyMul; }
+      troops += state.kyoten[k.id].garrison;
+    }
+    const upkeep = troops * RULE.econ.foodPerTroop;
+    return {
+      food: Math.round(food), gold: Math.round(gold), levyCap: Math.round(levy),
+      upkeep: Math.round(upkeep), net: Math.round(food - upkeep), troops,
+    };
+  },
+
+  /* 出兵の強さ。守備は防御値ぶんだけ嵩上げされる */
+  defenseStrength(state, k) { return state.kyoten[k.id].garrison + k.defense * 4; },
+
+  aiActions(state, fid) {
+    if (RULE.ai.famineBlock && Rule.famineActive(state)) return [];
+    const cand = [];
+    for (const src of Rule.ownedKyoten(state, fid)) {
+      const sg = state.kyoten[src.id].garrison;
+      if (sg < RULE.ai.minGarrison) continue;
+      for (const k of DATA.kyoten) {
+        const st = state.kyoten[k.id];
+        if (st.owner === fid || !Rule.adjacent(src, k)) continue;
+        const need = Rule.defenseStrength(state, k) * RULE.ai.attackRatio;
+        if (sg <= need) continue;
+        cand.push({ kind: 'capture', from: src.id, to: k.id, troops: Math.floor(sg * 0.6),
+                    score: k.scale + (sg - need) * 0.1 });
+      }
+    }
+    // 価値の高い順に、拠点の重複を避けて上限まで採る
+    cand.sort((a, b) => b.score - a.score);
+    const acts = [], usedFrom = new Set(), usedTo = new Set();
+    for (const c of cand) {
+      if (acts.length >= RULE.ai.maxActions) break;
+      if (usedFrom.has(c.from) || usedTo.has(c.to)) continue;
+      usedFrom.add(c.from); usedTo.add(c.to); acts.push(c);
+    }
+    return acts;
+  },
+
+  checkVictory(state) {
+    const f = state.factions[state.faction];
+    const owned = Rule.ownedKyoten(state, state.faction);
+    const seats = owned.filter((k) => k.type === 'kokufu').length;
+    if (owned.length === 0) return { done: true, win: false, reason: '拠点をすべて失った / All sites lost' };
+    if (Rule.monthIndex(state.year, state.month) < Rule.monthIndex(state.endYear, state.endMonth)) return { done: false };
+    const v = FACTIONS[state.faction].victory;
+    let win;
+    if (v === 'survive_regime') win = f.authority.includes('emperor') && !f.choteki && seats >= 20;
+    else if (v === 'bakufu') win = f.authority.includes('senji') && seats >= 35;
+    else if (v === 'hiraizumi') win = !!state.kyoten['tachi_hiraizumi'] && state.kyoten['tachi_hiraizumi'].owner === state.faction;
+    else win = owned.length > 0;
+    return { done: true, win, reason: win ? '勝利条件を満たした / Victory conditions met' : '終幕 / The age has ended' };
+  },
+};
+
+/* ============================================================================
+ * 4. ゲーム状態
+ * ========================================================================== */
+function buildState(scenarioId, factionId) {
+  const scn = SCENARIOS.find((s) => s.id === scenarioId);
+  const state = {
+    version: SAVE_VERSION, scenario: scenarioId, faction: factionId,
+    year: scn.start[0], month: scn.start[1], turn: 1,
+    endYear: scn.end[0], endMonth: scn.end[1],
+    factions: {}, kyoten: {}, log: [], result: null,
+  };
+  for (const fid of Object.keys(FACTIONS)) {
+    state.factions[fid] = {
+      authority: (scn.authority[fid] || []).slice(),
+      lord: scn.lords[fid] || FACTIONS[fid].jp,
+      reputation: 0, choteki: false, chotekiUntil: 0, courtInfluence: fid === 'taira' ? 55 : 20,
+      gold: 200, food: 0, alive: false,
+    };
+  }
+  for (const k of DATA.kyoten) {
+    const owner = k.own[scn.col] || null;
+    // 駐留兵は種別と規模から導く（Phase 1 の暫定。Phase 2 で武士団へ移す）
+    const mul = { kokufu: 1.2, tachi: 0.5, kisaku: 0.8, toride: 0.8, shoen: 2, tera: 6,
+                  jinja: 3, sekisho: 1.2, machi: 2, mura: 4, minato: 3 }[k.type] || 1;
+    state.kyoten[k.id] = { owner, garrison: Math.round(k.scale * mul + k.defense * 3) };
+    if (owner) state.factions[owner].alive = true;
+  }
+  for (const fid of Object.keys(FACTIONS)) state.factions[fid].food = Rule.income(state, fid).food * 3;
+  pushLog(state, `${scn.jp} — ${state.year}年${state.month}月、乱世はじまる`);
+  return state;
+}
+
+function pushLog(state, text) {
+  state.log.unshift({ y: state.year, m: state.month, text });
+  if (state.log.length > 120) state.log.length = 120;
+}
+
+/* 出兵の解決。★プレイヤーもAIも必ずこの関数を通す（判定が二重化すると必ず食い違う） */
+function applyActions(state, fid, acts) {
+  for (const act of acts) {
+    const src = state.kyoten[act.from], dst = state.kyoten[act.to];
+    if (!src || !dst || src.owner !== fid || src.garrison < act.troops) continue;
+    const target = DATA.kyotenById[act.to];
+    src.garrison -= act.troops;
+    // 攻め手が守りを上回れば落ちる。下回れば撃退され、双方が兵を失う。
+    // （「攻めれば必ず落ちる」にすると、拠点の多い勢力が毎ターン版図を倍にしてしまう）
+    const defence = Rule.defenseStrength(state, target);
+    const prev = dst.owner;
+    if (act.troops > defence) {
+      dst.owner = fid;
+      dst.garrison = Math.max(1, act.troops - defence);
+      state.factions[fid].alive = true;
+      if (prev === state.faction || fid === state.faction) pushLog(state, `${FACTIONS[fid].jp}が${target.jp}を落とした`);
+    } else {
+      dst.garrison = Math.max(0, dst.garrison - Math.floor(act.troops * 0.6));
+      src.garrison += Math.floor(act.troops * 0.3);   // 生き残りが本領へ戻る
+      if (prev === state.faction || fid === state.faction) pushLog(state, `${target.jp}が${FACTIONS[fid].jp}の攻めを凌いだ`);
+    }
+  }
+}
+
+/* 徴兵。金を兵に換える。国府の規模で決まる動員上限を超えられない */
+function levy(state, fid, kyotenId, want) {
+  const f = state.factions[fid], st = state.kyoten[kyotenId];
+  if (!st || st.owner !== fid) return { ok: false, why: '自勢力の拠点ではない' };
+  const inc = Rule.income(state, fid);
+  const room = Math.max(0, inc.levyCap - inc.troops);
+  const n = Math.min(want, room, Math.floor(f.gold / LEVY_COST));
+  if (n <= 0) return { ok: false, why: room <= 0 ? '動員上限に達している' : '金が足りない' };
+  f.gold -= n * LEVY_COST;
+  st.garrison += n;
+  return { ok: true, n };
+}
+const LEVY_COST = 0.5;   // 兵1あたりの金
+
+/* ターン終了（詳細設計 第5節のシーケンス。Phase 1 で実装済みの段のみ） */
+function endTurn(state) {
+  // 1. 時代イベントの発火
+  for (const ev of TIMELINE) if (ev.y === state.year && ev.m === state.month) pushLog(state, ev.jp);
+  // 3-4. 収支と兵糧枯渇
+  for (const fid of Object.keys(FACTIONS)) {
+    const f = state.factions[fid];
+    if (!f.alive) continue;
+    const inc = Rule.income(state, fid);
+    f.food = Math.max(0, f.food + inc.net);
+    f.gold += inc.gold;
+    if (f.food <= 0 && inc.troops > 0) {
+      for (const k of Rule.ownedKyoten(state, fid)) {
+        const st = state.kyoten[k.id];
+        st.garrison = Math.max(0, Math.round(st.garrison * (1 - RULE.econ.starveTroop)));
+      }
+      if (fid === state.faction) pushLog(state, '兵糧が尽き、兵が逃散した');
+    }
+  }
+  // 9. AI の行動
+  for (const fid of Object.keys(FACTIONS)) {
+    if (fid === state.faction) continue;
+    const f = state.factions[fid];
+    if (!f.alive || !FACTIONS[fid].playable) continue;
+    applyActions(state, fid, Rule.aiActions(state, fid));
+  }
+  for (const fid of Object.keys(FACTIONS)) state.factions[fid].alive = Rule.ownedKyoten(state, fid).length > 0;
+  // 12. 月を進める
+  state.month++;
+  if (state.month > 12) { state.month = 1; state.year++; }
+  state.turn++;
+  // 11. 勝敗
+  const v = Rule.checkVictory(state);
+  if (v.done) state.result = v;
+  // 13. オートセーブ
+  save.set('autosave', state);
+  return state;
+}
+
+/* ============================================================================
+ * 5. 描画のユーティリティ
+ * ========================================================================== */
+const ASSETS = { map: null, mapReady: false };
+const MAP_ASPECT = 941 / 1672;
+
+function loadMap() {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { ASSETS.map = img; ASSETS.mapReady = true; resolve(true); };
+    img.onerror = () => { ASSETS.mapReady = false; resolve(false); };
+    img.src = MAP_ASSET;
+  });
+}
+function mapAspect() {
+  const img = ASSETS.map;
+  return img && img.naturalWidth ? img.naturalHeight / img.naturalWidth : MAP_ASPECT;
+}
+
+/* 巻物風の枠。参照UIの金枠に合わせる */
+function frame(ctx, x, y, w, h, opts) {
+  const o = opts || {};
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, o.radius || 6);
+  ctx.fillStyle = o.fill || 'rgba(10,15,22,0.86)';
+  ctx.fill();
+  ctx.lineWidth = 1; ctx.strokeStyle = o.stroke || 'rgba(216,178,106,0.34)';
+  ctx.stroke();
+  ctx.restore();
+}
+function frameTitle(ctx, x, y, w, title, en) {
+  frame(ctx, x, y, w, 22, { fill: 'rgba(216,178,106,0.13)', stroke: 'rgba(216,178,106,0.30)', radius: 5 });
+  txt(ctx, title, x + 10, y + 4, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#e8d3a0', align: 'left' });
+  if (en) txt(ctx, en, x + w - 10, y + 6, { font: '10px "Segoe UI", sans-serif', color: '#8a7a58', align: 'right' });
+}
+function txt(ctx, str, x, y, o) {
+  ctx.save();
+  ctx.font = (o && o.font) || '13px "Hiragino Mincho ProN", serif';
+  ctx.fillStyle = (o && o.color) || '#dbe4ee';
+  ctx.textAlign = (o && o.align) || 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(str, x, y);
+  ctx.restore();
+}
+function fitText(ctx, str, max, font) {
+  ctx.save(); ctx.font = font;
+  let s = str;
+  while (s.length > 1 && ctx.measureText(s).width > max) s = s.slice(0, -1);
+  ctx.restore();
+  return s === str ? s : s.slice(0, -1) + '…';
+}
+function button(ctx, b, hover) {
+  frame(ctx, b.x, b.y, b.w, b.h, {
+    fill: b.disabled ? 'rgba(255,255,255,0.03)' : hover ? 'rgba(216,178,106,0.20)' : 'rgba(216,178,106,0.09)',
+    stroke: b.disabled ? 'rgba(255,255,255,0.10)' : hover ? 'rgba(216,178,106,0.75)' : 'rgba(216,178,106,0.38)',
+    radius: b.radius != null ? b.radius : 5,
+  });
+  const cx = b.x + b.w / 2;
+  txt(ctx, b.jp, cx, b.y + (b.en ? b.h / 2 - 15 : b.h / 2 - 8), {
+    font: b.font || '600 16px "Hiragino Mincho ProN", serif',
+    color: b.disabled ? '#5b6675' : '#f0e2c0', align: 'center',
+  });
+  if (b.en) txt(ctx, b.en, cx, b.y + b.h / 2 + 5, { font: '10px "Segoe UI", sans-serif', color: '#8a7a58', align: 'center' });
+}
+function hit(b, p) { return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h; }
+
+/* --------------------------------------------------------------------------
+ * 拠点アイコン — Canvas のみで描く小さな建物図形。
+ * ★ 画像アセットに依存しないので、後読みの失敗で「白い箱」になることがない。
+ * ------------------------------------------------------------------------ */
+function drawSiteIcon(ctx, kind, x, y, s, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.lineWidth = Math.max(1, s * 0.08);
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillStyle = color;
+  const roof = (w, h, dy) => {                        // 反りのある屋根
+    ctx.beginPath();
+    ctx.moveTo(-w, dy);
+    ctx.quadraticCurveTo(-w * 0.5, dy - h * 1.5, 0, dy - h);
+    ctx.quadraticCurveTo(w * 0.5, dy - h * 1.5, w, dy);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  };
+  const box = (w, h, dy) => { ctx.beginPath(); ctx.rect(-w, dy, w * 2, h); ctx.fill(); ctx.stroke(); };
+  switch (kind) {
+    case 'kokufu':                                     // 国府: 大きな瓦屋根＋旗
+      roof(s * 1.0, s * 0.45, 0); box(s * 0.72, s * 0.5, 0);
+      ctx.beginPath(); ctx.moveTo(0, -s * 0.5); ctx.lineTo(0, -s * 1.25); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, -s * 1.25); ctx.lineTo(s * 0.6, -s * 1.05); ctx.lineTo(0, -s * 0.85);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      break;
+    case 'tachi':                                      // 館: 屋敷
+      roof(s * 0.85, s * 0.4, 0); box(s * 0.6, s * 0.45, 0);
+      break;
+    case 'kisaku': {                                   // 城柵: 柵＋櫓
+      box(s * 0.34, s * 0.55, -s * 0.1); roof(s * 0.5, s * 0.3, -s * 0.1);
+      ctx.beginPath();
+      for (let i = -3; i <= 3; i++) { ctx.moveTo(i * s * 0.28, s * 0.15); ctx.lineTo(i * s * 0.28, s * 0.5); }
+      ctx.moveTo(-s, s * 0.28); ctx.lineTo(s, s * 0.28);
+      ctx.strokeStyle = color; ctx.stroke();
+      break;
+    }
+    case 'toride': {                                   // 砦: 土塁＋逆茂木
+      ctx.beginPath(); ctx.moveTo(-s, s * 0.5); ctx.lineTo(-s * 0.35, -s * 0.35);
+      ctx.lineTo(s * 0.35, -s * 0.35); ctx.lineTo(s, s * 0.5); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      break;
+    }
+    case 'shoen': {                                    // 荘園: 稲束
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath(); ctx.moveTo(i * s * 0.55, s * 0.5);
+        ctx.lineTo(i * s * 0.55 - s * 0.28, -s * 0.4); ctx.lineTo(i * s * 0.55 + s * 0.28, -s * 0.4);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+      }
+      break;
+    }
+    case 'tera': {                                     // 寺: 多重塔
+      for (let i = 0; i < 3; i++) {
+        const w = s * (0.95 - i * 0.22), dy = s * (0.45 - i * 0.42);
+        roof(w, s * 0.24, dy); box(w * 0.55, s * 0.2, dy);
+      }
+      ctx.beginPath(); ctx.moveTo(0, -s * 0.8); ctx.lineTo(0, -s * 1.2); ctx.stroke();
+      break;
+    }
+    case 'jinja': {                                    // 神社: 鳥居
+      ctx.beginPath();
+      ctx.moveTo(-s, -s * 0.55); ctx.lineTo(s, -s * 0.55);
+      ctx.moveTo(-s * 0.8, -s * 0.22); ctx.lineTo(s * 0.8, -s * 0.22);
+      ctx.moveTo(-s * 0.55, -s * 0.55); ctx.lineTo(-s * 0.42, s * 0.55);
+      ctx.moveTo(s * 0.55, -s * 0.55); ctx.lineTo(s * 0.42, s * 0.55);
+      ctx.lineWidth = Math.max(1.4, s * 0.19); ctx.strokeStyle = color; ctx.stroke();
+      break;
+    }
+    case 'sekisho': {                                  // 関所: 門
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.9, -s * 0.4); ctx.lineTo(s * 0.9, -s * 0.4);
+      ctx.moveTo(-s * 0.6, -s * 0.4); ctx.lineTo(-s * 0.6, s * 0.55);
+      ctx.moveTo(s * 0.6, -s * 0.4); ctx.lineTo(s * 0.6, s * 0.55);
+      ctx.lineWidth = Math.max(1.3, s * 0.17); ctx.strokeStyle = color; ctx.stroke();
+      break;
+    }
+    case 'machi': {                                    // 町: 家並み
+      for (let i = -1; i <= 1; i++) {
+        ctx.save(); ctx.translate(i * s * 0.62, i === 0 ? -s * 0.16 : 0);
+        roof(s * 0.34, s * 0.2, 0); box(s * 0.24, s * 0.34, 0);
+        ctx.restore();
+      }
+      break;
+    }
+    case 'mura':                                       // 村: 小屋
+      roof(s * 0.6, s * 0.34, s * 0.1); box(s * 0.36, s * 0.3, s * 0.1);
+      break;
+    case 'minato': {                                   // 湊: 舟
+      ctx.beginPath();
+      ctx.moveTo(-s, s * 0.1); ctx.quadraticCurveTo(0, s * 0.8, s, s * 0.1);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, s * 0.1); ctx.lineTo(0, -s * 0.9); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, -s * 0.85); ctx.lineTo(s * 0.7, -s * 0.35); ctx.lineTo(0, -s * 0.2);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      break;
+    }
+    default:
+      ctx.beginPath(); ctx.arc(0, 0, s * 0.55, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
+}
+/* 勢力の目印（家紋の代わりの簡易章。Phase 5 で本物の家紋に差し替える） */
+function drawKamon(ctx, fid, x, y, r) {
+  const c = FACTIONS[fid] ? FACTIONS[fid].color : '#94a3b8';
+  ctx.save(); ctx.translate(x, y);
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(8,11,17,0.85)'; ctx.fill();
+  ctx.lineWidth = 1.4; ctx.strokeStyle = c; ctx.stroke();
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * r * 0.72, Math.sin(a) * r * 0.72);
+  }
+  ctx.strokeStyle = c; ctx.lineWidth = 1.1; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 0, r * 0.26, 0, Math.PI * 2); ctx.fillStyle = c; ctx.fill();
+  ctx.restore();
+}
+
+class Backdrop {
+  constructor() { this.p = new GameKit.Particles(W, H, { count: 40 }); }
+  update(dt) { this.p.update(dt); }
+  draw(ctx) {
+    const g = ctx.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, '#080b11'); g.addColorStop(1, '#0d1119');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.save(); ctx.globalAlpha = 0.45; this.p.draw(ctx); ctx.restore();
+  }
+}
+
+/* ============================================================================
+ * 6. シーン（タイトル〜勢力選択）
+ * ========================================================================== */
+class BootScene extends GameKit.Scene {
+  enter(g) {
+    this.msg = 'データを読み込んでいます / Loading';
+    this.t = 0;
+    Promise.all([loadData(), loadMap()])
+      .then(() => { g.changeScene(new TitleScene()); })
+      .catch((e) => {
+        console.error(e);
+        this.msg = '起動に失敗しました: ' + e.message;
+        const el = document.getElementById('boot-error');
+        el.style.display = 'block';
+        el.textContent = '起動に失敗しました / Failed to start: ' + e.message;
+      });
+  }
+  update(dt) { this.t += Math.max(0, dt); }   // 初回フレームの dt は負になりうる
+  draw(ctx) {
+    ctx.fillStyle = '#080b11'; ctx.fillRect(0, 0, W, H);
+    txt(ctx, '源平争乱記', W / 2, H / 2 - 40, { font: '600 40px "Hiragino Mincho ProN", serif', color: '#e8d3a0', align: 'center' });
+    txt(ctx, this.msg, W / 2, H / 2 + 24, { font: '13px "Segoe UI", sans-serif', color: '#7c8ba1', align: 'center' });
+    txt(ctx, '・'.repeat(Math.max(0, Math.floor(Math.max(0, this.t) * 3) % 4)), W / 2, H / 2 + 48, { font: '13px sans-serif', color: '#d8b26a', align: 'center' });
+  }
+}
+
+class TitleScene extends GameKit.Scene {
+  enter() {
+    this.bd = new Backdrop(); this.t = 0;
+    const saved = save.get('autosave', null);
+    this.hasSave = !!(saved && saved.version === SAVE_VERSION && !saved.result);
+    this.staleSave = !!(saved && saved.version !== SAVE_VERSION);
+    this.buttons = [
+      { id: 'new', x: W / 2 - 190, y: 470, w: 380, h: 58, jp: '新規に始める', en: 'New Game' },
+      { id: 'cont', x: W / 2 - 190, y: 540, w: 380, h: 58, jp: '続きから', en: 'Continue', disabled: !this.hasSave },
+    ];
+  }
+  update(dt, g) {
+    this.t += dt; this.bd.update(dt);
+    const p = g.input.pointer;
+    if (!p.justPressed) return;
+    for (const b of this.buttons) {
+      if (!hit(b, p) || b.disabled) continue;
+      g.audio.jingle([{ f: 392, d: 0.09 }, { f: 523, d: 0.14 }]);
+      if (b.id === 'new') g.changeScene(new ScenarioSelectScene());
+      else {
+        const st = save.get('autosave', null);
+        if (st && st.version === SAVE_VERSION) g.changeScene(new MapScene(st));
+      }
+    }
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    if (ASSETS.mapReady) {
+      ctx.save(); ctx.globalAlpha = 0.22;
+      const s = Math.max(W / ASSETS.map.naturalWidth, H / ASSETS.map.naturalHeight) * 1.1;
+      const dw = ASSETS.map.naturalWidth * s, dh = ASSETS.map.naturalHeight * s;
+      ctx.drawImage(ASSETS.map, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.restore();
+    }
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, 'rgba(8,11,17,0.55)'); grad.addColorStop(1, 'rgba(8,11,17,0.92)');
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+    txt(ctx, '源 平 争 乱 記', W / 2, 210, { font: '600 66px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+    txt(ctx, 'GENPEI SOURANKI', W / 2, 300, { font: '15px "Segoe UI", sans-serif', color: '#d8b26a', align: 'center' });
+    txt(ctx, '治承・寿永の乱  1180 — 1189', W / 2, 336, { font: '14px "Hiragino Mincho ProN", serif', color: '#8b98ab', align: 'center' });
+    txt(ctx, '城ではなく、名分を獲る。 / Win legitimacy, not castles.', W / 2, 374, { font: '13px "Hiragino Mincho ProN", serif', color: '#a78bfa', align: 'center' });
+    const p = g.input.pointer;
+    for (const b of this.buttons) button(ctx, b, hit(b, p) && !b.disabled);
+    if (this.staleSave) txt(ctx, '保存データの形式が古いため読み込めません（新規に始めてください）', W / 2, 614, { font: '12px sans-serif', color: '#fca5a5', align: 'center' });
+    txt(ctx, DATA.source === 'embed' ? 'データ: 埋め込みシード（オフライン）' : `データ: assets/genpei/ ＋ kyoten_ichi.csv（拠点 ${DATA.kyoten.length}）`,
+      W / 2, H - 32, { font: '11px sans-serif', color: '#4b5563', align: 'center' });
+  }
+}
+
+class ScenarioSelectScene extends GameKit.Scene {
+  enter() {
+    this.bd = new Backdrop();
+    this.list = SCENARIOS.filter((s) => !s.unlockable || save.get('unlocked_sif', false));
+    this.sel = 0;
+    this.rows = this.list.map((s, i) => ({ x: 70, y: 140 + i * 80, w: 470, h: 68, i }));
+    this.back = { x: 70, y: H - 92, w: 200, h: 54, jp: '戻る', en: 'Back' };
+    this.go = { x: W - 370, y: H - 92, w: 300, h: 54, jp: 'この時代で始める', en: 'Choose This Age' };
+  }
+  update(dt, g) {
+    this.bd.update(dt);
+    const p = g.input.pointer;
+    if (!p.justPressed) return;
+    for (const r of this.rows) if (hit(r, p)) { this.sel = r.i; g.audio.jingle([{ f: 440, d: 0.07 }]); }
+    if (hit(this.back, p)) g.changeScene(new TitleScene());
+    if (hit(this.go, p)) g.changeScene(new OpeningScene(this.list[this.sel]));
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    txt(ctx, '時代を選ぶ', 70, 56, { font: '600 30px "Hiragino Mincho ProN", serif', color: '#f0e2c0' });
+    txt(ctx, 'Choose an Age', 70, 96, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    const p = g.input.pointer;
+    this.rows.forEach((r, i) => {
+      const s = this.list[i], on = i === this.sel;
+      frame(ctx, r.x, r.y, r.w, r.h, {
+        fill: on ? 'rgba(216,178,106,0.17)' : hit(r, p) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
+        stroke: on ? 'rgba(216,178,106,0.8)' : 'rgba(255,255,255,0.13)',
+      });
+      txt(ctx, String(s.start[0]), r.x + 18, r.y + 22, { font: '600 22px "Segoe UI", sans-serif', color: on ? '#e8d3a0' : '#8b98ab' });
+      txt(ctx, s.jp, r.x + 96, r.y + 15, { font: '600 20px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
+      txt(ctx, s.en, r.x + 96, r.y + 43, { font: '11px "Segoe UI", sans-serif', color: '#7c8ba1' });
+    });
+    const s = this.list[this.sel], px = 580, pw = W - 580 - 70;
+    frame(ctx, px, 140, pw, H - 140 - 116);
+    txt(ctx, s.jp, px + 24, 164, { font: '600 26px "Hiragino Mincho ProN", serif', color: '#f0e2c0' });
+    txt(ctx, s.en, px + 24, 200, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    const months = (s.end[0] * 12 + s.end[1]) - (s.start[0] * 12 + s.start[1]) + 1;
+    txt(ctx, `${s.start[0]}年${s.start[1]}月 〜 ${s.end[0]}年${s.end[1]}月（最大 ${months} ターン＝${months}ヶ月）`, px + 24, 228, { font: '13px "Hiragino Mincho ProN", serif', color: '#8b98ab' });
+    const counts = {};
+    for (const k of DATA.kyoten) { const o = k.own[s.col]; if (o) counts[o] = (counts[o] || 0) + 1; }
+    let y = 268;
+    txt(ctx, '開始時の版図 / Starting holdings', px + 24, y, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' }); y += 26;
+    for (const [fid, n] of Object.entries(counts).sort((a, b) => b[1] - a[1])) {
+      if (!FACTIONS[fid]) continue;
+      drawKamon(ctx, fid, px + 32, y + 8, 8);
+      txt(ctx, FACTIONS[fid].jp, px + 50, y, { font: '15px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
+      txt(ctx, `${n} 拠点`, px + 200, y + 2, { font: '13px "Segoe UI", sans-serif', color: '#8b98ab' });
+      y += 26;
+    }
+    const neutral = DATA.kyoten.length - Object.values(counts).reduce((a, b) => a + b, 0);
+    txt(ctx, `中立 ${neutral} 拠点 / Neutral`, px + 50, y, { font: '13px "Segoe UI", sans-serif', color: '#6b7787' });
+    button(ctx, this.back, hit(this.back, p));
+    button(ctx, this.go, hit(this.go, p));
+  }
+}
+
+class OpeningScene extends GameKit.Scene {
+  constructor(scn) { super(); this.scn = scn; }
+  enter() {
+    this.bd = new Backdrop(); this.t = 0;
+    this.lines = this.scn.opening.split('\n');
+    this.next = { x: W / 2 - 150, y: H - 100, w: 300, h: 56, jp: '勢力を選ぶ', en: 'Choose a Power' };
+    this.back = { x: 70, y: H - 100, w: 160, h: 56, jp: '戻る', en: 'Back' };
+  }
+  update(dt, g) {
+    this.t += dt; this.bd.update(dt);
+    const p = g.input.pointer;
+    if (!p.justPressed) return;
+    if (hit(this.next, p)) g.changeScene(new FactionSelectScene(this.scn));
+    if (hit(this.back, p)) g.changeScene(new ScenarioSelectScene());
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    txt(ctx, this.scn.jp, W / 2, 66, { font: '600 34px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+    txt(ctx, this.scn.en, W / 2, 112, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58', align: 'center' });
+    frame(ctx, 200, 160, W - 400, H - 160 - 140);
+    const shown = Math.min(this.lines.length, Math.floor(this.t / 0.26) + 1);
+    let y = 206;
+    for (let i = 0; i < shown; i++) {
+      const t = this.lines[i];
+      txt(ctx, t, W / 2, y, { font: '19px "Hiragino Mincho ProN", serif', color: t.startsWith('——') ? '#a78bfa' : '#dbe4ee', align: 'center' });
+      y += t === '' ? 16 : 34;
+    }
+    const p = g.input.pointer;
+    button(ctx, this.next, hit(this.next, p));
+    button(ctx, this.back, hit(this.back, p));
+  }
+}
+
+class FactionSelectScene extends GameKit.Scene {
+  constructor(scn) { super(); this.scn = scn; }
+  enter() {
+    this.bd = new Backdrop();
+    this.list = this.scn.playable.filter((f) => FACTIONS[f]);
+    this.sel = 0;
+    this.rows = this.list.map((fid, i) => ({ x: 70, y: 150 + i * 78, w: 430, h: 66, i }));
+    this.back = { x: 70, y: H - 92, w: 200, h: 54, jp: '戻る', en: 'Back' };
+    this.go = { x: W - 370, y: H - 92, w: 300, h: 54, jp: 'この勢力で始める', en: 'Begin' };
+    this.counts = {};
+    for (const k of DATA.kyoten) { const o = k.own[this.scn.col]; if (o) this.counts[o] = (this.counts[o] || 0) + 1; }
+  }
+  update(dt, g) {
+    this.bd.update(dt);
+    const p = g.input.pointer;
+    if (!p.justPressed) return;
+    for (const r of this.rows) if (hit(r, p)) { this.sel = r.i; g.audio.jingle([{ f: 440, d: 0.07 }]); }
+    if (hit(this.back, p)) g.changeScene(new OpeningScene(this.scn));
+    if (hit(this.go, p)) {
+      g.audio.jingle([{ f: 392, d: 0.1 }, { f: 523, d: 0.1 }, { f: 659, d: 0.2 }]);
+      g.changeScene(new MapScene(buildState(this.scn.id, this.list[this.sel])));
+    }
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    txt(ctx, '勢力を選ぶ', 70, 56, { font: '600 30px "Hiragino Mincho ProN", serif', color: '#f0e2c0' });
+    txt(ctx, 'Choose a Power', 70, 96, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    const p = g.input.pointer;
+    this.rows.forEach((r, i) => {
+      const fid = this.list[i], f = FACTIONS[fid], on = i === this.sel;
+      frame(ctx, r.x, r.y, r.w, r.h, {
+        fill: on ? 'rgba(216,178,106,0.17)' : hit(r, p) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
+        stroke: on ? 'rgba(216,178,106,0.8)' : 'rgba(255,255,255,0.13)',
+      });
+      drawKamon(ctx, fid, r.x + 32, r.y + 33, 14);
+      txt(ctx, f.jp, r.x + 58, r.y + 13, { font: '600 20px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
+      txt(ctx, `${f.en} ・ ${this.scn.lords[fid] || ''}`, r.x + 58, r.y + 42, { font: '11px "Segoe UI", sans-serif', color: '#7c8ba1' });
+      txt(ctx, `${this.counts[fid] || 0} 拠点`, r.x + r.w - 20, r.y + 24, { font: '14px "Segoe UI", sans-serif', color: '#8b98ab', align: 'right' });
+      if ((this.scn.recommended || []).includes(fid)) txt(ctx, '推奨', r.x + r.w - 20, r.y + 45, { font: '11px "Hiragino Mincho ProN", serif', color: '#d8b26a', align: 'right' });
+    });
+    const fid = this.list[this.sel], f = FACTIONS[fid], px = 540, pw = W - 540 - 70;
+    frame(ctx, px, 150, pw, H - 150 - 116);
+    txt(ctx, f.jp, px + 24, 174, { font: '600 28px "Hiragino Mincho ProN", serif', color: '#f0e2c0' });
+    txt(ctx, f.en, px + 24, 212, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    txt(ctx, `当主: ${this.scn.lords[fid] || '—'}（家格 ${LORD_KAKAKU[this.scn.lords[fid]] || '—'}）`, px + 24, 244, { font: '14px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
+    const auth = (this.scn.authority[fid] || []).map((a) => AUTHORITY[a].jp);
+    txt(ctx, `保持する権威: ${auth.length ? auth.join('・') : 'なし'}`, px + 24, 272, { font: '14px "Hiragino Mincho ProN", serif', color: auth.length ? '#f9d423' : '#6b7787' });
+    const v = VICTORY_TEXT[f.victory];
+    txt(ctx, '勝利条件 / Victory', px + 24, 316, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    wrapText(ctx, v.jp, px + 24, 340, pw - 48, 26, { font: '15px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
+    wrapText(ctx, v.en, px + 24, 402, pw - 48, 20, { font: '11px "Segoe UI", sans-serif', color: '#7c8ba1' });
+    button(ctx, this.back, hit(this.back, p));
+    button(ctx, this.go, hit(this.go, p));
+  }
+}
+
+function wrapText(ctx, str, x, y, maxW, lh, opts) {
+  ctx.save(); ctx.font = opts.font;
+  let line = '', yy = y;
+  for (const ch of str) {
+    if (ctx.measureText(line + ch).width > maxW) { txt(ctx, line, x, yy, opts); line = ch; yy += lh; }
+    else line += ch;
+  }
+  if (line) txt(ctx, line, x, yy, opts);
+  ctx.restore();
+  return yy + lh;
+}
+
+/* ============================================================================
+ * 7. MapScene — 参照UIの三段構え（全国図 → 国の拡大図 → 拠点の周辺図）
+ * ========================================================================== */
+const L = {
+  bar:    { x: 6, y: 6, w: W - 12, h: 26 },
+  nation: { x: 6, y: 36, w: 694, h: 566 },
+  prov:   { x: 706, y: 36, w: W - 706 - 6, h: 344 },
+  local:  { x: 706, y: 386, w: 470, h: 216 },
+  detail: { x: 1182, y: 386, w: W - 1182 - 6, h: 216 },
+  list:   { x: 6, y: 608, w: 474, h: 162 },
+  events: { x: 486, y: 608, w: 414, h: 162 },
+  side:   { x: 906, y: 608, w: W - 906 - 6, h: 162 },
+  cmd:    { x: 6, y: 776, w: W - 12, h: 30 },
+};
+const COMMANDS = [
+  { id: 'naisei',  jp: '内政', phase: 2 },
+  { id: 'gunji',   jp: '軍事', phase: 3 },
+  { id: 'jinji',   jp: '人事', phase: 2 },
+  { id: 'gaiko',   jp: '外交', phase: 2 },
+  { id: 'keiryaku',jp: '計略', phase: 2 },
+  { id: 'joho',    jp: '情報', phase: 1 },
+  { id: 'kino',    jp: '機能', phase: 1 },
+  { id: 'endTurn', jp: 'ターン終了', phase: 1 },
+];
+
+class MapScene extends GameKit.Scene {
+  constructor(state) { super(); this.state = state; }
+  enter(g) {
+    // 全国図のカメラ
+    // 幅に合わせて列島全体を見せる。枠を覆う倍率まで寄せると東西が切れてしまう。
+    // 余る上下は海として塗る（地図の周囲はもともと外洋なので違和感がない）。
+    this.minZoom = 1;
+    this.cam = { cx: 0.5, cy: 0.5, zoom: this.minZoom };
+    this.drag = null;
+    // 選択: 自勢力の本拠がある国を初期選択にする
+    const mine = Rule.ownedKyoten(this.state, this.state.faction);
+    this.province = mine.length ? mine[0].province : 'sagami';
+    this.sel = mine.length ? mine[0].id : null;
+    this.listScroll = 0;
+    this.notice = null; this.noticeT = 0;
+    this.cmdButtons = this._layoutCommands();
+    this._bindWheel(g);
+  }
+  exit() { if (this._wheel) canvas.removeEventListener('wheel', this._wheel); }
+
+  _layoutCommands() {
+    const n = COMMANDS.length, gap = 6;
+    const w = (L.cmd.w - gap * (n - 1)) / n;
+    return COMMANDS.map((c, i) => ({
+      ...c, x: L.cmd.x + i * (w + gap), y: L.cmd.y, w, h: L.cmd.h,
+      jp: c.jp, font: '600 15px "Hiragino Mincho ProN", serif', radius: 4,
+    }));
+  }
+  _bindWheel(g) {
+    this._wheel = (e) => {
+      const p = g.input.pointer;
+      if (!inRect(L.nation, p)) return;
+      e.preventDefault();
+      const before = this._n2m(p);
+      this.cam.zoom = clamp(this.cam.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), this.minZoom, this.minZoom * 5);
+      const after = this._n2m(p);
+      this.cam.cx += before.x - after.x; this.cam.cy += before.y - after.y;
+      this._clampCam();
+    };
+    canvas.addEventListener('wheel', this._wheel, { passive: false });
+  }
+  /* 全国図: 画面 → 地図正規化 */
+  _nationScale() { return L.nation.w * this.cam.zoom; }
+  _n2m(p) {
+    const s = this._nationScale();
+    return {
+      x: this.cam.cx + (p.x - L.nation.x - L.nation.w / 2) / s,
+      y: this.cam.cy + (p.y - L.nation.y - L.nation.h / 2) / (s * mapAspect()),
+    };
+  }
+  _m2n(mx, my) {
+    const s = this._nationScale();
+    return {
+      x: L.nation.x + L.nation.w / 2 + (mx - this.cam.cx) * s,
+      y: L.nation.y + L.nation.h / 2 + (my - this.cam.cy) * s * mapAspect(),
+    };
+  }
+  _clampCam() {
+    const s = this._nationScale();
+    const hx = (L.nation.w / 2) / s, hy = (L.nation.h / 2) / (s * mapAspect());
+    this.cam.cx = clamp(this.cam.cx, Math.min(0.5, hx), Math.max(0.5, 1 - hx));
+    this.cam.cy = clamp(this.cam.cy, Math.min(0.5, hy), Math.max(0.5, 1 - hy));
+  }
+
+  /* 国の拡大図 / 拠点の周辺図: 与えた中心と幅で地図を切り出す共通変換 */
+  _viewFor(rect, cx, cy, halfW) {
+    const s = rect.w / (halfW * 2);
+    return {
+      s,
+      toScreen: (mx, my) => ({
+        x: rect.x + rect.w / 2 + (mx - cx) * s,
+        y: rect.y + rect.h / 2 + (my - cy) * s * mapAspect(),
+      }),
+      toMap: (px, py) => ({
+        x: cx + (px - rect.x - rect.w / 2) / s,
+        y: cy + (py - rect.y - rect.h / 2) / (s * mapAspect()),
+      }),
+    };
+  }
+  _provView() {
+    const b = DATA.provBox[this.province];
+    const halfW = Math.max(0.035, (b.x1 - b.x0) / 2 + 0.022);
+    return this._viewFor(L.prov, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, halfW);
+  }
+  _localView() {
+    const k = this.sel ? DATA.kyotenById[this.sel] : null;
+    const b = DATA.provBox[this.province];
+    const cx = k ? k.mx : b.cx, cy = k ? k.my : b.cy;
+    return this._viewFor(L.local, cx, cy, 0.016);
+  }
+
+  update(dt, g) {
+    const p = g.input.pointer;
+    if (this.noticeT > 0) this.noticeT -= dt;
+
+    if (p.justPressed) {
+      // コマンドバー
+      for (const b of this.cmdButtons) {
+        if (!hit(b, p)) continue;
+        if (b.id === 'endTurn') {
+          if (!this.state.result) { endTurn(this.state); g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]); }
+        } else if (b.id === 'kino') { g.changeScene(new TitleScene()); return; }
+        else if (b.id === 'joho') this._notice(`拠点 ${DATA.kyoten.length}／国 ${DATA.provinces.length}／${DATA.source === 'embed' ? '埋め込みデータ' : '外部データ'}`);
+        else this._notice(`「${b.jp}」は Phase ${b.phase} で開きます / coming in Phase ${b.phase}`);
+        return;
+      }
+      // 命令ボタン（詳細パネル）
+      for (const b of (this.actionButtons || [])) {
+        if (!hit(b, p)) continue;
+        const k = DATA.kyotenById[this.sel];
+        if (b.id === 'levy') {
+          const res = levy(this.state, this.state.faction, k.id, 500);
+          this._notice(res.ok ? `${k.jp} で ${res.n} 名を徴発した` : `徴兵できない — ${res.why}`);
+        } else if (b.id === 'attack') {
+          const src = this._attackSource(k);
+          if (!src) { this._notice('隣接する自勢力の拠点に兵がいない'); return; }
+          const troops = Math.floor(this.state.kyoten[src.id].garrison * 0.7);
+          applyActions(this.state, this.state.faction, [{ from: src.id, to: k.id, troops }]);
+          this._notice(this.state.kyoten[k.id].owner === this.state.faction
+            ? `${src.jp} より出陣、${k.jp} を落とした` : `${k.jp} の守りに阻まれた`);
+        }
+        g.audio.jingle([{ f: 349, d: 0.08 }, { f: 440, d: 0.1 }]);
+        return;
+      }
+      // 全国図: 国を選ぶ
+      if (inRect(L.nation, p)) {
+        const pid = this._pickProvince(p);
+        if (pid) {
+          this.province = pid; this.listScroll = 0;
+          const list = DATA.byProvince[pid];
+          this.sel = list && list.length ? list[0].id : null;
+          g.audio.jingle([{ f: 523, d: 0.06 }]);
+        } else this.drag = { x: p.x, y: p.y, cx: this.cam.cx, cy: this.cam.cy };
+      }
+      // 拡大図・周辺図: 拠点を選ぶ
+      if (inRect(L.prov, p)) { const k = this._pickKyoten(p, this._provView(), null); if (k) { this.sel = k.id; g.audio.jingle([{ f: 587, d: 0.05 }]); } }
+      if (inRect(L.local, p)) { const k = this._pickKyoten(p, this._localView(), null); if (k) { this.sel = k.id; g.audio.jingle([{ f: 587, d: 0.05 }]); } }
+      // 拠点一覧
+      if (inRect(L.list, p)) {
+        const i = Math.floor((p.y - (L.list.y + 42)) / 20) + this.listScroll;
+        const list = this._provList();
+        if (i >= 0 && i < list.length) { this.sel = list[i].id; g.audio.jingle([{ f: 587, d: 0.05 }]); }
+      }
+    }
+    if (p.isDown && this.drag) {
+      const s = this._nationScale();
+      this.cam.cx = this.drag.cx - (p.x - this.drag.x) / s;
+      this.cam.cy = this.drag.cy - (p.y - this.drag.y) / (s * mapAspect());
+      this._clampCam();
+    }
+    if (!p.isDown) this.drag = null;
+    if (g.input.justPressed('Space') && !this.state.result) endTurn(this.state);
+  }
+  _notice(msg) { this.notice = msg; this.noticeT = 2.6; }
+  _provList() { return (DATA.byProvince[this.province] || []).slice().sort((a, b) => KYOTEN_TYPE[a.type].tier - KYOTEN_TYPE[b.type].tier || b.scale - a.scale); }
+
+  _pickProvince(p) {
+    const m = this._n2m(p);
+    let best = null, bestD = 0.05;
+    for (const [pid, b] of Object.entries(DATA.provBox)) {
+      const d = Math.hypot(b.cx - m.x, (b.cy - m.y) / mapAspect());
+      if (d < bestD) { bestD = d; best = pid; }
+    }
+    return best;
+  }
+  _pickKyoten(p, view, types) {
+    let best = null, bestD = 15;
+    for (const k of DATA.byProvince[this.province] || []) {
+      if (types && !types.includes(k.type)) continue;
+      const s = view.toScreen(k.mx, k.my);
+      const d = Math.hypot(s.x - p.x, s.y - p.y);
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    return best;
+  }
+
+  draw(ctx, g) {
+    ctx.fillStyle = '#05070b'; ctx.fillRect(0, 0, W, H);
+    this._drawTopBar(ctx);
+    this._drawNation(ctx);
+    this._drawProvince(ctx);
+    this._drawLocal(ctx);
+    this._drawDetail(ctx);
+    this._drawList(ctx, g);
+    this._drawEvents(ctx);
+    this._drawSide(ctx);
+    const p = g.input.pointer;
+    for (const b of this.cmdButtons) button(ctx, b, hit(b, p));
+    if (this.noticeT > 0) {
+      const a = clamp(this.noticeT / 0.6, 0, 1);
+      ctx.save(); ctx.globalAlpha = a;
+      frame(ctx, W / 2 - 260, H - 122, 520, 34, { fill: 'rgba(216,178,106,0.16)', stroke: 'rgba(216,178,106,0.5)' });
+      txt(ctx, this.notice, W / 2, H - 112, { font: '13px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+      ctx.restore();
+    }
+    if (this.state.result) this._drawResult(ctx);
+  }
+
+  /* -------- 上部ステータスバー -------- */
+  _drawTopBar(ctx) {
+    const st = this.state, me = st.factions[st.faction], f = FACTIONS[st.faction];
+    frame(ctx, L.bar.x, L.bar.y, L.bar.w, L.bar.h, { fill: 'rgba(216,178,106,0.10)', stroke: 'rgba(216,178,106,0.30)', radius: 4 });
+    const inc = Rule.income(st, st.faction);
+    let x = L.bar.x + 12;
+    const put = (s, color, font) => {
+      txt(ctx, s, x, L.bar.y + 6, { font: font || '13px "Hiragino Mincho ProN", serif', color: color || '#e8eef5' });
+      ctx.save(); ctx.font = font || '13px "Hiragino Mincho ProN", serif';
+      x += ctx.measureText(s).width + 18; ctx.restore();
+    };
+    put(`${st.year}年（${waReki(st.year)}）${st.month}月`, '#f0e2c0');
+    put(SEASON_JP[Rule.seasonOf(st.month)], '#d8b26a');
+    drawKamon(ctx, st.faction, x + 8, L.bar.y + 13, 8); x += 22;
+    put(me.lord, '#e8eef5', '600 13px "Hiragino Mincho ProN", serif');
+    const meibun = Rule.calcMeibun(st, st.faction);
+    put(`名分 ${meibun}`, meibun >= 500 ? '#5eead4' : meibun >= 250 ? '#f9d423' : '#fca5a5');
+    put(`金銭 ${me.gold}`);
+    put(`兵糧 ${me.food}`, inc.net < 0 ? '#fca5a5' : '#e8eef5');
+    put(`兵士 ${inc.troops}`);
+    put(`拠点 ${Rule.ownedKyoten(st, st.faction).length}`);
+    put(`朝廷支持 ${Math.round(me.courtInfluence)}`);
+    if (me.choteki) put('朝敵', '#fca5a5', '600 13px "Hiragino Mincho ProN", serif');
+    if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 12, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
+  }
+
+  /* -------- 全国図 -------- */
+  _drawNation(ctx) {
+    const r = L.nation;
+    frame(ctx, r.x, r.y, r.w, r.h, { fill: '#0a2233' });
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 6); ctx.clip();
+    if (ASSETS.mapReady) {
+      const s = this._nationScale(), o = this._m2n(0, 0);
+      ctx.drawImage(ASSETS.map, o.x, o.y, s, s * mapAspect());
+    }
+    ctx.fillStyle = 'rgba(5,7,11,0.34)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    // 国の領有を凸包で塗る（地図画像に境界線がないための近似）
+    ctx.globalCompositeOperation = 'lighter';
+    for (const [pid, b] of Object.entries(DATA.provBox)) {
+      const owner = Rule.provinceOwner(this.state, pid);
+      if (!owner || !b.hull.length) continue;
+      ctx.beginPath();
+      b.hull.forEach((pt, i) => { const s = this._m2n(pt[0], pt[1]); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); });
+      ctx.closePath();
+      ctx.fillStyle = hexA(FACTIONS[owner].color, pid === this.province ? 0.34 : 0.20);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    for (const [pid, b] of Object.entries(DATA.provBox)) {
+      const owner = Rule.provinceOwner(this.state, pid);
+      if (!owner || !b.hull.length) continue;
+      ctx.beginPath();
+      b.hull.forEach((pt, i) => { const s = this._m2n(pt[0], pt[1]); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); });
+      ctx.closePath();
+      ctx.lineWidth = pid === this.province ? 1.8 : 0.7;
+      ctx.strokeStyle = hexA(FACTIONS[owner].color, pid === this.province ? 0.95 : 0.55); ctx.stroke();
+    }
+    // 勢力の名札（各勢力の最大拠点の位置に置く）
+    const marks = {};
+    for (const k of DATA.kyoten) {
+      const o = this.state.kyoten[k.id].owner;
+      if (!o || k.type !== 'kokufu') continue;
+      if (!marks[o] || k.scale > marks[o].scale) marks[o] = k;
+    }
+    for (const [fid, k] of Object.entries(marks)) {
+      const s = this._m2n(k.mx, k.my);
+      if (s.x < r.x || s.x > r.x + r.w || s.y < r.y || s.y > r.y + r.h) continue;
+      drawKamon(ctx, fid, s.x, s.y, 9);
+      ctx.save();
+      ctx.font = '600 13px "Hiragino Mincho ProN", serif'; ctx.textAlign = 'left';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+      ctx.strokeText(FACTIONS[fid].jp, s.x + 13, s.y + 5);
+      ctx.fillStyle = FACTIONS[fid].color; ctx.fillText(FACTIONS[fid].jp, s.x + 13, s.y + 5);
+      ctx.restore();
+    }
+    // 選択中の国を示す枠（参照UIの黄色い矩形）
+    const b = DATA.provBox[this.province];
+    if (b) {
+      const a = this._m2n(b.x0 - 0.012, b.y0 - 0.012), c = this._m2n(b.x1 + 0.012, b.y1 + 0.012);
+      ctx.lineWidth = 1.6; ctx.strokeStyle = '#f9d423';
+      ctx.setLineDash([5, 3]);
+      ctx.strokeRect(a.x, a.y, c.x - a.x, c.y - a.y);
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
+    frameTitle(ctx, r.x, r.y, r.w, '全国図 — 国をクリックして選ぶ', 'National Map');
+    // 凡例
+    const alive = Object.keys(FACTIONS).filter((fid) => this.state.factions[fid].alive);
+    const lh = 17, lw = 108;
+    frame(ctx, r.x + 8, r.y + 30, lw, alive.length * lh + 10, { fill: 'rgba(8,11,17,0.8)' });
+    alive.forEach((fid, i) => {
+      const y = r.y + 36 + i * lh;
+      ctx.fillStyle = FACTIONS[fid].color; ctx.fillRect(r.x + 16, y + 3, 9, 9);
+      txt(ctx, FACTIONS[fid].jp, r.x + 31, y, { font: '11px "Hiragino Mincho ProN", serif', color: '#cbd5e1' });
+    });
+  }
+
+  /* -------- 国の拡大図 -------- */
+  _drawProvince(ctx) {
+    const r = L.prov, prov = DATA.provById[this.province];
+    frame(ctx, r.x, r.y, r.w, r.h, { fill: '#071018' });
+    const view = this._provView();
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(r.x + 1, r.y + 23, r.w - 2, r.h - 46, 6); ctx.clip();
+    if (ASSETS.mapReady) {
+      const o = view.toScreen(0, 0);
+      ctx.drawImage(ASSETS.map, o.x, o.y, view.s, view.s * mapAspect());
+      ctx.fillStyle = 'rgba(5,7,11,0.30)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    }
+    // 街道: 同国内の拠点を国府から結ぶ＋隣国の国府へ伸ばす
+    this._drawRoads(ctx, view);
+    for (const k of DATA.kyoten) {
+      const ty = KYOTEN_TYPE[k.type];
+      if (ty.tier > 1) continue;
+      const s = view.toScreen(k.mx, k.my);
+      if (s.x < r.x - 20 || s.x > r.x + r.w + 20 || s.y < r.y || s.y > r.y + r.h) continue;
+      this._drawSite(ctx, k, s, 8, k.province === this.province);
+    }
+    ctx.restore();
+    frameTitle(ctx, r.x, r.y, r.w, `拡大図（${prov ? prov.nameJP : this.province}国）`, prov ? prov.nameEN : '');
+    // 下端のステータス帯（参照UIの選択拠点バー）
+    const k = this.sel ? DATA.kyotenById[this.sel] : null;
+    const by = r.y + r.h - 22;
+    frame(ctx, r.x, by, r.w, 22, { fill: 'rgba(216,178,106,0.10)', stroke: 'rgba(216,178,106,0.28)', radius: 4 });
+    if (k) {
+      const st = this.state.kyoten[k.id];
+      const own = st.owner ? FACTIONS[st.owner].jp : '中立';
+      txt(ctx, `${k.jp}（${KYOTEN_TYPE[k.type].jp}）  ${own}  兵士 ${st.garrison}  規模 ${k.scale}  防御 ${k.defense}`,
+        r.x + 10, by + 4, { font: '12px "Hiragino Mincho ProN", serif', color: '#e8d3a0' });
+    }
+  }
+
+  /* 街道: 国府どうしを隣接関係で結ぶ（令制七道の近似） */
+  _drawRoads(ctx, view) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(216,178,106,0.30)';
+    ctx.lineWidth = 1.6; ctx.setLineDash([6, 4]);
+    for (const p of DATA.provinces) {
+      const a = DATA.kyotenById['kokufu_' + p.id];
+      if (!a) continue;
+      const sa = view.toScreen(a.mx, a.my);
+      for (const nb of p.neighbors) {
+        if (nb < p.id) continue;                       // 双方向を1回だけ描く
+        const b = DATA.kyotenById['kokufu_' + nb];
+        if (!b) continue;
+        const sb = view.toScreen(b.mx, b.my);
+        ctx.beginPath(); ctx.moveTo(sa.x, sa.y); ctx.lineTo(sb.x, sb.y); ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  _drawSite(ctx, k, s, size, inFocus) {
+    const ty = KYOTEN_TYPE[k.type];
+    const st = this.state.kyoten[k.id];
+    const owner = st && st.owner ? FACTIONS[st.owner] : null;
+    ctx.save();
+    ctx.globalAlpha = inFocus ? 1 : 0.42;
+    // 勢力色の台座
+    ctx.beginPath(); ctx.ellipse(s.x, s.y + size * 0.62, size * 0.85, size * 0.34, 0, 0, Math.PI * 2);
+    ctx.fillStyle = owner ? hexA(owner.color, 0.85) : 'rgba(150,160,175,0.7)'; ctx.fill();
+    drawSiteIcon(ctx, ty.icon, s.x, s.y, size, ty.color);
+    if (this.sel === k.id) {
+      ctx.beginPath(); ctx.arc(s.x, s.y, size * 1.6, 0, Math.PI * 2);
+      ctx.lineWidth = 2; ctx.strokeStyle = '#f9d423'; ctx.stroke();
+    }
+    if (inFocus) {
+      ctx.font = '10px "Hiragino Mincho ProN", serif'; ctx.textAlign = 'center';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+      ctx.strokeText(k.jp, s.x, s.y + size * 1.9);
+      ctx.fillStyle = '#e8eef5'; ctx.fillText(k.jp, s.x, s.y + size * 1.9);
+    }
+    ctx.restore();
+  }
+
+  /* -------- 拠点の周辺図 -------- */
+  _drawLocal(ctx) {
+    const r = L.local;
+    frame(ctx, r.x, r.y, r.w, r.h, { fill: '#071018' });
+    const k = this.sel ? DATA.kyotenById[this.sel] : null;
+    const view = this._localView();
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(r.x + 1, r.y + 23, r.w - 2, r.h - 24, 6); ctx.clip();
+    if (ASSETS.mapReady) {
+      const o = view.toScreen(0, 0);
+      ctx.drawImage(ASSETS.map, o.x, o.y, view.s, view.s * mapAspect());
+      ctx.fillStyle = 'rgba(5,7,11,0.24)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    }
+    for (const kk of DATA.kyoten) {
+      const s = view.toScreen(kk.mx, kk.my);
+      if (s.x < r.x - 30 || s.x > r.x + r.w + 30 || s.y < r.y || s.y > r.y + r.h) continue;
+      this._drawSite(ctx, kk, s, 13, true);
+    }
+    ctx.restore();
+    frameTitle(ctx, r.x, r.y, r.w, k ? `${k.jp} 周辺` : '周辺図', 'Local Map');
+  }
+
+  /* -------- 拠点の詳細 -------- */
+  _drawDetail(ctx) {
+    const r = L.detail;
+    frame(ctx, r.x, r.y, r.w, r.h);
+    const k = this.sel ? DATA.kyotenById[this.sel] : null;
+    frameTitle(ctx, r.x, r.y, r.w, k ? k.jp : '拠点', k ? k.en : 'Site');
+    if (!k) return;
+    const st = this.state.kyoten[k.id], ty = KYOTEN_TYPE[k.type];
+    // 拠点の絵（大きめのアイコン）
+    ctx.save();
+    frame(ctx, r.x + 8, r.y + 28, r.w - 16, 62, { fill: 'rgba(255,255,255,0.03)', stroke: 'rgba(255,255,255,0.08)', radius: 4 });
+    drawSiteIcon(ctx, ty.icon, r.x + r.w / 2, r.y + 62, 22, ty.color);
+    ctx.restore();
+    let y = r.y + 96;
+    const rowLimit = r.y + r.h - 48;      // 命令ボタンの上端まで
+    const row = (jp, v, color) => {
+      if (y > rowLimit) return;
+      txt(ctx, jp, r.x + 12, y, { font: '11px "Hiragino Mincho ProN", serif', color: '#8a7a58' });
+      txt(ctx, String(v), r.x + r.w - 12, y - 1, { font: '600 12px "Segoe UI", sans-serif', color: color || '#e8eef5', align: 'right' });
+      y += 17;
+    };
+    row('種類', ty.jp, ty.color);
+    const prov = DATA.provById[k.province];
+    row('国', prov ? prov.nameJP : k.province);
+    row('支配勢力', st.owner ? FACTIONS[st.owner].jp : '中立', st.owner ? FACTIONS[st.owner].color : '#94a3b8');
+    row('兵士', st.garrison);
+    row('規模', k.scale);
+    row('防御', k.defense);
+    if (k.holder) row('領主', HOLDER_JP[k.holder] || k.holder, '#c792ea');
+    if (k.suigun) row('水軍', k.suigun, '#4dd0e1');
+    if (k.note === 'riverPort') row('河港', 'はい');
+    // 命令ボタン
+    this.actionButtons = [];
+    const bw = r.w - 20, by = r.y + r.h - 40;
+    if (st.owner === this.state.faction) {
+      this.actionButtons.push({ id: 'levy', x: r.x + 10, y: by, w: bw, h: 30, jp: '徴 兵', font: '600 14px "Hiragino Mincho ProN", serif', radius: 4 });
+    } else if (this._attackSource(k)) {
+      this.actionButtons.push({ id: 'attack', x: r.x + 10, y: by, w: bw, h: 30, jp: '出 兵', font: '600 14px "Hiragino Mincho ProN", serif', radius: 4 });
+    }
+    for (const b of this.actionButtons) button(ctx, b, false);
+  }
+
+  /* 攻め手になれる自勢力の拠点（隣接かつ兵の多い順の先頭） */
+  _attackSource(target) {
+    const mine = Rule.ownedKyoten(this.state, this.state.faction)
+      .filter((k) => Rule.adjacent(k, target) && this.state.kyoten[k.id].garrison >= 100)
+      .sort((a, b) => this.state.kyoten[b.id].garrison - this.state.kyoten[a.id].garrison);
+    return mine[0] || null;
+  }
+
+  /* -------- 拠点一覧（選択中の国） -------- */
+  _drawList(ctx, g) {
+    const r = L.list, prov = DATA.provById[this.province];
+    frame(ctx, r.x, r.y, r.w, r.h);
+    frameTitle(ctx, r.x, r.y, r.w, `拠点一覧（${prov ? prov.nameJP : ''}国）`, 'Sites');
+    const cols = [12, 132, 196, 300, 372, 440];
+    const head = ['拠点名', '種類', '支配勢力', '兵士', '規模'];
+    head.forEach((h, i) => txt(ctx, h, r.x + cols[i], r.y + 26, { font: '10px "Hiragino Mincho ProN", serif', color: '#8a7a58' }));
+    ctx.save();
+    ctx.beginPath(); ctx.rect(r.x, r.y + 40, r.w, r.h - 42); ctx.clip();
+    const list = this._provList();
+    const rows = Math.floor((r.h - 46) / 20);
+    this.listScroll = clamp(this.listScroll, 0, Math.max(0, list.length - rows));
+    for (let i = 0; i < rows && i + this.listScroll < list.length; i++) {
+      const k = list[i + this.listScroll], st = this.state.kyoten[k.id];
+      const y = r.y + 44 + i * 20;
+      if (this.sel === k.id) frame(ctx, r.x + 6, y - 3, r.w - 12, 19, { fill: 'rgba(249,212,35,0.14)', stroke: 'rgba(249,212,35,0.4)', radius: 3 });
+      const owner = st.owner ? FACTIONS[st.owner] : null;
+      txt(ctx, fitText(ctx, k.jp, 112, '12px "Hiragino Mincho ProN", serif'), r.x + cols[0], y, { font: '12px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
+      txt(ctx, KYOTEN_TYPE[k.type].jp, r.x + cols[1], y, { font: '12px "Hiragino Mincho ProN", serif', color: KYOTEN_TYPE[k.type].color });
+      txt(ctx, owner ? owner.jp : '中立', r.x + cols[2], y, { font: '12px "Hiragino Mincho ProN", serif', color: owner ? owner.color : '#7c8ba1' });
+      txt(ctx, String(st.garrison), r.x + cols[4], y, { font: '12px "Segoe UI", sans-serif', color: '#cbd5e1', align: 'right' });
+      txt(ctx, String(k.scale), r.x + cols[5] + 22, y, { font: '12px "Segoe UI", sans-serif', color: '#8b98ab', align: 'right' });
+    }
+    ctx.restore();
+    if (list.length > rows) txt(ctx, `${this.listScroll + 1}–${Math.min(list.length, this.listScroll + rows)} / ${list.length}`, r.x + r.w - 10, r.y + 26, { font: '10px sans-serif', color: '#6b7787', align: 'right' });
+  }
+
+  /* -------- 時代イベント -------- */
+  _drawEvents(ctx) {
+    const r = L.events;
+    frame(ctx, r.x, r.y, r.w, r.h);
+    frameTitle(ctx, r.x, r.y, r.w, '時代イベント', 'Chronicle');
+    const now = Rule.monthIndex(this.state.year, this.state.month);
+    let y = r.y + 30;
+    const rows = Math.floor((r.h - 34) / 17);
+    // 直近に起きたもの＋これから起きるものを窓で見せる
+    let start = TIMELINE.findIndex((e) => Rule.monthIndex(e.y, e.m) >= now);
+    if (start < 0) start = TIMELINE.length - rows;
+    start = clamp(start - 2, 0, Math.max(0, TIMELINE.length - rows));
+    for (let i = start; i < Math.min(TIMELINE.length, start + rows); i++) {
+      const e = TIMELINE[i], past = Rule.monthIndex(e.y, e.m) < now;
+      txt(ctx, `${e.y}年`, r.x + 12, y, { font: '11px "Segoe UI", sans-serif', color: past ? '#5c6673' : '#d8b26a' });
+      txt(ctx, fitText(ctx, e.jp, r.w - 74, '12px "Hiragino Mincho ProN", serif'), r.x + 62, y,
+        { font: '12px "Hiragino Mincho ProN", serif', color: past ? '#7c8ba1' : '#dbe4ee' });
+      y += 17;
+    }
+  }
+
+  /* -------- 右下: 勢力一覧と年代記 -------- */
+  _drawSide(ctx) {
+    const r = L.side;
+    frame(ctx, r.x, r.y, r.w, r.h);
+    frameTitle(ctx, r.x, r.y, r.w, '勢力と年代記', 'Powers & Log');
+    let y = r.y + 30;
+    const rows = Object.keys(FACTIONS)
+      .filter((fid) => this.state.factions[fid].alive)
+      .map((fid) => ({ fid, n: Rule.ownedKyoten(this.state, fid).length, m: Rule.calcMeibun(this.state, fid) }))
+      .sort((a, b) => b.m - a.m).slice(0, 4);
+    for (const row of rows) {
+      ctx.fillStyle = FACTIONS[row.fid].color; ctx.fillRect(r.x + 12, y + 3, 9, 9);
+      txt(ctx, FACTIONS[row.fid].jp, r.x + 27, y, { font: '12px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
+      txt(ctx, `名分 ${row.m}`, r.x + 130, y, { font: '11px "Segoe UI", sans-serif', color: '#8b98ab' });
+      txt(ctx, `${row.n}`, r.x + r.w - 12, y, { font: '11px "Segoe UI", sans-serif', color: '#8b98ab', align: 'right' });
+      y += 17;
+    }
+    y += 6;
+    for (const l of this.state.log.slice(0, 3)) {
+      txt(ctx, `${l.m}月`, r.x + 12, y, { font: '10px "Segoe UI", sans-serif', color: '#d8b26a' });
+      txt(ctx, fitText(ctx, l.text, r.w - 60, '11px "Hiragino Mincho ProN", serif'), r.x + 46, y, { font: '11px "Hiragino Mincho ProN", serif', color: '#a9b6c6' });
+      y += 16;
+    }
+  }
+
+  _drawResult(ctx) {
+    ctx.fillStyle = 'rgba(5,7,11,0.86)'; ctx.fillRect(0, 0, W, H);
+    const r = this.state.result;
+    txt(ctx, r.win ? '勝 利' : '終 幕', W / 2, H / 2 - 80, { font: '600 58px "Hiragino Mincho ProN", serif', color: r.win ? '#d8b26a' : '#cbd5e1', align: 'center' });
+    txt(ctx, r.reason, W / 2, H / 2 + 6, { font: '16px "Hiragino Mincho ProN", serif', color: '#94a3b8', align: 'center' });
+    txt(ctx, '「機能」からタイトルへ戻れます / Use 機能 to return to the title', W / 2, H / 2 + 46, { font: '12px "Segoe UI", sans-serif', color: '#6b7787', align: 'center' });
+  }
+}
+
+function inRect(r, p) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; }
+function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+/* ============================================================================
+ * 8. 起動
+ * ========================================================================== */
+game.changeScene(new BootScene());
+game.start();
+// 検査（scripts/verify-genpei-boot.mjs）から状態を覗くための橋。
+// ★ 新しい関数・定数を足したらここにも追加する（追加し忘れると検査側が落ちる）。
+window.GENPEI_DEBUG = {
+  game, save, DATA, RULE, FACTIONS, SCENARIOS, AUTHORITY, KYOTEN_TYPE, TIMELINE, Rule,
+  buildState, endTurn, waReki, applyActions, levy,
+  scene: () => (game.scene ? game.scene.constructor.name : null),
+  errors: () => game.errors || [],
+  gotoMap: (scnId, fid) => { game.changeScene(new MapScene(buildState(scnId, fid))); return true; },
+  state: () => (game.scene && game.scene.state) || null,
+};
+</script>
+</body>
+</html>

@@ -17,7 +17,11 @@ const MAP = 'assets/sengoku/gpt/sengoku-japan-map-user-v1.webp';
 const MAP_W = 1672, MAP_H = 941;
 const OUT = process.argv[2] || path.join(ROOT, 'genpei-kyoten-map.png');
 
-const COLOR = { kokuga: '#f9d423', shoen: '#7ed957', tachi: '#ff6b6b', minato: '#4dd0e1' };
+const COLOR = {
+  kokufu: '#f9d423', tachi: '#ff6b6b', kisaku: '#ff9f43', toride: '#e17055', shoen: '#7ed957',
+  tera: '#c792ea', jinja: '#f78fb3', sekisho: '#b0bec5', machi: '#ffd479', mura: '#a5d6a7',
+  minato: '#4dd0e1',
+};
 
 const lines = fs.readFileSync(path.join(ROOT, 'kyoten_ichi.csv'), 'utf8')
   .replace(/^﻿/, '').trim().split(/\r?\n/);
@@ -56,7 +60,9 @@ const png = await page.evaluate(async ({ src, w, h, pts, color }) => {
     ctx.fillText(p.name, p.x, p.y - 7);
   }
   // 凡例
-  const legend = [['国衙', color.kokuga], ['荘園', color.shoen], ['館・城郭', color.tachi], ['湊', color.minato]];
+  const legend = [['国府', color.kokufu], ['館', color.tachi], ['城柵', color.kisaku], ['砦', color.toride],
+                  ['荘園', color.shoen], ['寺', color.tera], ['神社', color.jinja], ['関所', color.sekisho],
+                  ['町', color.machi], ['村', color.mura], ['湊', color.minato]];
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(12, 12, 130, 22 * legend.length + 12);

@@ -34,6 +34,9 @@ const SENGOKU_REFS = ['assets/sengoku/gpt/sengoku-japan-map-user-v1.webp'];
 const MAP = SENGOKU_REFS[0];
 const MAP_W = 1672, MAP_H = 941;
 const MIN_GAP = 11;
+// MX,MY は小数6桁で保存されるため、画素へ戻すと最大 0.001px 程度の丸め誤差が出る。
+// 生成側がちょうど 11px に置いた組が 10.99999px と読めて落ちるので、その分だけ緩める。
+const GAP_EPS = 0.01;
 // 湊はこの距離以内に海があること。絵地図なので湾の描き込みが粗く、12pxでは
 // 桑名・敦賀のような湾奥の湊が届かない。gen-genpei-kyoten.mjs と同値にすること。
 const MINATO_SEA_RADIUS = 20;
@@ -68,7 +71,10 @@ for (const r of rows) {
 }
 const byType = {};
 for (const r of rows) byType[r['種別']] = (byType[r['種別']] ?? 0) + 1;
-const EXPECT_TYPE = { kokuga: 66, shoen: 40, tachi: 25, minato: 16 };
+const EXPECT_TYPE = { kokufu: 66, tachi: 25, kisaku: 24, toride: 12, shoen: 40,
+                      tera: 20, jinja: 20, sekisho: 14, machi: 14, mura: 18, minato: 17 };
+const TYPE_JP = { kokufu:'国府', tachi:'館', kisaku:'城柵', toride:'砦', shoen:'荘園',
+                  tera:'寺', jinja:'神社', sekisho:'関所', machi:'町', mura:'村', minato:'湊' };
 for (const [t, n] of Object.entries(EXPECT_TYPE))
   if (byType[t] !== n) fail(`種別 ${t} の数が ${n} でない: ${byType[t] ?? 0}`);
 for (const t of Object.keys(byType))
@@ -81,11 +87,11 @@ for (const r of rows)
   if (!provIds.has(r['国'])) fail(`${r.ID}: 存在しない国 ${r['国']}`);
 // 国衙は1国1つ
 const kokugaByProv = {};
-for (const r of rows.filter(r => r['種別'] === 'kokuga'))
+for (const r of rows.filter(r => r['種別'] === 'kokufu'))
   kokugaByProv[r['国']] = (kokugaByProv[r['国']] ?? 0) + 1;
 for (const pid of provIds) {
-  if (!kokugaByProv[pid]) fail(`国衙のない国: ${pid}`);
-  else if (kokugaByProv[pid] > 1) fail(`国衙が複数ある国: ${pid}（${kokugaByProv[pid]}）`);
+  if (!kokugaByProv[pid]) fail(`国府のない国: ${pid}`);
+  else if (kokugaByProv[pid] > 1) fail(`国府が複数ある国: ${pid}（${kokugaByProv[pid]}）`);
 }
 
 /* ================= 3. 正規化座標 ================= */
@@ -103,7 +109,7 @@ for (const r of rows) {
 for (let i = 0; i < pts.length; i++) {
   for (let j = i + 1; j < pts.length; j++) {
     const d = Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y);
-    if (d < MIN_GAP) fail(`${pts[i].name} と ${pts[j].name} が近すぎる（${d.toFixed(1)}px < ${MIN_GAP}）`);
+    if (d < MIN_GAP - GAP_EPS) fail(`${pts[i].name} と ${pts[j].name} が近すぎる（${d.toFixed(1)}px < ${MIN_GAP}）`);
   }
 }
 
@@ -207,7 +213,7 @@ for (let i = 0; i < pts.length; i++) {
 }
 
 /* ================= 報告 ================= */
-console.log(`拠点 ${rows.length}件 — 国衙 ${byType.kokuga} / 荘園 ${byType.shoen} / 館・城郭 ${byType.tachi} / 湊 ${byType.minato}`);
+console.log(`拠点 ${rows.length}件 — ` + Object.entries(TYPE_JP).map(([t, jp]) => `${jp}${byType[t] || 0}`).join(' '));
 console.log(`水判定の校正: 既知の城 ${castleRes.length}件中 ${falsePositives}件を海と誤判定（${(fpRate * 100).toFixed(1)}%）`);
 for (const w of warns) console.log(`⚠ ${w}`);
 if (fails.length) {
