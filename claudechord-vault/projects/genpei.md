@@ -25,6 +25,7 @@ tags: [claudechord, project, genpei]
 - 要件: [[genpei_要件定義]]（Must 50 / Should 13 / Could 8・承認待ち）
 - 基本設計: [[genpei_基本設計]]（承認待ち）
 - 詳細設計: [[genpei_詳細設計]]（承認待ち・拠点147のロスター確定）
+- 法務: [[genpei_法務チェック]]（YELLOW 1件＝地図の出所記録漏れ。RED なし）
 - 姉妹作: 戦国風雲記（`sengoku.html`）／ [[sanguo]]（三国志・天下三分）
 
 ## 現在のフェーズ: `= this.phase`
@@ -50,8 +51,20 @@ Must 50件すべてを設計箇所へ対応づけた（同 第10節 トレーサ
 - `scripts/verify-genpei-balance.mjs` 5試行 PASS（113ターン完走・5勢力残存・
   最大占有68%・無血開城が1試行あたり平均88回）
 
-実装順序表21ステップを完了。残りは仕上げ（合戦背景・イベント絵などの絵素材、
-index.html への掲載、公開前の a11y/SEO 監査）。
+実装順序表21ステップを完了。
+
+**公開フェーズ**: `index.html` へ掲載し、公開前監査と法務チェックを通した。
+- 掲載: ツールカード／作品カード／JSON-LD `ItemList`（position 34）／`sitemap.xml`／
+  案内エージェントの `GAMES`（36本目）＋ `site-knowledge.js` 再生成／日英辞書エントリ8件
+- 画像: `scripts/gen-genpei-og.mjs` が実画面から OGP（`assets/og/genpei.jpg` 1200×630 JPEG）と
+  カードサムネイル（`assets/genpei/genpei-thumb.webp` 960×540）を同時に書き出す。
+  UI を変えたら撮り直すだけで両方が追随する
+- 監査: seo-audit ✅／a11y-audit ✅／i18n-check ✅（103件）／release-check（index.html の
+  Google Identity Services が SRI なしで残るが、GSI は安定ハッシュを公開しておらず SRI を付けられない）／
+  dynamic-test で `genpei.html` PASS／`verify-game-assets.mjs` で genpei は404・例外ともに0件
+- 法務: [[genpei_法務チェック]] YELLOW 1件（地図の出所記録漏れ）。RED なし
+
+残りは絵素材（合戦背景・イベント絵）のみ。
 
 ## 成果物（このプロジェクトに紐づくノート）
 
@@ -90,3 +103,13 @@ SORT revision_count ASC
 - 2026-08-05 **【決定・深澤】残る4件を planner 推奨どおり確定。** タイトル=「源平争乱記 / Genpei Souranki」、
   1ターン＝1ヶ月、攻城戦あり（館・城郭の簡易戦のみ・石垣/水堀/天守なし）、プレイ可能5勢力（平氏・鎌倉・木曽・甲斐・奥州）。
   → 構想フェーズの未決事項ゼロ。基本構想 第3版を承認済みとして確定。
+- 2026-08-05 公開監査で**監査スクリプト自体のバグを3件**見つけて直した。いずれも
+  「緑にならない」ではなく「**間違った答えを返していた**」種類で、放置すると監査が信用できなくなる:
+  - `i18n-check.sh`: PCRE の `\x{3040}` を `(*UTF)` なしで使い、LANG 未設定の環境で
+    grep が毎回エラー→0を返す。**日本語を含む全ページが「title英語のみ」と誤警告**されていた
+  - `seo-audit.sh`: `head -c 20000` で head を切っていたため、巨大な JSON-LD を持つ
+    `index.html`（og:* が27KB目）が**OGP完全欠落と誤判定**。`</head>` までを見るよう変更
+  - `a11y-audit.sh`: 装飾用 canvas の正解である `aria-hidden="true"` を認めていなかった
+- 2026-08-05 上記の修正で露出した実際の指摘も是正した。`index.html` のグラフ用 canvas 8枚へ
+  `role="img"` ＋ `aria-label`、`teams-transcriber/offscreen.html` と
+  `float_sink_game/web/index.html` へ `lang="ja"`。

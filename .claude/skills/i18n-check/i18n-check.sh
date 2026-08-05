@@ -23,7 +23,10 @@ while IFS= read -r f; do
   grep -qiE '<html[^>]*lang=' "$f" || ISSUES="$ISSUES lang属性なし;"
   TITLE=$(grep -oiE '<title[^>]*>[^<]*' "$f" | head -1 | sed 's/<[^>]*>//')
   if [ -n "$TITLE" ]; then
-    HAS_JA=$(printf '%s' "$TITLE" | grep -cP '[\x{3040}-\x{30ff}\x{4e00}-\x{9fff}]' || true)
+    # ★ (*UTF) が要る。ロケールが C（LANG 未設定）のままだと PCRE が \x{3040} を
+    #   バイト値と解釈して "character code point value in \x{} is too large" で落ち、
+    #   grep が常に0を返す＝日本語を含む全ページが「title英語のみ」と誤警告される。
+    HAS_JA=$(printf '%s' "$TITLE" | grep -cP '(*UTF)[\x{3040}-\x{30ff}\x{4e00}-\x{9fff}]' || true)
     HAS_EN=$(printf '%s' "$TITLE" | grep -cE '[A-Za-z]{3,}' || true)
     if [ "${HAS_JA:-0}" -gt 0 ] && [ "${HAS_EN:-0}" = 0 ]; then ISSUES="$ISSUES [warn]title日本語のみ;"; fi
     if [ "${HAS_JA:-0}" = 0 ] && [ "${HAS_EN:-0}" -gt 0 ]; then ISSUES="$ISSUES [warn]title英語のみ;"; fi

@@ -29,7 +29,9 @@ while IFS= read -r f; do
   [ "${NOALT:-0}" -gt 0 ] && ISSUES="$ISSUES alt無しimg×${NOALT};"
   # canvasにaria/role/フォールバックなし
   if grep -qi '<canvas' "$f"; then
-    grep -oiE '<canvas[^>]*>' "$f" | grep -qiE 'aria-label|role=' || ISSUES="$ISSUES canvasにaria-label/roleなし;"
+    # ★ aria-hidden="true" も正解として認める。装飾用canvas（背景パーティクル等）に
+    #   ラベルを付けるのはむしろ誤りで、支援技術から隠すのが正しい扱い。
+    grep -oiE '<canvas[^>]*>' "$f" | grep -qiE 'aria-label|role=|aria-hidden' || ISSUES="$ISSUES canvasにaria-label/role/aria-hiddenなし;"
   fi
   # アニメーション持ちページ（rAF使用）でreduced-motion未対応（警告扱い＝FAILにはしない）
   if grep -q 'requestAnimationFrame' "$f" && ! grep -q 'prefers-reduced-motion' "$f"; then
