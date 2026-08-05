@@ -10,6 +10,8 @@
  *   1. 規定ターン数まで進行が止まらない（防衛戦キューやオーバーレイで詰まらない）
  *   2. 未捕捉例外・フレーム内例外（engine.errors）がいずれも0件
  *      ※ GameKit は update/draw の例外を捕捉して継続するため pageerror だけでは足りない
+ *      ※ ターンを進めるだけでは描画が一度も走らず描画系の例外を取り逃がすため、
+ *        1ターンごとに requestAnimationFrame を1回待って実際にフレームを回す
  *   3. 勢力の淘汰が健全な帯に収まる
  *        - 序盤で全滅しない（小勢力が一瞬で消えて数勢力だけにならない）
  *        - 終盤までに淘汰が進む（誰も滅びず初期勢力数のままにならない）
@@ -108,6 +110,8 @@ async function runTrial(page, turns) {
       }
       if (gameover !== null) break;
       if (st.turn === before) { stalled = before; break; }
+      // 実際に1フレーム描画させる。ここを飛ばすと描画系の例外を一切拾えない
+      await new Promise(r => requestAnimationFrame(r));
       if (st.turn % 20 === 0) marks.push(snapshot());
     }
     const end = snapshot();
