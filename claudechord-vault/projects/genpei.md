@@ -42,10 +42,16 @@ Must 50件すべてを設計箇所へ対応づけた（同 第10節 トレーサ
 - Phase 2 名分・無血開城・朝敵認定・御恩と奉公・勧誘（コマンド5種が開通）
 - Phase 3 ヘックス合戦（騎射の間合い・士気決着・名乗り・一騎討ち）・攻城戦
 - Phase 4 渡海・海戦・潮流・水軍の離反
+- Phase 5 史実イベントの効果・三種の神器・人物列伝・家紋と肖像（すべて Canvas 描画）
 
-`scripts/verify-genpei-boot.mjs` 全27項目 PASS（http / file:// 両方）。
+検査:
+- `scripts/verify-genpei-boot.mjs` 全27項目 PASS（http / file:// 両方）
+- `scripts/verify-genpei-kyoten.mjs` 拠点270 PASS
+- `scripts/verify-genpei-balance.mjs` 5試行 PASS（113ターン完走・5勢力残存・
+  最大占有68%・無血開城が1試行あたり平均88回）
 
-次は Phase 5（全6シナリオの通し・養和の飢饉の演出・史実イベント・肖像・人物列伝）。
+実装順序表21ステップを完了。残りは仕上げ（合戦背景・イベント絵などの絵素材、
+index.html への掲載、公開前の a11y/SEO 監査）。
 
 ## 成果物（このプロジェクトに紐づくノート）
 
