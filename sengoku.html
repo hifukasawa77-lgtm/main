@@ -7547,6 +7547,60 @@ const FORMATIONS = {
   hoen:    {jp:'方円', en:'Circle',     atk:0.92, def:1.20, beats:'gyorin'},
   gankou:  {jp:'雁行', en:'Wild-goose', atk:1.02, def:1.02, beats:null},
 };
+/* ---- 剣術指南（剣豪を指南役に任じる） ----
+ * 武将の能力値は静的な DATA.genById[gid].stats を各所が直接読むため、鍛錬の成果を
+ * そこへ書くとセーブをまたいで汚染される。局面ごとの値は st.generals[gid].trained に
+ * 持ち、参照側は generalBu() を通す。
+ * armyQuality() は state を受け取らない関数なので、現在の局面を ACTIVE_STATE で参照する。
+ * 局面が未設定・古い場合は素の能力値へ落ちるだけで、誤った値にはならない。
+ */
+let ACTIVE_STATE = null;
+const SWORD_TRAINING_CAP = 10;     // 鍛錬による武勇の上限（+10）
+function setActiveState(st){ ACTIVE_STATE = st || null; }
+function generalBu(gid){
+  const g = DATA.genById[gid];
+  const base = g ? g.stats.bu : 50;
+  const gs = ACTIVE_STATE && ACTIVE_STATE.generals && ACTIVE_STATE.generals[gid];
+  const t = gs && Number.isFinite(gs.trained) ? gs.trained : 0;
+  return base + Math.max(0, Math.min(SWORD_TRAINING_CAP, t));
+}
+// その武将が剣豪（兵法者）か。SWORD_MASTER_GENERALS と既存 SPECIALIST_GENERALS の剣豪を拾う
+function isSwordMaster(gid){
+  const g = DATA.genById[gid];
+  return !!(g && (g.schoolJP || g.roleJP==='剣豪' || g.roleJP==='槍術' || g.roleJP==='居合'));
+}
+function swordInstructorOf(st, did){
+  if (!st.swordInstructors || typeof st.swordInstructors!=='object') st.swordInstructors={};
+  return st.swordInstructors[did] || null;
+}
+// 毎ターン、指南役と同じ城にいる自家の武将を鍛える（指南役自身は対象外）
+function trainUnderSwordInstructors(st){
+  const lines=[];
+  if (!st.swordInstructors || typeof st.swordInstructors!=='object') return lines;
+  Object.entries(st.swordInstructors).forEach(([did,gid])=>{
+    const ins=st.generals[gid];
+    // 指南役が死亡・離反したら任を解く
+    if (!ins || !ins.alive || ins.daimyo!==did){ delete st.swordInstructors[did]; return; }
+    const pid=ins.location; const prov=pid && st.provinces[pid];
+    if (!prov) return;
+    let n=0;
+    (prov.generals||[]).forEach(other=>{
+      if (other===gid) return;
+      const g=st.generals[other];
+      if (!g || !g.alive || g.daimyo!==did) return;
+      const cur=Number.isFinite(g.trained)?g.trained:0;
+      if (cur>=SWORD_TRAINING_CAP) return;
+      g.trained=cur+1; n++;
+    });
+    if (n>0 && did===st.playerDaimyo){
+      const insName=(DATA.genById[gid]||{}).nameJP||gid;
+      const provName=(DATA.provById[pid]||{}).nameJP||pid;
+      lines.push({jp:'【指南】'+provName+'で'+insName+'が'+n+'名を鍛えた（武+1）',
+                  en:insName+' trained '+n+' retainers at '+provName});
+    }
+  });
+  return lines;
+}
 const FORMATION_ORDER=['gankou','gyorin','kakuyoku','choda','hoen'];
 // AI の陣形選択（性格・攻守で決定論寄りに）
 function aiFormationFor(st, did, isAttacker){
@@ -7560,7 +7614,7 @@ function armyQuality(generals, year, family, defender, castleLevel, terrain, nav
   let bu=50, tou=50;
   if (generals && generals.length){
     let mb=0, mt=0;
-    generals.forEach(gid=>{ const g=DATA.genById[gid]; if(!g) return; mb=Math.max(mb,g.stats.bu); mt=Math.max(mt,g.stats.tou); });
+    generals.forEach(gid=>{ const g=DATA.genById[gid]; if(!g) return; mb=Math.max(mb,generalBu(gid)); mt=Math.max(mt,g.stats.tou); });
     bu=mb||50; tou=mt||50;
   }
   const comp = compFor(year, family);
@@ -8303,7 +8357,7 @@ class ScenarioSelectScene extends GameKit.Scene {
  * MapScene — 戦略マップ（ハブ）
  * =================================================================== */
 class MapScene extends GameKit.Scene {
-  constructor(state){ super(); this.state=normalizeGameState(normalizeDiplomacyState(state)); refreshDiplomaticTreaties(this.state,[]); applyScenarioCastleNames(state.scenarioId); }
+  constructor(state){ super(); this.state=normalizeGameState(normalizeDiplomacyState(state)); refreshDiplomaticTreaties(this.state,[]); applyScenarioCastleNames(state.scenarioId); setActiveState(this.state); }
   enter(game){
     setCanvasViewportMode('fit');
     BGM.setMood('map'); BGM.start();
@@ -10547,6 +10601,7 @@ class MapScene extends GameKit.Scene {
     st.season = Math.floor((st.month-1)/3);
     rollWeatherForState(st);
     st.turn++;
+    const shinanLog=trainUnderSwordInstructors(st);
     const diplomacyLog=refreshDiplomaticTreaties(st,[]);
     this.selected=null; this.mode='select';
     this._updateDaimyoAlive();
@@ -10599,7 +10654,7 @@ class MapScene extends GameKit.Scene {
     // 年明けに寿命・下剋上／天災・ランダムイベント
     const lifeLog = (st.month===1) ? this._yearlyLifeEvents(st) : [];
     const eventLog = (st.month===1) ? this._yearlyEvents(st) : [];
-    const aiLog=(st.pendingTurnLog||[]).concat(diplomacyLog).concat(ikkiLog).concat(forceLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
+    const aiLog=(st.pendingTurnLog||[]).concat(diplomacyLog).concat(shinanLog).concat(ikkiLog).concat(forceLog).concat(lifeLog).concat(eventLog); st.pendingTurnLog=null;
     // 歴史的ゲームイベントチェック（優先）
     const histEvts = this._checkHistoricalEvents(st);
     if (playerGekokujo){
@@ -11583,14 +11638,17 @@ class MapScene extends GameKit.Scene {
       bs.push({x:px+pw-230, y:py+ph-84, w:170, h:64, jp:'閉じる', en:'Close', sz:24, accent:'rgba(232,192,122,0.6)', action:()=>{ this.overlay=null; }});
     } else if (ov.type==='retainerAction'){
       const gid=ov.gid; const px=W/2-560, py=H/2-460, pw=1120, ph=920;
-      const rewards=['kanjo','shokin','chigyo','treasure','kani','engumi','henki','joshu','meiyo'];
+      const rewards=['kanjo','shokin','chigyo','treasure','kani','engumi','henki','joshu','meiyo','shinan'];
       const punish=['kaijo','rien','ryodo','kaniRevoke','tsuiho','seppuku'];
-      const cols=3, bw=(pw-160-(cols-1)*20)/cols, bh=104, gy=py+300;
+      // 褒賞は3行に収める（下の処罰行のY座標が3行前提のため）。項目が9を超えたら列を増やす
+      const cols=Math.max(3, Math.ceil(rewards.length/3)), bw=(pw-160-(cols-1)*20)/cols, bh=104, gy=py+300;
       rewards.forEach((k,i)=>{ const def=RETAINER_ACTIONS[k]; const av=def.avail(this.state,gid); const r=Math.floor(i/cols), c=i%cols;
-        bs.push({x:px+80+c*(bw+20), y:gy+r*(bh+16), w:bw, h:bh, jp:def.jp, en:def.en, sz:24, ensz:13, accent:def.accent, on:av.ok, sub:av.cost, _hitFirst:true, action:g=>this._retainerAct(g,gid,k)}); });
+        bs.push({x:px+80+c*(bw+20), y:gy+r*(bh+16), w:bw, h:bh, jp:def.jp, en:def.en, sz:cols>3?21:24, ensz:cols>3?12:13, accent:def.accent, on:av.ok, sub:av.cost, _hitFirst:true, action:g=>this._retainerAct(g,gid,k)}); });
       const py2=gy+3*(bh+16)+16, pbh=72;
+      // 処罰は常に3列。褒賞側の列数に引きずられると幅が縮んで説明文が重なる
+      const pbw=(pw-160-2*20)/3;
       punish.forEach((k,i)=>{ const def=RETAINER_ACTIONS[k]; const av=def.avail(this.state,gid), r=Math.floor(i/3), c=i%3;
-        bs.push({x:px+80+c*(bw+20), y:py2+r*(pbh+12), w:bw, h:pbh, jp:def.jp, en:def.en, sz:22, ensz:12, accent:def.accent, on:av.ok, sub:av.cost, _hitFirst:true, action:g=>this._retainerAct(g,gid,k)}); });
+        bs.push({x:px+80+c*(pbw+20), y:py2+r*(pbh+12), w:pbw, h:pbh, jp:def.jp, en:def.en, sz:22, ensz:12, accent:def.accent, on:av.ok, sub:av.cost, _hitFirst:true, action:g=>this._retainerAct(g,gid,k)}); });
       bs.push({x:px+pw/2-170, y:py+ph-84, w:340, h:66, jp:'\u2190 \u5bb6\u81e3\u56e3\u3078\u623b\u308b', en:'Back', sz:24, accent:'rgba(232,192,122,0.6)', action:()=>{ this.overlay={type:'retainers', page:ov.back||0}; }});
     } else if (ov.type==='retainerReaction'){
       const px=W/2-520, py=H/2-330, pw=1040, ph=660;
@@ -13381,7 +13439,9 @@ class MapScene extends GameKit.Scene {
     });
     // 能力値
     const statY=infoY+110;
-    const statItems=[['統率',g.stats.tou],['武勇',g.stats.bu],['知略',g.stats.chi],['政治',g.stats.sei],['忠誠',gs.loyalty],['野心',(gs.ambition!=null?gs.ambition:deriveAmbition(g))]];
+    // 鍛錬（剣術指南）の成果は素の能力値と分けて「95(+8)」の形で見せる
+    const trained=Math.max(0,Math.min(SWORD_TRAINING_CAP, Number.isFinite(gs.trained)?gs.trained:0));
+    const statItems=[['統率',g.stats.tou],['武勇',trained>0?(g.stats.bu+'(+'+trained+')'):g.stats.bu],['知略',g.stats.chi],['政治',g.stats.sei],['忠誠',gs.loyalty],['野心',(gs.ambition!=null?gs.ambition:deriveAmbition(g))]];
     const statColW=(pw-80)/statItems.length;
     statItems.forEach((s,i)=>{
       const sx=px+40+i*statColW;
@@ -14632,6 +14692,23 @@ const RETAINER_ACTIONS = {
   kanjo:  { jp:'感状', en:'Commendation', accent:'rgba(232,192,122,0.6)', punish:false,
     avail:()=>({ok:true, cost:'金0'}),
     apply:(st,gid)=>{ const g=st.generals[gid], h=retHonors(g); h.kanjo++; const d=st.daimyo[st.playerDaimyo]; d.fame=(d.fame||0)+1; return {loy:6, line:'感状を与えた'}; } },
+  // 剣豪だけに出る任命。以後その城にいる自家武将が毎ターン鍛えられる（武+1・上限+10）
+  shinan: { jp:'剣術指南', en:'Sword Instructor', accent:'rgba(56,189,248,0.62)', punish:false, gold:200,
+    avail:(st,gid)=>{
+      if (!isSwordMaster(gid)) return {ok:false, cost:'剣豪のみ'};
+      const g=st.generals[gid];
+      if (!g || !g.location) return {ok:false, cost:'在城していない'};
+      if (swordInstructorOf(st, st.playerDaimyo)===gid) return {ok:false, cost:'任命済み'};
+      return {ok:st.daimyo[st.playerDaimyo].gold>=200, cost:'金200'};
+    },
+    apply:(st,gid)=>{
+      st.daimyo[st.playerDaimyo].gold-=200;
+      if (!st.swordInstructors || typeof st.swordInstructors!=='object') st.swordInstructors={};
+      st.swordInstructors[st.playerDaimyo]=gid;
+      const g=st.generals[gid], gd=DATA.genById[gid]||{};
+      const provName=(DATA.provById[g.location]||{}).nameJP||g.location;
+      return {loy:8, line:provName+'の剣術指南に任じた（'+(gd.schoolJP||'兵法')+'）'};
+    } },
   shokin: { jp:'賞金', en:'Cash reward', accent:'rgba(251,191,36,0.6)', punish:false, gold:150,
     avail:(st)=>({ok:st.daimyo[st.playerDaimyo].gold>=150, cost:'金150'}),
     apply:(st)=>{ st.daimyo[st.playerDaimyo].gold-=150; return {loy:10, line:'賞金150貫を下賜'}; } },
