@@ -1150,7 +1150,8 @@ function aiPolitics(state, fid) {
 }
 
 /* ターン終了（詳細設計 第5節のシーケンス。Phase 1 で実装済みの段のみ） */
-function endTurn(state) {
+function endTurn(state, audio) {
+  const wasFamineActive = Rule.famineActive(state);
   // 1. 時代イベントの発火（ログを出し、fx があれば盤面へ効かせる）
   for (const ev of TIMELINE) {
     if (ev.y !== state.year || ev.m !== state.month) continue;
@@ -1251,6 +1252,11 @@ function endTurn(state) {
   // 11. 勝敗
   const v = Rule.checkVictory(state);
   if (v.done) state.result = v;
+  // 飢饉(kikin) の開始検出。false→true になった最初のターンだけ、沈んだ不吉な低音を1回鳴らす
+  if (audio && !wasFamineActive && Rule.famineActive(state)) {
+    audio.beep(96, 0.5, 'sawtooth', 0.2);
+    audio.beep(72, 0.7, 'sawtooth', 0.22);
+  }
   // 13. オートセーブ
   save.set('autosave', state);
   return state;
@@ -2079,7 +2085,7 @@ class MapScene extends GameKit.Scene {
       for (const b of this.cmdButtons) {
         if (!hit(b, p)) continue;
         if (b.id === 'endTurn') {
-          if (!this.state.result) { endTurn(this.state); g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]); }
+          if (!this.state.result) { endTurn(this.state, g.audio); g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]); }
         } else if (b.id === 'kino') { g.changeScene(new TitleScene()); return; }
         else if (b.id === 'jinji2') { g.changeScene(new RetsudenScene(this.state, () => new MapScene(this.state))); return; }
         else if (OPEN_COMMANDS.has(b.id)) { this.panel = this.panel === b.id ? null : b.id; this.panelScroll = 0; }
@@ -2156,7 +2162,7 @@ class MapScene extends GameKit.Scene {
       this._clampCam();
     }
     if (!p.isDown) this.drag = null;
-    if (g.input.justPressed('Space') && !this.state.result) endTurn(this.state);
+    if (g.input.justPressed('Space') && !this.state.result) endTurn(this.state, g.audio);
   }
   _notice(msg) { this.notice = msg; this.noticeT = 2.6; }
   _provList() { return (DATA.byProvince[this.province] || []).slice().sort((a, b) => KYOTEN_TYPE[a.type].tier - KYOTEN_TYPE[b.type].tier || b.scale - a.scale); }
@@ -3100,10 +3106,19 @@ class BattleScene extends GameKit.Scene {
     if (!this.sel) return;
     if (u && u.side === 'def') {
       if (!Battle.canShoot(b, this.sel, u)) { this._notice('間合いが合わない'); return; }
+      const isKisha = hexDistance(this.sel, u) > 1; // 間合いを空けての騎射(kisha)か、密着の白兵か
       const dmg = Battle.damage(b, this.sel, u);
       Battle.applyHit(b, this.sel, u, dmg);
       this.sel.acted = true; this.sel = null; this.reach = null;
-      g.audio.jingle([{ f: 740, d: 0.05 }, { f: 494, d: 0.09 }]);
+      if (u.troops <= 0) {
+        this._kuzureSfx(g);
+      } else if (isKisha) {
+        // 騎射(kisha): 矢が放たれる風切り音 → 高めのbeepで着弾
+        g.audio.noise(0.08, 0.14);
+        g.audio.beep(880, 0.07, 'square', 0.16);
+      } else {
+        g.audio.jingle([{ f: 740, d: 0.05 }, { f: 494, d: 0.09 }]);
+      }
       return;
     }
     const key = `${this.hover.hx},${this.hover.hy}`;
@@ -3121,16 +3136,36 @@ class BattleScene extends GameKit.Scene {
     if (!c.ok) { this._notice(c.why); return; }
     const r = Battle.resolveDuel(b, this.sel, foe);
     this.sel.acted = true; this.sel = null; this.reach = null;
-    g.audio.jingle(r.accepted ? [{ f: 330, d: 0.1 }, { f: 494, d: 0.1 }, { f: 659, d: 0.18 }] : [{ f: 262, d: 0.14 }]);
+    if (r.accepted) {
+      // 名乗り(nanori)受諾: 法螺貝を模した低音beep → triangleの武張ったファンファーレ
+      g.audio.beep(110, 0.24, 'sawtooth', 0.22);
+      g.audio.jingle([{ f: 220, d: 0.09 }, { f: 330, d: 0.09 }, { f: 440, d: 0.1 }, { f: 587, d: 0.24 }], 'triangle', 0.2);
+    } else {
+      g.audio.jingle([{ f: 262, d: 0.14 }]);
+    }
+  }
+  _kuzureSfx(g) {
+    // 崩れ(kuzure): 士気崩壊で浮足立つ様子。noiseのざわめき＋音程が下がっていくsawtoothのjingle
+    g.audio.noise(0.2, 0.14);
+    g.audio.jingle([{ f: 349, d: 0.09 }, { f: 294, d: 0.09 }, { f: 220, d: 0.16 }], 'sawtooth', 0.17);
   }
   _endRound(g) {
     const b = this.b;
+    const logBefore = b.log.length;
     Battle.aiTurn(b, 'def');
     Battle.tickMorale(b);
     Battle.tickSuigunDefect(b, this.state);
     for (const u of b.units) u.acted = false;
     b.round++;
-    if (Battle.tickTide(b)) g.audio.jingle([{ f: 196, d: 0.16 }, { f: 262, d: 0.2 }]);
+    // 崩れ(kuzure): AIの一手や士気崩壊で新たに「崩れた/退いた」ログが出たら1回だけ鳴らす
+    if (b.log.length > logBefore
+      && b.log.slice(0, b.log.length - logBefore).some((s) => s.includes('崩れた') || s.includes('退いた'))) {
+      this._kuzureSfx(g);
+    }
+    if (Battle.tickTide(b)) {
+      // 潮の変わり目(shio): triangleでゆるやかにうねる音列。他のjingleと被らない独自の周波数パターン
+      g.audio.jingle([{ f: 220, d: 0.18 }, { f: 262, d: 0.14 }, { f: 233, d: 0.16 }, { f: 294, d: 0.24 }], 'triangle', 0.15);
+    }
     this.sel = null; this.reach = null;
     const o = Battle.over(b);
     if (o.done) {
