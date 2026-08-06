@@ -1269,6 +1269,23 @@ function endTurn(state, audio) {
 const PORTRAIT_ROOT = 'assets/genpei/ai-portraits/';
 const SITE_ICON_ROOT = 'assets/genpei/site-icons/';
 const SITE_ICON_VARIANTS = ['province', 'local', 'detail'];
+const BATTLE_BG_ROOT = 'assets/genpei/battles/';
+const BATTLE_BG_IDS = ['ishibashiyama', 'fujikawa', 'kurikara', 'ujigawa', 'ichinotani', 'yashima', 'dannoura'];
+const BATTLE_BG_MATCH = [
+  [/石橋山/, 'ishibashiyama'], [/富士川/, 'fujikawa'], [/倶利伽羅/, 'kurikara'],
+  [/宇治/, 'ujigawa'], [/一ノ谷|一谷/, 'ichinotani'], [/屋島/, 'yashima'], [/壇/, 'dannoura'],
+];
+function battleBgFor(jp) { const m = BATTLE_BG_MATCH.find(([re]) => re.test(jp)); return m ? m[1] : null; }
+const EVENT_ART_ROOT = 'assets/genpei/events/';
+const EVENT_ART_IDS = ['mochihito-decree', 'kiyomori-death', 'nanto-shoutou', 'miyako-ochi', 'atsumori', 'nasu-no-yoichi', 'antoku-suibotsu', 'koromogawa'];
+const EVENT_ART_BY_FX = { nanto: 'nanto-shoutou', kiyomori_death: 'kiyomori-death', miyako_ochi: 'miyako-ochi', dannoura: 'antoku-suibotsu' };
+const EVENT_ART_BY_TEXT = [[/扇の的/, 'nasu-no-yoichi'], [/一ノ谷/, 'atsumori'], [/衣川/, 'koromogawa']];
+function eventArtFor(ev) {
+  if (ev.fx && EVENT_ART_BY_FX[ev.fx]) return EVENT_ART_BY_FX[ev.fx];
+  const m = EVENT_ART_BY_TEXT.find(([re]) => re.test(ev.jp));
+  return m ? m[1] : null;
+}
+const OPENING_ART = { s1180: 'mochihito-decree' };
 const PREHISTORY_PORTRAIT_IDS = {
   '源義朝': 'pre_minamoto_yoshitomo', '源為義': 'pre_minamoto_tameyoshi',
   '平忠正': 'pre_taira_tadamasa', '鎌田政清': 'pre_kamada_masakiyo',
@@ -1279,6 +1296,8 @@ const ASSETS = {
   map: null, mapReady: false,
   portraits: {}, portraitsReady: false,
   siteIcons: { province: {}, local: {}, detail: {} }, siteIconsReady: false,
+  battleBg: {}, battleBgReady: false,
+  eventArt: {}, eventArtReady: false,
 };
 const MAP_NATIVE_W = 1672;
 const MAP_ASPECT = 941 / MAP_NATIVE_W;
@@ -1321,6 +1340,30 @@ function loadSiteIcons() {
   })));
   return Promise.all(jobs).then((loaded) => {
     ASSETS.siteIconsReady = true;
+    return loaded.filter(Boolean).length;
+  });
+}
+function loadBattleBg() {
+  const jobs = BATTLE_BG_IDS.map((id) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { ASSETS.battleBg[id] = img; resolve(true); };
+    img.onerror = () => resolve(false);
+    img.src = BATTLE_BG_ROOT + id + '.webp';
+  }));
+  return Promise.all(jobs).then((loaded) => {
+    ASSETS.battleBgReady = true;
+    return loaded.filter(Boolean).length;
+  });
+}
+function loadEventArt() {
+  const jobs = EVENT_ART_IDS.map((id) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { ASSETS.eventArt[id] = img; resolve(true); };
+    img.onerror = () => resolve(false);
+    img.src = EVENT_ART_ROOT + id + '.webp';
+  }));
+  return Promise.all(jobs).then((loaded) => {
+    ASSETS.eventArtReady = true;
     return loaded.filter(Boolean).length;
   });
 }
@@ -1713,7 +1756,7 @@ class BootScene extends GameKit.Scene {
   enter(g) {
     this.msg = 'データを読み込んでいます / Loading';
     this.t = 0;
-    Promise.all([loadData(), loadMap(), loadPortraits(), loadSiteIcons()])
+    Promise.all([loadData(), loadMap(), loadPortraits(), loadSiteIcons(), loadBattleBg(), loadEventArt()])
       .then(() => { g.changeScene(new TitleScene()); })
       .catch((e) => {
         console.error(e);
@@ -1854,6 +1897,15 @@ class OpeningScene extends GameKit.Scene {
   }
   draw(ctx, g) {
     this.bd.draw(ctx);
+    const artId = OPENING_ART[this.scn.id];
+    const artImg = artId && ASSETS.eventArt[artId];
+    if (artImg) {
+      const s = Math.max(W / artImg.naturalWidth, H / artImg.naturalHeight);
+      const dw = artImg.naturalWidth * s, dh = artImg.naturalHeight * s;
+      ctx.save(); ctx.globalAlpha = 0.55;
+      ctx.drawImage(artImg, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.restore();
+    }
     txt(ctx, this.scn.jp, W / 2, 66, { font: '600 34px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
     txt(ctx, this.scn.en, W / 2, 112, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58', align: 'center' });
     frame(ctx, 200, 160, W - 400, H - 160 - 140);
@@ -1984,6 +2036,7 @@ class MapScene extends GameKit.Scene {
     this.sel = mine.length ? mine[0].id : null;
     this.listScroll = 0;
     this.notice = null; this.noticeT = 0;
+    this.eventArtId = null; this.eventArtT = 0;
     this.panel = null; this.panelScroll = 0; this.panelButtons = [];
     this.cmdButtons = this._layoutCommands();
     this._bindWheel(g);
@@ -2069,6 +2122,7 @@ class MapScene extends GameKit.Scene {
   update(dt, g) {
     const p = g.input.pointer;
     if (this.noticeT > 0) this.noticeT -= dt;
+    if (this.eventArtT > 0) this.eventArtT -= dt;
 
     if (p.justPressed && this.panel) {
       // 開いているパネルの操作を最優先で拾う（背後の地図に吸われないように）
@@ -2085,7 +2139,7 @@ class MapScene extends GameKit.Scene {
       for (const b of this.cmdButtons) {
         if (!hit(b, p)) continue;
         if (b.id === 'endTurn') {
-          if (!this.state.result) { endTurn(this.state, g.audio); g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]); }
+          if (!this.state.result) { this._fireEventArt(); endTurn(this.state, g.audio); g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]); }
         } else if (b.id === 'kino') { g.changeScene(new TitleScene()); return; }
         else if (b.id === 'jinji2') { g.changeScene(new RetsudenScene(this.state, () => new MapScene(this.state))); return; }
         else if (OPEN_COMMANDS.has(b.id)) { this.panel = this.panel === b.id ? null : b.id; this.panelScroll = 0; }
@@ -2162,9 +2216,35 @@ class MapScene extends GameKit.Scene {
       this._clampCam();
     }
     if (!p.isDown) this.drag = null;
-    if (g.input.justPressed('Space') && !this.state.result) endTurn(this.state, g.audio);
+    if (g.input.justPressed('Space') && !this.state.result) { this._fireEventArt(); endTurn(this.state, g.audio); }
   }
   _notice(msg) { this.notice = msg; this.noticeT = 2.6; }
+  /* このターン終了で発火する史実イベントにイベント絵があれば、endTurn() 適用前に拾って表示予約する */
+  _fireEventArt() {
+    const y = this.state.year, m = this.state.month;
+    for (const ev of TIMELINE) {
+      if (ev.y !== y || ev.m !== m) continue;
+      const id = eventArtFor(ev);
+      if (id) { this.eventArtId = id; this.eventArtLabel = ev.jp; this.eventArtT = 6.0; return; }
+    }
+  }
+  _drawEventArt(ctx) {
+    const img = ASSETS.eventArt[this.eventArtId];
+    if (!img) return;
+    const a = this.eventArtT > 5.4 ? (6.0 - this.eventArtT) / 0.6 : clamp(this.eventArtT / 1.2, 0, 1);
+    const w = 440, h = 248, x = W / 2 - w / 2, y = 76;
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+    const s = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+    const dw = img.naturalWidth * s, dh = img.naturalHeight * s;
+    ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+    ctx.restore();
+    frame(ctx, x, y, w, 34 + h, { fill: 'rgba(0,0,0,0)', stroke: 'rgba(216,178,106,0.6)', radius: 4 });
+    frame(ctx, x, y + h, w, 34, { fill: 'rgba(8,11,17,0.82)', stroke: 'rgba(216,178,106,0.6)', radius: 4 });
+    txt(ctx, this.eventArtLabel, W / 2, y + h + 22, { font: '13px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+    ctx.restore();
+  }
   _provList() { return (DATA.byProvince[this.province] || []).slice().sort((a, b) => KYOTEN_TYPE[a.type].tier - KYOTEN_TYPE[b.type].tier || b.scale - a.scale); }
 
   _pickProvince(p) {
@@ -2206,6 +2286,7 @@ class MapScene extends GameKit.Scene {
       txt(ctx, this.notice, W / 2, H - 112, { font: '13px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
       ctx.restore();
     }
+    if (this.eventArtT > 0) this._drawEventArt(ctx);
     if (this.panel) this._drawPanel(ctx, g);
     if (this.state.result) this._drawResult(ctx);
   }
@@ -3178,6 +3259,14 @@ class BattleScene extends GameKit.Scene {
   draw(ctx, g) {
     const b = this.b;
     ctx.fillStyle = '#05070b'; ctx.fillRect(0, 0, W, H);
+    const bgId = battleBgFor(b.target.jp);
+    const bgImg = bgId && ASSETS.battleBg[bgId];
+    if (bgImg) {
+      const s = Math.max(W / bgImg.naturalWidth, H / bgImg.naturalHeight);
+      const dw = bgImg.naturalWidth * s, dh = bgImg.naturalHeight * s;
+      ctx.drawImage(bgImg, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.fillStyle = 'rgba(5,7,11,0.62)'; ctx.fillRect(0, 0, W, H);
+    }
     // 見出し
     frame(ctx, 20, 12, W - 40, 42, { fill: 'rgba(216,178,106,0.10)', stroke: 'rgba(216,178,106,0.30)', radius: 5 });
     txt(ctx, `${b.target.jp} ${b.mode === 'siege' ? '攻め' : b.mode === 'naval' ? 'の海戦' : 'の野戦'}`, 34, 20,
@@ -3476,7 +3565,7 @@ window.GENPEI_DEBUG = {
   buildState, endTurn, waReki, applyActions, levy, ZOOM_CAP, applyEventEffect, TIMELINE,
   tryBloodlessOpen, declareChoteki, donateCourt, grantAndo, grantShinon, purgeBand, tryRecruit, aiPolitics, buildBands,
   GENERALS, TROOP_TYPES, TERRAIN, HEX, Battle, initBattle, hexDistance, BattleScene, SUIGUN, islandOf,
-  PREHISTORY, GEN_NOTE, RetsudenScene, drawPortrait, drawKamon,
+  PREHISTORY, GEN_NOTE, RetsudenScene, OpeningScene, drawPortrait, drawKamon,
   gotoRetsuden: () => { game.changeScene(new RetsudenScene(buildState('s1180', 'kamakura'), () => new TitleScene())); return true; },
   gotoBattle: (scnId, fid, from, to) => { const st = buildState(scnId, fid);
     game.changeScene(new BattleScene(st, { fid, from, to, troops: 3000 }, () => {})); return true; },

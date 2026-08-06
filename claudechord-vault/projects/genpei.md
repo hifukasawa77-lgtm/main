@@ -64,7 +64,12 @@ Must 50件すべてを設計箇所へ対応づけた（同 第10節 トレーサ
   dynamic-test で `genpei.html` PASS／`verify-game-assets.mjs` で genpei は404・例外ともに0件
 - 法務: [[genpei_法務チェック]] GREEN（地図の出所記録漏れは深澤確認・`assets/sengoku/README.md`記録で是正済み）
 
-残りは絵素材（合戦背景・イベント絵）とSFXのみ（S-08/S-09/S-10、着手中）。
+**2026-08-06追記**: Should項目 S-08（合戦背景画7枚）・S-09（イベント絵8枚）・S-10（専用SFX5種）を完了。
+- 合戦背景・イベント絵はgraphic-designerエージェントがPython3+Pillowでプロシージャル生成（外部AI生成ツール不使用・完全オリジナル。出所は`assets/genpei/README.md`に記録）。12世紀の時代考証（大鎧・水干・薙刀・和船。天守閣や火縄銃等の戦国期意匠は排除）を遵守
+- SFXはmusic-generatorエージェントがGameKitの`Sfx`（beep/noise/jingle）のみで実装。音声ファイル追加なし
+- 深澤(PM)が着手承認。統合（ASSETS読込・BattleScene全画面背景・OpeningScene/MapSceneのイベントバナー）はメインセッションが実施し、`verify-genpei-boot.mjs`（27項目）・`verify-genpei-balance.mjs`（150ターン×5試行）・Playwrightでの目視確認済み
+
+Should項目は全13件完了。Could項目（C-01〜C-08）のみ任意で残存。
 
 ## 成果物（このプロジェクトに紐づくノート）
 
