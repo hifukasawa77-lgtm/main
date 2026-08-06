@@ -20,10 +20,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const PW = process.env.PLAYWRIGHT_PKG || '/opt/node22/lib/node_modules/playwright/index.js';
-const { chromium } = (await import(PW)).default ?? await import(PW);
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const LOCAL_PW = path.join(ROOT, 'node_modules', 'playwright', 'index.js');
+const PW = process.env.PLAYWRIGHT_PKG || (fs.existsSync(LOCAL_PW) ? LOCAL_PW : '/opt/node22/lib/node_modules/playwright/index.js');
+const PW_SPECIFIER = path.isAbsolute(PW) ? pathToFileURL(PW).href : PW;
+const { chromium } = (await import(PW_SPECIFIER)).default ?? await import(PW_SPECIFIER);
 
 /* sengoku.html は同一オリジンから画像を読むので、簡易HTTPサーバで配信する */
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json', '.csv': 'text/csv' };

@@ -71,8 +71,8 @@ for (const r of rows) {
 }
 const byType = {};
 for (const r of rows) byType[r['種別']] = (byType[r['種別']] ?? 0) + 1;
-const EXPECT_TYPE = { kokufu: 66, tachi: 25, kisaku: 24, toride: 12, shoen: 40,
-                      tera: 20, jinja: 20, sekisho: 14, machi: 14, mura: 18, minato: 17 };
+const EXPECT_TYPE = { kokufu: 66, tachi: 25, kisaku: 32, toride: 12, shoen: 40,
+                      tera: 20, jinja: 20, sekisho: 15, machi: 14, mura: 18, minato: 17 };
 const TYPE_JP = { kokufu:'国府', tachi:'館', kisaku:'城柵', toride:'砦', shoen:'荘園',
                   tera:'寺', jinja:'神社', sekisho:'関所', machi:'町', mura:'村', minato:'湊' };
 for (const [t, n] of Object.entries(EXPECT_TYPE))
