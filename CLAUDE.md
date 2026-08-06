@@ -22,13 +22,37 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - ライブラリを追加する場合はCDN経由、ビルドツール不使用
 - ゲーム系はCanvas APIのみで完結させる方針
 
+## 画像アセットの方針（全ゲーム共通）
+**アセットは原則WebP**。2026-08-02 に全ゲームを PNG/JPG → WebP q90 へ再エンコードし、
+リポジトリを 1.6GB → 264MB（assets は 1.5GB → 209MB）に縮小した。GitHub Pages の
+公開サイト上限1GBを下回るために必要。新規アセットも WebP で追加すること。
+
+```bash
+python3 scripts/optimize-assets.py --dir assets/<game> --dry-run  # 変換量の確認
+python3 scripts/optimize-assets.py --dir assets/<game>            # 変換＋参照書換＋元削除
+python3 scripts/fix-webp-refs.py                                  # 取りこぼした参照を修復
+node scripts/verify-game-assets.mjs                               # 全ページで404・例外を検査（必須）
+```
+
+- **解像度は変えない**。`drawImage` の source-rect を画素値で直書きしている描画があると、
+  縮小した瞬間に矩形が画像外へ出て**無言で絵が消える**（404もエラーも出ない）
+- **アルファは必ず保つ**。RGBA を RGB で保存すると背景が白い箱になる
+- **実行時に組み立てるパスは一括置換で直らない**。`` `${DIR}/${type}.png` `` や
+  `BASE + id + '.png'` は手で直す。`optimize-assets.py` が該当行を警告する
+- **参照はフルパスとは限らない**。`ASSET_ROOT + 'gpt/foo.png'` のような分割記法や
+  **CSSの `background-image`** も対象。`.css` を検査対象から外すと無言で壊れる
+- **ファイル名の部分一致で置換しない**。`hero.jpg` が `misato-hero.jpg` に当たって
+  別ゲームを壊した実績あり。必ずパス境界を要求する
+- `verify-game-assets.mjs` は「全参照が実在ファイルを指すか」の静的検査と、
+  実際にページを開いた404検出の2段。**静的検査だけでは動的パスを見逃す**
+
 ## 戦国風雲記の攻城ヘックス（侵入可否）
 
 攻城戦のヘックスは「侵入出来る／破壊すれば侵入出来る／侵入出来ない」の3分類で、
 定義は `sengoku.html` の `CASTLE_PASSABILITY` に一本化してある（進入判定・枠の描き分け・凡例が共有）。
 
 - 城郭レイアウトの優先順: ①`CASTLE_TRACED_LAYOUTS`（絵をトレース済み）→ ②特別城は天守中心の生成リング → ③`CASTLE_HEX_LAYOUTS`（城タイプ別）
-- 天守の位置は `SPECIAL_CASTLE_KEEP_HEX`（特別城35城分、専用画像からトレース済み）
+- 天守の位置は `SPECIAL_CASTLE_KEEP_HEX`（特別城20城分、専用画像からトレース済み）
 - **自動画像分類は使わない**。手トレース済み4城を正解として実測した結果、しきい値方式で水堀の適合率46%/再現率48%（全マスopenと答える基準値と同等以下）、領域成長法でF1 0.22。写実CGのため水堀・石垣・曲輪・遠景の水田の色差が数階調しかない
 
 ### トレース手順
@@ -37,30 +61,63 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 **`sengoku.html` のレイアウトを更新したら、必ず再生成してコミットし直すこと**（初期値が古いままになる）。
 
 ```bash
-node scripts/trace-castle-layout.mjs          # 編集ページを再生成（39城・現在の状態を初期値に）
+node scripts/trace-castle-layout.mjs          # 編集ページを再生成（24城・現在の状態を初期値に）
 node scripts/trace-castle-layout.mjs --serve  # 生成してローカルURLで開く（手元で作業する場合）
 # 絵を見てヘックスを塗る（編集はブラウザに自動保存）
 #   ドラッグでなぞって連続塗り／数字キー1〜0で種別切替／右ドラッグで消去／Ctrl+Zで取り消し
 #   上部の索引から城へジャンプ。丸印が進捗（緑=OK 黄=注意 赤=要修正 白抜き=未トレース）
 #   城ごとに「閉じている・落城可能」を即時判定。要修正（赤）が出たら直す
 node scripts/apply-castle-layouts.mjs castle-layouts.json   # sengoku.html へ反映
-node scripts/verify-castle-layouts.mjs                      # 全39城を機械検査（必須）
+node scripts/verify-castle-layouts.mjs                      # 全24城を機械検査（必須）
 ```
 検査内容: 天守が盤内で1マス／無傷なら天守へ到達不能／破壊可能な塁を全部破れば到達可能／城内に空きマスが十分。
 トレースが天守を囲みきれない場合は `ensureKeepSealed()` が本丸石垣＋虎口を自動で足す（素通り落城の防止）。
+
+## 三国志・天下三分の必須チェック（sanguo.html を触ったら必ず実行）
+
+```bash
+node scripts/verify-sanguo-boot.mjs   # 起動→マップ→増援→政務→肖像→一騎打ち→AI→セーブ互換（17項目）
+```
+
+- 検査は `window.__SANGUO_TEST=true` を `addInitScript` で立てて `window.SANGUO_DEBUG` ブリッジを開ける。
+  新しい関数・定数を足したら**このブリッジにも追加する**（追加し忘れると検査側が `is not a function` で落ちる）
+- **AI の集計値（最大勢力の都市数・所有者交代の頻度）は乱数の種を固定していないので試行ごとに大きく揺れる**。
+  50巡で最大勢力は 7〜11 都市の幅がある。検査は「盟主が現れる（≧5都市）」までしか保証しない。
+  バランスを語るときは1回の実行ではなく**5試行以上の平均**で見ること
+- ブラウザは `favicon.ico` を勝手に取りに行く。テストサーバが404を返すと `console.error` が出て
+  検査が常に落ちるので、204 を返して黙らせている（本物のアセット404は `response` で拾う）
+- 肖像は `GENERAL_IDS` のインデックス＝アトラスの通しスロット番号（194で一致）。
+  ただし `GENERAL_IDS` には**重複IDがある**ため、名鑑だけはスロット番号で直接引く
+  （`portraitCss(id)` の `indexOf` 経由にすると重複の2件目が1件目の顔になる）
 
 ## 戦国風雲記の必須チェック（sengoku.html を触ったら必ず実行）
 
 ```bash
 node scripts/verify-sengoku-boot.mjs   # 起動して遊べるか（タイトル→マップ→街道編集→ターン終了で例外0件）
 node scripts/verify-castle-csv.mjs     # siro_ichi.csv の全行がゲーム内データと一致するか
-node scripts/verify-castle-layouts.mjs # 攻城レイアウト39城
+node scripts/verify-castle-layouts.mjs # 攻城レイアウト24城
+node scripts/verify-map-assets.mjs     # マップアイコンが実際に絵として描かれるか（アセットを差し替えたら必須）
+node scripts/verify-force-list.mjs     # force_list.csv の全行がゲーム内マーカーと一致するか
+node scripts/verify-sengoku-balance.mjs # 長期進行（150ターン×3試行）で停止・例外・勢力淘汰の破綻がないか
 ```
 
 - **タイトル画面が出た＝起動成功ではない**。描画ループの例外は「背景画像だけ残してUIが出ない」形で現れ、タイトルは無事に出る。必ず `verify-sengoku-boot.mjs` でマップ画面まで入って確かめること（2026-08-02: `_drawRoads` の `preview is not defined` を「アセット読込が重い」「roundRect非対応」と誤診して3コミット費やした）
 - GameKit のループは update/draw の例外を捕捉して継続し `engine.errors` に積む。**そのため `pageerror` だけ見る検査は素通りする**。描画系の検査を書くときは必ず `engine.errors` も合算する
 - 城データの正本は `siro_ichi.csv`。取り込みは追加・更新のみで**削除はしない**ため、行を消しても城はゲーム内に残り座標だけ内蔵値へ戻る。差し替え時は `verify-castle-csv.mjs` の「CSV外の城が残存」警告を必ず確認する
+- 勢力・施設マーカーの正本は `force_list.csv`。城CSVと違い**行を消す＝削除**で、`MARKER_HIDDEN_SEED` に載せて既定で非表示にする。取込結果は同梱シード（`MARKER_POSITION_SEED` 座標／`MARKER_DAIMYO_SEED` 支配大名／マーカー実体の `nameJP` 名称）へ焼き込むこと。**シードを更新し忘れても例外は出ない**——localStorage 上書きを持つPCだけ正しく見え、初回起動の端末は `geoToScreen` の経緯度近似へ落ちて最大900px以上ずれる。`verify-force-list.mjs` が localStorage を空にして突き合わせる
+- **`force_list.csv` の「近くの城」列は出力専用の派生列**。取込は X,Y を最優先し、この列は X,Y が空欄の行のフォールバックにしか使わない。値は `_nearestCastleId()` が座標から最近傍城を再計算して上書きするので、ここを手で書き換えても反映されない（マーカーを別の城に紐づけたいなら X,Y ごと動かす）
 - 地図画像は絵地図で `geoToScreen` の緯度経度換算と一致しない（九州はx方向に約380pxずれる）。**新しい城の座標は近傍城のCSV値から局所アフィン内挿で起こす**。城どうしの最短間隔は11px程度が下限
+- **アセットを縮小・再エンコードするときは、そのアセットを切り出して使っている箇所を必ず洗う**。`drawImage` の source-rect を画素値で直書きしていると、縮小した瞬間に矩形が画像外へ出て絵が消える。読み込みは成功するので404もエラーも出ず、無言で絵だけが消える（2026-08-02: 1254px→256px でマーカー4種が塗り面積0〜3.5%に）。矩形は「測った原寸サイズ」と対で持ち、描画時に実解像度へスケールする（`scaleSrcRect`）
+- **アセットは全てWebP**（2026-08-02に PNG 660MB → WebP q90 89MB へ再エンコード）。追加・差し替えは `python3 scripts/optimize-sengoku-assets.py` を通す。**解像度は変えない**（上記の source-rect が壊れるため）。PNGを直接足すと容量が跳ねるので置かないこと
+- **武将を追加するときは必ず配列の末尾へ足す**。`buildPortraitSlots()` は `DATA.generals` の
+  **index** で肖像アトラスの枠を連番配布するため、途中に挿入すると後続の武将全員の顔がずれる
+  （例外もエラーも出ず、無言で別人の顔になる）。1枚1人の専用画を使う場合は `KENGO_PORTRAIT_SLOTS`
+  のように `{cols:1,rows:1}` のスロットを作り、`buildPortraitSlots()` の `Object.assign` の
+  **最後**に当てて既存の一括スロットに上書きされないようにする
+- **剣豪など人物の年代ゲートは `GENERAL_BIRTH_DEATH` に `{born,died}` を入れるだけでよい**。
+  元服13歳・没年の判定は既存実装が持っており、シナリオごとの登場可否は自動で決まる
+- **一度に全部を要求しない**。後読みは同時4枚まで＋1枚60秒上限（`DEFERRED_LOAD_CONCURRENCY` / `DEFERRED_LOAD_TIMEOUT_MS`）。`ASSETS.img` は Proxy で、描画側が未ロードのキーに触れた瞬間そのアセットをキューの最優先へ引き上げる（先読み順の決め打ちに頼らない）
+- **施設・城グラフィックには未ロード時のフォールバック描画がある**（仮のベクター図形＝白い箱）。読み込みが遅いとこれが長時間表示され「画像が壊れている」ように見える。アイコンの不具合を調べるときは、primary が生きていると再現しないので `ASSETS.img` から該当キーを消してフォールバック経路を直接確かめること
 
 ## 戦国風雲記の武装勢力と棟梁
 

@@ -44,11 +44,13 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0019-fixed-canvas-mobile-ui-promotion]] — 固定CanvasのモバイルUI対策（パネル拡大＋入力逆変換/ラベル幅フィット）をgame-devへ昇格＋lint検査#8を位置ベース検査へ強化
 - [[0020-perf-cost-placement-and-canvas-layout-promotion]] — 前処理コストの置き場所（静止時ベイクの罠/補償ハック撤去）をcodingへ、Canvas絶対座標レイアウトの整合（分岐の全要素更新/描画倍率とレイアウト予約の一致）をgame-devへ昇格＋7営業日分の遡及Daily整備
 - [[0021-routine-schedule-single-source]] — Routineスケジュールの正をCLAUDE.md「定期実行（Routine）一覧」へ単一ソース化＋lint検査#11、/self-improveを週次Routine化（日曜21:00 JST）
+- [[0022-asset-reencode-safety]] — アセット再エンコードの安全策（切り出し矩形の解像度非依存化・後読みの同時数/上限）＋マップ描画の機械検査を新設
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
 - [[static-hosting-security-limits]] — GitHub Pagesのセキュリティ制約・XSS/escHtmlのハマりどころ
 - [[harness-maintenance-patterns]] — ハーネス保守のパターン・ハマりどころ（色ドリフト/スキル/hook2段/bash罠）
+- [[web-audio-singing-synthesis]] — Web Audioでの歌声合成（放射特性/音量正規化/広いCanvasのGrid突き抜け/WAV解析で検証）
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール

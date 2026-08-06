@@ -165,7 +165,7 @@ function initStampRally() {
   mapWrap.style.cssText = 'position:relative;width:100%;max-width:600px;margin:0 auto;user-select:none;';
 
   const mapImg = mkEl('img');
-  mapImg.src = 'assets/trains/generated/ui/japan-map.png';
+  mapImg.src = 'assets/trains/generated/ui/japan-map.webp';
   mapImg.alt = '日本地図';
   mapImg.style.cssText = 'width:100%;display:block;';
   mapWrap.appendChild(mapImg);
@@ -203,8 +203,8 @@ function initStampRally() {
       // スタンプアイコン（SVG参照）
       const icon = mkEl('img');
       icon.src = stamped
-        ? 'assets/trains/generated/ui/stamp-done.png'
-        : 'assets/trains/generated/ui/stamp-empty.png';
+        ? 'assets/trains/generated/ui/stamp-done.webp'
+        : 'assets/trains/generated/ui/stamp-empty.webp';
       icon.alt = stamped ? 'スタンプ済み' : '未スタンプ';
       icon.style.cssText = `width:32px;height:32px;filter:${stamped ? 'none' : 'grayscale(1) opacity(.55)'};`;
       pin.appendChild(icon);
@@ -690,7 +690,7 @@ function initSugoroku() {
   mapWrap.style.cssText = 'position:relative;width:100%;max-width:600px;margin:0 auto;';
 
   const mapImg = mkEl('img');
-  mapImg.src = 'assets/trains/generated/ui/japan-map.png';
+  mapImg.src = 'assets/trains/generated/ui/japan-map.webp';
   mapImg.alt = '日本地図';
   mapImg.style.cssText = 'width:100%;display:block;opacity:.85;';
   mapWrap.appendChild(mapImg);
@@ -818,7 +818,7 @@ function initSugoroku() {
   diceWrap.style.cssText = 'display:flex;align-items:center;gap:16px;justify-content:center;margin-bottom:16px;';
 
   const diceImg = mkEl('img');
-  diceImg.src = 'assets/trains/generated/ui/dice.png';
+  diceImg.src = 'assets/trains/generated/ui/dice.webp';
   diceImg.alt = 'さいころ';
   diceImg.style.cssText = 'width:72px;height:72px;cursor:pointer;transition:transform .15s;';
   diceImg.id = 'dice-img';

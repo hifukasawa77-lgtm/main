@@ -254,15 +254,21 @@ for dp, dn, fn in os.walk('.claude'):
                 continue
             m = pat.search(l)
             if m:
-                out.append('%s:%d: %s' % (p, i, m.group(0)[:40]))
+                out.append('%s:%d: [多バイトブラケット] %s' % (p, i, m.group(0)[:40]))
+            # 同じ「localeで無言に壊れる」系: grep -P の \x{...} は (*UTF) が要る。
+            # C locale だと PCRE が code point を大きすぎると判断してエラー終了し、
+            # grep が常に0を返す＝日本語を含む全ページが「含まれていない」と誤判定される
+            # （i18n-check.sh で実際に発生, 2026-08-05）。
+            if re.search(r'grep\b[^|;]*-\w*P', l) and re.search(r'\\x\{', l) and '(*UTF)' not in l:
+                out.append('%s:%d: [PCRE \\x{} に (*UTF) なし] %s' % (p, i, l.strip()[:60]))
 print('\n'.join(out))
 PYEOF
 )
   if [ -z "$MB" ]; then
-    ok "多バイトブラケット表現なし"
+    ok "多バイトブラケット表現なし／PCRE の \\x{} は (*UTF) 付き"
   else
     while IFS= read -r l; do
-      [ -n "$l" ] && note_fail "多バイトブラケット（C localeで空振り→偽の✓）: $l"
+      [ -n "$l" ] && note_fail "locale依存で空振り→偽の✓: $l"
     done <<< "$MB"
   fi
 else
