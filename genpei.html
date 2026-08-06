@@ -1256,13 +1256,19 @@ function endTurn(state) {
  * ========================================================================== */
 /* GPT-image-2 の人物肖像。読み込み失敗時は従来の描画へフォールバックする。 */
 const PORTRAIT_ROOT = 'assets/genpei/ai-portraits/';
+const SITE_ICON_ROOT = 'assets/genpei/site-icons/';
+const SITE_ICON_VARIANTS = ['province', 'local', 'detail'];
 const PREHISTORY_PORTRAIT_IDS = {
   '源義朝': 'pre_minamoto_yoshitomo', '源為義': 'pre_minamoto_tameyoshi',
   '平忠正': 'pre_taira_tadamasa', '鎌田政清': 'pre_kamada_masakiyo',
   '藤原信西': 'pre_fujiwara_shinzei', '藤原信頼': 'pre_fujiwara_nobuyori',
   '平重盛': 'pre_taira_shigemori', '常盤御前': 'pre_tokiwa_gozen',
 };
-const ASSETS = { map: null, mapReady: false, portraits: {}, portraitsReady: false };
+const ASSETS = {
+  map: null, mapReady: false,
+  portraits: {}, portraitsReady: false,
+  siteIcons: { province: {}, local: {}, detail: {} }, siteIconsReady: false,
+};
 const MAP_NATIVE_W = 1672;
 const MAP_ASPECT = 941 / MAP_NATIVE_W;
 
@@ -1292,6 +1298,18 @@ function loadPortraits() {
   }));
   return Promise.all(jobs).then((loaded) => {
     ASSETS.portraitsReady = true;
+    return loaded.filter(Boolean).length;
+  });
+}
+function loadSiteIcons() {
+  const jobs = SITE_ICON_VARIANTS.flatMap((variant) => Object.keys(KYOTEN_TYPE).map((kind) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { ASSETS.siteIcons[variant][kind] = img; resolve(true); };
+    img.onerror = () => resolve(false);
+    img.src = `${SITE_ICON_ROOT}${variant}/${kind}.png`;
+  })));
+  return Promise.all(jobs).then((loaded) => {
+    ASSETS.siteIconsReady = true;
     return loaded.filter(Boolean).length;
   });
 }
@@ -1455,6 +1473,19 @@ function drawSiteIcon(ctx, kind, x, y, s, color) {
  * 十六葉八重表菊（皇室の紋章そのもの）は避けてある。
  * 平氏＝揚羽蝶／源氏＝笹竜胆／奥州藤原＝下がり藤／朝廷＝菊。
  * 三つ鱗は北条氏用に用意してあるが、北条は現状「武士団」で勢力ではないため未割当。 */
+/* GPT-image-2 の拠点アイコン。未読込・欠損時は従来のCanvas描画を使用する。 */
+function drawLoadedSiteIcon(ctx, kind, x, y, s, color) {
+  const variant = s <= 8 ? 'province' : (s <= 12 ? 'local' : 'detail');
+  const img = ASSETS.siteIcons[variant] && ASSETS.siteIcons[variant][kind];
+  if (img && img.complete && img.naturalWidth) {
+    // 元のCanvasアイコンと同程度の画面占有率で、倍率別アセットを表示する。
+    const d = s * 2.5;
+    ctx.drawImage(img, x - d / 2, y - d / 2, d, d);
+    return;
+  }
+  drawSiteIcon(ctx, kind, x, y, s, color);
+}
+
 const KAMON = {
   taira: 'ageha', kamakura: 'sasarindo', kiso: 'sasarindo', kai: 'sasarindo',
   yoshitsune: 'sasarindo', oshu: 'fuji', goshirakawa: 'kiku',
@@ -1671,7 +1702,7 @@ class BootScene extends GameKit.Scene {
   enter(g) {
     this.msg = 'データを読み込んでいます / Loading';
     this.t = 0;
-    Promise.all([loadData(), loadMap(), loadPortraits()])
+    Promise.all([loadData(), loadMap(), loadPortraits(), loadSiteIcons()])
       .then(() => { g.changeScene(new TitleScene()); })
       .catch((e) => {
         console.error(e);
@@ -2347,7 +2378,7 @@ class MapScene extends GameKit.Scene {
     // 勢力色の台座
     ctx.beginPath(); ctx.ellipse(s.x, s.y + size * 0.62, size * 0.85, size * 0.34, 0, 0, Math.PI * 2);
     ctx.fillStyle = owner ? hexA(owner.color, 0.85) : 'rgba(150,160,175,0.7)'; ctx.fill();
-    drawSiteIcon(ctx, ty.icon, s.x, s.y, size, ty.color);
+    drawLoadedSiteIcon(ctx, ty.icon, s.x, s.y, size, ty.color);
     if (this.sel === k.id) {
       ctx.beginPath(); ctx.arc(s.x, s.y, size * 1.6, 0, Math.PI * 2);
       ctx.lineWidth = 2; ctx.strokeStyle = '#f9d423'; ctx.stroke();
@@ -2402,7 +2433,7 @@ class MapScene extends GameKit.Scene {
     // 拠点の絵（大きめのアイコン）
     ctx.save();
     frame(ctx, r.x + 8, r.y + 28, r.w - 16, 62, { fill: 'rgba(255,255,255,0.03)', stroke: 'rgba(255,255,255,0.08)', radius: 4 });
-    drawSiteIcon(ctx, ty.icon, r.x + r.w / 2, r.y + 62, 22, ty.color);
+    drawLoadedSiteIcon(ctx, ty.icon, r.x + r.w / 2, r.y + 62, 22, ty.color);
     ctx.restore();
     let y = r.y + 96;
     const rowLimit = r.y + r.h - 82;      // 命令ボタン（最大2段）の上端まで
