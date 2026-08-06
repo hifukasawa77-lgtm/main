@@ -25,7 +25,7 @@ tags: [claudechord, project, genpei]
 - 要件: [[genpei_要件定義]]（Must 50 / Should 13 / Could 8・承認待ち）
 - 基本設計: [[genpei_基本設計]]（承認待ち）
 - 詳細設計: [[genpei_詳細設計]]（承認待ち・拠点147のロスター確定）
-- 法務: [[genpei_法務チェック]]（YELLOW 1件＝地図の出所記録漏れ。RED なし）
+- 法務: [[genpei_法務チェック]]（GREEN。地図の出所記録漏れは深澤確認で是正済み）
 - 姉妹作: 戦国風雲記（`sengoku.html`）／ [[sanguo]]（三国志・天下三分）
 
 ## 現在のフェーズ: `= this.phase`
@@ -62,9 +62,9 @@ Must 50件すべてを設計箇所へ対応づけた（同 第10節 トレーサ
 - 監査: seo-audit ✅／a11y-audit ✅／i18n-check ✅（103件）／release-check（index.html の
   Google Identity Services が SRI なしで残るが、GSI は安定ハッシュを公開しておらず SRI を付けられない）／
   dynamic-test で `genpei.html` PASS／`verify-game-assets.mjs` で genpei は404・例外ともに0件
-- 法務: [[genpei_法務チェック]] YELLOW 1件（地図の出所記録漏れ）。RED なし
+- 法務: [[genpei_法務チェック]] GREEN（地図の出所記録漏れは深澤確認・`assets/sengoku/README.md`記録で是正済み）
 
-残りは絵素材（合戦背景・イベント絵）のみ。
+残りは絵素材（合戦背景・イベント絵）とSFXのみ（S-08/S-09/S-10、着手中）。
 
 ## 成果物（このプロジェクトに紐づくノート）
 
