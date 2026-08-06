@@ -1254,7 +1254,15 @@ function endTurn(state) {
 /* ============================================================================
  * 5. 描画のユーティリティ
  * ========================================================================== */
-const ASSETS = { map: null, mapReady: false };
+/* GPT-image-2 の人物肖像。読み込み失敗時は従来の描画へフォールバックする。 */
+const PORTRAIT_ROOT = 'assets/genpei/ai-portraits/';
+const PREHISTORY_PORTRAIT_IDS = {
+  '源義朝': 'pre_minamoto_yoshitomo', '源為義': 'pre_minamoto_tameyoshi',
+  '平忠正': 'pre_taira_tadamasa', '鎌田政清': 'pre_kamada_masakiyo',
+  '藤原信西': 'pre_fujiwara_shinzei', '藤原信頼': 'pre_fujiwara_nobuyori',
+  '平重盛': 'pre_taira_shigemori', '常盤御前': 'pre_tokiwa_gozen',
+};
+const ASSETS = { map: null, mapReady: false, portraits: {}, portraitsReady: false };
 const MAP_NATIVE_W = 1672;
 const MAP_ASPECT = 941 / MAP_NATIVE_W;
 
@@ -1274,6 +1282,20 @@ function loadMap() {
     img.src = MAP_ASSET;
   });
 }
+function loadPortraits() {
+  const ids = [...GENERALS.map((gen) => gen.id), ...Object.values(PREHISTORY_PORTRAIT_IDS)];
+  const jobs = ids.map((id) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { ASSETS.portraits[id] = img; resolve(true); };
+    img.onerror = () => resolve(false);
+    img.src = PORTRAIT_ROOT + id + '.png';
+  }));
+  return Promise.all(jobs).then((loaded) => {
+    ASSETS.portraitsReady = true;
+    return loaded.filter(Boolean).length;
+  });
+}
+
 function mapAspect() {
   const img = ASSETS.map;
   return img && img.naturalWidth ? img.naturalHeight / img.naturalWidth : MAP_ASPECT;
@@ -1501,6 +1523,17 @@ function drawKamon(ctx, fid, x, y, r) {
 /* 人物の肖像。★プロシージャル（大鎧・直垂・僧形・法衣を能力と勢力から描き分ける）。
  * 画像アセットが無くても顔が出るので、後読みの失敗で白い箱にならない。 */
 function drawPortrait(ctx, gen, x, y, size) {
+  const portrait = gen && ASSETS.portraits[gen.id];
+  if (portrait && portrait.naturalWidth) {
+    ctx.save(); ctx.translate(x, y);
+    ctx.beginPath(); ctx.roundRect(-size, -size, size * 2, size * 2, size * 0.12); ctx.clip();
+    ctx.drawImage(portrait, -size, -size, size * 2, size * 2);
+    ctx.restore();
+    ctx.save(); ctx.translate(x, y);
+    ctx.strokeStyle = 'rgba(216,178,106,0.62)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(-size, -size, size * 2, size * 2, size * 0.12); ctx.stroke(); ctx.restore();
+    return;
+  }
   const col = gen && FACTIONS[gen.faction] ? FACTIONS[gen.faction].color : '#94a3b8';
   const rank = gen ? gen.kakaku : 50;
   const S = (v) => size * v;
@@ -1638,7 +1671,7 @@ class BootScene extends GameKit.Scene {
   enter(g) {
     this.msg = 'データを読み込んでいます / Loading';
     this.t = 0;
-    Promise.all([loadData(), loadMap()])
+    Promise.all([loadData(), loadMap(), loadPortraits()])
       .then(() => { g.changeScene(new TitleScene()); })
       .catch((e) => {
         console.error(e);
@@ -3277,7 +3310,7 @@ class RetsudenScene extends GameKit.Scene {
       return GENERALS.filter((g) => g.born <= y && g.died >= y)
         .sort((a, b) => (a.faction < b.faction ? -1 : a.faction > b.faction ? 1 : b.kakaku - a.kakaku));
     }
-    return PREHISTORY.map(([jp, died, note]) => ({ id: 'pre_' + jp, jp, died, note, pre: true }));
+    return PREHISTORY.map(([jp, died, note]) => ({ id: PREHISTORY_PORTRAIT_IDS[jp] || 'pre_' + jp, jp, died, note, pre: true }));
   }
   update(dt, g) {
     this.bd.update(dt);
@@ -3348,10 +3381,11 @@ class RetsudenScene extends GameKit.Scene {
       const note = GEN_NOTE[gen.id] || `${FACTIONS[gen.faction] ? FACTIONS[gen.faction].jp : ''}に属する武者。`;
       wrapText(ctx, note, dx + 30, sy, dw - 60, 26, { font: '15px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
     } else if (gen) {
-      txt(ctx, gen.jp, dx + 30, ly + 50, { font: '600 30px "Hiragino Mincho ProN", serif', color: '#f0e2c0' });
-      txt(ctx, `${gen.died}年没　※この乱には登場しない`, dx + 30, ly + 94,
+      drawPortrait(ctx, gen, dx + 110, ly + 130, 84);
+      txt(ctx, gen.jp, dx + 220, ly + 60, { font: '600 30px "Hiragino Mincho ProN", serif', color: '#f0e2c0' });
+      txt(ctx, `${gen.died}年没　※この乱には登場しない`, dx + 220, ly + 104,
         { font: '13px "Hiragino Mincho ProN", serif', color: '#a78bfa' });
-      wrapText(ctx, gen.note, dx + 30, ly + 134, dw - 60, 28, { font: '16px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
+      wrapText(ctx, gen.note, dx + 30, ly + 260, dw - 60, 28, { font: '16px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
     }
     const p = g.input.pointer;
     for (const b of this._buttons) if (!b.invisible) button(ctx, b, hit(b, p));
