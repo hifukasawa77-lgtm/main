@@ -1160,12 +1160,20 @@ const SIRO_ICHI_CASTLE_NAME_ALIASES={
   '尾山御坊(金沢城)':'尾山御坊',
   '石山御坊(大阪城)':'石山御坊'
 };
-const MAP_MIN_ZOOM=0.716;              // 16%拡大率（= 16×4.47/100）
-const MAP_DEFAULT_ZOOM=6.84;          // 153%拡大率（= 153×4.47/100）
-const MAP_SUBCASTLE_ZOOM_THRESHOLD=3.174; // 71%拡大率（= 71×4.47/100）
-const MAP_FORCE_FACILITY_ZOOM_THRESHOLD=4.47; // 100%拡大率: 武装勢力・施設を表示／操作できる最小倍率
-const MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD=13.41; // 300%拡大率（= 300×4.47/100）: これ以上でアセットの城グラフィック、299%以下は家紋マークを表示
-const MAP_SITE_GRAPHIC_ZOOM_THRESHOLD=13.41; // 300%拡大率（= 300×4.47/100）: これ以上で施設グラフィックを表示
+// 拡大率(%)とカメラ zoom の換算。プレイ時の標準倍率 100% = zoom 4.47（2026-07-08に基準統一）。
+// 閾値・上限・＋／－の刻みは全てこの換算を通して定義し、%表示と実際の切り替わりを一致させる
+// （生の数値を直書きすると、%表示だけ動かして閾値が取り残される事故が起きる）。
+const MAP_ZOOM_PER_PCT=4.47/100;
+const zoomFromPct=(pct)=>pct*MAP_ZOOM_PER_PCT;
+const zoomToPct=(z)=>z/MAP_ZOOM_PER_PCT;
+const MAP_MIN_ZOOM=0.716;                        // 16%拡大率（= 16×4.47/100）
+const MAP_MAX_ZOOM=zoomFromPct(325);             // 325%拡大率: 拡大の上限（深澤要望 2026-08-07）
+const MAP_ZOOM_STEP_PCT=25;                      // ＋／－ボタン1回あたりの増減幅（%刻み）
+const MAP_DEFAULT_ZOOM=6.84;                     // 153%拡大率（= 153×4.47/100）
+const MAP_SUBCASTLE_ZOOM_THRESHOLD=zoomFromPct(100);       // 100%以上: 支城を表示（深澤要望 2026-08-07）
+const MAP_FORCE_FACILITY_ZOOM_THRESHOLD=zoomFromPct(150);  // 150%以上: 武装勢力・施設を表示／操作できる最小倍率
+const MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD=zoomFromPct(250);  // 250%以上: アセットの城グラフィック、249%以下は家紋マークを表示
+const MAP_SITE_GRAPHIC_ZOOM_THRESHOLD=zoomFromPct(250);    // 250%以上: 武装勢力・施設のグラフィックを表示
 const CASTLE_POS_CSV_STORE = 'sengokuCastlePositionCsv:v1';
 // HTML埋め込みシードCSV（siro_ichi.csvが取得できない場合のフォールバック）
 const CASTLE_POS_SEED_CSV = `城名,国名,シナリオ１(大名),シナリオ２(大名),シナリオ３(大名),シナリオ４(大名),シナリオ５(大名),シナリオ６(大名),城LV,X城の配置位置の座標,城の配置位置のY座標,城区分,城の種類
@@ -6361,7 +6369,7 @@ function mapSiteAssetKey(marker){
   if (marker && TAISHA_MARKER_IDS.has(marker.id)) return 'mapSiteTaisha';
   return MAP_SITE_MARKER_ASSET_KEYS[marker && marker.kind] || null;
 }
-// 寺社の独立勢力は、300% 以上で家紋ではなく GPT-image-2 の施設グラフィックを表示する。
+// 寺社の独立勢力は、250% 以上で家紋ではなく GPT-image-2 の施設グラフィックを表示する。
 // 諏訪・厳島・彌彦は神社勢力なので大社、それ以外は寺院アセットを用いる。
 function religiousForceAssetKey(force){
   return force && (force.id==='suwa_taisha' || force.id==='itsukushima_jinja' || force.id==='yahiko_jinja')
@@ -6533,14 +6541,14 @@ function drawCheckpointIcon(ctx, x, y, size, color){
   ctx.fillStyle='rgba(10,14,20,0.92)'; ctx.fillRect(-size*0.42,-size*0.50,size*0.16,size*0.90); ctx.fillRect(size*0.26,-size*0.50,size*0.16,size*0.90);
   ctx.fillStyle=color || '#f2b84b'; ctx.beginPath(); ctx.moveTo(-size*0.52,-size*0.30); ctx.lineTo(0,-size*0.62); ctx.lineTo(size*0.52,-size*0.30); ctx.lineTo(size*0.52,-size*0.14); ctx.lineTo(0,-size*0.44); ctx.lineTo(-size*0.52,-size*0.14); ctx.closePath(); ctx.fill(); ctx.restore();
 }
-// 城マーカーのスプライト（Cycle 8）: 家紋（299%以下）を clanId×色 でキー化して1枚に焼き込む。
-// 300%以上のアセット城グラフィックは家紋の2.5倍（世界32.5px）と大きく、この216px焼き込み
+// 城マーカーのスプライト（Cycle 8）: 家紋（249%以下）を clanId×色 でキー化して1枚に焼き込む。
+// 250%以上のアセット城グラフィックは家紋の2.5倍（世界32.5px）と大きく、この216px焼き込み
 // キャンバスに収まらないため drawCastleMarker 側で単一 drawImage の直接描画に切り替える
 // （高ズーム時はビューフラスタムカリングで可視城数が少なく、焼き込み不要でも軽量）。
 const MARKER_SPRITE = { cache:new Map() };
 // 地図アイコン（城グラフィック・勢力/施設マーカー）の縮小率。約15%縮小（深澤要望 2026-07-30）。
 const MAP_ICON_SCALE = 0.85;
-// 城グラフィック（300%以上表示）の世界サイズ。家紋基準13pxの2.5倍（深澤要望 2026-07-19）。
+// 城グラフィック（250%以上表示）の世界サイズ。家紋基準13pxの2.5倍（深澤要望 2026-07-19）。
 const CASTLE_GRAPHIC_WORLD = 13 * 2.5 * MAP_ICON_SCALE;
 function castleMarkerSprite(clanId, color){
   const key = clanId + '|' + color;
@@ -6566,7 +6574,7 @@ function drawCastleMarker(ctx, clanId, x, y, color, showCastle, castleType=null,
     }
     return;
   }
-  const spr = castleMarkerSprite(clanId, color);  // 299%以下: 家紋スプライト
+  const spr = castleMarkerSprite(clanId, color);  // 249%以下: 家紋スプライト
   if (!spr){ drawKamonMap(ctx, clanId, x-7.5, y-7.5, 15, color); return; }  // ロード待ちの間はライブ描画
   const kk = 15/KAMON_SPRITE.size;
   ctx.drawImage(spr, x - spr.width*kk/2, y - spr.height*kk/2, spr.width*kk, spr.height*kk);
@@ -8390,7 +8398,7 @@ class MapScene extends GameKit.Scene {
     const pd=daimyoDef(this.state, this.state.playerDaimyo);
     const capProv = pd && DATA.provById[pd.capital];
     if (capProv){ const pt=provinceScreenPoint(capProv); cx=pt[0]; cy=pt[1]; }
-    this.cam = { zoom:MAP_DEFAULT_ZOOM, cx, cy, min:MAP_MIN_ZOOM, max:24 };
+    this.cam = { zoom:MAP_DEFAULT_ZOOM, cx, cy, min:MAP_MIN_ZOOM, max:MAP_MAX_ZOOM };
     this._clampCam();
     this._bindInput();
     // 戦闘から戻った結果の適用／ターン解決の継続
@@ -8433,6 +8441,16 @@ class MapScene extends GameKit.Scene {
     this.cam.cx = w.x - (sx-this._clipCx)/this.cam.zoom;
     this.cam.cy = w.y - (sy-this._clipCy)/(this.cam.zoom*MAP_VERTICAL_STRETCH);
     this._clampCam();
+  }
+  // ＋／－ボタンのズーム。倍率を MAP_ZOOM_STEP_PCT（25%）刻みのグリッドへ吸着させる（深澤要望 2026-08-07）。
+  // ホイール／ピンチで刻みの途中にいる場合は、押した方向側の直近の刻みへ寄せてから進む。
+  // 到達値は zoomFromPct() で作るため、同じ換算で定義した表示閾値と厳密に一致する（100%で支城が確実に出る）。
+  _zoomStep(dir){
+    const step=MAP_ZOOM_STEP_PCT, eps=1e-6;
+    const cur=zoomToPct(this.cam.zoom);
+    const targetPct = dir>0 ? (Math.floor(cur/step+eps)+1)*step : (Math.ceil(cur/step-eps)-1)*step;
+    const next = clamp(zoomFromPct(targetPct), this.cam.min, this.cam.max);
+    this._zoomAt(this._clipCx, this._clipCy, next/this.cam.zoom);
   }
   _bindInput(){
     this._touchState=null;
@@ -10139,7 +10157,7 @@ class MapScene extends GameKit.Scene {
       { title:'目的と基本操作 / Goal & Basics', lines:[
         '◆ 目的: 全'+DATA.provinces.length+'洲を制覇して天下統一（外交での併呑も可）',
         '◆ 自国の城をタップ→隣接する敵洲をタップで出陣。増援・自動/手動戦を選択',
-        '◆ 地図はドラッグで移動、ホイール/＋−で拡大縮小',
+        '◆ 地図はドラッグで移動、ホイール/＋−（25%刻み・最大325%）で拡大縮小',
         '◆ 「ターン終了」で全大名が行動。年明けに寿命・天災などのイベント',
         '◆ 右上の ♪ でBGM切替、？ でこの案内を再表示',
       ]},
@@ -11416,8 +11434,8 @@ class MapScene extends GameKit.Scene {
     if (!this.showClans){
       const Z=this._zoomGeom();
       if (Z.visible){
-        bs.push({x:Z.x1, y:Z.y, w:Z.w, h:Z.h, skin:'topBar', label:'＋', sz:Z.sz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1.25); }, noScale:true});
-        bs.push({x:Z.x2, y:Z.y, w:Z.w, h:Z.h, skin:'topBar', label:'－', sz:Z.sz, action:()=>{ this._zoomAt(this._clipCx,this._clipCy,1/1.25); }, noScale:true});
+        bs.push({x:Z.x1, y:Z.y, w:Z.w, h:Z.h, skin:'topBar', label:'＋', sz:Z.sz, action:()=>{ this._zoomStep(+1); }, noScale:true});
+        bs.push({x:Z.x2, y:Z.y, w:Z.w, h:Z.h, skin:'topBar', label:'－', sz:Z.sz, action:()=>{ this._zoomStep(-1); }, noScale:true});
       }
     }
     // 以下は製作用の編集ツール。「管理」を開いている間だけ出す
@@ -11892,11 +11910,11 @@ class MapScene extends GameKit.Scene {
   }
   // ズームアウトした「全体の地図」では支城・城名が省略されるため、代わりに国（旧国名）の
   // 位置を示すラベルを重ねて、どの国がどこにあるかを把握できるようにする。
-  // ズームインすると城名レイヤーへ切り替わるよう、支城表示の閾値(71%)と同じ境界で消す。
+  // ズームインすると城名レイヤーへ切り替わるよう、支城表示の閾値(100%)と同じ境界で消す。
   _drawProvinceOverviewLabels(ctx){
     if (this.castleEdit || this.castleMetaEdit || this.religiousEdit) return;
     if (this.showProvinceNames===false) return;
-    if (!this.cam || this.cam.zoom > MAP_SUBCASTLE_ZOOM_THRESHOLD) return;
+    if (!this.cam || this.cam.zoom >= MAP_SUBCASTLE_ZOOM_THRESHOLD) return;
     const c=this.cam, cx=this._clipCx, cy=this._clipCy;
     // 上部ステータスバーの下に隠れる位置へはラベルを置かない
     const top=IS_TOUCH?134:44;
@@ -12075,9 +12093,9 @@ class MapScene extends GameKit.Scene {
     // 高コストな配置探索（海判定サンプリング×候補×全洲）を毎フレーム再計算していたのを、
     // 変化検知でメモ化して描画のみ毎フレーム行う（マップFPSのボトルネック解消）。
     const items = this._castleLayoutItems();
-    const showSubCastles = this.cam.zoom > MAP_SUBCASTLE_ZOOM_THRESHOLD;
+    const showSubCastles = this.cam.zoom >= MAP_SUBCASTLE_ZOOM_THRESHOLD;
     const showForcesAndFacilities = this.cam.zoom >= MAP_FORCE_FACILITY_ZOOM_THRESHOLD;
-    // 拡大率300%以上でアセットの城グラフィック、299%以下は家紋マークを城位置に表示する（深澤要望）。
+    // 拡大率250%以上でアセットの城グラフィック、249%以下は家紋マークを城位置に表示する（深澤要望）。
     const showCastleGraphic = this.cam.zoom >= MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD;
     const labelSize=7, gap=7;  // 城アイコン13px・家紋15pxは drawCastleMarker のスプライトへ焼き込み済み（Cycle 8）
     // モバイル（タッチ端末）は画面が小さく城名・家紋が見づらいため、城アイコン・家紋・城名ラベルを
@@ -12109,7 +12127,7 @@ class MapScene extends GameKit.Scene {
       drawVerticalLabelCached(ctx, it.name, it.nx, _ny, {size:labelSize, gap, fill:it.force?'rgba(8,12,18,0.92)':'rgba(8,12,18,0.70)', stroke:it.color, color:'#ffffff'});
       if (s!==1) ctx.restore();
     }
-    // 武装勢力・施設は100%以上、支城は従来どおり71%超から表示する。
+    // 支城は100%以上、武装勢力・施設は150%以上から表示する（深澤要望 2026-08-07）。
     if (showForcesAndFacilities){
     // 寺社勢力は領地を奪わず、史跡位置に独立勢力マーカーとして表示する。
     for (const marker of RESOURCE_MARKERS){
@@ -12121,7 +12139,7 @@ class MapScene extends GameKit.Scene {
       const labelH = Math.max(18, Array.from(marker.nameJP).length*gap+6);
       const s=lscale*MK;
       if (s!==1){ ctx.save(); ctx.translate(cx,cy); ctx.scale(s,s); ctx.translate(-cx,-cy); }
-      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5*MAP_ICON_SCALE, showIcon: this.cam.zoom > MAP_SITE_GRAPHIC_ZOOM_THRESHOLD});
+      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5*MAP_ICON_SCALE, showIcon: this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD});
       if (s!==1) ctx.restore();
     }
     for (const force of RELIGIOUS_FORCES){
@@ -12135,7 +12153,7 @@ class MapScene extends GameKit.Scene {
       if (s!==1){ ctx.save(); ctx.translate(cx, cy); ctx.scale(s, s); ctx.translate(-cx, -cy); }
       // グラフィックを先に描き、施設名称を最後に重ねて常に読めるようにする。
 
-      // 寺社の独立勢力: 300%以上で既存の GPT-image-2 施設グラフィックを表示する。
+      // 寺社の独立勢力: 250%以上で既存の GPT-image-2 施設グラフィックを表示する。
       // アセット遅延読込中だけは従来の家紋へフォールバックして、マーカーを消さない。
       if (this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD){
         const assetKey=religiousForceAssetKey(force);
@@ -12239,7 +12257,7 @@ class MapScene extends GameKit.Scene {
     if (this.showClans || this.overlay || this.castleEdit || this.religiousEdit || this.castleMetaEdit || this.castleAddOpen) return;
     const Z=this._zoomGeom();
     if (!Z.visible) return;  // ボタンが無い状態で読み取りだけ浮かせない
-    const pct=Math.round(this.cam.zoom/4.47*100);
+    const pct=Math.round(zoomToPct(this.cam.zoom));
     const x=Z.x2+Z.w+24, y=Z.y, w=280, h=Z.h; // －ボタンの右隣
     GameKit.UI.glassPanel(ctx, x, y, w, h, {radius:14, fill:'rgba(8,13,24,0.88)', stroke:'rgba(56,189,248,0.42)'});
     T(ctx, '拡大率 / Zoom', x+w/2, y+16, {size:22, weight:'bold', color:'#7dd3fc', align:'center'});
@@ -12369,7 +12387,7 @@ class MapScene extends GameKit.Scene {
       {text:'兵糧：'+rice, x:800, color:riceColor, size:24, mark:'◒'},
       {text:'兵士：'+totalSoldiers, x:1110, color:'#e2e8f0', size:24, mark:'♟'},
       {text:'領国：'+owned.length+'/'+DATA.provinces.length, x:1424, color:'#cbd5e1', size:23, mark:'⚑'},
-      {text:'倍率 '+Math.round(this.cam.zoom/4.47*100)+'%', x:1720, color:'#7dd3fc', size:21}
+      {text:'倍率 '+Math.round(zoomToPct(this.cam.zoom))+'%', x:1720, color:'#7dd3fc', size:21}
     ];
     const markSz=big?36:22, markOff=big?52:34, ty=big?(h-40)/2:25;
     items.forEach(it=>{
