@@ -25,7 +25,7 @@ tags: [claudechord, project, genpei]
 - 要件: [[genpei_要件定義]]（Must 50 / Should 13 / Could 8・承認待ち）
 - 基本設計: [[genpei_基本設計]]（承認待ち）
 - 詳細設計: [[genpei_詳細設計]]（承認待ち・拠点147のロスター確定）
-- 法務: [[genpei_法務チェック]]（YELLOW 1件＝地図の出所記録漏れ。RED なし）
+- 法務: [[genpei_法務チェック]]（GREEN。地図の出所記録漏れは深澤確認で是正済み）
 - 姉妹作: 戦国風雲記（`sengoku.html`）／ [[sanguo]]（三国志・天下三分）
 
 ## 現在のフェーズ: `= this.phase`
@@ -62,9 +62,14 @@ Must 50件すべてを設計箇所へ対応づけた（同 第10節 トレーサ
 - 監査: seo-audit ✅／a11y-audit ✅／i18n-check ✅（103件）／release-check（index.html の
   Google Identity Services が SRI なしで残るが、GSI は安定ハッシュを公開しておらず SRI を付けられない）／
   dynamic-test で `genpei.html` PASS／`verify-game-assets.mjs` で genpei は404・例外ともに0件
-- 法務: [[genpei_法務チェック]] YELLOW 1件（地図の出所記録漏れ）。RED なし
+- 法務: [[genpei_法務チェック]] GREEN（地図の出所記録漏れは深澤確認・`assets/sengoku/README.md`記録で是正済み）
 
-残りは絵素材（合戦背景・イベント絵）のみ。
+**2026-08-06追記**: Should項目 S-08（合戦背景画7枚）・S-09（イベント絵8枚）・S-10（専用SFX5種）を完了。
+- 合戦背景・イベント絵はgraphic-designerエージェントがPython3+Pillowでプロシージャル生成（外部AI生成ツール不使用・完全オリジナル。出所は`assets/genpei/README.md`に記録）。12世紀の時代考証（大鎧・水干・薙刀・和船。天守閣や火縄銃等の戦国期意匠は排除）を遵守
+- SFXはmusic-generatorエージェントがGameKitの`Sfx`（beep/noise/jingle）のみで実装。音声ファイル追加なし
+- 深澤(PM)が着手承認。統合（ASSETS読込・BattleScene全画面背景・OpeningScene/MapSceneのイベントバナー）はメインセッションが実施し、`verify-genpei-boot.mjs`（27項目）・`verify-genpei-balance.mjs`（150ターン×5試行）・Playwrightでの目視確認済み
+
+Should項目は全13件完了。Could項目（C-01〜C-08）のみ任意で残存。
 
 ## 成果物（このプロジェクトに紐づくノート）
 
