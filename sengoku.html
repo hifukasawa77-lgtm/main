@@ -1902,6 +1902,10 @@ const TREASURE_ITEMS = [
 const DATA = { provinces:null, provById:{}, generals:null, genById:{}, scenarios:null };
 const GPT_ASSETS = {
   map:'assets/sengoku/gpt/sengoku-japan-map-user-v1.webp',
+  // 高ズーム用の高精細版（2倍・Lanczos＋弱アンシャープ。scripts/build-map-detail.py で生成）。
+  // CRITICAL に入れないので起動は従来どおり。描画側が ASSETS.img.mapDetail を触った時点で
+  // Proxy が最優先読込へ引き上げ、届き次第そのまま背景ソースが差し替わる。
+  mapDetail:'assets/sengoku/gpt/sengoku-japan-map-user-v1-detail.webp',
   portraitHonganjiKennyoMonk:'assets/sengoku/gpt/sengoku-portrait-honganji-kennyo-monk-gpt-image-2.webp',
   // 豪商4人（堺・博多の会合衆）。540x540 の正方形・キーは portrait 始まりで優先読込バケットへ入る
   // 剣豪（兵法者）の肖像。1枚1人・192x192
@@ -4901,7 +4905,13 @@ function drawTerrainBackdrop(ctx, mapImg, opts={}){
     // （アスペクト比同一）なので配置（dh/dy）は元画像基準のまま、ソース矩形だけmapSharpの実寸を
     // 指定する。未生成なら初回のみここで生成（以降キャッシュ）。
     // Use one super-resolution source at every zoom to avoid the 40% -> 49% quality discontinuity.
-    const src = ASSETS.img.mapSharp || buildSharpenedMap() || mapImg;
+    // 高精細版(mapDetail)が届いていればそれを使う。オフラインで Lanczos 拡大＋弱アンシャープを
+    // 掛けてあるぶん、ブラウザ補間で焼いた mapSharp より高ズーム時のにじみが少ない。
+    // ソース矩形は sw/sh から都度読むので、解像度が違っても配置（dh/dy）は縦横比のみで決まる。
+    const detail = ASSETS.img.mapDetail;
+    const src = detail || ASSETS.img.mapSharp || buildSharpenedMap() || mapImg;
+    // 高精細版が使えるようになったら、起動時に焼いたプリスケール(約24MB)は捨てて実メモリを返す。
+    if (detail && ASSETS.img.mapSharp){ ASSETS.img.mapSharp=null; ASSETS.img._mapSharpSrc=null; }
     const sw = src.width || src.naturalWidth || iw, sh = src.height || src.naturalHeight || ih;
     ctx.save();
     ctx.imageSmoothingEnabled=true;
@@ -6548,8 +6558,12 @@ function drawCheckpointIcon(ctx, x, y, size, color){
 const MARKER_SPRITE = { cache:new Map() };
 // 地図アイコン（城グラフィック・勢力/施設マーカー）の縮小率。約15%縮小（深澤要望 2026-07-30）。
 const MAP_ICON_SCALE = 0.85;
+// 250%以上で出るグラフィック（城／武装勢力・施設）だけをさらに一回り小さくする係数
+// （深澤要望 2026-08-07）。MAP_ICON_SCALE と分けてあるのは、家紋の占有矩形・関所アイコンなど
+// 250%未満でも出る要素を巻き添えで縮めないため。過去の「一回り」と同じ15%縮小に揃えた。
+const MAP_GRAPHIC_SIZE_MULT = 0.85;
 // 城グラフィック（250%以上表示）の世界サイズ。家紋基準13pxの2.5倍（深澤要望 2026-07-19）。
-const CASTLE_GRAPHIC_WORLD = 13 * 2.5 * MAP_ICON_SCALE;
+const CASTLE_GRAPHIC_WORLD = 13 * 2.5 * MAP_ICON_SCALE * MAP_GRAPHIC_SIZE_MULT;
 function castleMarkerSprite(clanId, color){
   const key = clanId + '|' + color;
   const hit = MARKER_SPRITE.cache.get(key);
@@ -12139,7 +12153,7 @@ class MapScene extends GameKit.Scene {
       const labelH = Math.max(18, Array.from(marker.nameJP).length*gap+6);
       const s=lscale*MK;
       if (s!==1){ ctx.save(); ctx.translate(cx,cy); ctx.scale(s,s); ctx.translate(-cx,-cy); }
-      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5*MAP_ICON_SCALE, showIcon: this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD});
+      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5*MAP_ICON_SCALE*MAP_GRAPHIC_SIZE_MULT, showIcon: this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD});
       if (s!==1) ctx.restore();
     }
     for (const force of RELIGIOUS_FORCES){
@@ -12157,7 +12171,7 @@ class MapScene extends GameKit.Scene {
       // アセット遅延読込中だけは従来の家紋へフォールバックして、マーカーを消さない。
       if (this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD){
         const assetKey=religiousForceAssetKey(force);
-        if (!drawMapSiteImage(ctx, assetKey, cx, cy+4, 22*MAP_ICON_SCALE, 1.6)){
+        if (!drawMapSiteImage(ctx, assetKey, cx, cy+4, 22*MAP_ICON_SCALE*MAP_GRAPHIC_SIZE_MULT, 1.6)){
           drawKamonMap(ctx, crestId, cx-size/2, cy-size/2+4, size, force.color);
         }
       }
