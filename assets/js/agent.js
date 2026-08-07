@@ -231,6 +231,93 @@
         return result;
       }
 
+      // ── 話題ガード（off-topic 判定） ─────────────────────────
+      // 「おすすめ」「無料」「やり方」等は"それ自体が話題を持たない語"なので、
+      // キーワード一致だけで応答すると「おすすめのカツ丼ありますか？」に
+      // ゲーム推薦を返してしまう（＝聞かれていないことに自信満々で答える）。
+      // 質問文から内容語（漢字・カタカナ・英数の連なり）を取り出し、サイトの
+      // 語彙に無い語が混じっていたらルールベース応答を見送り、AI自由回答へ回す。
+      const TOPIC_GENERIC_INTENTS = ['recommend', 'more', 'free', 'howto', 'newGames'];
+
+      // サイトが扱う話題の語彙。ゲーム名・別名・セクション名・intent辞書に加え、
+      // 話題を名指ししない汎用語（ゲーム/サイト/暇つぶし等）を明示的に含める。
+      const SITE_TOPIC_WORDS = [
+        'ゲーム', 'げーむ', 'game', 'games', 'サイト', 'ページ', 'アプリ', 'ツール', '作品',
+        '暇つぶし', 'ひまつぶし', '遊', '遊べる', '遊ぶ', 'プレイ', 'play', 'ジャンル', '難易度',
+        'ブラウザ', 'スマホ', 'スマートフォン', 'pc', 'パソコン', 'モバイル', '対戦', 'ai', '人工知能',
+        'hide', 'ヒデ', 'ひで', '深澤', '三郷', '埼玉', 'claude', 'クロード',
+        '初心者', '入門', '初', '子供', '大人', '一人', '二人',
+      ];
+
+      // 話題を名指ししない機能語。これらは「知らない語」に数えない
+      // （数えると「おすすめを教えて」の"教"だけで off-topic 判定になってしまう）。
+      const TOPIC_STOPWORDS = new Set([
+        // 日本語（動詞・指示・数量など、話題を持たない漢字語）
+        '教', '見', '何', '私', '僕', '俺', '君', '貴方', '今', '時', '話', '質問', '知', '聞',
+        '言', '思', '来', '行', '出', '入', '事', '物', '所', '中', '上', '下', '的', '感', '数',
+        '好', '良', '欲', '是非', '少', '多', '全', '色々', '色', '種類', '教えて', '感じ',
+        // 英語
+        'a', 'an', 'the', 'any', 'some', 'this', 'that', 'these', 'those', 'it', 'its',
+        'i', 'me', 'my', 'we', 'us', 'our', 'you', 'your', 'they', 'them', 'their',
+        'is', 'are', 'was', 'were', 'be', 'do', 'does', 'did', 'can', 'could', 'would',
+        'should', 'will', 'have', 'has', 'had', 'got', 'get', 'give', 'show', 'tell',
+        'want', 'like', 'know', 'see', 'find', 'look', 'looking', 'please', 'thanks',
+        'what', 'which', 'who', 'when', 'where', 'why', 'how', 'there', 'here',
+        'to', 'of', 'for', 'in', 'on', 'at', 'with', 'and', 'or', 'but', 'about',
+        'thing', 'things', 'one', 'ones', 'something', 'anything', 'good', 'nice', 'fun',
+      ]);
+
+      const SITE_VOCAB = (() => {
+        const set = new Set();
+        const add = (s) => { const n = normalize(String(s || '')); if (n) set.add(n); };
+        for (const g of GAMES) {
+          add(g.title.ja); add(g.title.en); add(g.slug); add(g.cat);
+          for (const lang of ['ja', 'en']) for (const a of (g.aliases[lang] || [])) add(a);
+        }
+        for (const key in SECTIONS) { add(SECTIONS[key].ja); add(SECTIONS[key].en); }
+        for (const lang in SECTION_ALIASES) {
+          for (const key in SECTION_ALIASES[lang]) SECTION_ALIASES[lang][key].forEach(add);
+        }
+        for (const lang in INTENT_DICT) {
+          for (const intent in INTENT_DICT[lang]) INTENT_DICT[lang][intent].forEach(([kw]) => add(kw));
+        }
+        SITE_TOPIC_WORDS.forEach(add);
+        return [...set].filter(Boolean);
+      })();
+
+      // 内容語の抽出。ひらがなだけの連なりは助詞・語尾（「ありますか」等）が大半なので
+      // 対象外にする＝判定を保守側（＝ガードが働かない側）に倒す。
+      function contentTokens(text) {
+        const s = String(text || '').toLowerCase()
+          .replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+        const out = [];
+        const re = /[一-鿿々〆]+|[ァ-ヺー]+|[a-z0-9]+/g;
+        let m;
+        while ((m = re.exec(s)) !== null) {
+          const raw = m[0];
+          // 1文字のカタカナ・英数はノイズ（「ｍ」「ル」等）。漢字は1文字でも語になる
+          if (!/[一-鿿々〆]/.test(raw) && raw.length < 2) continue;
+          const n = normalize(raw);
+          if (n && !TOPIC_STOPWORDS.has(n)) out.push(n);
+        }
+        return out;
+      }
+
+      function isKnownTopicWord(token) {
+        for (const v of SITE_VOCAB) {
+          if (v.indexOf(token) !== -1 || token.indexOf(v) !== -1) return true;
+        }
+        return false;
+      }
+
+      // 話題を持たないintentが当たったとき、サイト語彙に無い内容語が1つでもあれば off-topic。
+      function isOffTopic(intentName, text) {
+        if (!intentName || TOPIC_GENERIC_INTENTS.indexOf(intentName) === -1) return false;
+        const tokens = contentTokens(text);
+        if (!tokens.length) return false;         // 「おすすめは？」等は内容語ゼロ＝サイト内の話題
+        return tokens.some(tk => !isKnownTopicWord(tk));
+      }
+
       // ゲームエイリアスは起動時に正規化しておく（カナ折り畳み・長音展開を辞書側にも適用）
       const GAME_ALIAS_NORM = GAMES.map(g => ({
         g,
@@ -1017,13 +1104,17 @@
         }
 
         // intent dispatch
-        if (intent.name && intent.score >= 2.0) {
+        // 話題ガード: 「おすすめ」等のキーワードは当たっているが、話題がサイトの
+        // 範囲外（例:「おすすめのカツ丼ありますか？」）ならルールベース応答を見送り、
+        // ④のAI自由回答に聞かれたことを答えさせる。
+        const offTopic = isOffTopic(intent.name, text);
+        if (!offTopic && intent.name && intent.score >= 2.0) {
           State.lastIntent = intent.name;
           State.save();
           await runIntent(intent.name, text);
           return;
         }
-        if (intent.name && intent.score >= 1.0) {
+        if (!offTopic && intent.name && intent.score >= 1.0) {
           // disambiguation when borderline
           State.lastIntent = 'disambig_intent';
           State.save();
@@ -1831,6 +1922,12 @@
       }
 
       // ── Init ────────────────────────────────────────────────
+      // 検査用ブリッジ（window.__AGENT_TEST=true のときだけ開く）。
+      // 判定ロジックを足したらここにも公開すること（検査側が is not a function で落ちる）。
+      if (typeof window !== 'undefined' && window.__AGENT_TEST) {
+        window.AGENT_DEBUG = { detectIntent, detectGame, detectSection, contentTokens, isOffTopic, SITE_VOCAB, TOPIC_GENERIC_INTENTS };
+      }
+
       function init() {
         fab        = document.getElementById('agent-fab');
         panel      = document.getElementById('agent-panel');
