@@ -345,6 +345,105 @@ check('26. ★潮が反転し順潮側の移動力と射程が伸びる',
   JSON.stringify(phase4.tide));
 check('27. ★水軍が離反しうる', phase4.defect.p > 0 && phase4.defect.flips > 0, JSON.stringify(phase4.defect));
 
+/* 28〜31. 回帰検査（2026-08-09 に見つけた不具合。どれも例外を出さず無言で壊れる） */
+const regress = await page.evaluate(() => {
+  const G = window.GENPEI_DEBUG;
+  const out = {};
+
+  /* 28. 合戦に勝ったら拠点を奪える。
+     ★かつてプレイヤー側は applyActions へ troops:10**7 の番兵を渡していたが、
+       関数冒頭の `src.garrison < act.troops` に弾かれて占領が無言で捨てられていた。
+       AI は applyActions を直接叩くので、AIだけを見る検査では絶対に気づけない。
+     ★ヘルパ（captureKyoten）を単体で呼ぶだけでは不足。出兵ボタンから合戦を経て
+       盤面へ戻るまでの経路をそのまま通すこと（壊れていたのは経路の配線だった）。 */
+  {
+    G.gotoMap('s1180', 'kamakura');
+    const sc = G.game.scene, st = sc.state, me = st.faction;
+    let src = null, target = null;
+    for (const s of G.Rule.ownedKyoten(st, me)) {
+      for (const k of G.DATA.kyoten) {
+        if (st.kyoten[k.id].owner === me || !G.Rule.adjacent(s, k) || G.Rule.needsSeaCrossing(s, k)) continue;
+        if (st.kyoten[s.id].garrison < 100) continue;
+        src = s; target = k; break;
+      }
+      if (target) break;
+    }
+    const before = st.kyoten[target.id].owner;
+    sc._launchAttack(target, G.game);                 // ← 出兵ボタンが呼ぶのと同じ入口
+    const bs = G.game.scene;
+    let flow = bs.constructor.name;
+    if (flow === 'BattleScene') {
+      for (const u of bs.b.units) if (u.side === 'def') u.troops = 0;   // 城方が崩れた状態にする
+      bs._endRound(G.game);
+      if (bs.result) bs.onDone(bs.result);            // ← 勝敗の反映（占領）はこの先
+    }
+    out.capture = { id: target.id, flow, before, after: st.kyoten[target.id].owner,
+                    garrison: st.kyoten[target.id].garrison, atkLeft: bs.result && bs.result.atkLeft };
+  }
+
+  /* 29. 盤上に無い神器・帝が湧かない／宝剣を失ったあとの引き継ぎは一度きり。
+     ★s1185b は「平氏は壇ノ浦に滅び、宝剣は海に沈んだ」で始まるのに、
+       誰も持っていない神器と帝が1ヶ月目に最高名分の勢力へ渡っていた。
+       壇ノ浦後に保持勢力が滅んだ場合は毎ターン評判+60とログが無限に積もっていた。 */
+  {
+    const a = G.buildState('s1185b', 'yoshitsune');
+    G.endTurn(a, null);
+    const spawned = Object.values(a.factions).some((f) => f.authority.includes('jingi') || f.authority.includes('emperor'));
+
+    const b = G.buildState('s1180', 'kamakura');
+    b.jingiLost = true;
+    for (const f of Object.values(b.factions)) f.authority = f.authority.filter((x) => x !== 'jingi');
+    for (let i = 0; i < 6; i++) G.endTurn(b, null);
+    out.regalia = { spawned, 引継ぎログ: b.log.filter((l) => /神器は/.test(l.text)).length };
+  }
+
+  /* 30. 勝利条件が VICTORY_TEXT の記述どおりに判定される。
+     ★木曽の seitai_shogun は分岐が無く `else win = owned.length > 0` に落ちていたため、
+       「高難度」と表示しながら実際は拠点が1つでも残れば勝ちだった。 */
+  {
+    const mk = (fid, tweak) => { const s = G.buildState('s1180', fid); s.year = s.endYear; s.month = s.endMonth; tweak(s); return G.Rule.checkVictory(s).win; };
+    out.victory = {
+      木曽_京なし: mk('kiso', () => {}),
+      木曽_京12ヶ月: mk('kiso', (s) => { s.kyoten[G.KYOTO_KOKUFU].owner = 'kiso'; s.factions.kiso.authority.push('senji'); s.kyotoHoldMonths = 12; }),
+      鎌倉_平氏健在: mk('kamakura', (s) => {
+        s.factions.kamakura.authority.push('senji');
+        let n = 0; for (const k of G.DATA.kyoten) if (k.type === 'kokufu' && n < 40) { s.kyoten[k.id].owner = 'kamakura'; n++; }
+      }),
+      鎌倉_平氏滅亡: mk('kamakura', (s) => {
+        s.factions.kamakura.authority.push('senji');
+        let n = 0; for (const k of G.DATA.kyoten) if (k.type === 'kokufu' && n < 40) { s.kyoten[k.id].owner = 'kamakura'; n++; }
+        for (const k of G.DATA.kyoten) if (s.kyoten[k.id].owner === 'taira') s.kyoten[k.id].owner = null;
+        s.factions.taira.alive = false;
+      }),
+    };
+  }
+
+  /* 31. 「Phase N で開きます」としか言わない死んだコマンドが残っていない */
+  {
+    G.gotoMap('s1180', 'kamakura');
+    const sc = G.game.scene;
+    const closed = sc.cmdButtons.map((b) => b.id).filter((id) => !G.OPEN_COMMANDS.has(id));
+    // 軍事パネルが実際に候補を並べるか
+    sc.panel = 'gunji';
+    sc.draw(document.getElementById('game').getContext('2d'), G.game);
+    out.commands = { 未開通: closed, 出兵ボタン: sc.panelButtons.filter((b) => b.act === 'attack').length };
+    sc.panel = null;
+  }
+  return out;
+});
+check('28. ★出兵→合戦に勝つ→拠点を奪える（プレイヤー経路を通しで）',
+  regress.capture.flow === 'BattleScene' && regress.capture.before !== 'kamakura'
+  && regress.capture.after === 'kamakura' && regress.capture.garrison === regress.capture.atkLeft,
+  JSON.stringify(regress.capture));
+check('29. ★盤上に無い神器・帝が湧かない／引き継ぎは一度きり',
+  regress.regalia.spawned === false && regress.regalia.引継ぎログ === 1, JSON.stringify(regress.regalia));
+check('30. ★勝利条件が表示どおりに判定される',
+  regress.victory.木曽_京なし === false && regress.victory.木曽_京12ヶ月 === true
+  && regress.victory.鎌倉_平氏健在 === false && regress.victory.鎌倉_平氏滅亡 === true,
+  JSON.stringify(regress.victory));
+check('31. ★未開通のまま残ったコマンドがない（軍事が出兵候補を並べる）',
+  regress.commands.未開通.length === 0 && regress.commands.出兵ボタン > 0, JSON.stringify(regress.commands));
+
 /* 11. ★例外の合算（pageerror だけでは素通りする） */
 const engineErrors = await page.evaluate(() => window.GENPEI_DEBUG.errors().map((e) => `${e.key} ×${e.count}`));
 check('10. pageerror が0件', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / '));

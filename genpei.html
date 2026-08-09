@@ -200,6 +200,8 @@ const RULE = {
     defectMax: 0.25, defectMeibunDiv: 1500, defectWeakMul: 0.10,
     suirenDiv: 240,
   },
+  /* 京の保持（木曽義仲の勝利条件「京を占め、朝敵とならず12ヶ月保つ」） */
+  capital: { holdMonths: 12 },
   /* 勧誘 */
   recruit: {
     meibunDiv: 10, kakakuMul: 4, sameProvince: 25, adjacent: 10,
@@ -259,6 +261,8 @@ const KYOTEN_TYPE = {
   mura:    { jp: '村',     en: 'Village',         color: '#a5d6a7', tier: 2, icon: 'mura' },
 };
 const HOLDER_JP = { jisha: '寺社領', sekkanke: '摂関家領', kuge: '公家領', buke: '武家領' };
+/* 京＝山城国府。木曽の勝利条件と上部バーの表示が参照する */
+const KYOTO_KOKUFU = 'kokufu_yamashiro';
 
 /* 元号 — 上部バーの和暦表示 */
 const ERA = [
@@ -844,6 +848,12 @@ const Rule = {
              p: clamp(score / (R.threshold * 2), 0.02, 0.95) };
   },
 
+  /* 京（山城国府）を朝敵にならずに保っているか。木曽の勝利条件が数える月の判定 */
+  holdsCapital(state, fid) {
+    const kyoto = state.kyoten[KYOTO_KOKUFU];
+    return !!kyoto && kyoto.owner === fid && !state.factions[fid].choteki;
+  },
+
   checkVictory(state) {
     const f = state.factions[state.faction];
     const owned = Rule.ownedKyoten(state, state.faction);
@@ -851,10 +861,15 @@ const Rule = {
     if (owned.length === 0) return { done: true, win: false, reason: '拠点をすべて失った / All sites lost' };
     if (Rule.monthIndex(state.year, state.month) < Rule.monthIndex(state.endYear, state.endMonth)) return { done: false };
     const v = FACTIONS[state.faction].victory;
+    // ★VICTORY_TEXT に書いた条件をそのまま判定する。表示と実装が食い違うと、
+    //   「高難度」と謳った条件が実際には「拠点が1つでも残っていれば勝ち」になる。
     let win;
     if (v === 'survive_regime') win = f.authority.includes('emperor') && !f.choteki && seats >= 20;
-    else if (v === 'bakufu') win = f.authority.includes('senji') && seats >= 35;
-    else if (v === 'hiraizumi') win = !!state.kyoten['tachi_hiraizumi'] && state.kyoten['tachi_hiraizumi'].owner === state.faction;
+    else if (v === 'bakufu') win = !state.factions.taira.alive && f.authority.includes('senji') && seats >= 35;
+    else if (v === 'seitai_shogun') {
+      win = Rule.holdsCapital(state, state.faction) && f.authority.includes('senji')
+        && (state.kyotoHoldMonths || 0) >= RULE.capital.holdMonths;
+    } else if (v === 'hiraizumi') win = !!state.kyoten['tachi_hiraizumi'] && state.kyoten['tachi_hiraizumi'].owner === state.faction;
     else win = owned.length > 0;
     return { done: true, win, reason: win ? '勝利条件を満たした / Victory conditions met' : '終幕 / The age has ended' };
   },
@@ -908,13 +923,50 @@ function buildState(scenarioId, factionId) {
     };
   }
   for (const fid of Object.keys(FACTIONS)) state.factions[fid].food = Rule.income(state, fid).food * 3;
+  migrateState(state);
   pushLog(state, `${scn.jp} — ${state.year}年${state.month}月、乱世はじまる`);
+  return state;
+}
+
+/* 保存データ・新規状態に、後から足したフィールドの既定値を入れる。
+ * ★SAVE_VERSION を上げると遊びかけの盤面が捨てられるので、既定値で足りるものはここで補う。 */
+function migrateState(state) {
+  // 盤上に残っている神器・帝。開始時に誰も持っていないシナリオでは最初から「無い」
+  if (!state.regalia) {
+    state.regalia = {};
+    for (const key of ['jingi', 'emperor']) {
+      state.regalia[key] = Object.values(state.factions).some((f) => f.authority.includes(key));
+    }
+  }
+  if (state.kyotoHoldMonths == null) state.kyotoHoldMonths = 0;
   return state;
 }
 
 function pushLog(state, text) {
   state.log.unshift({ y: state.year, m: state.month, text });
   if (state.log.length > 120) state.log.length = 120;
+}
+
+/* 拠点が落ちたときの後始末。★占領の副作用（恩賞の約束・寺社領接収の名分・ログ）は
+ * 必ずここに集約する。AI の自動解決（applyActions）とプレイヤーのヘックス合戦の
+ * 両方から呼ぶ。
+ * ★かつてプレイヤー側は applyActions に troops:10**7 という番兵を渡して「必ず落ちた
+ *   ことにする」つもりだったが、applyActions 冒頭の `src.garrison < act.troops` に
+ *   弾かれて占領そのものが無言で捨てられていた。判定を二重化するとこうなる。 */
+function captureKyoten(state, fid, kyotenId, garrison) {
+  const target = DATA.kyotenById[kyotenId], dst = state.kyoten[kyotenId];
+  const prev = dst.owner;
+  dst.owner = fid;
+  dst.garrison = Math.max(1, Math.round(garrison));
+  state.factions[fid].alive = true;
+  // 勝てば恩賞を約束したことになる。配れなければ後で効いてくる
+  for (const b of Rule.bandsOf(state, fid)) b.debt += b.troops * RULE.debt.capture * 0.02;
+  // 寺社領・摂関家領を武力で接収すると名分が下がる
+  if (target.holder === 'jisha' || target.holder === 'sekkanke') {
+    addRep(state, fid, RULE.rep.seizeJisha,
+      fid === state.faction ? `${target.jp}を接収した——${HOLDER_JP[target.holder]}を侵したと京で沙汰される` : null);
+  }
+  if (prev === state.faction || fid === state.faction) pushLog(state, `${FACTIONS[fid].jp}が${target.jp}を落とした`);
 }
 
 /* 出兵の解決。★プレイヤーもAIも必ずこの関数を通す（判定が二重化すると必ず食い違う） */
@@ -929,17 +981,7 @@ function applyActions(state, fid, acts) {
     const defence = Rule.defenseStrength(state, target);
     const prev = dst.owner;
     if (act.troops > defence) {
-      dst.owner = fid;
-      dst.garrison = Math.max(1, act.troops - defence);
-      state.factions[fid].alive = true;
-      // 勝てば恩賞を約束したことになる。配れなければ後で効いてくる
-      for (const b of Rule.bandsOf(state, fid)) b.debt += b.troops * RULE.debt.capture * 0.02;
-      // 寺社領・摂関家領を武力で接収すると名分が下がる
-      if (target.holder === 'jisha' || target.holder === 'sekkanke') {
-        addRep(state, fid, RULE.rep.seizeJisha,
-          fid === state.faction ? `${target.jp}を接収した——${HOLDER_JP[target.holder]}を侵したと京で沙汰される` : null);
-      }
-      if (prev === state.faction || fid === state.faction) pushLog(state, `${FACTIONS[fid].jp}が${target.jp}を落とした`);
+      captureKyoten(state, fid, act.to, act.troops - defence);
     } else {
       dst.garrison = Math.max(0, dst.garrison - Math.floor(act.troops * 0.6));
       src.garrison += Math.floor(act.troops * 0.3);   // 生き残りが本領へ戻る
@@ -1231,33 +1273,47 @@ function endTurn(state, audio) {
   }
   for (const fid of Object.keys(FACTIONS)) state.factions[fid].alive = Rule.ownedKyoten(state, fid).length > 0;
   // 10. 神器と帝の行方（要件 M-41）。保持勢力が滅べば最も名分の高い勢力へ渡る
+  //     ★盤上に無いものを湧かせてはいけない。state.regalia[key] が「まだ盤上にある」の正本で、
+  //       ここを見ないと (a) 平氏滅亡後に始まる s1185b で、冒頭文が「宝剣は海に沈んだ」と
+  //       語った直後の一ヶ月目に神器と帝が最高名分の勢力へ湧き、(b) 壇ノ浦のあと保持勢力が
+  //       滅ぶと「誰も持たない」状態が続くため、毎ターン評判+60とログが無限に積み上がる。
   for (const key of ['jingi', 'emperor']) {
+    if (!state.regalia || !state.regalia[key]) continue;      // もう盤上に無い
     const holder = Object.keys(FACTIONS).find((f) => state.factions[f].authority.includes(key));
     if (holder && state.factions[holder].alive) continue;
     const next = Object.keys(FACTIONS).filter((f) => state.factions[f].alive && FACTIONS[f].playable)
       .sort((a, b) => Rule.calcMeibun(state, b) - Rule.calcMeibun(state, a))[0];
     if (!next) continue;
     for (const f of Object.values(state.factions)) f.authority = f.authority.filter((a) => a !== key);
-    // 壇ノ浦のあとは宝剣を欠いた神器になる（名分の寄与が下がる）
-    if (key === 'jingi' && state.jingiLost) { state.factions[next].reputation += 60; }
-    else state.factions[next].authority.push(key);
+    // 壇ノ浦のあとは宝剣を欠いた神器になる（権威としては失われ、名声だけが残る）
+    if (key === 'jingi' && state.jingiLost) {
+      state.factions[next].reputation += 60;
+      state.regalia.jingi = false;                             // ★引き継ぎは一度きり
+    } else state.factions[next].authority.push(key);
     pushLog(state, key === 'jingi'
       ? (state.jingiLost ? `神器は${FACTIONS[next].jp}の手に——ただし宝剣を欠く` : `三種の神器は${FACTIONS[next].jp}の手に渡った`)
       : `帝は${FACTIONS[next].jp}に奉じられた`);
   }
+  // 11. 京の保持を数える（木曽の勝利条件。落とすか朝敵になれば振り出しに戻る）
+  state.kyotoHoldMonths = Rule.holdsCapital(state, state.faction) ? (state.kyotoHoldMonths || 0) + 1 : 0;
   // 12. 月を進める
   state.month++;
   if (state.month > 12) { state.month = 1; state.year++; }
   state.turn++;
-  // 11. 勝敗
+  // 13. 勝敗
   const v = Rule.checkVictory(state);
-  if (v.done) state.result = v;
+  if (v.done) {
+    state.result = v;
+    // 一度でも終幕まで見届けたら「もし清盛が死なざれば」を解禁する。
+    // ★ここで書かないと unlockable のシナリオは誰にも開かれないまま残る
+    save.set('unlocked_sif', true);
+  }
   // 飢饉(kikin) の開始検出。false→true になった最初のターンだけ、沈んだ不吉な低音を1回鳴らす
   if (audio && !wasFamineActive && Rule.famineActive(state)) {
     audio.beep(96, 0.5, 'sawtooth', 0.2);
     audio.beep(72, 0.7, 'sawtooth', 0.22);
   }
-  // 13. オートセーブ
+  // 14. オートセーブ
   save.set('autosave', state);
   return state;
 }
@@ -1796,7 +1852,7 @@ class TitleScene extends GameKit.Scene {
       if (b.id === 'new') g.changeScene(new ScenarioSelectScene());
       else {
         const st = save.get('autosave', null);
-        if (st && st.version === SAVE_VERSION) g.changeScene(new MapScene(st));
+        if (st && st.version === SAVE_VERSION) g.changeScene(new MapScene(migrateState(st)));
       }
     }
   }
@@ -2006,18 +2062,18 @@ const L = {
   panel:  { x: 150, y: 60, w: W - 300, h: 700 },   // コマンドのモーダル
 };
 const COMMANDS = [
-  { id: 'naisei',  jp: '内政', phase: 2 },
-  { id: 'gunji',   jp: '軍事', phase: 3 },
-  { id: 'jinji',   jp: '人事', phase: 2 },
-  { id: 'gaiko',   jp: '外交', phase: 2 },
-  { id: 'keiryaku',jp: '計略', phase: 2 },
-  { id: 'jinji2',  jp: '列伝', phase: 5 },
-  { id: 'joho',    jp: '情報', phase: 1 },
-  { id: 'kino',    jp: '機能', phase: 1 },
-  { id: 'endTurn', jp: 'ターン終了', phase: 1 },
+  { id: 'naisei',  jp: '内政', en: 'Domestic',  phase: 2 },
+  { id: 'gunji',   jp: '軍事', en: 'Military',  phase: 3 },
+  { id: 'jinji',   jp: '人事', en: 'Vassals',   phase: 2 },
+  { id: 'gaiko',   jp: '外交', en: 'Diplomacy', phase: 2 },
+  { id: 'keiryaku',jp: '計略', en: 'Stratagem', phase: 2 },
+  { id: 'jinji2',  jp: '列伝', en: 'Chronicles',phase: 5 },
+  { id: 'joho',    jp: '情報', en: 'Records',   phase: 1 },
+  { id: 'kino',    jp: '機能', en: 'System',    phase: 1 },
+  { id: 'endTurn', jp: 'ターン終了', en: 'End Turn', phase: 1 },
 ];
 /* 開通済みのコマンド。Phase を進めるたびにここへ足す */
-const OPEN_COMMANDS = new Set(['naisei', 'jinji', 'gaiko', 'keiryaku', 'jinji2', 'joho', 'kino', 'endTurn']);
+const OPEN_COMMANDS = new Set(['naisei', 'gunji', 'jinji', 'gaiko', 'keiryaku', 'jinji2', 'joho', 'kino', 'endTurn']);
 
 class MapScene extends GameKit.Scene {
   constructor(state) { super(); this.state = state; }
@@ -2046,8 +2102,9 @@ class MapScene extends GameKit.Scene {
   _layoutCommands() {
     const n = COMMANDS.length, gap = 6;
     const w = (L.cmd.w - gap * (n - 1)) / n;
+    // ★en は渡さない。button() は en があると2段組みで描くが、バーは高さ30pxしかない
     return COMMANDS.map((c, i) => ({
-      ...c, x: L.cmd.x + i * (w + gap), y: L.cmd.y, w, h: L.cmd.h,
+      id: c.id, phase: c.phase, x: L.cmd.x + i * (w + gap), y: L.cmd.y, w, h: L.cmd.h,
       jp: c.jp, font: '600 15px "Hiragino Mincho ProN", serif', radius: 4,
     }));
   }
@@ -2157,33 +2214,7 @@ class MapScene extends GameKit.Scene {
           const res = tryBloodlessOpen(this.state, this.state.faction, k.id);
           this._notice(res.ok ? (res.opened ? `${k.jp}の門が開いた——戦わずして国を得る` : `${k.jp}は門を開かなかった`) : `試みられない — ${res.why}`);
         } else if (b.id === 'attack') {
-          const src = this._attackSource(k);
-          if (!src) { this._notice('隣接する自勢力の拠点に兵がいない'); return; }
-          const troops = Math.floor(this.state.kyoten[src.id].garrison * 0.7);
-          const st = this.state, me = st.faction;
-          // ★渡海の判定。湊を持たない勢力は海を越えられない
-          const cross = Rule.canCrossSea(st, me, src.id, k.id);
-          if (!cross.ok) { this._notice(cross.why); return; }
-          if (cross.sea && Math.random() < cross.failRate) {
-            st.kyoten[src.id].garrison = Math.round(st.kyoten[src.id].garrison * (1 - RULE.naval.crossLoss));
-            pushLog(st, `${k.jp}へ渡ろうとして時化に遭い、引き返した`);
-            this._notice('時化に阻まれ渡海できなかった');
-            return;
-          }
-          // ★プレイヤーの出兵はヘックス合戦へ。AI 同士は applyActions の自動解決のまま
-          g.changeScene(new BattleScene(st, { fid: me, from: src.id, to: k.id, troops }, (res) => {
-            st.kyoten[src.id].garrison -= troops;
-            if (res.winner === 'atk') {
-              applyActions(st, me, [{ from: src.id, to: k.id, troops: 10 ** 7 }]);
-              st.kyoten[src.id].garrison = Math.max(0, st.kyoten[src.id].garrison);
-              st.kyoten[k.id].garrison = Math.max(1, Math.round(troops * 0.5));
-              addRep(st, me, RULE.rep.greatVictory);
-            } else {
-              st.kyoten[k.id].garrison = Math.max(0, Math.round(st.kyoten[k.id].garrison * 0.6));
-              pushLog(st, `${k.jp}を攻めあぐねた`);
-            }
-            game.changeScene(new MapScene(st));
-          }));
+          this._launchAttack(k, g);
           return;
         }
         g.audio.jingle([{ f: 349, d: 0.08 }, { f: 440, d: 0.1 }]);
@@ -2314,6 +2345,11 @@ class MapScene extends GameKit.Scene {
     put(`拠点 ${Rule.ownedKyoten(st, st.faction).length}`);
     put(`朝廷支持 ${Math.round(me.courtInfluence)}`);
     if (me.choteki) put('朝敵', '#fca5a5', '600 13px "Hiragino Mincho ProN", serif');
+    // 京の保持は木曽の勝利条件そのものなので、数えている月数を出す（見えないと詰められない）
+    if (f.victory === 'seitai_shogun') {
+      const held = st.kyotoHoldMonths || 0;
+      put(`京 ${held}/${RULE.capital.holdMonths}ヶ月`, held >= RULE.capital.holdMonths ? '#5eead4' : held > 0 ? '#f9d423' : '#8b98ab');
+    }
     if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 12, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
   }
 
@@ -2570,6 +2606,41 @@ class MapScene extends GameKit.Scene {
     for (const b of this.actionButtons) button(ctx, b, false);
   }
 
+  /* 出兵する。詳細パネルの「出 兵」と「軍事」パネルの両方から呼ぶ。
+   * ★勝敗の反映はここ1箇所に集約する。合戦の生き残り（res.atkLeft / res.defLeft）を
+   *   そのまま駐留兵にするので、損害が盤面へ素直に効く。 */
+  _launchAttack(k, g) {
+    const src = this._attackSource(k);
+    if (!src) { this._notice('隣接する自勢力の拠点に兵がいない'); return; }
+    const troops = Math.floor(this.state.kyoten[src.id].garrison * 0.7);
+    const st = this.state, me = st.faction;
+    // ★渡海の判定。湊を持たない勢力は海を越えられない
+    const cross = Rule.canCrossSea(st, me, src.id, k.id);
+    if (!cross.ok) { this._notice(cross.why); return; }
+    if (cross.sea && Math.random() < cross.failRate) {
+      st.kyoten[src.id].garrison = Math.round(st.kyoten[src.id].garrison * (1 - RULE.naval.crossLoss));
+      pushLog(st, `${k.jp}へ渡ろうとして時化に遭い、引き返した`);
+      this._notice('時化に阻まれ渡海できなかった');
+      return;
+    }
+    // ★プレイヤーの出兵はヘックス合戦へ。AI 同士は applyActions の自動解決のまま
+    g.changeScene(new BattleScene(st, { fid: me, from: src.id, to: k.id, troops }, (res) => {
+      st.kyoten[src.id].garrison = Math.max(0, st.kyoten[src.id].garrison - troops);
+      if (res.winner === 'atk') {
+        // ★占領は captureKyoten を通す。恩賞の約束・寺社領接収の名分・ログがここに集まっている
+        captureKyoten(st, me, k.id, Math.max(1, res.atkLeft || Math.round(troops * 0.5)));
+        addRep(st, me, RULE.rep.greatVictory);
+      } else {
+        // 敗れた寄手の生き残りは本領へ引き揚げる。守りも削れた分だけ減る
+        st.kyoten[src.id].garrison += Math.max(0, Math.round((res.atkLeft || 0) * 0.6));
+        // 守備側の隊には拠点の防御値ぶんの嵩上げが入っているので、駐留兵へ戻すときに差し引く
+        st.kyoten[k.id].garrison = Math.max(0, Math.round(res.defLeft || 0) - k.defense * 4);
+        pushLog(st, `${k.jp}を攻めあぐねた`);
+      }
+      game.changeScene(new MapScene(st));
+    }));
+  }
+
   /* 攻め手になれる自勢力の拠点（隣接かつ兵の多い順の先頭） */
   _attackSource(target) {
     const mine = Rule.ownedKyoten(this.state, this.state.faction)
@@ -2666,6 +2737,7 @@ class MapScene extends GameKit.Scene {
       case 'choteki': r = declareChoteki(st, me, b.arg); this._notice(r.ok ? (r.done ? `${FACTIONS[b.arg].jp}を朝敵に落とした` : '奏請は容れられなかった') : `奏請できない — ${r.why}`); break;
       case 'recruit': r = tryRecruit(st, me, b.arg, 200); this._notice(r.ok ? (r.joined ? `${st.bands[b.arg].nameJP}が与した` : `${st.bands[b.arg].nameJP}は動かなかった`) : `勧誘できない — ${r.why}`); break;
       case 'open':    r = tryBloodlessOpen(st, me, b.arg); this._notice(r.ok ? (r.opened ? `${DATA.kyotenById[b.arg].jp}が門を開いた` : `${DATA.kyotenById[b.arg].jp}は門を開かなかった`) : `試みられない — ${r.why}`); break;
+      case 'attack':  this.panel = null; this.sel = b.arg; this._launchAttack(DATA.kyotenById[b.arg], g); return;
       case 'scroll':  this.panelScroll = Math.max(0, this.panelScroll + b.arg); return;
       default: return;
     }
@@ -2677,7 +2749,7 @@ class MapScene extends GameKit.Scene {
     ctx.fillStyle = 'rgba(5,7,11,0.72)'; ctx.fillRect(0, 0, W, H);
     frame(ctx, r.x, r.y, r.w, r.h, { fill: 'rgba(10,15,22,0.97)', radius: 8 });
     const cmd = COMMANDS.find((c) => c.id === this.panel);
-    frameTitle(ctx, r.x, r.y, r.w, cmd.jp, this.panel);
+    frameTitle(ctx, r.x, r.y, r.w, cmd.jp, cmd.en || this.panel);
     this.panelButtons = [{ act: 'close', x: r.x + r.w - 78, y: r.y + 30, w: 66, h: 24, jp: '閉じる', font: '600 12px "Hiragino Mincho ProN", serif', radius: 4 }];
     const st = this.state, me = st.faction, f = st.factions[me];
     const rows = [];       // { cells:[…], buttons:[{jp,act,arg,arg2,w}] }
@@ -2692,6 +2764,33 @@ class MapScene extends GameKit.Scene {
       for (const k of Rule.ownedKyoten(st, me).sort((a, b) => b.scale - a.scale)) {
         rows.push({ cells: [k.jp, KYOTEN_TYPE[k.type].jp, String(st.kyoten[k.id].garrison), String(k.scale)],
                     buttons: [{ jp: '徴兵', act: 'levy', arg: k.id, w: 62 }] });
+      }
+    } else if (this.panel === 'gunji') {
+      // ★出兵できる相手を一覧にする。拠点詳細からしか攻められないと、
+      //   隣接の可否と兵の足りる／足りないを地図上で総当たりすることになる
+      const targets = DATA.kyoten
+        .filter((k) => st.kyoten[k.id].owner !== me)
+        .map((k) => ({ k, src: this._attackSource(k) }))
+        .filter((x) => !!x.src)
+        .map((x) => ({ ...x, sea: Rule.canCrossSea(st, me, x.src.id, x.k.id),
+                       open: Rule.canOpenBloodless(st, me, x.k.id) }))
+        .sort((a, b) => st.kyoten[b.k.id].garrison - st.kyoten[a.k.id].garrison);
+      note = `出兵できる相手 ${targets.length}　※攻め手は隣接する自勢力の拠点のうち兵の多いもの。`
+           + `兵の7割を率いて出る　船 ${Rule.ships(st, me)}`;
+      head = ['拠点', '国', '支配勢力', '守備', '攻め手', ''];
+      for (const x of targets) {
+        const g2 = st.kyoten[x.k.id].garrison, mine = st.kyoten[x.src.id].garrison;
+        rows.push({
+          cells: [x.k.jp, DATA.provById[x.k.province] ? DATA.provById[x.k.province].nameJP : x.k.province,
+                  st.kyoten[x.k.id].owner ? FACTIONS[st.kyoten[x.k.id].owner].jp : '中立',
+                  String(g2) + (x.sea.sea ? `（渡海・失敗${Math.round(x.sea.failRate * 100)}%）` : ''),
+                  `${x.src.jp} ${Math.floor(mine * 0.7)}`],
+          hot: Math.floor(mine * 0.7) > Rule.defenseStrength(st, x.k),
+          buttons: [
+            { jp: `無血開城 ${x.open.ok ? Math.round(x.open.p * 100) + '%' : '—'}`, act: 'open', arg: x.k.id, w: 104, off: !x.open.ok },
+            { jp: '出 兵', act: 'attack', arg: x.k.id, w: 62, off: !x.sea.ok },
+          ],
+        });
       }
     } else if (this.panel === 'jinji') {
       const debt = Rule.totalDebt(st, me);
@@ -3250,7 +3349,10 @@ class BattleScene extends GameKit.Scene {
     this.sel = null; this.reach = null;
     const o = Battle.over(b);
     if (o.done) {
-      this.result = o;
+      // ★生き残りを添えて返す。呼び手（MapScene._launchAttack）が駐留兵へ反映する
+      this.result = { ...o,
+        atkLeft: Battle.alive(b, 'atk').reduce((s, u) => s + u.troops, 0),
+        defLeft: Battle.alive(b, 'def').reduce((s, u) => s + u.troops, 0) };
       g.audio.jingle(o.winner === 'atk' ? [{ f: 523, d: 0.1 }, { f: 659, d: 0.1 }, { f: 784, d: 0.2 }]
                                         : [{ f: 330, d: 0.12 }, { f: 247, d: 0.24 }]);
     }
@@ -3562,7 +3664,8 @@ game.start();
 // ★ 新しい関数・定数を足したらここにも追加する（追加し忘れると検査側が落ちる）。
 window.GENPEI_DEBUG = {
   game, save, DATA, RULE, FACTIONS, SCENARIOS, AUTHORITY, KYOTEN_TYPE, TIMELINE, Rule,
-  buildState, endTurn, waReki, applyActions, levy, ZOOM_CAP, applyEventEffect, TIMELINE,
+  buildState, migrateState, endTurn, waReki, applyActions, captureKyoten, levy, ZOOM_CAP, applyEventEffect, TIMELINE,
+  MapScene, KYOTO_KOKUFU, COMMANDS, OPEN_COMMANDS,
   tryBloodlessOpen, declareChoteki, donateCourt, grantAndo, grantShinon, purgeBand, tryRecruit, aiPolitics, buildBands,
   GENERALS, TROOP_TYPES, TERRAIN, HEX, Battle, initBattle, hexDistance, BattleScene, SUIGUN, islandOf,
   PREHISTORY, GEN_NOTE, RetsudenScene, OpeningScene, drawPortrait, drawKamon,
