@@ -6,6 +6,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 ## ファイル構成
 - `index.html` — メインポートフォリオページ（シングルページ）
 - `game.html` — ZELDA QUEST（Canvas APIのみで作ったトップビューRPG）
+- `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。詳細: `claudechord-vault/README.md`）
@@ -147,6 +148,30 @@ node scripts/verify-sengoku-balance.mjs # 長期進行（150ターン×3試行�
   代わりに `portraitKind`（`ninja`/`monk`/`shinto`/`naval`/`kokujin`）で `drawProceduralPortrait()` の手描き風肖像に落ちる
 - **マーカーと勢力の対応はID照合**。マーカーIDは `<勢力ID>_marker` / `_pirates` / `_ninja_marker` の規約。
   名前一致に頼ると勢力名の改称で対応が無言で切れる（軒猿→軒猿衆の改称で実際に切れていた）
+
+## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
+
+```bash
+node scripts/verify-synth-eq.mjs   # 起動→発音→EQ実効→声部リーク→シーケンサー→共有リンク→MIDI→描画（45項目）
+node scripts/gen-synth-eq-og.mjs   # UIを変えたら OGP 画像を撮り直す
+```
+
+- **「例外0件＝動いている」ではない**。Web Audio はノードの未接続やエンベロープの時刻ミスで
+  **例外もエラーも出さずに無音になる**。検査は必ず `analyser.getByteFrequencyData` のピーク値まで見る
+  （本ページは `SYNTHEQ_DEBUG.peak()` で公開。新しい関数・定数を足したらこのブリッジにも追加する）
+- **ヘッドレスでは `--autoplay-policy=no-user-gesture-required` が要る**。無いと AudioContext が
+  `suspended` のままで全項目が無音になり、原因を実装側に誤診する
+- **`setTargetAtTime` の直後に `AudioParam.value` を読むと目標値に達していない**。
+  時定数の10倍（本ページは 0.02s ⇒ 250ms）待ってから突き合わせること。
+  これを忘れると「フェーダーがフィルターに届いていない」という**偽の不合格**が出る
+- **無音判定はリバーブのIR長（2.4秒）より長く待つ**。600ms では余韻が残っていて必ず落ちる
+- **アナライザは出力ゲインより前段に置く**。こうするとマイク使用時に「スピーカーへ出力」を切っても
+  スペクトラムと録音が生きたままになり、ハウリングを避けつつ可視化できる
+- **EQカーブは `getFrequencyResponse` の実測**。バンド周波数（例: 31.25Hz のローシェルフ）の
+  真上ではなく平坦部（20Hz / 20kHz）で設定値どおりになる。検査の抜き取り位置を間違えない
+- **関数宣言は巻き上がるが `let`/`const` は巻き上がらない**。UI配線から呼ばれる関数が
+  ファイル後方の `let` を参照すると TDZ で**起動時に丸ごと落ちる**（`saveTimer` で実際に踏んだ）。
+  状態変数は「最初に使う場所より前」で宣言する
 
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
