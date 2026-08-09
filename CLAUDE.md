@@ -152,7 +152,7 @@ node scripts/verify-sengoku-balance.mjs # 長期進行（150ターン×3試行�
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
 ```bash
-node scripts/verify-synth-eq.mjs   # 起動→発音→EQ実効→声部リーク→描画（28項目）
+node scripts/verify-synth-eq.mjs   # 起動→発音→EQ実効→声部リーク→シーケンサー→共有リンク→MIDI→描画（45項目）
 node scripts/gen-synth-eq-og.mjs   # UIを変えたら OGP 画像を撮り直す
 ```
 
