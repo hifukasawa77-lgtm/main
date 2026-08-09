@@ -74,6 +74,21 @@ check('シンセプリセットが並ぶ', synthChips >= 6, `count=${synthChips}
 const aria = await page.locator('.ftrack').first().getAttribute('role');
 check('フェーダーが role=slider（キーボード操作可）', aria === 'slider');
 
+// CLAUDE.md / AGENTS.md の「UIは日英バイリンガル表記」を機械検査する。
+// 目視レビューだと新しいボタンを足したときに日本語のみで通ってしまう
+const jpOnly = await page.evaluate(() => {
+  const bad = [];
+  document.querySelectorAll('button, .chip, .hint, .warn, .status').forEach((el) => {
+    const t = (el.textContent || '').trim();
+    if (!t) return;
+    const hasJa = /[぀-ヿ一-鿿]/.test(t);
+    const hasEn = /[A-Za-z]{2,}/.test(t);
+    if (hasJa && !hasEn) bad.push(t.slice(0, 30));
+  });
+  return bad;
+});
+check('操作系のUIが日英併記', jpOnly.length === 0, jpOnly.slice(0, 4).join(' / '));
+
 console.log('\n── 3. AudioContext とグラフ ────────────');
 await page.locator('#btnDemo').click();          // ユーザー操作 → AudioContext 起動 + デモ開始
 await page.waitForTimeout(300);
@@ -138,7 +153,7 @@ const presetIssues = await page.evaluate(() => {
   Object.entries(D.EQ_PRESETS).forEach(([name, arr]) => {
     if (arr.length !== D.EQ_FREQS.length) bad.push(`${name}: バンド数 ${arr.length}`);
     if (arr.some(v => Math.abs(v) > 18)) bad.push(`${name}: ±18dB超`);
-    if (name !== 'フラット' && arr.every(v => v === 0)) bad.push(`${name}: 全て0`);
+    if (!/フラット|Flat/.test(name) && arr.every(v => v === 0)) bad.push(`${name}: 全て0`);
   });
   return bad;
 });
@@ -241,7 +256,7 @@ check('全シーケンスパターンが読み込める', patFilled.length === 0
 
 const seqPlay = await page.evaluate(async () => {
   const D = window.SYNTHEQ_DEBUG;
-  D.loadSeqPattern(D.SEQ_PATTERNS['🎹 アルペジオ']);
+  D.loadSeqPattern(Object.values(D.SEQ_PATTERNS)[0]);
   D.setSeq(true);
   await new Promise(r => setTimeout(r, 1500));
   const p = D.peak(), on = D.isSeqOn();
@@ -273,7 +288,7 @@ console.log('\n── 11. 共有リンク・保存 ─────────�
 const roundTrip = await page.evaluate(() => {
   const D = window.SYNTHEQ_DEBUG;
   D.setAllBands([3,-6,9,0,-2,4,0,-9,12,-3]);
-  D.loadSeqPattern(D.SEQ_PATTERNS['🎵 コード']);
+  D.loadSeqPattern(Object.values(D.SEQ_PATTERNS)[3]);
   document.getElementById('osc1Type').value = 'square';
   document.getElementById('osc1Type').dispatchEvent(new Event('change'));
   const before = D.snapshot();
@@ -350,7 +365,116 @@ check('ホバー前は読み取り表示が出ていない', readout === true);
 check('ホバーで周波数とEQ値が読める', !readShown.hidden && /Hz|kHz/.test(readShown.text) && /dB/.test(readShown.text),
   readShown.text);
 
-console.log('\n── 14. 例外の再確認 ────────────────────');
+console.log('\n── 14. 停止・モード切替の取り残し ──────');
+// 先読み(150ms)で予約済みの声部は生成時点で stop(未来) 済み＝released。
+// kill() を持たないと「停止したのに鳴り出す」音が残る
+const panic = await page.evaluate(async () => {
+  const D = window.SYNTHEQ_DEBUG;
+  // 余韻で判定が濁らないよう、リバーブ・ディレイ・リリースを切る
+  // ★ リリースを長くするのが肝。短いと幽霊音が一瞬で鳴り終わり、
+  //   アナライザの平滑化に埋もれて「止まっている」ように見えてしまう
+  [['reverb',0],['delay',0],['rel',1.2],['sus',100]].forEach(([id, v]) => {
+    const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('input'));
+  });
+  // 全ステップを埋めた上でテンポを上げ、停止時に必ず先読み予約が残っている状態にする
+  const bpm = document.getElementById('bpm'); bpm.value = 200; bpm.dispatchEvent(new Event('input'));
+  D.loadSeqPattern(Array.from({length: D.SEQ_STEPS}, (_, s) => [0, s]));
+  D.setSeq(true);
+  await new Promise(r => setTimeout(r, 1200));
+  const during = D.peak();
+  D.setSeq(false);                                   // 内部で allNotesOff
+  // 止めたのに鳴り続けていれば、予約済みの声部が生き残っている
+  await new Promise(r => setTimeout(r, 900));
+  return { during, ghost: D.peak(), voices: D.voiceCount() };
+});
+check('停止すると予約済みの音も鳴り出さない',
+  panic.during > 0 && panic.ghost < 25 && panic.voices === 0,
+  `during=${panic.during} ghost=${panic.ghost} voices=${panic.voices}`);
+
+const modeStuck = await page.evaluate(async () => {
+  const D = window.SYNTHEQ_DEBUG;
+  const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('change')); };
+  const out = {};
+  for (const [from, to] of [['poly','mono'], ['mono','poly']]){
+    D.allNotesOff(); await new Promise(r => setTimeout(r, 300));
+    set('voiceMode', from);
+    D.noteOn(60); await new Promise(r => setTimeout(r, 150));
+    set('voiceMode', to);                             // 押しっぱなしのままモードを跨ぐ
+    await new Promise(r => setTimeout(r, 100));
+    D.noteOff(60);
+    await new Promise(r => setTimeout(r, 900));
+    out[from + '→' + to] = D.voiceCount();
+  }
+  set('voiceMode', 'poly');
+  return out;
+});
+check('発音モードを跨いでも声部が残らない', Object.values(modeStuck).every((n) => n === 0), JSON.stringify(modeStuck));
+
+// PCキーを押したままオクターブを変えると、keyup が別のMIDI番号を計算して
+// 旧番号が pressed に残り、そのキーが二度と反応しなくなる
+await page.evaluate(() => { window.SYNTHEQ_DEBUG.allNotesOff(); document.body.focus(); });
+await page.keyboard.down('a');
+await page.waitForTimeout(120);
+await page.keyboard.press('z');            // オクターブ下げ
+await page.keyboard.up('a');
+await page.keyboard.press('x');            // 元のオクターブへ戻す
+await page.waitForTimeout(150);
+await page.keyboard.down('a');             // 同じキーをもう一度
+await page.waitForTimeout(350);
+const keyAlive = await page.evaluate(() => ({ v: window.SYNTHEQ_DEBUG.voiceCount(), p: window.SYNTHEQ_DEBUG.peak() }));
+await page.keyboard.up('a');
+await page.evaluate(() => window.SYNTHEQ_DEBUG.allNotesOff());
+check('オクターブ変更後も同じPCキーで発音できる', keyAlive.v > 0 && keyAlive.p > 0,
+  `voices=${keyAlive.v} peak=${keyAlive.p}`);
+
+console.log('\n── 15. EQカーブの追随・MIDI後始末 ──────');
+// setTargetAtTime の途中値でキャッシュが固まると、カーブが実際の応答とズレたまま残る
+const converge = await page.evaluate(async () => {
+  const D = window.SYNTHEQ_DEBUG;
+  // ★ 幅は描画ループと同じ値を使う。別の幅で問い合わせるとキャッシュを常に外し、
+  //   「固まったキャッシュ」というバグ自体を素通りしてしまう
+  const w = Math.round(document.getElementById('viz').getBoundingClientRect().width);
+  D.setBypass(false);
+  D.setAllBands([0,0,0,0,0,0,0,0,0,0]);
+  await new Promise(r => setTimeout(r, 350));
+  D.setAllBands([12,0,0,0,0,0,0,0,0,0]);
+  await new Promise(r => setTimeout(r, 40));
+  const early = D.curve(w)[0];
+  await new Promise(r => setTimeout(r, 700));
+  return { w, early, late: D.curve(w)[0] };
+});
+check('EQカーブが平滑化の完了後も更新される', converge.late > 9,
+  `${converge.early.toFixed(1)} → ${converge.late.toFixed(1)} dB @20Hz`);
+
+// MIDI停止後に onstatechange が残ると、機器の抜き差しで null 参照の例外になる
+const pageM = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const errorsM = [];
+pageM.on('pageerror', (e) => errorsM.push(e.message));
+await pageM.addInitScript(() => {
+  window.__SYNTHEQ_TEST = true;
+  const fake = { inputs: new Map(), onstatechange: null };
+  navigator.requestMIDIAccess = async () => fake;    // 実機の代わり
+  window.__fakeMidi = fake;
+});
+await pageM.goto(`${BASE}/synth-eq.html`, { waitUntil: 'load' });
+await pageM.locator('#btnMidi').click();             // 開始
+await pageM.waitForTimeout(250);
+const midiStarted = await pageM.evaluate(() => typeof window.__fakeMidi.onstatechange === 'function');
+await pageM.locator('#btnMidi').click();             // 停止
+await pageM.waitForTimeout(150);
+const midiStopped = await pageM.evaluate(() => {
+  const f = window.__fakeMidi;
+  let threw = false;
+  try { if (f.onstatechange) f.onstatechange(); } catch(e){ threw = true; }
+  return { cleared: f.onstatechange === null, threw };
+});
+check('MIDI開始で状態監視が付く', midiStarted);
+check('MIDI停止で状態監視が外れ、抜き差しで落ちない',
+  midiStopped.cleared && !midiStopped.threw && errorsM.length === 0,
+  `${JSON.stringify(midiStopped)} errors=${errorsM.length}`);
+await pageM.close();
+
+console.log('\n── 16. 例外の再確認 ────────────────────');
 check('操作後も例外0件', errors.length === 0, errors.slice(0, 3).join(' | '));
 check('操作後も404が0件', missing.length === 0, missing.slice(0, 3).join(' | '));
 
