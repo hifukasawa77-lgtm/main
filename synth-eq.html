@@ -116,6 +116,26 @@
   .legend .l-spec{background:linear-gradient(90deg,var(--cyan),var(--purple))}
   .legend .l-curve{background:var(--purple)}
 
+  .vizread[hidden]{display:none}
+  .vizread{position:absolute;top:8px;left:8px;pointer-events:none;font-size:0.68rem;
+    color:var(--text);background:rgba(5,7,13,0.82);border:1px solid var(--line);
+    border-radius:8px;padding:3px 8px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .vizread b{color:var(--cyan);font-weight:600}
+
+  /* ── step sequencer ── */
+  .seqwrap{overflow-x:auto;padding-bottom:4px}
+  .seq{display:grid;grid-template-columns:42px repeat(16, minmax(17px, 1fr));gap:3px;min-width:340px}
+  .seqlab{font-size:0.6rem;color:var(--muted);text-align:right;padding-right:4px;
+    line-height:19px;font-variant-numeric:tabular-nums}
+  .cell{height:19px;border-radius:4px;border:1px solid var(--line);background:var(--bg2);
+    cursor:pointer;padding:0;font:inherit}
+  .cell.blk{background:rgba(255,255,255,0.025)}
+  .cell.beat{border-color:rgba(255,255,255,0.22)}
+  .cell.on{background:linear-gradient(180deg,var(--cyan),var(--purple));border-color:transparent}
+  .cell.now{box-shadow:inset 0 0 0 2px rgba(226,232,240,0.75)}
+  .cell.now:not(.on){background:rgba(226,232,240,0.14)}   /* 暗いマスでは枠線だけだと見えない */
+  .cell:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+
   /* ── graphic EQ faders ── */
   .eqbank{display:flex;gap:4px;justify-content:space-between;margin-top:6px}
   .fader{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px}
@@ -347,6 +367,13 @@
           <button type="button" class="btn ghost" id="btnDl" disabled>⬇ WAV保存</button>
         </div>
         <div class="hint" id="recInfo">EQ通過後の音を 16bit ステレオWAVで書き出します。</div>
+
+        <div class="sep"></div>
+        <div class="btnrow" style="margin-top:10px">
+          <button type="button" class="btn ghost sm" id="btnShare">🔗 設定を共有リンクに</button>
+          <button type="button" class="btn ghost sm" id="btnMidi">🎛 MIDI鍵盤を使う</button>
+        </div>
+        <div class="hint" id="shareInfo">音色・EQ・シーケンスをURLに埋め込みます（サーバーには何も保存されません）。</div>
       </section>
     </aside>
 
@@ -357,6 +384,7 @@
           <span class="right" id="ctxState">音を鳴らすと動きます</span></h2>
         <div class="vizwrap">
           <canvas id="viz" aria-label="周波数スペクトラムとイコライザーカーブ / Spectrum and EQ response"></canvas>
+          <div class="vizread" id="vizRead" hidden></div>
         </div>
         <canvas id="scope" aria-label="波形モニター / Waveform scope"></canvas>
         <div class="legend">
@@ -377,6 +405,22 @@
         </div>
         <label class="toggle"><input type="checkbox" id="autoGain" checked> 自動レベル補正（ブースト時の音割れを防ぐ） <span class="en">/ Auto make-up gain</span></label>
         <div class="status" id="status">31Hz〜16kHz の10バンド（オクターブ間隔）。両端はシェルビング、中央はピーキングフィルターです。</div>
+      </section>
+
+      <section class="card">
+        <h2>🎼 ステップシーケンサー <small>16-step sequencer</small>
+          <span class="right" id="seqState">停止中 / Stopped</span></h2>
+        <div class="btnrow" style="margin-top:0">
+          <button type="button" class="btn ghost" id="btnSeq">▶ 再生 / Play</button>
+          <button type="button" class="btn ghost sm" id="btnSeqClear">✕ クリア</button>
+          <button type="button" class="btn ghost sm" id="btnSeqRand">🎲 ランダム</button>
+        </div>
+        <div class="seqwrap">
+          <div class="seq" id="seqGrid"></div>
+        </div>
+        <div class="chips" id="seqPatterns"></div>
+        <div class="hint">マス目をクリック／ドラッグで音符を置きます。テンポは左のシンセ設定と共通、
+          刻みは16分音符です。1列に複数置けば和音になります。</div>
       </section>
 
       <section class="card">
@@ -443,6 +487,19 @@ const cutoffHz = () => 30 * Math.pow(600, P.cutoff/100);
    宣言は §11 ではなくここに置く（let のまま §11 に置くと TDZ で落ちる） */
 const LS_KEY = 'synth-eq-v1';
 let saveTimer = null;
+
+/* ステップシーケンサーの状態も saveState() が触るのでここで宣言する */
+const SEQ_STEPS = 16, SEQ_ROWS = 13;          // 16分音符×16 / C4〜C5 の13半音
+let seqBase = 60;                              // 最下段の音（C4）
+let seqGrid = Array.from({length:SEQ_ROWS}, () => new Array(SEQ_STEPS).fill(false));
+let seqOn = false, seqNext = 0, seqIdx = 0, seqCol = -1;
+
+const SEQ_PATTERNS = {
+  '🎹 アルペジオ': [[0,0],[4,2],[7,4],[12,6],[7,8],[4,10],[7,12],[12,14]],
+  '🎸 ペンタトニック': [[0,0],[3,1],[5,3],[7,5],[10,6],[12,8],[10,9],[7,11],[5,12],[3,14]],
+  '🔊 ベースライン': [[0,0],[0,3],[7,4],[0,6],[5,8],[5,11],[7,12],[0,14]],
+  '🎵 コード': [[0,0],[4,0],[7,0],[0,4],[5,4],[9,4],[2,8],[5,8],[9,8],[0,12],[4,12],[7,12]]
+};
 
 const EQ_FREQS = [31.25, 62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const EQ_LABELS = ['31','63','125','250','500','1k','2k','4k','8k','16k'];
@@ -756,6 +813,11 @@ function tick(){
     if (demoNext < now) demoNext = now + 0.02;
     while (demoNext < ahead){ demoStep(demoIdx++, demoNext, dur); demoNext += dur; }
   } else { demoNext = 0; demoIdx = 0; }
+  if (seqOn){
+    const dur = 60/P.bpm/4;
+    if (seqNext < now) seqNext = now + 0.02;
+    while (seqNext < ahead){ seqStep(seqIdx++, seqNext, dur); seqNext += dur; }
+  } else { seqNext = 0; seqIdx = 0; }
 }
 function playFor(midi, vel, when, len){
   const v = makeVoice(midi, vel, when);
@@ -791,6 +853,104 @@ function demoStep(idx, when, dur){
   if (s === 6 || s === 14) playFor(chord[(s===6?2:1)] + 12, 0.45, when, dur*1.6);
   if (s === 10) playFor(chord[0] + 12, 0.4, when, dur*1.6);
 }
+
+/* ------------------------------------------------------------------
+   4b. ステップシーケンサー
+   ------------------------------------------------------------------ */
+const seqCells = [];                            // [row][step] -> button
+function buildSeq(){
+  const box = $('seqGrid');
+  box.textContent = '';
+  seqCells.length = 0;
+  for (let r=0;r<SEQ_ROWS;r++){
+    const midi = seqBase + (SEQ_ROWS-1-r);      // 上ほど高い音
+    const lab = document.createElement('div');
+    lab.className = 'seqlab';
+    lab.textContent = noteName(midi);
+    box.appendChild(lab);
+    const row = [];
+    for (let s=0;s<SEQ_STEPS;s++){
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cell' + (isBlack(midi) ? ' blk' : '') + (s % 4 === 0 ? ' beat' : '');
+      b.dataset.r = r; b.dataset.s = s;
+      b.setAttribute('aria-label', noteName(midi) + ' ステップ' + (s+1));
+      b.setAttribute('aria-pressed', 'false');
+      box.appendChild(b);
+      row.push(b);
+    }
+    seqCells.push(row);
+  }
+  renderSeq();
+}
+function renderSeq(){
+  for (let r=0;r<SEQ_ROWS;r++){
+    for (let s=0;s<SEQ_STEPS;s++){
+      const on = !!seqGrid[r][s];
+      seqCells[r][s].classList.toggle('on', on);
+      seqCells[r][s].setAttribute('aria-pressed', String(on));
+    }
+  }
+}
+function seqToggle(r, s, force){
+  seqGrid[r][s] = (force === undefined) ? !seqGrid[r][s] : force;
+  const on = seqGrid[r][s];
+  seqCells[r][s].classList.toggle('on', on);
+  seqCells[r][s].setAttribute('aria-pressed', String(on));
+  saveState();
+}
+function seqStep(idx, when, dur){
+  const col = idx % SEQ_STEPS;
+  for (let r=0;r<SEQ_ROWS;r++){
+    if (seqGrid[r][col]) playFor(seqBase + (SEQ_ROWS-1-r), 0.8, when, dur*0.92);
+  }
+  // 再生位置の表示は音の時刻に合わせて遅らせる（先読み予約なので今すぐ点けるとずれる）
+  const delay = Math.max(0, (when - AC.currentTime) * 1000);
+  setTimeout(() => { if (seqOn) markSeqCol(col); }, delay);
+}
+function markSeqCol(col){
+  if (seqCol === col) return;
+  if (seqCol >= 0) for (let r=0;r<SEQ_ROWS;r++) seqCells[r][seqCol].classList.remove('now');
+  seqCol = col;
+  for (let r=0;r<SEQ_ROWS;r++) seqCells[r][col].classList.add('now');
+}
+function clearSeqCol(){
+  if (seqCol >= 0) for (let r=0;r<SEQ_ROWS;r++) seqCells[r][seqCol].classList.remove('now');
+  seqCol = -1;
+}
+function setSeq(on){
+  if (on && !ensureAudio()) return;
+  seqOn = on;
+  if (on){ demoOn = false; syncDemoBtn(); }    // デモとシーケンサーは排他（混ざると何も分からない）
+  else { clearSeqCol(); allNotesOff(); }
+  $('btnSeq').classList.toggle('on', on);
+  $('btnSeq').textContent = on ? '⏹ 停止 / Stop' : '▶ 再生 / Play';
+  $('seqState').textContent = on ? '再生中 / Playing' : '停止中 / Stopped';
+}
+function loadSeqPattern(pairs){
+  seqGrid = Array.from({length:SEQ_ROWS}, () => new Array(SEQ_STEPS).fill(false));
+  pairs.forEach(([semi, step]) => {
+    const r = SEQ_ROWS-1-semi;                  // パターンは「根音からの半音数」で書く
+    if (r >= 0 && r < SEQ_ROWS && step < SEQ_STEPS) seqGrid[r][step] = true;
+  });
+  renderSeq(); saveState();
+}
+
+/* ドラッグでまとめて塗る。塗りか消しかは最初のマスで決める */
+let seqPaint = null;
+$('seqGrid').addEventListener('pointerdown', (e) => {
+  const c = e.target.closest('.cell'); if (!c) return;
+  const r = +c.dataset.r, s = +c.dataset.s;
+  seqPaint = !seqGrid[r][s];
+  seqToggle(r, s, seqPaint);
+  e.preventDefault();
+});
+$('seqGrid').addEventListener('pointerover', (e) => {
+  if (seqPaint === null) return;
+  const c = e.target.closest('.cell'); if (!c) return;
+  seqToggle(+c.dataset.r, +c.dataset.s, seqPaint);
+});
+window.addEventListener('pointerup', () => { seqPaint = null; });
 
 /* ------------------------------------------------------------------
    5. グラフィックEQ（フェーダーUI）
@@ -911,6 +1071,8 @@ const F_MIN = 20, F_MAX = 20000;
 const viz = $('viz'), vctx = viz.getContext('2d');
 const scope = $('scope'), sctx = scope.getContext('2d');
 let specData = null, timeData = null, curveCache = null;
+let peakHold = null;                   // 列ごとのピーク保持（0-255）。毎フレーム少しずつ落とす
+let cursorX = -1, cursorY = -1;
 
 function fitCanvas(cv, ctx){
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -988,20 +1150,33 @@ function draw(){
     grad.addColorStop(0, 'rgba(34,211,238,0.10)');
     grad.addColorStop(0.55, 'rgba(34,211,238,0.42)');
     grad.addColorStop(1, 'rgba(167,139,250,0.62)');
-    vctx.beginPath(); vctx.moveTo(0, h-14);
     const step = 2;
-    for (let x=0; x<=w; x+=step){
+    const cols = Math.floor(w/step) + 1;
+    if (!peakHold || peakHold.length !== cols) peakHold = new Float32Array(cols);
+    const lvl = new Float32Array(cols);
+    for (let c=0;c<cols;c++){
+      const x = c*step;
       const f = xToF(x, w);
       const bin = clamp(Math.round(f/nyq * bins), 0, bins-1);
       let v = specData[bin];
       // 低域は1ピクセルあたりのビン数が1未満になるので、隣接ビンの最大を取って階段状の欠けを埋める
       const bin2 = clamp(Math.round(xToF(x+step, w)/nyq * bins), 0, bins-1);
       for (let b=bin; b<=Math.min(bin2, bin+64); b++) if (specData[b] > v) v = specData[b];
-      const y = (h-14) - (v/255) * (h-24);
-      vctx.lineTo(x, y);
+      lvl[c] = v;
+      peakHold[c] = v >= peakHold[c] ? v : Math.max(v, peakHold[c] - 1.1);
     }
+    vctx.beginPath(); vctx.moveTo(0, h-14);
+    for (let c=0;c<cols;c++) vctx.lineTo(c*step, (h-14) - (lvl[c]/255) * (h-24));
     vctx.lineTo(w, h-14); vctx.closePath();
     vctx.fillStyle = grad; vctx.fill();
+
+    // ピークホールド（瞬間的な山が見えるように少しだけ遅れて落ちる線）
+    vctx.beginPath();
+    for (let c=0;c<cols;c++){
+      const y = (h-14) - (peakHold[c]/255) * (h-24);
+      if (c === 0) vctx.moveTo(0, y); else vctx.lineTo(c*step, y);
+    }
+    vctx.strokeStyle = 'rgba(226,232,240,0.28)'; vctx.lineWidth = 1; vctx.stroke();
   }
 
   // EQカーブ
@@ -1024,6 +1199,21 @@ function draw(){
     vctx.fillStyle = eqBypassed ? 'rgba(148,163,184,0.6)' : (eqGains[i] === 0 ? 'rgba(226,232,240,0.75)' : 'rgba(34,211,238,0.95)');
     vctx.fill();
   });
+
+  // カーソル位置の読み取り（周波数とEQゲイン）
+  if (cursorX >= 0 && dragBand < 0){
+    vctx.beginPath();
+    vctx.moveTo(cursorX, 0); vctx.lineTo(cursorX, h-14);
+    vctx.strokeStyle = 'rgba(226,232,240,0.28)'; vctx.lineWidth = 1; vctx.stroke();
+    const f = xToF(cursorX, w);
+    const gi = clamp(Math.round(cursorX/w * (N-1)), 0, N-1);
+    const read = $('vizRead');
+    read.hidden = false;
+    read.innerHTML = '<b>' + (f >= 1000 ? (f/1000).toFixed(2) + ' kHz' : Math.round(f) + ' Hz') + '</b>'
+      + '　EQ ' + (db[gi] > 0 ? '+' : '') + db[gi].toFixed(1) + ' dB';
+  } else if (cursorX < 0){
+    $('vizRead').hidden = true;
+  }
 
   // 波形
   const s = fitCanvas(scope, sctx);
@@ -1055,7 +1245,12 @@ viz.addEventListener('pointerdown', (e) => {
   viz.setPointerCapture(e.pointerId);
   dragTo(e); e.preventDefault();
 });
-viz.addEventListener('pointermove', (e) => { if (dragBand >= 0 && (e.buttons & 1)) dragTo(e); });
+viz.addEventListener('pointermove', (e) => {
+  const r = viz.getBoundingClientRect();
+  cursorX = e.clientX - r.left; cursorY = e.clientY - r.top;
+  if (dragBand >= 0 && (e.buttons & 1)) dragTo(e);
+});
+viz.addEventListener('pointerleave', () => { cursorX = -1; cursorY = -1; });
 window.addEventListener('pointerup', () => { dragBand = -1; });
 function dragTo(e){
   const r = viz.getBoundingClientRect();
@@ -1219,6 +1414,45 @@ $('btnMic').addEventListener('click', async () => {
 });
 
 /* ------------------------------------------------------------------
+   8b. MIDI鍵盤（Web MIDI API）
+   ------------------------------------------------------------------ */
+let midiAccess = null;
+$('btnMidi').addEventListener('click', async () => {
+  if (!navigator.requestMIDIAccess){
+    // Safari / Firefox は Web MIDI 非対応。「押しても無反応」に見えないよう明示する
+    setStatus('このブラウザは Web MIDI API に対応していません（Chrome / Edge でお試しください）。');
+    return;
+  }
+  if (midiAccess){
+    midiAccess.inputs.forEach((i) => { i.onmidimessage = null; });
+    midiAccess = null;
+    $('btnMidi').classList.remove('on');
+    $('btnMidi').textContent = '🎛 MIDI鍵盤を使う';
+    setStatus('MIDI入力を停止しました。');
+    return;
+  }
+  try {
+    ensureAudio();
+    midiAccess = await navigator.requestMIDIAccess();
+    let n = 0;
+    midiAccess.inputs.forEach((input) => { input.onmidimessage = onMidi; n++; });
+    midiAccess.onstatechange = () => { midiAccess.inputs.forEach((i) => { i.onmidimessage = onMidi; }); };
+    $('btnMidi').classList.add('on');
+    $('btnMidi').textContent = '⏹ MIDI入力を止める';
+    setStatus(n ? `MIDI入力を受け付けています（${n}台）。` : 'MIDI機器が見つかりません。接続してからもう一度お試しください。');
+  } catch(err){
+    setStatus('MIDIを使用できませんでした: ' + (err && err.name ? err.name : 'error'));
+  }
+});
+function onMidi(e){
+  const [st, d1, d2] = e.data;
+  const cmd = st & 0xf0;
+  if (cmd === 0x90 && d2 > 0) noteOn(d1, clamp(d2/127, 0.05, 1));
+  else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) noteOff(d1);
+  else if (cmd === 0xb0 && d1 === 123) allNotesOff();      // All Notes Off
+}
+
+/* ------------------------------------------------------------------
    9. 録音（EQ通過後を WAV で書き出す）
    ------------------------------------------------------------------ */
 let recNode = null, recSink = null, recBufs = null, recording = false, recUrl = null;
@@ -1377,14 +1611,46 @@ function applySynthPreset(name){
 
 $('btnEqBypass').addEventListener('click', () => setBypass(!eqBypassed));
 $('btnEqReset').addEventListener('click', () => { setAllBands(new Array(EQ_FREQS.length).fill(0)); setStatus('EQをフラットに戻しました。'); });
-$('btnPanic').addEventListener('click', () => { demoOn = false; $('btnDemo').classList.remove('on'); $('btnDemo').textContent = '▶ デモ演奏 / Demo'; allNotesOff(); });
-$('btnDemo').addEventListener('click', () => {
-  if (!ensureAudio()) return;
-  demoOn = !demoOn;
+function syncDemoBtn(){
   $('btnDemo').classList.toggle('on', demoOn);
   $('btnDemo').textContent = demoOn ? '⏹ デモ停止 / Stop' : '▶ デモ演奏 / Demo';
-  if (!demoOn) allNotesOff();
-  else setStatus('デモ演奏中。<b>EQ ON / OFF</b> や各バンドのフェーダーを動かすと違いが分かります。');
+}
+function setDemo(on){
+  if (on && !ensureAudio()) return;
+  demoOn = on;
+  if (on){ if (seqOn) setSeq(false); }         // デモとシーケンサーは排他
+  else allNotesOff();
+  syncDemoBtn();
+  if (on) setStatus('デモ演奏中。<b>EQ ON / OFF</b> や各バンドのフェーダーを動かすと違いが分かります。');
+}
+$('btnPanic').addEventListener('click', () => { setDemo(false); setSeq(false); allNotesOff(); });
+$('btnDemo').addEventListener('click', () => setDemo(!demoOn));
+
+$('btnSeq').addEventListener('click', () => setSeq(!seqOn));
+$('btnSeqClear').addEventListener('click', () => {
+  seqGrid = Array.from({length:SEQ_ROWS}, () => new Array(SEQ_STEPS).fill(false));
+  renderSeq(); saveState(); setStatus('シーケンスをクリアしました。');
+});
+$('btnSeqRand').addEventListener('click', () => {
+  // メジャーペンタトニックから拾うので、でたらめに置いても音楽的に破綻しない
+  const SCALE = [0,2,4,7,9,12];
+  const pairs = [];
+  for (let s=0;s<SEQ_STEPS;s++){
+    if (Math.random() < (s % 4 === 0 ? 0.85 : 0.4)){
+      pairs.push([SCALE[Math.floor(Math.random()*SCALE.length)], s]);
+    }
+  }
+  loadSeqPattern(pairs);
+  setStatus('ランダムなシーケンスを作りました（メジャーペンタトニック）。');
+});
+Object.keys(SEQ_PATTERNS).forEach((name) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'chip'; b.textContent = name;
+  b.addEventListener('click', () => {
+    loadSeqPattern(SEQ_PATTERNS[name]);
+    setStatus('シーケンスパターン <b>' + name + '</b> を読み込みました。');
+  });
+  $('seqPatterns').appendChild(b);
 });
 
 /* AudioContext は最初のユーザー操作で起こす（自動再生ポリシー対策） */
@@ -1405,34 +1671,112 @@ setInterval(() => {
 /* ------------------------------------------------------------------
    11. 設定の保存（EQと主要パラメータのみ）
    ------------------------------------------------------------------ */
+/* シーケンスは 1行=16bit を4桁の16進で詰める（URLに載せても短い） */
+function packSeq(){
+  return seqGrid.map((row) => {
+    let v = 0;
+    for (let s=0;s<SEQ_STEPS;s++) if (row[s]) v |= (1 << s);
+    return v.toString(16).padStart(4, '0');
+  }).join('');
+}
+function unpackSeq(hex){
+  if (typeof hex !== 'string' || hex.length !== SEQ_ROWS*4) return false;
+  const next = [];
+  for (let r=0;r<SEQ_ROWS;r++){
+    const v = parseInt(hex.slice(r*4, r*4+4), 16) || 0;
+    const row = [];
+    for (let s=0;s<SEQ_STEPS;s++) row.push(!!(v & (1 << s)));
+    next.push(row);
+  }
+  seqGrid = next;
+  return true;
+}
+
+function snapshot(){
+  const p = {};
+  Object.keys(P).forEach((k) => { p[k] = P[k]; });
+  return { v:2, p, eq: eqGains.slice(), seq: packSeq(),
+    ui: { ag: $('autoGain').checked, spk: $('spkOut').checked, byp: eqBypassed, oct: octave } };
+}
+function applySnapshot(s){
+  if (!s || typeof s !== 'object') return false;
+  if (s.p && typeof s.p === 'object'){
+    Object.keys(s.p).forEach((k) => {
+      if (!(k in P)) return;                       // 知らないキーは黙って捨てる（前方互換）
+      const el = $(k);
+      if (!el){ P[k] = s.p[k]; return; }
+      el.value = s.p[k];
+      el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input'));
+    });
+  }
+  if (Array.isArray(s.eq) && s.eq.length === EQ_FREQS.length) setAllBands(s.eq.map(Number));
+  if (s.seq && unpackSeq(s.seq)) renderSeq();
+  if (s.ui && typeof s.ui === 'object'){
+    if (typeof s.ui.ag === 'boolean'){ $('autoGain').checked = s.ui.ag; applyAutoGain(); }
+    if (typeof s.ui.spk === 'boolean'){ $('spkOut').checked = s.ui.spk; applyMaster(); }
+    if (typeof s.ui.byp === 'boolean') setBypass(s.ui.byp);
+    if (typeof s.ui.oct === 'number'){ octave = clamp(s.ui.oct, 0, 7); buildKeys(); }
+  }
+  return true;
+}
+
 function saveState(){
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify({
-        eq: eqGains, vol: P.vol, autoGain: $('autoGain').checked, spk: $('spkOut').checked
-      }));
-    } catch(e){ /* プライベートモード等では黙って諦める */ }
+    try { localStorage.setItem(LS_KEY, JSON.stringify(snapshot())); }
+    catch(e){ /* プライベートモード等では黙って諦める */ }
   }, 250);
 }
 function loadState(){
   let s = null;
   try { s = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch(e){}
-  if (!s) return;
-  if (Array.isArray(s.eq) && s.eq.length === EQ_FREQS.length){
-    s.eq.forEach((v, i) => { eqGains[i] = clamp(+v || 0, -EQ_RANGE, EQ_RANGE); });
-  }
-  if (typeof s.vol === 'number'){ $('vol').value = s.vol; P.vol = s.vol; $('volVal').textContent = s.vol + '%'; }
-  if (typeof s.autoGain === 'boolean') $('autoGain').checked = s.autoGain;
-  if (typeof s.spk === 'boolean') $('spkOut').checked = s.spk;
+  if (s) applySnapshot(s);
 }
+
+/* 共有リンク: 状態を URL-safe base64 にして location.hash へ載せる（送信先は無い） */
+function encodeState(){
+  const json = JSON.stringify(snapshot());
+  const bin = String.fromCharCode.apply(null, new TextEncoder().encode(json));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function decodeState(str){
+  const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+function applyShareLink(){
+  const m = location.hash.match(/[#&]s=([A-Za-z0-9\-_]+)/);
+  if (!m) return false;
+  try {
+    if (applySnapshot(decodeState(m[1]))){
+      setStatus('共有リンクの設定を読み込みました。<b>デモ演奏</b>やシーケンサーで鳴らしてみてください。');
+      return true;
+    }
+  } catch(e){ setStatus('共有リンクを読み取れませんでした（形式が違うようです）。'); }
+  return false;
+}
+$('btnShare').addEventListener('click', async () => {
+  const url = location.href.split('#')[0] + '#s=' + encodeState();
+  history.replaceState(null, '', url);
+  try {
+    await navigator.clipboard.writeText(url);
+    $('shareInfo').textContent = '共有リンクをコピーしました（音色・EQ・シーケンスを含みます）。';
+  } catch(e){
+    // クリップボードは安全なコンテキストでしか使えない。URLは既に反映済みなので手動コピーを促す
+    $('shareInfo').textContent = 'アドレスバーのURLをコピーしてください（設定は反映済みです）。';
+  }
+});
 
 /* ------------------------------------------------------------------
    12. 起動
    ------------------------------------------------------------------ */
-loadState();
+/* ★ 順番が大事: 復元（loadState / applyShareLink）は UI を組み立てた後に走らせる。
+   applySnapshot はフェーダーやシーケンサーのマスに直接触るので、先に呼ぶと空振りする */
 buildEq();
+buildSeq();
 buildKeys();
+loadState();
+applyShareLink();                     // 共有リンクがあれば localStorage より優先する
 window.addEventListener('resize', () => { renderEq(); curveCache = null; });
 requestAnimationFrame(draw);          // AudioContext 前でもグリッドとEQカーブは描く
 
@@ -1448,10 +1792,18 @@ if (window.__SYNTHEQ_TEST){
     noteOn, noteOff, allNotesOff,
     setBand, setAllBands, setBypass, applySynthPreset,
     isBypassed: () => eqBypassed,
+    /* シーケンサー */
+    SEQ_STEPS, SEQ_ROWS, SEQ_PATTERNS,
+    setSeq, loadSeqPattern, seqToggle, renderSeq,
+    seqSnapshot: () => seqGrid.map((r) => r.slice()),
+    isSeqOn: () => seqOn,
+    /* 保存・共有 */
+    snapshot, applySnapshot, encodeState, decodeState, packSeq,
+    onMidi,
     makeupGain: () => (AC ? makeup.gain.value : 1),
     filterGains: () => eqFilters.map(f => f.gain.value),
     curve: (w) => Array.from(eqCurve(w || 600)),
-    setDemo: (on) => { demoOn = !!on; if (!on) allNotesOff(); },
+    setDemo, isDemoOn: () => demoOn,
     /* 実際に音が出ているか（アナライザのピーク 0-255）。0 のままなら無音 */
     peak: () => {
       if (!AC || !analyser) return -1;

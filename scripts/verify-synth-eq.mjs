@@ -217,7 +217,140 @@ const painted = await page.evaluate(() => {
 check('スペクトラムCanvasに描画がある', painted.lit > painted.total * 0.02,
   `${painted.lit}/${painted.total} px (${painted.w}×${painted.h})`);
 
-console.log('\n── 10. 例外の再確認 ────────────────────');
+console.log('\n── 10. ステップシーケンサー ────────────');
+const seqCells = await page.locator('#seqGrid .cell').count();
+const seqLabels = await page.locator('#seqGrid .seqlab').count();
+const dims = await page.evaluate(() => ({ r: window.SYNTHEQ_DEBUG.SEQ_ROWS, s: window.SYNTHEQ_DEBUG.SEQ_STEPS }));
+check('シーケンサーのマス目が揃っている', seqCells === dims.r * dims.s && seqLabels === dims.r,
+  `cells=${seqCells} labels=${seqLabels} (${dims.r}×${dims.s})`);
+
+// パターンを読み込むと実際に音符が入る（空パターンを「読めた」と誤判定しないよう個数も見る）
+const patFilled = await page.evaluate(() => {
+  const D = window.SYNTHEQ_DEBUG, bad = [];
+  Object.entries(D.SEQ_PATTERNS).forEach(([name, pairs]) => {
+    D.loadSeqPattern(pairs);
+    const n = D.seqSnapshot().flat().filter(Boolean).length;
+    // 行外（音域を超える半音）は捨てられるので、置けた数が pairs 以下なのは正常。0 は異常
+    if (n === 0) bad.push(`${name}: 0個`);
+    const onCells = document.querySelectorAll('#seqGrid .cell.on').length;
+    if (onCells !== n) bad.push(`${name}: DOM ${onCells} ≠ 状態 ${n}`);
+  });
+  return bad;
+});
+check('全シーケンスパターンが読み込める', patFilled.length === 0, patFilled.join(' | '));
+
+const seqPlay = await page.evaluate(async () => {
+  const D = window.SYNTHEQ_DEBUG;
+  D.loadSeqPattern(D.SEQ_PATTERNS['🎹 アルペジオ']);
+  D.setSeq(true);
+  await new Promise(r => setTimeout(r, 1500));
+  const p = D.peak(), on = D.isSeqOn();
+  const head = document.querySelectorAll('#seqGrid .cell.now').length;
+  D.setSeq(false);
+  await new Promise(r => setTimeout(r, 300));
+  return { p, on, head, stillOn: D.isSeqOn(), headAfter: document.querySelectorAll('#seqGrid .cell.now').length };
+});
+check('シーケンサー再生で音が出る', seqPlay.p > 0 && seqPlay.on, `peak=${seqPlay.p}`);
+check('再生位置マーカーが1列だけ点く', seqPlay.head === dims.r, `now=${seqPlay.head}`);
+check('停止でマーカーも消える', !seqPlay.stillOn && seqPlay.headAfter === 0, `now=${seqPlay.headAfter}`);
+
+// デモとシーケンサーは排他（両方鳴ると何を聞いているか分からなくなる）
+const excl = await page.evaluate(async () => {
+  const D = window.SYNTHEQ_DEBUG;
+  D.setSeq(true);
+  D.setDemo(true);
+  await new Promise(r => setTimeout(r, 120));
+  const a = D.isSeqOn();
+  D.setSeq(true);
+  await new Promise(r => setTimeout(r, 120));
+  const b = document.getElementById('btnDemo').textContent.includes('停止');
+  D.setSeq(false); D.setDemo(false); D.allNotesOff();
+  return { seqOffWhenDemo: a === false, demoOffWhenSeq: b === false };
+});
+check('デモとシーケンサーが排他になる', excl.seqOffWhenDemo && excl.demoOffWhenSeq, JSON.stringify(excl));
+
+console.log('\n── 11. 共有リンク・保存 ────────────────');
+const roundTrip = await page.evaluate(() => {
+  const D = window.SYNTHEQ_DEBUG;
+  D.setAllBands([3,-6,9,0,-2,4,0,-9,12,-3]);
+  D.loadSeqPattern(D.SEQ_PATTERNS['🎵 コード']);
+  document.getElementById('osc1Type').value = 'square';
+  document.getElementById('osc1Type').dispatchEvent(new Event('change'));
+  const before = D.snapshot();
+  const code = D.encodeState();
+  const after = D.decodeState(code);
+  return {
+    urlSafe: /^[A-Za-z0-9\-_]+$/.test(code),
+    len: code.length,
+    eqSame: JSON.stringify(before.eq) === JSON.stringify(after.eq),
+    seqSame: before.seq === after.seq,
+    oscSame: before.p.osc1Type === after.p.osc1Type && after.p.osc1Type === 'square'
+  };
+});
+check('共有コードがURLに載る文字だけで出来ている', roundTrip.urlSafe, `len=${roundTrip.len}`);
+check('EQ・シーケンス・音色が往復して一致する',
+  roundTrip.eqSame && roundTrip.seqSame && roundTrip.oscSame, JSON.stringify(roundTrip));
+
+// 実際に #s=... 付きで開き直して復元されるか（往復関数だけ通っても復元経路は別物）
+const shareCode = await page.evaluate(() => window.SYNTHEQ_DEBUG.encodeState());
+const restored = await page.evaluate(() => window.SYNTHEQ_DEBUG.snapshot());
+const page2 = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const errors2 = [];
+page2.on('pageerror', (e) => errors2.push(e.message));
+await page2.addInitScript(() => { window.__SYNTHEQ_TEST = true; try { localStorage.clear(); } catch(e){} });
+await page2.goto(`${BASE}/synth-eq.html#s=${shareCode}`, { waitUntil: 'load' });
+await page2.waitForTimeout(400);
+const loaded = await page2.evaluate(() => window.SYNTHEQ_DEBUG.snapshot());
+check('共有リンクを開くとEQが復元される', JSON.stringify(loaded.eq) === JSON.stringify(restored.eq),
+  `${JSON.stringify(loaded.eq)}`);
+check('共有リンクを開くとシーケンスが復元される', loaded.seq === restored.seq, `${loaded.seq}`);
+check('共有リンクを開くと音色が復元される', loaded.p.osc1Type === restored.p.osc1Type, `${loaded.p.osc1Type}`);
+check('共有リンクの復元で例外が出ない', errors2.length === 0, errors2.slice(0,2).join(' | '));
+// 壊れた共有リンクでページごと落ちないこと
+const page3 = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const errors3 = [];
+page3.on('pageerror', (e) => errors3.push(e.message));
+await page3.addInitScript(() => { window.__SYNTHEQ_TEST = true; });
+await page3.goto(`${BASE}/synth-eq.html#s=zzz_not_a_real_state_zzz`, { waitUntil: 'load' });
+await page3.waitForTimeout(300);
+const alive = await page3.evaluate(() => document.querySelectorAll('.ftrack').length);
+check('壊れた共有リンクでもページが生きている', alive === 10 && errors3.length === 0,
+  `faders=${alive} errors=${errors3.length}`);
+await page2.close(); await page3.close();
+
+console.log('\n── 12. MIDI入力 ────────────────────────');
+const midi = await page.evaluate(async () => {
+  const D = window.SYNTHEQ_DEBUG;
+  D.allNotesOff();
+  // 実機は繋がらないので、onmidimessage が受け取る形のメッセージを直接流す
+  D.onMidi({ data: [0x90, 64, 100] });
+  await new Promise(r => setTimeout(r, 400));
+  const on = { v: D.voiceCount(), p: D.peak() };
+  D.onMidi({ data: [0x80, 64, 0] });                 // note off
+  D.onMidi({ data: [0x90, 67, 90] });
+  await new Promise(r => setTimeout(r, 300));
+  const second = D.voiceCount();
+  D.onMidi({ data: [0xb0, 123, 0] });                // all notes off
+  await new Promise(r => setTimeout(r, 1400));
+  return { on, second, after: D.voiceCount() };
+});
+check('MIDI note-on で発音する', midi.on.v > 0 && midi.on.p > 0, `voices=${midi.on.v} peak=${midi.on.p}`);
+check('MIDI note-off / All Notes Off が効く', midi.after === 0, `after=${midi.after}`);
+await page.evaluate(() => window.SYNTHEQ_DEBUG.allNotesOff());
+
+console.log('\n── 13. カーソル読み取り ────────────────');
+const readout = await page.evaluate(() => document.getElementById('vizRead').hidden);
+await page.locator('#viz').hover({ position: { x: 400, y: 120 } });
+await page.waitForTimeout(200);
+const readShown = await page.evaluate(() => {
+  const el = document.getElementById('vizRead');
+  return { hidden: el.hidden, text: el.textContent };
+});
+check('ホバー前は読み取り表示が出ていない', readout === true);
+check('ホバーで周波数とEQ値が読める', !readShown.hidden && /Hz|kHz/.test(readShown.text) && /dB/.test(readShown.text),
+  readShown.text);
+
+console.log('\n── 14. 例外の再確認 ────────────────────');
 check('操作後も例外0件', errors.length === 0, errors.slice(0, 3).join(' | '));
 check('操作後も404が0件', missing.length === 0, missing.slice(0, 3).join(' | '));
 
