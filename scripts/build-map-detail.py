@@ -3,7 +3,7 @@
 
 背景
 ----
-地図の原画は 1672x941 しかない。マップは拡大率100%の時点で既に元画像の約5.3倍、
+地図のゲーム用原画は 1672x941。マップは拡大率100%の時点で既に元画像の約5.3倍、
 200%で約10.5倍、325%では約17倍に引き伸ばされるため、高ズームでは必ずぼやける。
 
 従来はブラウザ側で `buildSharpenedMap()` が毎起動 2倍プリスケールを焼いていたが、
@@ -46,8 +46,8 @@ except ImportError:
     sys.exit('Pillow が必要です: pip install Pillow')
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, 'assets/sengoku/gpt/sengoku-japan-map-user-v1.webp')
-DST = os.path.join(ROOT, 'assets/sengoku/gpt/sengoku-japan-map-user-v1-detail.webp')
+SRC = os.path.join(ROOT, 'assets/sengoku/gpt/sengoku-japan-map-user-v2.webp')
+DST = os.path.join(ROOT, 'assets/sengoku/gpt/sengoku-japan-map-user-v2-detail.webp')
 
 SCALE = 2               # sengoku.html の buildSharpenedMap と同じ倍率（配置計算は縦横比のみに依存）
 UNSHARP_RADIUS = 1.0    # --unsharp を指定したときの半径（2倍解像度に対する画素）
