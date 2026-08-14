@@ -55,7 +55,7 @@ function parseCsv(text) {
   const header = lines[0].split(',').map(s => s.trim());
   const idx = name => header.indexOf(name);
   const scenarioCols = header
-    .map((n, i) => (/^シナリオ[１-６1-6]\(大名\)$/.test(n) ? i : -1))
+    .map((n, i) => (/^シナリオ[１-８1-8]\(大名\)$/.test(n) ? i : -1))
     .filter(i => i >= 0);
   return lines.slice(1).map((line, i) => {
     const c = line.split(',');
@@ -79,10 +79,12 @@ const CASTLE_CLASS_FROM_JP = { '本城': 'honjo', '支城': 'shijo' };
 // 深澤が承認済みの、CSVとゲーム内データの意図的な差異。
 // 検査は続けるが FAIL ではなく「承認済みの差異」として報告し、終了コードには数えない。
 // キー: `<城名>|シナリオ<番号>領有`
+// 2026-08-10: シナリオ0(1534年)を先頭に追加したため列番号が1つずつ後ろへずれた
+// （旧シナリオ3=1568年 → 新シナリオ4=1568年）。
 const APPROVED_DEVIATIONS = {
-  // 六角家は1568年(シナリオ3「信長上洛」)の大名一覧から外れている（滅亡済み）ため反映されず、
+  // 六角家は1568年(シナリオ4「信長上洛」)の大名一覧から外れている（滅亡済み）ため反映されず、
   // 実際は織田領のまま動く。CSVの表記は深澤の判断で六角のまま残す（2026-08-02）。
-  '伊賀上野城|シナリオ3領有': '六角'
+  '伊賀上野城|シナリオ4領有': '六角'
 };
 
 async function main() {
@@ -162,7 +164,7 @@ async function main() {
     else if (g.castleType !== wantType) fails.push(`L${r.row} ${r.castleName}: 城の種類 期待=${r.castleType} 実際=${g.castleType}`);
     if (g.x !== r.x || g.y !== r.y) fails.push(`L${r.row} ${r.castleName}: 座標 期待=(${r.x},${r.y}) 実際=(${g.x},${g.y})`);
 
-    dump.scenarios.slice(0, 6).forEach((s, i) => {
+    dump.scenarios.forEach((s, i) => {
       const want = r.scenarioDaimyos[i];
       if (!want) return;
       const gotId = s.own[g.id];

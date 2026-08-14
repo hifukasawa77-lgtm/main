@@ -12,6 +12,7 @@
  *   4. スロット追跡（「将棋」→「それの遊び方は？」で文脈解決）
  *   5. プロアクティブ提案（プロファイル/news仕込み→未読提案が出る）
  *   6. pageerror（未捕捉例外）ゼロ
+ *   7. 話題ガード（「おすすめのカツ丼」→ゲーム推薦を返さない／「おすすめは？」は今まで通り返す）
  *
  * 使い方: node scripts/agent-dynamic-test.cjs [--scenarios=1,2,6]
  * 終了コード: 全PASS=0 / FAILあり=1
@@ -80,7 +81,7 @@ async function newPage(browser, pageErrors, init) {
 
 (async () => {
   const only = (process.argv.find(a => a.startsWith('--scenarios=')) || '').replace('--scenarios=', '');
-  const want = only ? only.split(',').map(Number) : [1, 2, 3, 4, 5, 6];
+  const want = only ? only.split(',').map(Number) : [1, 2, 3, 4, 5, 6, 7];
   const srv = await serve();
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || (fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined) });
   const pageErrors = [];
@@ -134,6 +135,71 @@ async function newPage(browser, pageErrors, init) {
       await page.waitForTimeout(2500);
       const proactive = await page.evaluate(() => document.querySelectorAll('#agent-messages .agent-proactive').length);
       report('5. プロアクティブ提案表示', proactive > 0, `proactive=${proactive}`);
+      await ctx.close();
+    }
+
+    // ── シナリオ7: 話題ガード（off-topic をゲーム推薦にしない） ──
+    // 「検出できることを確認していない検査は有害」— 弾くべき例と弾いてはいけない例の両方を見る
+    if (want.includes(7)) {
+      const { ctx, page } = await newPage(browser, pageErrors, () => { window.__AGENT_TEST = true; });
+      await openAgent(page);
+
+      const CASES = [
+        // サイト範囲外 → ルールベース応答を見送りAIへ回す
+        { q: 'おすすめのカツ丼ありますか？',   off: true },
+        { q: 'おすすめのラーメン屋は',         off: true },
+        { q: 'おすすめの映画教えて',           off: true },
+        { q: 'おすすめの投資信託は',           off: true },
+        { q: '近くのおすすめ居酒屋',           off: true },
+        { q: 'サッカーのルール教えて',         off: true },
+        { q: 'おすすめの旅行先を教えて',       off: true },
+        { q: 'recommend a good ramen shop',    off: true, lang: 'en' },
+        { q: 'how to play the guitar',         off: true, lang: 'en' },
+        // サイト内の話題 → 従来どおりルールベースで答える（過剰ブロックの検出）
+        { q: 'おすすめは？',                   off: false },
+        { q: 'おすすめを教えて',               off: false },
+        { q: 'おすすめのゲームは？',           off: false },
+        { q: 'おすすめのアクションゲームは？', off: false },
+        { q: '初心者におすすめのゲーム',       off: false },
+        { q: 'おすすめの暇つぶしは',           off: false },
+        { q: '一番人気のゲームは？',           off: false },
+        { q: '面白いゲーム教えて',             off: false },
+        { q: '新作ゲームある？',               off: false },
+        { q: '将棋の遊び方は？',               off: false },
+        { q: '操作方法を教えて',               off: false },
+        { q: '無料で遊べますか',               off: false },
+        { q: 'もっと見たい',                   off: false },
+        { q: 'recommend a game',               off: false, lang: 'en' },
+        { q: 'any good games?',                off: false, lang: 'en' },
+        { q: 'how to play shogi',              off: false, lang: 'en' },
+        { q: 'are they free?',                 off: false, lang: 'en' },
+      ];
+      const judged = await page.evaluate((cases) => {
+        const d = window.AGENT_DEBUG;
+        if (!d || typeof d.isOffTopic !== 'function') return null;
+        return cases.map(c => ({ q: c.q, off: c.off, got: d.isOffTopic(d.detectIntent(c.q, c.lang || 'ja').name, c.q) }));
+      }, CASES);
+      if (!judged) {
+        report(`7a. 話題ガード判定（${CASES.length}ケース）`, false, 'AGENT_DEBUG ブリッジが開いていない');
+      } else {
+        const bad = judged.filter(r => r.got !== r.off);
+        report(`7a. 話題ガード判定（${CASES.length}ケース）`, bad.length === 0,
+          bad.length ? bad.map(b => `${b.q}: 期待${b.off}→実際${b.got}`).join(' / ') : `${judged.length}件一致`);
+      }
+
+      // 実挙動: off-topic ではゲームカード（推薦3本）を出さない
+      const before = await page.evaluate(() => document.querySelectorAll('#agent-messages .game-card-mini').length);
+      await askAgent(page, 'おすすめのカツ丼ありますか？');
+      const afterOff = await page.evaluate(() => document.querySelectorAll('#agent-messages .game-card-mini').length);
+      // 全文で見る（最後の吹き出しだけ見ると空文字でも素通りする＝検出できない検査になる）
+      const offText = await page.evaluate(() => document.getElementById('agent-messages').innerText || '');
+      report('7b. off-topic でゲーム推薦を返さない', afterOff === before && !/おすすめはこの\d+本/.test(offText),
+        `cards ${before}→${afterOff}`);
+
+      // 反対側: サイト内の「おすすめは？」は従来どおりカードが出る（過剰ブロックの検出）
+      await askAgent(page, 'おすすめは？');
+      const afterOn = await page.evaluate(() => document.querySelectorAll('#agent-messages .game-card-mini').length);
+      report('7c. サイト内の「おすすめは？」は従来どおり推薦', afterOn > afterOff, `cards ${afterOff}→${afterOn}`);
       await ctx.close();
     }
 

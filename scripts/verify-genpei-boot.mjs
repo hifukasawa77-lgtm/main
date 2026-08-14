@@ -31,7 +31,8 @@ const MIME = {
   '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
 };
 
-const RULE_DEFECT = 20;   // genpei.html の RULE.hoko.defectBelow と同値
+const RULE_DEFECT = 20;      // genpei.html の RULE.hoko.defectBelow と同値
+const RULE_POACH_REP = -20;  // genpei.html の RULE.recruit.poachRep と同値
 const fails = [];
 const checks = [];
 function check(name, ok, detail) {
@@ -344,6 +345,240 @@ check('26. ★潮が反転し順潮側の移動力と射程が伸びる',
   && (phase4.tide.before.move !== phase4.tide.after.move || phase4.tide.before.range !== phase4.tide.after.range),
   JSON.stringify(phase4.tide));
 check('27. ★水軍が離反しうる', phase4.defect.p > 0 && phase4.defect.flips > 0, JSON.stringify(phase4.defect));
+
+/* 28〜31. 回帰検査（2026-08-09 に見つけた不具合。どれも例外を出さず無言で壊れる） */
+const regress = await page.evaluate(() => {
+  const G = window.GENPEI_DEBUG;
+  const out = {};
+
+  /* 28. 合戦に勝ったら拠点を奪える。
+     ★かつてプレイヤー側は applyActions へ troops:10**7 の番兵を渡していたが、
+       関数冒頭の `src.garrison < act.troops` に弾かれて占領が無言で捨てられていた。
+       AI は applyActions を直接叩くので、AIだけを見る検査では絶対に気づけない。
+     ★ヘルパ（captureKyoten）を単体で呼ぶだけでは不足。出兵ボタンから合戦を経て
+       盤面へ戻るまでの経路をそのまま通すこと（壊れていたのは経路の配線だった）。 */
+  {
+    G.gotoMap('s1180', 'kamakura');
+    const sc = G.game.scene, st = sc.state, me = st.faction;
+    let src = null, target = null;
+    for (const s of G.Rule.ownedKyoten(st, me)) {
+      for (const k of G.DATA.kyoten) {
+        if (st.kyoten[k.id].owner === me || !G.Rule.adjacent(s, k) || G.Rule.needsSeaCrossing(s, k)) continue;
+        if (st.kyoten[s.id].garrison < 100) continue;
+        src = s; target = k; break;
+      }
+      if (target) break;
+    }
+    const before = st.kyoten[target.id].owner;
+    sc._launchAttack(target, G.game);                 // ← 出兵ボタンが呼ぶのと同じ入口
+    const bs = G.game.scene;
+    let flow = bs.constructor.name;
+    if (flow === 'BattleScene') {
+      for (const u of bs.b.units) if (u.side === 'def') u.troops = 0;   // 城方が崩れた状態にする
+      bs._endRound(G.game);
+      if (bs.result) bs.onDone(bs.result);            // ← 勝敗の反映（占領）はこの先
+    }
+    out.capture = { id: target.id, flow, before, after: st.kyoten[target.id].owner,
+                    garrison: st.kyoten[target.id].garrison, atkLeft: bs.result && bs.result.atkLeft };
+  }
+
+  /* 29. 盤上に無い神器・帝が湧かない／宝剣を失ったあとの引き継ぎは一度きり。
+     ★s1185b は「平氏は壇ノ浦に滅び、宝剣は海に沈んだ」で始まるのに、
+       誰も持っていない神器と帝が1ヶ月目に最高名分の勢力へ渡っていた。
+       壇ノ浦後に保持勢力が滅んだ場合は毎ターン評判+60とログが無限に積もっていた。 */
+  {
+    const a = G.buildState('s1185b', 'yoshitsune');
+    G.endTurn(a, null);
+    const spawned = Object.values(a.factions).some((f) => f.authority.includes('jingi') || f.authority.includes('emperor'));
+
+    const b = G.buildState('s1180', 'kamakura');
+    b.jingiLost = true;
+    for (const f of Object.values(b.factions)) f.authority = f.authority.filter((x) => x !== 'jingi');
+    for (let i = 0; i < 6; i++) G.endTurn(b, null);
+    out.regalia = { spawned, 引継ぎログ: b.log.filter((l) => /神器は/.test(l.text)).length };
+  }
+
+  /* 30. 勝利条件が VICTORY_TEXT の記述どおりに判定される。
+     ★木曽の seitai_shogun は分岐が無く `else win = owned.length > 0` に落ちていたため、
+       「高難度」と表示しながら実際は拠点が1つでも残れば勝ちだった。 */
+  {
+    const mk = (fid, tweak) => { const s = G.buildState('s1180', fid); s.year = s.endYear; s.month = s.endMonth; tweak(s); return G.Rule.checkVictory(s).win; };
+    out.victory = {
+      木曽_京なし: mk('kiso', () => {}),
+      木曽_京12ヶ月: mk('kiso', (s) => { s.kyoten[G.KYOTO_KOKUFU].owner = 'kiso'; s.factions.kiso.authority.push('senji'); s.kyotoHoldMonths = 12; }),
+      鎌倉_平氏健在: mk('kamakura', (s) => {
+        s.factions.kamakura.authority.push('senji');
+        let n = 0; for (const k of G.DATA.kyoten) if (k.type === 'kokufu' && n < 40) { s.kyoten[k.id].owner = 'kamakura'; n++; }
+      }),
+      鎌倉_平氏滅亡: mk('kamakura', (s) => {
+        s.factions.kamakura.authority.push('senji');
+        let n = 0; for (const k of G.DATA.kyoten) if (k.type === 'kokufu' && n < 40) { s.kyoten[k.id].owner = 'kamakura'; n++; }
+        for (const k of G.DATA.kyoten) if (s.kyoten[k.id].owner === 'taira') s.kyoten[k.id].owner = null;
+        s.factions.taira.alive = false;
+      }),
+    };
+  }
+
+  /* 31. 「Phase N で開きます」としか言わない死んだコマンドが残っていない */
+  {
+    G.gotoMap('s1180', 'kamakura');
+    const sc = G.game.scene;
+    const closed = sc.cmdButtons.map((b) => b.id).filter((id) => !G.OPEN_COMMANDS.has(id));
+    // 軍事パネルが実際に候補を並べるか
+    sc.panel = 'gunji';
+    sc.draw(document.getElementById('game').getContext('2d'), G.game);
+    out.commands = { 未開通: closed, 出兵ボタン: sc.panelButtons.filter((b) => b.act === 'attack').length };
+    sc.panel = null;
+  }
+  return out;
+});
+check('28. ★出兵→合戦に勝つ→拠点を奪える（プレイヤー経路を通しで）',
+  regress.capture.flow === 'BattleScene' && regress.capture.before !== 'kamakura'
+  && regress.capture.after === 'kamakura' && regress.capture.garrison === regress.capture.atkLeft,
+  JSON.stringify(regress.capture));
+check('29. ★盤上に無い神器・帝が湧かない／引き継ぎは一度きり',
+  regress.regalia.spawned === false && regress.regalia.引継ぎログ === 1, JSON.stringify(regress.regalia));
+check('30. ★勝利条件が表示どおりに判定される',
+  regress.victory.木曽_京なし === false && regress.victory.木曽_京12ヶ月 === true
+  && regress.victory.鎌倉_平氏健在 === false && regress.victory.鎌倉_平氏滅亡 === true,
+  JSON.stringify(regress.victory));
+check('31. ★未開通のまま残ったコマンドがない（軍事が出兵候補を並べる）',
+  regress.commands.未開通.length === 0 && regress.commands.出兵ボタン > 0, JSON.stringify(regress.commands));
+
+/* 32〜38. ブラッシュアップ分。定数を置いただけで参照されていない＝仕様が死ぬので機械で押さえる */
+const brush = await page.evaluate(() => {
+  const G = window.GENPEI_DEBUG, out = {};
+  const mkBattle = (to) => G.initBattle(G.buildState('s1180', 'kamakura'),
+    { fid: 'kamakura', from: 'kokufu_izu', to, troops: 3000 });
+
+  /* 32. 崩れ（RULE.battle.breakBelow / breakDiv）が効く */
+  {
+    const hot = mkBattle('kokufu_suruga'), cold = mkBattle('kokufu_suruga');
+    hot.rng = () => 0.01; cold.rng = () => 0.99;
+    for (const u of hot.units) u.morale = 20;      // routBelow(10)超・breakBelow(25)未満
+    for (const u of cold.units) u.morale = 20;
+    G.Battle.tickMorale(hot); G.Battle.tickMorale(cold);
+    out.break = { 崩れる: hot.units.filter((u) => u.troops <= 0).length,
+                  耐える: cold.units.filter((u) => u.troops <= 0).length, 隊数: hot.units.length };
+  }
+  /* 33. 攻城戦の兵糧切れ（RULE.siege.starveMorale）。
+     ★ヘルパを単体で呼ぶだけでは「_endRound から呼ばれているか」を確かめられない。
+       ラウンド送りの実物を通すこと（28 と同じ落とし穴）。 */
+  {
+    G.gotoBattle('s1180', 'kamakura', 'kokufu_izu', 'tachi_hiraizumi');
+    const sc = G.game.scene, b = sc.b;
+    const early = { round: b.round };
+    for (const u of b.units) u.morale = 100;
+    sc._endRound(G.game);                                   // 序盤：まだ細らない
+    early.log = b.log.some((l) => /兵糧が細る/.test(l));
+    b.round = 8;
+    for (const u of b.units) u.morale = 100;
+    sc._endRound(G.game);                                   // 長期化：細る
+    out.siege = { mode: b.mode, 序盤に細る: early.log,
+                  長期化で細る: b.log.some((l) => /兵糧が細る/.test(l)),
+                  士気: [100, Math.max(...G.Battle.alive(b, 'atk').map((u) => u.morale))] };
+  }
+  /* 34. 林が射線を遮る（TERRAIN.forest.blocksRange） */
+  {
+    const b = mkBattle('kokufu_suruga');
+    for (let y = 0; y < G.HEX.rows; y++) for (let x = 0; x < G.HEX.cols; x++) b.terrain[y][x] = 'plain';
+    const u = { hx: 2, hy: 4, side: 'atk', type: 'yumi', troops: 100, gen: null, injured: 0 };
+    const t = { hx: 5, hy: 4, side: 'def', type: 'roto', troops: 100, gen: null, injured: 0 };
+    const clear = G.Battle.canShoot(b, u, t);
+    b.terrain[4][4] = 'forest';
+    out.los = { 開けていれば撃てる: clear, 林越しは不可: !G.Battle.canShoot(b, u, t),
+                騎射も林越しは不可: !G.Battle.canShoot(b, { ...u, type: 'kisha' }, t),
+                密着は遮られない: G.Battle.canShoot(b, { ...u, type: 'kisha' }, { ...t, hx: 3 }) };
+  }
+  /* 35. 乱妨取りと寄進（RULE.rep.pillage / donateJisha / court.pillage） */
+  {
+    const st = G.buildState('s1180', 'kamakura'), f = st.factions.kamakura;
+    const loot = G.Rule.ownedKyoten(st, 'kamakura').find((k) => G.PILLAGE_TYPES.has(k.type));
+    const before = { food: f.food, rep: f.reputation, court: f.courtInfluence };
+    const p1 = G.pillage(st, 'kamakura', loot.id);
+    const p2 = G.pillage(st, 'kamakura', loot.id);
+    const afterLoot = { food: f.food, rep: f.reputation, court: f.courtInfluence };
+    const jisha = G.Rule.ownedKyoten(st, 'kamakura').find((k) => k.type === 'tera' || k.type === 'jinja');
+    const gold0 = f.gold;
+    const d = jisha ? G.donateJisha(st, 'kamakura', jisha.id) : { ok: false };
+    out.pillage = { 兵糧増: afterLoot.food - before.food, 評判減: Math.round(afterLoot.rep - before.rep),
+      朝廷支持減: Math.round(afterLoot.court - before.court), 連続不可: !p2.ok, gain: p1.gain,
+      寄進: d.ok, 寄進で評判回復: Math.round(f.reputation - afterLoot.rep), 寄進の費用: gold0 - f.gold };
+  }
+  /* 36. 文治の勅許が国衙収入に効く（RULE.econ.shugoJitoMul） */
+  {
+    const st = G.buildState('s1184', 'kamakura');
+    const b4 = G.Rule.income(st, 'kamakura').gold;
+    G.applyEventEffect(st, 'shugo_jito');
+    out.shugo = { holder: st.shugoJito, before: b4, after: G.Rule.income(st, 'kamakura').gold };
+  }
+  /* 37. 引き抜きは中立より難しく、成功すると評判を払う（RULE.recruit.poach*） */
+  {
+    const st = G.buildState('s1180', 'kamakura');
+    const best = Object.values(st.bands).filter((b) => !b.faction)
+      .map((b) => ({ b, c: G.Rule.recruitChance(st, 'kamakura', b.id, 200) }))
+      .filter((x) => x.c.ok).sort((a, b) => b.c.score - a.c.score)[0];
+    const neutral = best.c.score;
+    best.b.faction = 'taira'; best.b.hoko = 55;
+    const poach = G.Rule.recruitChance(st, 'kamakura', best.b.id, 200).score;
+    best.b.hoko = 0; st.factions.taira.reputation = -600; st.factions.kamakura.gold = 99999;
+    const rep0 = st.factions.kamakura.reputation;
+    let r = null; for (let i = 0; i < 80 && !(r && r.joined); i++) r = G.tryRecruit(st, 'kamakura', best.b.id, 200);
+    out.poach = { neutral, poach, joined: !!(r && r.joined), poached: !!(r && r.poached),
+                  評判増減: r && r.joined ? Math.round(st.factions.kamakura.reputation - rep0) : null };
+  }
+  /* 38. 地形シードが拠点ごとに変わる／勢力一覧に自勢力が残る／一騎討ちの討死が響く */
+  {
+    const st = G.buildState('s1180', 'kamakura');
+    const sig = (to) => G.initBattle(st, { fid: 'kamakura', from: 'kokufu_izu', to, troops: 3000 })
+      .terrain.map((r2) => r2.join('')).join('|');
+    const pair = G.DATA.kyoten.filter((k) => k.id.length === 14 && k.type !== 'tachi').slice(0, 2);
+    out.seed = { 拠点: pair.map((k) => k.id), 別地形: sig(pair[0].id) !== sig(pair[1].id),
+                 再現する: sig(pair[0].id) === sig(pair[0].id) };
+
+    G.gotoMap('s1180', 'kai');
+    const sc = G.game.scene;
+    const rank = Object.keys(G.FACTIONS).filter((f) => sc.state.factions[f].alive)
+      .map((f) => ({ f, m: G.Rule.calcMeibun(sc.state, f) })).sort((a, b) => b.m - a.m)
+      .findIndex((x) => x.f === 'kai') + 1;
+    out.side = { 名分順位: rank, 表示: sc._sideRows().map((x) => x.fid) };
+
+    const b = G.initBattle(st, { fid: 'kamakura', from: 'kokufu_izu', to: 'kokufu_suruga', troops: 3000 });
+    const a = b.units.find((u) => u.side === 'atk' && u.gen), d = b.units.find((u) => u.side === 'def' && u.gen);
+    a.hx = d.hx - 1; a.hy = d.hy;
+    for (const u of b.units) u.morale = 100;
+    const seq = [0.01, 0.5, 0.9, 0.9, 0.9, 0.9, 0.01]; let i = 0;
+    b.rng = () => seq[i++ % seq.length];
+    const r = G.Battle.resolveDuel(b, a, d);
+    const lose = r.win === 'atk' ? 'def' : 'atk';
+    out.duel = { accepted: r.accepted, death: r.death,
+                 敗者側士気: b.units.filter((u) => u.side === lose).map((u) => u.morale),
+                 討死ログ: b.log.some((l) => /討死——.*陣が揺らぐ/.test(l)) };
+  }
+  return out;
+});
+check('32. ★崩れ（士気が breakBelow を割ると確率で退く）',
+  brush.break.崩れる === brush.break.隊数 && brush.break.耐える === 0, JSON.stringify(brush.break));
+check('33. ★攻城戦は長引くと寄手の兵糧が細る（ラウンド送りを通しで）',
+  brush.siege.mode === 'siege' && brush.siege.序盤に細る === false && brush.siege.長期化で細る === true
+  && brush.siege.士気[1] < brush.siege.士気[0], JSON.stringify(brush.siege));
+check('34. ★林は射線を遮る（密着の白兵は遮られない）',
+  brush.los.開けていれば撃てる && brush.los.林越しは不可 && brush.los.騎射も林越しは不可 && brush.los.密着は遮られない,
+  JSON.stringify(brush.los));
+check('35. ★乱妨取りは兵糧を生み名分を削る／寄進は買い戻す',
+  brush.pillage.兵糧増 > 0 && brush.pillage.評判減 < 0 && brush.pillage.朝廷支持減 < 0
+  && brush.pillage.連続不可 && brush.pillage.寄進 === true && brush.pillage.寄進で評判回復 > 0,
+  JSON.stringify(brush.pillage));
+check('36. ★文治の勅許が国衙収入に効く（ログの飾りにしない）',
+  brush.shugo.holder === 'kamakura' && brush.shugo.after > brush.shugo.before, JSON.stringify(brush.shugo));
+check('37. ★引き抜きは中立より難しく、成れば評判を払う',
+  brush.poach.poach < brush.poach.neutral && brush.poach.joined && brush.poach.poached
+  && brush.poach.評判増減 === RULE_POACH_REP, JSON.stringify(brush.poach));
+check('38. ★地形は拠点ごとに変わる／自勢力は一覧に残る／一騎討ちの討死が全軍に響く',
+  brush.seed.別地形 && brush.seed.再現する
+  && brush.side.表示.includes('kai')
+  && brush.duel.death && brush.duel.討死ログ && brush.duel.敗者側士気.every((m) => m < 100 - 18),
+  JSON.stringify({ seed: brush.seed, side: brush.side, duel: brush.duel }));
 
 /* 11. ★例外の合算（pageerror だけでは素通りする） */
 const engineErrors = await page.evaluate(() => window.GENPEI_DEBUG.errors().map((e) => `${e.key} ×${e.count}`));

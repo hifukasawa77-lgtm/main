@@ -1,7 +1,7 @@
 // hide_0001 Portfolio — Service Worker
 // HTML/ナビゲーションは network-first（常に最新を表示／更新が確実に反映される）、
 // 静的アセットは cache-first（速度維持）。バージョン更新で旧キャッシュを破棄する。
-const CACHE_NAME = 'hide-portfolio-v3';
+const CACHE_NAME = 'hide-portfolio-v4';
 const PRECACHE_URLS = [
   '/',
   '/index.html',

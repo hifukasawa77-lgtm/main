@@ -3,10 +3,10 @@ type: リスク報告書
 project: genpei
 status: 合格
 agent: legal-checker
-risk_level: YELLOW
+risk_level: GREEN
 target_file: genpei.html
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 tags: [claudechord, 法務, リスク, genpei]
 ---
 
@@ -15,15 +15,26 @@ tags: [claudechord, 法務, リスク, genpei]
 > プロジェクトハブ: [[genpei]]
 > 分類: **RED**（即時修正必須） / **YELLOW**（要対応） / **GREEN**（問題なし）
 
-## 総合判定: YELLOW
+## 総合判定: GREEN（2026-08-06 是正済み）
 
-公開を止める指摘（RED）はない。YELLOW 1件は**出典の記録漏れ**であって、既知の権利侵害ではない。
+公開を止める指摘（RED）はない。唯一のYELLOW（地図の出所記録漏れ）は深澤への確認により解消した。
+
+> **2026-08-06 追記1**: 指摘1について深澤に確認したところ、ChatGPT/DALL-E系のAI画像生成ツールで
+> 深澤本人が生成したもの（リポジトリ初出2026-07-27、コミット `38fbced`）と判明。
+> `assets/sengoku/README.md` を新設して出所を記録した。これによりYELLOWをGREENに更新する。
+
+> **2026-08-06 追記2**: Should項目 S-08（合戦背景画7枚）・S-09（イベント絵8枚）を実装。
+> `assets/genpei/battles/` `assets/genpei/events/` の計15枚は、graphic-designerエージェントが
+> Python3+Pillowによる**完全プロシージャル生成**（外部生成AI・APIキー不使用）で制作した完全オリジナル制作物。
+> 実在の絵画・写真・アセット素材のトレース・参照は一切なし。出所（ツール・生成日・構図概要）は
+> `assets/genpei/README.md` に全15枚分を記録済み（前回の反省を踏まえ、生成と同時に記録）。
+> 権利者・ライセンス上の懸念なし。GREEN判定を維持する。
 
 ## 検査対象
 
 - [x] コード（`genpei.html` / `gamekit/gamekit.js` / `scripts/*genpei*`）
-- [x] グラフィック（家紋・肖像・地図・OGP画像・カードサムネイル）
-- [ ] 音楽・SE（本作は未実装。該当なし）
+- [x] グラフィック（家紋・肖像・地図・OGP画像・カードサムネイル・合戦背景7枚・イベント絵8枚）
+- [x] 音楽・SE（S-10で実装。GameKitの`Sfx`によるプロシージャル生成のみ、音声ファイル追加なし）
 - [x] ライブラリ・外部依存
 - [x] 文章（人物列伝・年代記・引用句）
 
@@ -31,7 +42,7 @@ tags: [claudechord, 法務, リスク, genpei]
 
 | # | 種別 | 内容 | レベル | 是正先 |
 |---|------|------|--------|--------|
-| 1 | グラフィック | `sengoku-japan-map-user-v1.webp` の**生成元・権利者の記録がない**。genpei はこれを参照するうえ、OGP画像とカードサムネイルに**焼き込んで配布**する（従来はライブ描画のみ） | YELLOW | 深澤（記録） |
+| 1 | グラフィック | `sengoku-japan-map-user-v1.webp` の**生成元・権利者の記録がない**。genpei はこれを参照するうえ、OGP画像とカードサムネイルに**焼き込んで配布**する（従来はライブ描画のみ） → 深澤に確認しChatGPT/DALL-E系AI生成・深澤本人と判明。`assets/sengoku/README.md` に記録済み | GREEN（是正済） | — |
 | 2 | コード | mulberry32 の出所（Tommy Ettinger / CC0）が未記載だった → 本チェックで注記を追加済み | GREEN（是正済） | — |
 | 3 | グラフィック | 家紋の意匠が既存の紋帳のトレースでないことがコード上わからなかった → 由来コメントを追加済み | GREEN（是正済） | — |
 
@@ -107,6 +118,4 @@ genpei が参照する画像は `assets/sengoku/gpt/sengoku-japan-map-user-v1.we
 
 ## 次のアクション
 
-- 指摘1（地図の出所記録）は深澤の記憶に依るため、**本エージェントでは是正できない**。
-  記録が付き次第 GREEN に更新する
-- 是正済みの2・3は再チェック不要
+- 指摘1〜3すべて是正済み。再チェック不要。総合判定 GREEN で確定
