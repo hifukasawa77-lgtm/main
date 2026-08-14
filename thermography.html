@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!-- CSP: 完全クライアントサイド。外部通信なし。映像はカメラから取得しCanvas内で処理するのみ。 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; base-uri 'self'; form-action 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="カメラ映像の明るさをヒートマップ色に変換して疑似的な熱源探知を演出。Iron/Rainbow/White-Hotパレット、熱源マーカー、感度調整、PNG保存に対応。完全ブラウザ内処理・映像は外部送信なし。実際の温度は計測しません。">
+  <title>疑似サーモグラフィー | Thermo Cam</title>
+  <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/thermography.html">
+  <link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="疑似サーモグラフィー | Thermo Cam">
+  <meta property="og:description" content="カメラ映像の明るさをヒートマップ色に変換して疑似的な熱源探知を演出。完全ブラウザ内処理・映像は外部送信なし。">
+  <meta property="og:url" content="https://hifukasawa77-lgtm.github.io/main/thermography.html">
+  <meta property="og:image" content="https://hifukasawa77-lgtm.github.io/main/assets/logo/favicon.svg">
+  <meta name="twitter:card" content="summary">
+  <style>
+    :root{
+      --bg:#05070d; --text:#e6edf6; --muted:#8b97a8;
+      --cyan:#22d3ee; --purple:#a78bfa;
+      --card:rgba(255,255,255,0.04); --border:rgba(255,255,255,0.09); --radius:20px;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0}
+    body{background:var(--bg); color:var(--text); min-height:100vh;
+      font-family:"Aptos","Segoe UI Variable","Yu Gothic UI","Hiragino Sans","Meiryo",sans-serif;
+      line-height:1.6; -webkit-font-smoothing:antialiased}
+    a{color:var(--cyan)}
+    #bg-canvas{position:fixed; inset:0; z-index:-1; pointer-events:none}
+    .wrap{max-width:820px; margin:0 auto; padding:28px 18px 72px}
+    .topbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px}
+    .home{color:var(--muted); text-decoration:none; font-size:.85rem}
+    .home:hover{color:var(--cyan)}
+    .hero{text-align:center; margin-bottom:22px}
+    .hero h1{font-size:clamp(1.7rem,5vw,2.5rem); margin:.2em 0 .1em}
+    .hero .sub{color:var(--muted); font-weight:600; margin:0; font-size:.9rem}
+    .hero .note{color:var(--muted); font-size:.82rem; margin:.7em 0 0}
+    .grad{background:linear-gradient(135deg,var(--cyan) 0%,var(--purple) 100%);
+      -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+    .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+      backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+      box-shadow:0 8px 30px rgba(0,0,0,0.35); padding:20px; margin:18px 0}
+
+    .stage{position:relative; width:100%; max-width:560px; margin:0 auto; aspect-ratio:4/3;
+      border-radius:16px; overflow:hidden; background:#000; display:flex; align-items:center; justify-content:center}
+    #canvas{width:100%; height:100%; object-fit:cover; display:block}
+    #video{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none}
+    .placeholder{position:absolute; color:var(--muted); text-align:center; padding:20px; font-size:.9rem}
+    .placeholder .big{font-size:2.6rem; display:block; margin-bottom:8px}
+
+    .btn{appearance:none; border:0; cursor:pointer; font:inherit; font-weight:600; border-radius:12px;
+      padding:11px 18px; color:#04121a; background:linear-gradient(135deg,var(--cyan) 0%,#38bdf8 100%);
+      box-shadow:0 4px 16px rgba(34,211,238,0.22); transition:transform .15s,box-shadow .15s,opacity .15s}
+    .btn:hover{transform:translateY(-2px); box-shadow:0 8px 22px rgba(34,211,238,0.3)}
+    .btn:disabled{opacity:.4; cursor:not-allowed; transform:none; box-shadow:none}
+    .btn.purple{background:linear-gradient(135deg,var(--purple) 0%,#8b5cf6 100%); color:#fff; box-shadow:0 4px 16px rgba(167,139,250,0.22)}
+    .btn.ghost{background:transparent; color:var(--cyan); border:1px solid var(--border); box-shadow:none}
+    .btn.ghost:hover{background:rgba(34,211,238,0.08)}
+    .btn-row{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center; margin-top:16px}
+    #status{color:var(--muted); font-size:.84rem; min-height:1.3em; text-align:center; margin-top:12px}
+
+    .opts{display:flex; flex-wrap:wrap; gap:18px; align-items:center; justify-content:center; margin-top:16px}
+    .opt-group{display:flex; flex-direction:column; align-items:center; gap:6px}
+    .opt-label{color:var(--muted); font-size:.72rem}
+    .seg{display:flex; border:1px solid var(--border); border-radius:10px; overflow:hidden}
+    .seg-btn{appearance:none; border:0; background:transparent; color:var(--muted); font:inherit; font-size:.78rem;
+      padding:7px 12px; cursor:pointer; transition:background .15s,color .15s}
+    .seg-btn + .seg-btn{border-left:1px solid var(--border)}
+    .seg-btn.active{background:rgba(34,211,238,0.14); color:var(--cyan)}
+    .slide-row{display:flex; align-items:center; gap:8px}
+    .slide-row input[type=range]{width:120px}
+    .slide-row .v{font-variant-numeric:tabular-nums; font-size:.78rem; width:34px; text-align:right}
+    .toggle-row{display:flex; align-items:center; gap:6px; font-size:.78rem; color:var(--muted); cursor:pointer}
+    .toggle-row input{accent-color:var(--cyan)}
+
+    .toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
+      background:rgba(11,16,32,0.95); color:var(--text); border:1px solid var(--border);
+      padding:11px 18px; border-radius:12px; font-size:.86rem; opacity:0; pointer-events:none;
+      transition:opacity .25s,transform .25s; z-index:50; max-width:90vw; text-align:center}
+    .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+    @media (prefers-reduced-motion: reduce){ *{transition:none !important} }
+  </style>
+</head>
+<body>
+  <canvas id="bg-canvas" aria-hidden="true"></canvas>
+  <main class="wrap">
+    <div class="topbar"><a class="home" href="index.html">← ホーム / Home</a></div>
+
+    <header class="hero">
+      <h1>🌡️ <span class="grad">疑似サーモグラフィー</span></h1>
+      <p class="sub">Thermo Cam — カメラで熱源探知（風）</p>
+      <p class="note">実物の赤外線センサーは使わず、カメラ映像の明るさをヒートマップ色に変換する視覚エフェクトです。実際の温度は計測しません。完全ブラウザ内処理・映像は外部送信なし。<br>
+        No real infrared sensor — this colorizes camera brightness as a heatmap. It does not measure real temperature. 100% client-side, nothing uploaded.</p>
+    </header>
+
+    <section class="card">
+      <div class="stage">
+        <video id="video" playsinline muted></video>
+        <canvas id="canvas" width="480" height="360"></canvas>
+        <div class="placeholder" id="placeholder">
+          <span class="big">🌡️</span>
+          カメラを起動して熱源探知を開始<br>
+          <span style="font-size:.8rem">Start the camera to begin scanning</span>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn" id="start-btn" type="button">カメラ起動 / Start</button>
+        <button class="btn ghost" id="flip-btn" type="button" disabled>🔄 切替 / Flip</button>
+        <button class="btn ghost" id="save-btn" type="button" disabled>📸 保存 / Save PNG</button>
+        <button class="btn ghost" id="stop-btn" type="button" disabled>停止 / Stop</button>
+      </div>
+
+      <div class="opts">
+        <div class="opt-group">
+          <span class="opt-label">パレット / Palette</span>
+          <div class="seg">
+            <button class="seg-btn active" type="button" data-pal="iron">Iron</button>
+            <button class="seg-btn" type="button" data-pal="rainbow">Rainbow</button>
+            <button class="seg-btn" type="button" data-pal="white">White-Hot</button>
+          </div>
+        </div>
+        <div class="opt-group">
+          <span class="opt-label">感度 / Sensitivity</span>
+          <div class="slide-row">
+            <input type="range" id="sens-slider" min="50" max="300" value="150" step="10">
+            <span class="v" id="sens-val">1.5×</span>
+          </div>
+        </div>
+        <div class="opt-group">
+          <label class="toggle-row"><input type="checkbox" id="hotspot-chk" checked>熱源マーカー / Hot-spot marker</label>
+        </div>
+      </div>
+
+      <p id="status" role="status" aria-live="polite">最も明るい場所を熱源として自動マークします。<br>The brightest spot is auto-marked as the detected "heat source".</p>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="alert"></div>
+
+  <script>
+  (function () {
+    'use strict';
+    var video = document.getElementById('video');
+    var canvas = document.getElementById('canvas');
+    var ctx = canvas.getContext('2d', { willReadFrequently: true });
+    var proc = document.createElement('canvas');
+    var pctx = proc.getContext('2d', { willReadFrequently: true });
+    var placeholder = document.getElementById('placeholder');
+    var startBtn = document.getElementById('start-btn');
+    var stopBtn = document.getElementById('stop-btn');
+    var flipBtn = document.getElementById('flip-btn');
+    var saveBtn = document.getElementById('save-btn');
+    var hotspotChk = document.getElementById('hotspot-chk');
+    var sensSlider = document.getElementById('sens-slider');
+    var sensVal = document.getElementById('sens-val');
+    var statusEl = document.getElementById('status');
+    var toastEl = document.getElementById('toast');
+    var palBtns = document.querySelectorAll('.seg-btn');
+
+    var stream = null, rafId = 0, running = false;
+    var facing = 'environment', mirrored = false;
+    var paletteName = 'iron';
+    var smoothMin = 0, smoothMax = 255, haveRange = false;
+    var PROC_W = 220;
+
+    var toastTimer = 0;
+    function toast(m) { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 2400); }
+
+    /* ---------- パレット LUT（256段階を先計算） ---------- */
+    function buildLUT(stops) {
+      var lut = new Uint8ClampedArray(256 * 3);
+      for (var i = 0; i < 256; i++) {
+        var t = i / 255, a = stops[0], b = stops[stops.length - 1];
+        for (var s = 0; s < stops.length - 1; s++) {
+          if (t >= stops[s][0] && t <= stops[s + 1][0]) { a = stops[s]; b = stops[s + 1]; break; }
+        }
+        var span = (b[0] - a[0]) || 1, f = (t - a[0]) / span;
+        lut[i * 3] = a[1][0] + (b[1][0] - a[1][0]) * f;
+        lut[i * 3 + 1] = a[1][1] + (b[1][1] - a[1][1]) * f;
+        lut[i * 3 + 2] = a[1][2] + (b[1][2] - a[1][2]) * f;
+      }
+      return lut;
+    }
+    var PALETTES = {
+      iron: buildLUT([
+        [0.00, [8, 8, 26]], [0.14, [32, 0, 90]], [0.30, [110, 0, 110]],
+        [0.44, [190, 20, 60]], [0.58, [235, 70, 10]], [0.72, [250, 150, 10]],
+        [0.86, [255, 220, 60]], [1.00, [255, 255, 255]]
+      ]),
+      rainbow: buildLUT([
+        [0.00, [10, 0, 60]], [0.20, [0, 40, 200]], [0.40, [0, 200, 200]],
+        [0.55, [0, 210, 60]], [0.70, [230, 220, 0]], [0.85, [240, 110, 0]],
+        [1.00, [230, 20, 20]]
+      ]),
+      white: buildLUT([[0.00, [0, 0, 0]], [1.00, [255, 255, 255]]])
+    };
+
+    palBtns.forEach(function (b) {
+      b.addEventListener('click', function () {
+        palBtns.forEach(function (x) { x.classList.remove('active'); });
+        b.classList.add('active');
+        paletteName = b.dataset.pal;
+      });
+    });
+    sensSlider.addEventListener('input', function () {
+      sensVal.textContent = (sensSlider.value / 100).toFixed(1) + '×';
+    });
+
+    function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('このブラウザはカメラ非対応です / Camera not supported'); return; }
+      statusEl.textContent = 'カメラを起動中… / Starting camera…';
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
+        .then(function (s) { stream = s; video.srcObject = s; return video.play(); })
+        .then(function () {
+          running = true; haveRange = false; mirrored = (facing === 'user');
+          placeholder.style.display = 'none';
+          startBtn.disabled = true; stopBtn.disabled = false; flipBtn.disabled = false; saveBtn.disabled = false;
+          statusEl.textContent = '';
+          loop();
+        })
+        .catch(function (err) { statusEl.textContent = ''; toast('カメラを起動できませんでした（' + ((err && err.name) || 'error') + '）/ Camera unavailable'); });
+    }
+    function stopCamera() {
+      running = false;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+      video.srcObject = null;
+      placeholder.style.display = '';
+      startBtn.disabled = false; stopBtn.disabled = true; flipBtn.disabled = true; saveBtn.disabled = true;
+    }
+
+    function loop() {
+      if (!running) return;
+      if (video.readyState >= 2 && video.videoWidth) render();
+      rafId = requestAnimationFrame(loop);
+    }
+
+    function render() {
+      var vw = video.videoWidth, vh = video.videoHeight;
+      var dw = Math.min(vw, 640), dh = Math.round(dw * vh / vw);
+      if (canvas.width !== dw || canvas.height !== dh) { canvas.width = dw; canvas.height = dh; }
+      var pw = PROC_W, ph = Math.round(pw * vh / vw);
+      if (proc.width !== pw || proc.height !== ph) { proc.width = pw; proc.height = ph; }
+      pctx.drawImage(video, 0, 0, pw, ph);
+
+      var img = pctx.getImageData(0, 0, pw, ph);
+      var d = img.data, n = pw * ph;
+      var lum = new Float32Array(n);
+      var mn = 255, mx = 0, mi = 0;
+      var i, p;
+      for (i = 0, p = 0; i < n; i++, p += 4) {
+        var l = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
+        lum[i] = l;
+        if (l < mn) mn = l;
+        if (l > mx) { mx = l; mi = i; }
+      }
+      // フリッカー防止に前フレームの範囲へ指数平滑化
+      smoothMin = haveRange ? smoothMin + (mn - smoothMin) * 0.15 : mn;
+      smoothMax = haveRange ? smoothMax + (mx - smoothMax) * 0.15 : mx;
+      haveRange = true;
+      var range = Math.max(smoothMax - smoothMin, 8);
+      var gain = sensSlider.value / 100;
+      var lut = PALETTES[paletteName];
+
+      for (i = 0, p = 0; i < n; i++, p += 4) {
+        var t = (lum[i] - smoothMin) / range;
+        t = 0.5 + (t - 0.5) * gain;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        var idx = (t * 255) | 0;
+        d[p] = lut[idx * 3]; d[p + 1] = lut[idx * 3 + 1]; d[p + 2] = lut[idx * 3 + 2];
+      }
+      pctx.putImageData(img, 0, 0);
+
+      ctx.save();
+      if (mirrored) { ctx.translate(dw, 0); ctx.scale(-1, 1); }
+      ctx.drawImage(proc, 0, 0, dw, dh);
+      ctx.restore();
+
+      if (hotspotChk.checked) {
+        var hx = mi % pw, hy = (mi / pw) | 0;
+        var sx = hx / pw * dw, sy = hy / ph * dh;
+        if (mirrored) sx = dw - sx;
+        drawHotspot(sx, sy);
+      }
+    }
+
+    function drawHotspot(x, y) {
+      ctx.save();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, 14, 0, Math.PI * 2);
+      ctx.moveTo(x - 22, y); ctx.lineTo(x - 8, y);
+      ctx.moveTo(x + 8, y); ctx.lineTo(x + 22, y);
+      ctx.moveTo(x, y - 22); ctx.lineTo(x, y - 8);
+      ctx.moveTo(x, y + 8); ctx.lineTo(x, y + 22);
+      ctx.stroke();
+      var label = '🔥 熱源 / Hot spot';
+      var right = x > canvas.width - 100;
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = right ? 'right' : 'left';
+      var lx = x + (right ? -20 : 20), ly = Math.max(16, y - 20);
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(label, lx, ly);
+      ctx.fillStyle = '#fff'; ctx.fillText(label, lx, ly);
+      ctx.restore();
+    }
+
+    flipBtn.addEventListener('click', function () {
+      facing = facing === 'environment' ? 'user' : 'environment';
+      if (running) { stopCamera(); startCamera(); }
+    });
+    saveBtn.addEventListener('click', function () {
+      if (!running) return;
+      var a = document.createElement('a');
+      a.download = 'thermography-' + Date.now() + '.png';
+      a.href = canvas.toDataURL('image/png');
+      a.click();
+      toast('保存しました / Saved');
+    });
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+    window.addEventListener('beforeunload', stopCamera);
+
+    /* ---------- 背景アンビエントパーティクル ---------- */
+    (function ambient() {
+      var c = document.getElementById('bg-canvas'), x = c.getContext('2d');
+      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var pts = [], W, H;
+      function resize() { W = c.width = innerWidth; H = c.height = innerHeight; }
+      resize(); addEventListener('resize', resize);
+      var N = reduce ? 0 : Math.min(60, Math.floor(innerWidth / 22));
+      for (var i = 0; i < N; i++) pts.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.8 + 0.4, vx: (Math.random() - 0.5) * 0.25, vy: (Math.random() - 0.5) * 0.25, c: Math.random() > 0.5 ? '34,211,238' : '167,139,250' });
+      function tick() {
+        x.clearRect(0, 0, W, H);
+        for (var i = 0; i < pts.length; i++) { var p = pts[i]; p.x += p.vx; p.y += p.vy; if (p.x < 0) p.x = W; if (p.x > W) p.x = 0; if (p.y < 0) p.y = H; if (p.y > H) p.y = 0; x.beginPath(); x.arc(p.x, p.y, p.r, 0, 6.283); x.fillStyle = 'rgba(' + p.c + ',0.5)'; x.fill(); }
+        if (!reduce) requestAnimationFrame(tick);
+      }
+      tick();
+    })();
+  })();
+  </script>
+</body>
+</html>
