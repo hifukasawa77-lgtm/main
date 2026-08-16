@@ -45,6 +45,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0020-perf-cost-placement-and-canvas-layout-promotion]] — 前処理コストの置き場所（静止時ベイクの罠/補償ハック撤去）をcodingへ、Canvas絶対座標レイアウトの整合（分岐の全要素更新/描画倍率とレイアウト予約の一致）をgame-devへ昇格＋7営業日分の遡及Daily整備
 - [[0021-routine-schedule-single-source]] — Routineスケジュールの正をCLAUDE.md「定期実行（Routine）一覧」へ単一ソース化＋lint検査#11、/self-improveを週次Routine化（日曜21:00 JST）
 - [[0022-asset-reencode-safety]] — アセット再エンコードの安全策（切り出し矩形の解像度非依存化・後読みの同時数/上限）＋マップ描画の機械検査を新設
+- [[0023-verification-integrity-and-daily-backfill]] — 検査スクリプトの健全性を横断ルール化＋Daily骨組み生成を機械化（backfill-daily.sh）
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
