@@ -8286,12 +8286,17 @@ function drawCheckpointIcon(ctx, x, y, size, color){
 const MARKER_SPRITE = { cache:new Map() };
 // 地図アイコン（城グラフィック・勢力/施設マーカー）の縮小率。約15%縮小（深澤要望 2026-07-30）。
 const MAP_ICON_SCALE = 0.85;
-// 250%以上で出るグラフィック（城／武装勢力・施設）だけをさらに一回り小さくする係数
-// （深澤要望 2026-08-07）。MAP_ICON_SCALE と分けてあるのは、家紋の占有矩形・関所アイコンなど
-// 250%未満でも出る要素を巻き添えで縮めないため。過去の「一回り」と同じ15%縮小に揃えた。
+// 250%以上で出るグラフィック（城／武装勢力・施設）の従来サイズ（深澤要望 2026-08-07）。
 const MAP_GRAPHIC_SIZE_MULT = 0.85;
-// 城グラフィック（250%以上表示）の世界サイズ。家紋基準13pxの2.5倍（深澤要望 2026-07-19）。
-const CASTLE_GRAPHIC_WORLD = 13 * 2.5 * MAP_ICON_SCALE * MAP_GRAPHIC_SIZE_MULT;
+// 250～275%だけ従来サイズからさらに一回り小さくし、300～325%では従来サイズを維持する。
+// ホイール／ピンチの中間倍率も300%を境界に切り替え、家紋・関所アイコンは巻き添えにしない。
+const MAP_GRAPHIC_LOW_ZOOM_MULT = 0.85;
+const MAP_GRAPHIC_FULL_SIZE_ZOOM_THRESHOLD = zoomFromPct(300);
+function mapGraphicSizeMultForZoom(zoom){
+  return MAP_GRAPHIC_SIZE_MULT * (zoom < MAP_GRAPHIC_FULL_SIZE_ZOOM_THRESHOLD ? MAP_GRAPHIC_LOW_ZOOM_MULT : 1);
+}
+// 城グラフィック（250%以上表示）の基準世界サイズ。家紋基準13pxの2.5倍（深澤要望 2026-07-19）。
+const CASTLE_GRAPHIC_WORLD = 13 * 2.5 * MAP_ICON_SCALE;
 function castleMarkerSprite(clanId, color){
   const key = clanId + '|' + color;
   const hit = MARKER_SPRITE.cache.get(key);
@@ -8306,10 +8311,10 @@ function castleMarkerSprite(clanId, color){
   MARKER_SPRITE.cache.set(key, cv);
   return cv;
 }
-function drawCastleMarker(ctx, clanId, x, y, color, showCastle, castleType=null, castleName=''){  // (x,y)=アイコン中心（ワールド座標）。showCastle=true で城グラフィック、false で家紋
+function drawCastleMarker(ctx, clanId, x, y, color, showCastle, castleType=null, castleName='', graphicSizeMult=1){  // (x,y)=アイコン中心（ワールド座標）。showCastle=true で城グラフィック、false で家紋
   if (showCastle){
     const assetKey=mapCastleAssetKey(castleType,castleName);
-    const size=CASTLE_GRAPHIC_WORLD*(CASTLE_ASSET_SIZE_MULT[assetKey]||1);
+    const size=CASTLE_GRAPHIC_WORLD*graphicSizeMult*(CASTLE_ASSET_SIZE_MULT[assetKey]||1);
     if (!drawMapCastleImage(ctx,assetKey,x,y,size) &&
         !drawMapSiteImage(ctx,'mapSiteCastle',x,y,size,1.0)){
       drawCastleIcon(ctx,x,y,size,color);
@@ -13891,6 +13896,7 @@ class MapScene extends GameKit.Scene {
     const showForcesAndFacilities = this.cam.zoom >= MAP_FORCE_FACILITY_ZOOM_THRESHOLD;
     // 拡大率250%以上でアセットの城グラフィック、249%以下は家紋マークを城位置に表示する（深澤要望）。
     const showCastleGraphic = this.cam.zoom >= MAP_CASTLE_GRAPHIC_ZOOM_THRESHOLD;
+    const graphicSizeMult = mapGraphicSizeMultForZoom(this.cam.zoom);
     const labelSize=7, gap=7;  // 城アイコン13px・家紋15pxは drawCastleMarker のスプライトへ焼き込み済み（Cycle 8）
     // モバイル（タッチ端末）は画面が小さく城名・家紋が見づらいため、城アイコン・家紋・城名ラベルを
     // 一回り（1.3倍）大きく表示する。各城アンカー基点のスケールに factor を掛けるだけで、
@@ -13913,7 +13919,7 @@ class MapScene extends GameKit.Scene {
       if (it.cx<vx0 || it.cx>vx1 || it.cy<vy0 || it.cy>vy1) continue;
       const s=lscale*MK;
       if (s!==1){ ctx.save(); ctx.translate(it.cx, it.cy); ctx.scale(s, s); ctx.translate(-it.cx, -it.cy); }
-      drawCastleMarker(ctx, it.ddId, it.cx-5, it.cy+9, it.color, showCastleGraphic, it.castleType, it.name);
+      drawCastleMarker(ctx, it.ddId, it.cx-5, it.cy+9, it.color, showCastleGraphic, it.castleType, it.name, graphicSizeMult);
       // zoom 対応ラベル位置: 家紋直上に固定（lscale で拡縮後2px のギャップ）
       const _lh=Math.max(18, Array.from(it.name).length*7+5);
       const _eff=this.cam.zoom*lscale; // min(zoom, LABEL_ZOOM_CLAMP)
@@ -13933,7 +13939,7 @@ class MapScene extends GameKit.Scene {
       const labelH = Math.max(18, Array.from(marker.nameJP).length*gap+6);
       const s=lscale*MK;
       if (s!==1){ ctx.save(); ctx.translate(cx,cy); ctx.scale(s,s); ctx.translate(-cx,-cy); }
-      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5*MAP_ICON_SCALE*MAP_GRAPHIC_SIZE_MULT, showIcon: this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD});
+      drawResourceMarker(ctx, marker, cx, cy-labelH-7, {labelSize, gap, iconSize:19.5*MAP_ICON_SCALE*graphicSizeMult, showIcon: this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD});
       if (s!==1) ctx.restore();
     }
     for (const force of RELIGIOUS_FORCES){
@@ -13951,7 +13957,7 @@ class MapScene extends GameKit.Scene {
       // アセット遅延読込中だけは従来の家紋へフォールバックして、マーカーを消さない。
       if (this.cam.zoom >= MAP_SITE_GRAPHIC_ZOOM_THRESHOLD){
         const assetKey=religiousForceAssetKey(force);
-        if (!drawMapSiteImage(ctx, assetKey, cx, cy+4, 22*MAP_ICON_SCALE*MAP_GRAPHIC_SIZE_MULT, 1.6)){
+        if (!drawMapSiteImage(ctx, assetKey, cx, cy+4, 22*MAP_ICON_SCALE*graphicSizeMult, 1.6)){
           drawKamonMap(ctx, crestId, cx-size/2, cy-size/2+4, size, force.color);
         }
       }
