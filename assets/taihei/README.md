@@ -15,9 +15,17 @@
   `scripts/gen-taihei-provinces.mjs` を再実行して再生成すること
   （genpei側を汚さないため、genpeiは読むだけで書き戻さない設計）
 
+## taihei-japan-map.webp
+
+- 出典: `assets/sengoku/gpt/sengoku-japan-map-user-v1.webp`（1672×941）をそのままコピー
+  （spec 4.1節。解像度・再エンコードなし、CLAUDE.md「アセットは全てWebP・解像度を変えない」準拠）。
+- v1を選んだ理由: `assets/taihei/provinces.json`（`assets/genpei/provinces.json`複製）の
+  x/y座標は genpei.html が `MAP_ASSET = 'assets/sengoku/gpt/sengoku-japan-map-user-v1.webp'`
+  で校正した座標系のため、v1でなければ国ノードの位置が地図と合わない。
+- 新規生成ではなく既存アセットのコピーのため、Graphic-Designerへの発注はせず
+  Code-Generator（MapScene実装）が直接コピーした。
+
 ## 未着手（後続Phase）
 
-- 全国地図背景画像（`assets/sengoku/gpt/sengoku-japan-map-user-v2.webp` 相当を
-  コピーして自ゲーム完結にする、spec 4.1節）はPhase A（骨格・ロジックのみ）では
-  未着手。MapScene実装フェーズ（spec 6章 step6）でコピーする。
-- `taihei-thumb.webp`（index.html掲載用サムネイル）も同様に未着手（spec 6章 step10）。
+- `taihei-thumb.webp`（index.html掲載用サムネイル）は未着手（spec 6章 step10、
+  Evaluator合格後に `game-release` スキル手順で作成）。
