@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>太平風雲記 | Taihei Fuuunki</title>
+<style>
+  :root {
+    --bg: #05070d;
+    --accent-cyan: #22d3ee;
+    --accent-purple: #a78bfa;
+    --text: #e2e8f0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 12px;
+  }
+  canvas {
+    max-width: 96vw;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--bg);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  }
+  .hint { font-size: 13px; color: #94a3b8; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<p class="hint">
+  太平風雲記 — 南北朝・太平記時代(1331-1392)の戦略シミュレーション（実装中 / under construction: Phase A ロジック骨格）<br>
+  Taihei Fuuunki — a strategy sim set in the Nanboku-chō era (1331-1392). Phase A: logic scaffold only, no playable scenes yet.
+</p>
+
+<script src="gamekit/gamekit.js"></script>
+<script>
+'use strict';
+
+/* ==========================================================================
+ * 太平風雲記 (Taihei Fuuunki) — Phase A: 骨格・コアロジック・朝廷・悪党システム
+ *
+ * 正本仕様書: specs/taihei_spec.md
+ * 姉妹作品: sengoku.html（戦国風雲記）/ genpei.html（源平争乱記）
+ *   本ファイルはこの2作のアーキテクチャパターン（国ノード+隣接グラフの全国マップ、
+ *   GameKit.Save永続化、GAME_EVENT_DEFS型の年代記イベント、雇用制の秘匿部隊）を
+ *   踏襲しつつ、本作固有の朝廷・恩賞・忠義思想・悪党の4新システムを実装する。
+ *
+ * Phase A のスコープ（specs/taihei_spec.md 6章 ステップ1〜4）:
+ *   1. 骨格構築    — 定数群 / provinces.json の複製・整理
+ *   2. コアロジック — buildState/applyActions/endTurn/aiTurn、恩賞・忠義思想
+ *   3. 朝廷システム — courtPropose/issueTobatsurei/grantKani、南朝・北朝二重管理
+ *   4. 悪党システム — hireAkutou/akutouCommand、4特殊コマンド
+ * シーン（描画・UI）は本Phaseの対象外。BootScene/TitleSceneは後続Phaseで
+ * 差し替え前提のプレースホルダに留める（ロジック関数群をconsoleで検証できれば良い）。
+ * ========================================================================== */
+
+/* ---------- 起動 / Boot ---------- */
+const W = 1440, H = 810;
+const canvas = document.getElementById('game');
+const game = new GameKit.Engine(canvas, { width: W, height: H });
+const save = new GameKit.Save('taihei');
+const clamp = GameKit.MathX.clamp;
+
+const SAVE_VERSION = 1;
+function migrateState(raw) {
+  // スキーマ変更に備えたマイグレーション口（spec 4.10節）。Phase Aでは同一バージョンのみ。
+  if (!raw) return null;
+  if (raw.version === SAVE_VERSION) return raw;
+  return raw;
+}
+
+/* ---------- データ読込: assets/taihei/provinces.json ----------
+ * fetch → 失敗したら埋め込みシードへ落ちる。file:// で開いても動くこと（genpei.html踏襲）。
+ * 埋め込みシードは scripts/gen-taihei-embed.mjs が正本(assets/taihei/provinces.json)から
+ * 再生成する。手で書き換えないこと。 */
+const DATA = { provinces: null, provById: {} };
+
+/* ==TAIHEI_EMBED_START== 以下は自動生成。手で編集しないこと。
+   scripts/gen-taihei-embed.mjs が assets/taihei/provinces.json から作る。 */
+const EMBED = {
+  provinces: {"version":1,"provinces":[{"id":"mutsu","jp":"陸奥","en":"Mutsu","circuit":"tosando","region":"東山道","x":760,"y":70,"terrain":"mountain","koku":752,"adjacency":["dewa","echigo","hitachi","shimotsuke"]},{"id":"dewa","jp":"出羽","en":"Dewa","circuit":"tosando","region":"東山道","x":680,"y":95,"terrain":"mountain","koku":392,"adjacency":["echigo","mutsu"]},{"id":"hitachi","jp":"常陸","en":"Hitachi","circuit":"tokaido","region":"東海道","x":800,"y":255,"terrain":"plain","koku":572,"adjacency":["mutsu","shimotsuke","shimousa"]},{"id":"shimotsuke","jp":"下野","en":"Shimotsuke","circuit":"tosando","region":"東山道","x":725,"y":225,"terrain":"plain","koku":370,"adjacency":["hitachi","kozuke","musashi","mutsu","shimousa"]},{"id":"kozuke","jp":"上野","en":"Kozuke","circuit":"tosando","region":"東山道","x":655,"y":245,"terrain":"mountain","koku":446,"adjacency":["echigo","musashi","shimotsuke","shinano"]},{"id":"shimousa","jp":"下総","en":"Shimousa","circuit":"tokaido","region":"東海道","x":795,"y":300,"terrain":"plain","koku":424,"adjacency":["hitachi","kazusa","musashi","shimotsuke"]},{"id":"kazusa","jp":"上総","en":"Kazusa","circuit":"tokaido","region":"東海道","x":815,"y":345,"terrain":"coast","koku":391,"adjacency":["awa_kanto","sagami","shimousa"]},{"id":"awa_kanto","jp":"安房","en":"Awa(Boso)","circuit":"tokaido","region":"東海道","x":800,"y":390,"terrain":"coast","koku":41,"adjacency":["kazusa","sagami"]},{"id":"musashi","jp":"武蔵","en":"Musashi","circuit":"tokaido","region":"東海道","x":720,"y":300,"terrain":"plain","koku":720,"adjacency":["kai","kozuke","sagami","shimotsuke","shimousa"]},{"id":"sagami","jp":"相模","en":"Sagami","circuit":"tokaido","region":"東海道","x":700,"y":350,"terrain":"coast","koku":175,"adjacency":["awa_kanto","izu","kai","kazusa","musashi","suruga"]},{"id":"echigo","jp":"越後","en":"Echigo","circuit":"hokurikudo","region":"北陸道","x":615,"y":165,"terrain":"plain","koku":263,"adjacency":["dewa","etchu","kozuke","mutsu","sado","shinano"]},{"id":"sado","jp":"佐渡","en":"Sado","circuit":"hokurikudo","region":"北陸道","x":555,"y":130,"terrain":"coast","koku":15,"adjacency":["echigo"]},{"id":"etchu","jp":"越中","en":"Etchu","circuit":"hokurikudo","region":"北陸道","x":560,"y":220,"terrain":"mountain","koku":342,"adjacency":["echigo","hida","kaga","noto","shinano"]},{"id":"noto","jp":"能登","en":"Noto","circuit":"hokurikudo","region":"北陸道","x":500,"y":190,"terrain":"coast","koku":189,"adjacency":["etchu","kaga"]},{"id":"kaga","jp":"加賀","en":"Kaga","circuit":"hokurikudo","region":"北陸道","x":500,"y":245,"terrain":"plain","koku":320,"adjacency":["echizen","etchu","noto"]},{"id":"echizen","jp":"越前","en":"Echizen","circuit":"hokurikudo","region":"北陸道","x":470,"y":295,"terrain":"plain","koku":449,"adjacency":["kaga","mino","omi","wakasa"]},{"id":"wakasa","jp":"若狭","en":"Wakasa","circuit":"hokurikudo","region":"北陸道","x":450,"y":315,"terrain":"coast","koku":77,"adjacency":["echizen","omi","tanba"]},{"id":"shinano","jp":"信濃","en":"Shinano","circuit":"tosando","region":"東山道","x":600,"y":300,"terrain":"mountain","koku":294,"adjacency":["echigo","etchu","hida","kai","kozuke","mikawa","mino","totomi"]},{"id":"kai","jp":"甲斐","en":"Kai","circuit":"tokaido","region":"東海道","x":660,"y":340,"terrain":"mountain","koku":164,"adjacency":["musashi","sagami","shinano","suruga"]},{"id":"hida","jp":"飛騨","en":"Hida","circuit":"tosando","region":"東山道","x":560,"y":280,"terrain":"mountain","koku":24,"adjacency":["etchu","mino","shinano"]},{"id":"mino","jp":"美濃","en":"Mino","circuit":"tosando","region":"東山道","x":540,"y":350,"terrain":"plain","koku":413,"adjacency":["echizen","hida","ise","omi","owari","shinano"]},{"id":"totomi","jp":"遠江","en":"Totomi","circuit":"tokaido","region":"東海道","x":645,"y":390,"terrain":"plain","koku":230,"adjacency":["mikawa","shinano","suruga"]},{"id":"suruga","jp":"駿河","en":"Suruga","circuit":"tokaido","region":"東海道","x":680,"y":380,"terrain":"coast","koku":135,"adjacency":["izu","kai","sagami","totomi"]},{"id":"izu","jp":"伊豆","en":"Izu","circuit":"tokaido","region":"東海道","x":702,"y":415,"terrain":"coast","koku":62,"adjacency":["sagami","suruga"]},{"id":"mikawa","jp":"三河","en":"Mikawa","circuit":"tokaido","region":"東海道","x":600,"y":392,"terrain":"plain","koku":261,"adjacency":["owari","shinano","totomi"]},{"id":"owari","jp":"尾張","en":"Owari","circuit":"tokaido","region":"東海道","x":558,"y":392,"terrain":"plain","koku":412,"adjacency":["ise","mikawa","mino"]},{"id":"ise","jp":"伊勢","en":"Ise","circuit":"tokaido","region":"東海道","x":530,"y":412,"terrain":"coast","koku":510,"adjacency":["iga","kii","mino","omi","owari","shima"]},{"id":"shima","jp":"志摩","en":"Shima","circuit":"tokaido","region":"東海道","x":552,"y":432,"terrain":"coast","koku":16,"adjacency":["ise"]},{"id":"omi","jp":"近江","en":"Omi","circuit":"tosando","region":"東山道","x":485,"y":342,"terrain":"plain","koku":792,"adjacency":["echizen","iga","ise","mino","tanba","wakasa","yamashiro"]},{"id":"yamashiro","jp":"山城","en":"Yamashiro","circuit":"kinai","region":"畿内","x":452,"y":382,"terrain":"plain","koku":203,"adjacency":["iga","kawachi","omi","settsu","tanba","yamato"]},{"id":"yamato","jp":"大和","en":"Yamato","circuit":"kinai","region":"畿内","x":452,"y":422,"terrain":"mountain","koku":403,"adjacency":["iga","kawachi","kii","yamashiro"]},{"id":"kawachi","jp":"河内","en":"Kawachi","circuit":"kinai","region":"畿内","x":422,"y":412,"terrain":"plain","koku":218,"adjacency":["izumi","settsu","yamashiro","yamato"]},{"id":"izumi","jp":"和泉","en":"Izumi","circuit":"kinai","region":"畿内","x":412,"y":432,"terrain":"coast","koku":127,"adjacency":["awaji","kawachi","kii","settsu"]},{"id":"settsu","jp":"摂津","en":"Settsu","circuit":"kinai","region":"畿内","x":402,"y":392,"terrain":"coast","koku":272,"adjacency":["awaji","harima","izumi","kawachi","tanba","yamashiro"]},{"id":"iga","jp":"伊賀","en":"Iga","circuit":"tokaido","region":"東海道","x":490,"y":400,"terrain":"mountain","koku":90,"adjacency":["ise","omi","yamashiro","yamato"]},{"id":"kii","jp":"紀伊","en":"Kii","circuit":"nankaido","region":"南海道","x":440,"y":470,"terrain":"mountain","koku":219,"adjacency":["awa_shikoku","ise","izumi","yamato"]},{"id":"tanba","jp":"丹波","en":"Tanba","circuit":"sanindo","region":"山陰道","x":410,"y":350,"terrain":"mountain","koku":237,"adjacency":["harima","omi","settsu","tajima","tango","wakasa","yamashiro"]},{"id":"tango","jp":"丹後","en":"Tango","circuit":"sanindo","region":"山陰道","x":400,"y":318,"terrain":"coast","koku":99,"adjacency":["tajima","tanba"]},{"id":"tajima","jp":"但馬","en":"Tajima","circuit":"sanindo","region":"山陰道","x":360,"y":320,"terrain":"mountain","koku":103,"adjacency":["harima","inaba","tanba","tango"]},{"id":"harima","jp":"播磨","en":"Harima","circuit":"sanyodo","region":"山陽道","x":360,"y":390,"terrain":"plain","koku":275,"adjacency":["bizen","mimasaka","sanuki","settsu","tajima","tanba"]},{"id":"mimasaka","jp":"美作","en":"Mimasaka","circuit":"sanyodo","region":"山陽道","x":330,"y":368,"terrain":"mountain","koku":167,"adjacency":["bitchu","bizen","harima","hoki","inaba"]},{"id":"bizen","jp":"備前","en":"Bizen","circuit":"sanyodo","region":"山陽道","x":320,"y":400,"terrain":"plain","koku":201,"adjacency":["bitchu","harima","mimasaka","sanuki"]},{"id":"bitchu","jp":"備中","en":"Bitchu","circuit":"sanyodo","region":"山陽道","x":290,"y":400,"terrain":"plain","koku":158,"adjacency":["bingo","bizen","hoki","mimasaka"]},{"id":"bingo","jp":"備後","en":"Bingo","circuit":"sanyodo","region":"山陽道","x":250,"y":400,"terrain":"mountain","koku":167,"adjacency":["aki","bitchu","izumo"]},{"id":"inaba","jp":"因幡","en":"Inaba","circuit":"sanindo","region":"山陰道","x":320,"y":322,"terrain":"coast","koku":80,"adjacency":["hoki","mimasaka","tajima"]},{"id":"hoki","jp":"伯耆","en":"Hoki","circuit":"sanindo","region":"山陰道","x":290,"y":332,"terrain":"mountain","koku":90,"adjacency":["bitchu","inaba","izumo","mimasaka","oki"]},{"id":"izumo","jp":"出雲","en":"Izumo","circuit":"sanindo","region":"山陰道","x":220,"y":350,"terrain":"coast","koku":168,"adjacency":["bingo","hoki","iwami","oki"]},{"id":"iwami","jp":"石見","en":"Iwami","circuit":"sanindo","region":"山陰道","x":180,"y":380,"terrain":"mountain","koku":100,"adjacency":["aki","izumo","suo"]},{"id":"aki","jp":"安芸","en":"Aki","circuit":"sanyodo","region":"山陽道","x":200,"y":420,"terrain":"coast","koku":175,"adjacency":["bingo","iwami","iyo","suo"]},{"id":"suo","jp":"周防","en":"Suo","circuit":"sanyodo","region":"山陽道","x":150,"y":440,"terrain":"coast","koku":150,"adjacency":["aki","iwami","iyo","nagato"]},{"id":"nagato","jp":"長門","en":"Nagato","circuit":"sanyodo","region":"山陽道","x":110,"y":450,"terrain":"coast","koku":117,"adjacency":["buzen","suo"]},{"id":"awa_shikoku","jp":"阿波","en":"Awa(Shikoku)","circuit":"nankaido","region":"南海道","x":330,"y":480,"terrain":"mountain","koku":165,"adjacency":["awaji","iyo","kii","sanuki","tosa"]},{"id":"sanuki","jp":"讃岐","en":"Sanuki","circuit":"nankaido","region":"南海道","x":300,"y":460,"terrain":"coast","koku":113,"adjacency":["awa_shikoku","awaji","bizen","harima","iyo"]},{"id":"iyo","jp":"伊予","en":"Iyo","circuit":"nankaido","region":"南海道","x":230,"y":470,"terrain":"coast","koku":329,"adjacency":["aki","awa_shikoku","bungo","sanuki","suo","tosa"]},{"id":"tosa","jp":"土佐","en":"Tosa","circuit":"nankaido","region":"南海道","x":280,"y":522,"terrain":"mountain","koku":88,"adjacency":["awa_shikoku","iyo"]},{"id":"buzen","jp":"豊前","en":"Buzen","circuit":"saikaido","region":"西海道","x":120,"y":472,"terrain":"coast","koku":145,"adjacency":["bungo","chikuzen","nagato"]},{"id":"bungo","jp":"豊後","en":"Bungo","circuit":"saikaido","region":"西海道","x":110,"y":510,"terrain":"mountain","koku":376,"adjacency":["buzen","chikugo","higo","hyuga","iyo"]},{"id":"chikuzen","jp":"筑前","en":"Chikuzen","circuit":"saikaido","region":"西海道","x":70,"y":472,"terrain":"coast","koku":333,"adjacency":["buzen","chikugo","hizen"]},{"id":"chikugo","jp":"筑後","en":"Chikugo","circuit":"saikaido","region":"西海道","x":80,"y":510,"terrain":"plain","koku":239,"adjacency":["bungo","chikuzen","higo","hizen"]},{"id":"hizen","jp":"肥前","en":"Hizen","circuit":"saikaido","region":"西海道","x":32,"y":490,"terrain":"coast","koku":278,"adjacency":["chikugo","chikuzen","higo"]},{"id":"higo","jp":"肥後","en":"Higo","circuit":"saikaido","region":"西海道","x":62,"y":550,"terrain":"mountain","koku":307,"adjacency":["bungo","chikugo","hizen","hyuga","osumi","satsuma"]},{"id":"hyuga","jp":"日向","en":"Hyuga","circuit":"saikaido","region":"西海道","x":110,"y":560,"terrain":"mountain","koku":140,"adjacency":["bungo","higo","osumi"]},{"id":"osumi","jp":"大隅","en":"Osumi","circuit":"saikaido","region":"西海道","x":80,"y":600,"terrain":"coast","koku":181,"adjacency":["higo","hyuga","satsuma"]},{"id":"satsuma","jp":"薩摩","en":"Satsuma","circuit":"saikaido","region":"西海道","x":40,"y":592,"terrain":"coast","koku":258,"adjacency":["higo","osumi"]},{"id":"awaji","jp":"淡路","en":"Awaji","circuit":"nankaido","region":"南海道","x":372,"y":442,"terrain":"coast","koku":56,"adjacency":["awa_shikoku","izumi","sanuki","settsu"]},{"id":"oki","jp":"隠岐","en":"Oki","circuit":"sanindo","region":"山陰道","x":214,"y":292,"terrain":"coast","koku":16,"adjacency":["hoki","izumo"]}]},
+};
+/* ==TAIHEI_EMBED_END== */
+
+async function loadProvinces() {
+  let provinces = null;
+  try {
+    const res = await fetch('assets/taihei/provinces.json', { cache: 'no-store' });
+    if (res.ok) provinces = (await res.json()).provinces;
+  } catch (e) { /* file:// 等でfetchが使えない環境は埋め込みへ */ }
+  if (!provinces || !provinces.length) provinces = EMBED.provinces.provinces;
+  DATA.provinces = provinces;
+  DATA.provById = Object.fromEntries(provinces.map((p) => [p.id, p]));
+  return DATA;
+}
+const dataReady = loadProvinces();
+
+/* ==========================================================================
+ * 定数群 / Constants
+ * ========================================================================== */
+
+/* ---- ルール数値 / Rule knobs ---- */
+const RULE = {
+  scenario: { defaultId: 'genko' },
+  reward: { gracePeriod: 3, minFulfillRatio: 0.5, unrewardedPenalty: 15, graceRelaxMul: 0.5 },
+  loyalty: { defectBelow: 20, decayPerTurn: 0.3, initialDefault: 60 },
+  akutou: { hireCostPerUnit: 15, cooldownTurns: 2, poolCap: 12 },
+  court: {
+    tobatsureiCourtRelMin: 60,
+    tobatsureiLegitimacyMin: 50,
+    tobatsureiCombatBonus: 0.15,
+    tobatsureiMoraleBonus: 10,
+    tobatsureiDurationTurns: 6,
+    keepHolderLegitimacyBonus: 20,
+    courtRelRecoveryBase: 1.0,
+    courtRelRecoveryHolderMul: 1.5,
+    emperorDeathLegitimacyMul: 0.5,
+  },
+  ai: { maxActions: 3 },
+  // 後続フェーズ(BattleScene)向けの下地。Phase Aでは未使用。
+  combat: { breakBelow: 35, routBelow: 15 },
+};
+
+/* ---- 陣営（3陣営の型） / Camp archetypes ----
+ * 'chihou' はメタグループの表示用ラベル。実体は CHIHOU_HOUSES の9家が
+ * それぞれ独立した camp として state.camps に入る（spec 4.2節の注記）。
+ * court は「現在どちらの朝廷に属しているか」。足利方は建武期には南朝(nancho)の
+ * 一員として挙兵しており、中先代の乱(4.6節)で離反するまでは nancho 側。 */
+const CAMPS = {
+  ashikaga: { id: 'ashikaga', jp: '北朝・足利方', en: 'Ashikaga (Northern Court)', color: '#60a5fa', playable: true, ai: 'central', court: 'nancho', home: ['mikawa', 'musashi', 'sagami', 'harima', 'mino', 'awa_shikoku', 'suruga'] },
+  nancho: { id: 'nancho', jp: '南朝方', en: 'Southern Court Loyalists', color: '#f59e0b', playable: true, ai: 'aggressive', court: 'nancho', home: ['yamashiro', 'yamato', 'mutsu', 'ise', 'kawachi', 'kozuke', 'hoki', 'higo'] },
+  chihou: { id: 'chihou', jp: '中立・地方勢力', en: 'Neutral Regional Houses', color: '#94a3b8', playable: true, ai: 'opportunist', court: null, home: [] },
+};
+
+const CHIHOU_HOUSES = [
+  { id: 'ouchi', jp: '大内氏', en: 'Ōuchi Clan', color: '#34d399', home: ['suo'], ai: 'opportunist' },
+  { id: 'shimazu', jp: '島津氏', en: 'Shimazu Clan', color: '#4ade80', home: ['satsuma'], ai: 'opportunist' },
+  { id: 'date', jp: '伊達氏', en: 'Date Clan', color: '#86efac', home: [], ai: 'opportunist' },
+  { id: 'soma', jp: '相馬氏', en: 'Sōma Clan', color: '#5eead4', home: [], ai: 'opportunist' },
+  { id: 'ogasawara', jp: '小笠原氏', en: 'Ogasawara Clan', color: '#93c5fd', home: ['shinano'], ai: 'defensive' },
+  { id: 'hatakeyama', jp: '畠山氏', en: 'Hatakeyama Clan', color: '#a5b4fc', home: ['noto'], ai: 'defensive' },
+  { id: 'kyogoku', jp: '京極氏', en: 'Kyōgoku Clan', color: '#c4b5fd', home: [], ai: 'defensive' },
+  { id: 'momonoi', jp: '桃井氏', en: 'Momonoi Clan', color: '#ddd6fe', home: ['etchu'], ai: 'defensive' },
+  { id: 'shiba', jp: '斯波氏', en: 'Shiba Clan', color: '#e9d5ff', home: [], ai: 'defensive' },
+];
+
+/* ---- 官位ランク（南朝・北朝共通の型。値は宮廷ごとに個別インスタンスを持つ）
+ * spec 4.3節の COURT_KANI_RANKS 雛形をそのまま採用。 ---- */
+const COURT_KANI_RANKS = [
+  { rank: 0, jp: '従五位下', en: 'Jr. 5th Rank Lower', rel: 15, cost: 200, prestigeGain: 10 },
+  { rank: 1, jp: '従五位上', en: 'Jr. 5th Rank Upper', rel: 25, cost: 350, prestigeGain: 15 },
+  { rank: 2, jp: '従四位下', en: 'Jr. 4th Rank Lower', rel: 40, cost: 500, prestigeGain: 20 },
+  { rank: 3, jp: '従四位上', en: 'Jr. 4th Rank Upper', rel: 55, cost: 700, prestigeGain: 25 },
+  { rank: 4, jp: '従三位', en: 'Jr. 3rd Rank', rel: 70, cost: 1000, prestigeGain: 35 },
+  { rank: 5, jp: '正三位', en: 'Sr. 3rd Rank', rel: 80, cost: 1500, prestigeGain: 50 },
+  { rank: 6, jp: '征夷大将軍/鎮守府将軍', en: 'Shogun-equivalent', rel: 90, cost: 2500, prestigeGain: 75 },
+];
+
+/* ---- 朝廷（南朝・北朝）基礎定義。北朝は延元の乱(1337)まで active:false ---- */
+const COURTS_DEF = {
+  nancho: {
+    id: 'nancho', jp: '南朝', en: 'Southern Court',
+    emperor: { jp: '後醍醐天皇', en: 'Emperor Go-Daigo', generalId: 'godaigo', alive: true },
+    legitimacy: 60, active: true, heldBy: null, capital: 'yamashiro',
+  },
+  hokucho: {
+    id: 'hokucho', jp: '北朝', en: 'Northern Court',
+    emperor: { jp: '光厳天皇（擁立予定）', en: 'Emperor Kōgon (pending enthronement)', generalId: null, alive: false },
+    legitimacy: 0, active: false, heldBy: null, capital: null,
+  },
+};
+
+/* ---- シナリオ ---- */
+const SCENARIOS = [
+  {
+    id: 'genko', jp: '元弘の乱', en: 'Genkō War (1331)', startYear: 1331, startMonth: 5, maxTurns: 61,
+    desc: { jp: '元弘元年、後醍醐帝挙兵から南北朝合一までの本編シナリオ', en: 'Main scenario: from the 1331 uprising to the 1392 unification of the courts.' },
+  },
+  {
+    id: 'kanno', jp: '観応の擾乱', en: 'Kannō Disturbance (1350)', startYear: 1350, startMonth: 10, maxTurns: 15,
+    desc: { jp: '足利兄弟の内訌に絞った上級者向け短編シナリオ（Should要件、spec 2.3節）', en: 'Short scenario focused on the Ashikaga brothers’ feud (Should requirement).' },
+  },
+];
+
+/* ---- 思想 / Ideology ---- */
+const IDEOLOGY = {
+  sonno: { jp: '尊王', en: 'Loyalist' },
+  bakufu: { jp: '幕府派', en: 'Shogunate Partisan' },
+  yashin: { jp: '野心家', en: 'Ambitious' },
+  genjitsu: { jp: '現実主義', en: 'Pragmatist' },
+};
+/* 思想別の忠義変動係数（reason別）。spec 4.4節そのまま。 */
+const IDEOLOGY_MUL = {
+  sonno: { court_shift: 1.6, unrewarded: 0.7, power_balance: 0.4 },
+  bakufu: { court_shift: 0.8, unrewarded: 1.0, power_balance: 1.3 },
+  yashin: { court_shift: 0.3, unrewarded: 1.6, power_balance: 0.9 },
+  genjitsu: { court_shift: 0.6, unrewarded: 0.9, power_balance: 1.5 },
+};
+
+/* ---- 武将データ（30武将 … spec表は実数29行。仕様の数値不一致は完了報告で明記）
+ * camp: ashikaga / nancho / CHIHOU_HOUSESの各id（地方勢力は各家が独立勢力のため、
+ *       spec 4.2節注記に従い camp には家id自体を入れる。'chihou' というcamp idは
+ *       state.camps 上には存在しない（表示用メタグループのみ）。
+ * province: 初期の物理的所在地。「province の所有権(owner)」とは独立した概念とし、
+ *       同一国に複数陣営の武将が同時に所在してよい（在地武士の割拠を表現）。
+ *       実際の国の領有(owner)は PROVINCE_OWNER_SEED で別途決める。 ---- */
+const GENERALS_DEF = [
+  // ---- 北朝・足利方 ----
+  { id: 'ashikaga_takauji', camp: 'ashikaga', jp: '足利尊氏', en: 'Ashikaga Takauji', born: 1305, died: 1358, province: 'mikawa', ideology: 'yashin', stats: { tosotsu: 88, chiryaku: 70, busou: 82, suiren: 40 }, loyalty: 75, landDesire: 30, note: { jp: '恩賞不足で建武政権から離反する中核イベントの主体', en: 'Central figure of the defection from the Kenmu regime over unpaid rewards.' } },
+  { id: 'ashikaga_tadayoshi', camp: 'ashikaga', jp: '足利直義', en: 'Ashikaga Tadayoshi', born: 1306, died: 1352, province: 'musashi', ideology: 'bakufu', stats: { tosotsu: 72, chiryaku: 85, busou: 60, suiren: 30 }, loyalty: 80, landDesire: 20, note: { jp: '観応の擾乱で兄と対立', en: 'Clashes with his brother in the Kannō Disturbance.' } },
+  { id: 'ko_moronao', camp: 'ashikaga', jp: '高師直', en: 'Kō no Moronao', born: 1300, died: 1351, province: 'musashi', ideology: 'yashin', stats: { tosotsu: 80, chiryaku: 68, busou: 88, suiren: 20 }, loyalty: 65, landDesire: 45, note: { jp: '執事、四條畷で楠木正行を破る', en: 'Steward; defeats Kusunoki Masatsura at Shijōnawate.' } },
+  { id: 'akamatsu_enshin', camp: 'ashikaga', jp: '赤松円心', en: 'Akamatsu Enshin', born: 1277, died: 1350, province: 'harima', ideology: 'genjitsu', stats: { tosotsu: 75, chiryaku: 78, busou: 65, suiren: 20 }, loyalty: 60, landDesire: 35, note: { jp: '山城防衛が得意、特殊兵「赤松軍」', en: 'Skilled mountain-castle defender; fields the "Akamatsu Garrison" special troop.' } },
+  { id: 'sasaki_doukyo', camp: 'ashikaga', jp: '佐々木道誉', en: 'Sasaki Dōkyo', born: 1296, died: 1373, province: 'omi', ideology: 'genjitsu', stats: { tosotsu: 68, chiryaku: 82, busou: 55, suiren: 30 }, loyalty: 55, landDesire: 40, note: { jp: '婆娑羅大名、史実通り日和見寄りAI', en: 'A "Basara" lord; AI leans opportunistic, true to history.' } },
+  { id: 'toki_yoritou', camp: 'ashikaga', jp: '土岐頼遠', en: 'Toki Yoritō', born: null, died: 1342, province: 'mino', ideology: 'yashin', stats: { tosotsu: 70, chiryaku: 45, busou: 78, suiren: 15 }, loyalty: 55, landDesire: 50 },
+  { id: 'hosokawa_akiuji', camp: 'ashikaga', jp: '細川顕氏', en: 'Hosokawa Akiuji', born: null, died: 1352, province: 'awa_shikoku', ideology: 'bakufu', stats: { tosotsu: 65, chiryaku: 60, busou: 62, suiren: 35 }, loyalty: 65, landDesire: 30, note: { jp: '四国方面', en: 'Shikoku theater.' } },
+  { id: 'imagawa_norikuni', camp: 'ashikaga', jp: '今川範国', en: 'Imagawa Norikuni', born: 1295, died: 1384, province: 'suruga', ideology: 'bakufu', stats: { tosotsu: 68, chiryaku: 65, busou: 58, suiren: 20 }, loyalty: 75, landDesire: 25 },
+  { id: 'isshiki_norifuji', camp: 'ashikaga', jp: '一色範氏', en: 'Isshiki Norifuji', born: null, died: 1369, province: 'mutsu', ideology: 'bakufu', stats: { tosotsu: 62, chiryaku: 60, busou: 55, suiren: 10 }, loyalty: 70, landDesire: 25, note: { jp: '奥州探題格', en: 'Effectively the Ōshū Tandai deputy.' } },
+  { id: 'yamana_tokiuji', camp: 'ashikaga', jp: '山名時氏', en: 'Yamana Tokiuji', born: 1303, died: 1371, province: 'hoki', ideology: 'genjitsu', stats: { tosotsu: 70, chiryaku: 66, busou: 68, suiren: 15 }, loyalty: 50, landDesire: 45, note: { jp: '山陰、後年南朝転属もあり得るAI挙動', en: 'San’in theater; AI may later switch allegiance to the Southern Court.' } },
+
+  // ---- 南朝方 ----
+  { id: 'godaigo', camp: 'nancho', jp: '後醍醐天皇', en: 'Emperor Go-Daigo', born: 1288, died: 1339, province: 'yamashiro', ideology: 'sonno', stats: { tosotsu: 20, chiryaku: 90, busou: 5, suiren: 0 }, loyalty: 100, landDesire: 0, isEmperor: 'nancho', note: { jp: '南朝の玉座そのもの。討死/退位で南朝legitimacy崩壊', en: 'The Southern Court’s throne itself; his death collapses Southern legitimacy.' } },
+  { id: 'moriyoshi_shinno', camp: 'nancho', jp: '護良親王', en: 'Prince Moriyoshi', born: 1308, died: 1335, province: 'yamato', ideology: 'sonno', stats: { tosotsu: 55, chiryaku: 60, busou: 50, suiren: 10 }, loyalty: 85, landDesire: 10 },
+  { id: 'kitabatake_akiie', camp: 'nancho', jp: '北畠顕家', en: 'Kitabatake Akiie', born: 1318, died: 1338, province: 'mutsu', ideology: 'sonno', stats: { tosotsu: 92, chiryaku: 80, busou: 75, suiren: 10 }, loyalty: 90, landDesire: 15, note: { jp: '特殊兵「北畠騎馬隊」', en: 'Fields the "Kitabatake Cavalry" special troop.' } },
+  { id: 'kitabatake_chikafusa', camp: 'nancho', jp: '北畠親房', en: 'Kitabatake Chikafusa', born: 1293, died: 1354, province: 'ise', ideology: 'sonno', stats: { tosotsu: 60, chiryaku: 95, busou: 30, suiren: 15 }, loyalty: 95, landDesire: 10, note: { jp: '神皇正統記、legitimacy維持に貢献する設計', en: 'Author of the Jinnō Shōtōki; bolsters Southern legitimacy.' } },
+  { id: 'kusunoki_masashige', camp: 'nancho', jp: '楠木正成', en: 'Kusunoki Masashige', born: 1294, died: 1336, province: 'kawachi', ideology: 'sonno', stats: { tosotsu: 85, chiryaku: 98, busou: 70, suiren: 20 }, loyalty: 95, landDesire: 5, note: { jp: '特殊兵「楠木軍」、湊川で討死イベント', en: 'Fields the "Kusunoki Irregulars"; dies at the Battle of Minatogawa.' } },
+  { id: 'kusunoki_masatsura', camp: 'nancho', jp: '楠木正行', en: 'Kusunoki Masatsura', born: 1326, died: 1348, province: 'kawachi', ideology: 'sonno', stats: { tosotsu: 78, chiryaku: 80, busou: 65, suiren: 15 }, loyalty: 90, landDesire: 10, note: { jp: '四條畷で討死', en: 'Dies at the Battle of Shijōnawate.' } },
+  { id: 'nitta_yoshisada', camp: 'nancho', jp: '新田義貞', en: 'Nitta Yoshisada', born: 1301, died: 1338, province: 'kozuke', ideology: 'sonno', stats: { tosotsu: 82, chiryaku: 55, busou: 85, suiren: 15 }, loyalty: 75, landDesire: 55, note: { jp: '鎌倉幕府滅亡イベントの主体', en: 'Central figure in the Fall of the Kamakura Shogunate.' } },
+  { id: 'nawa_nagatoshi', camp: 'nancho', jp: '名和長年', en: 'Nawa Nagatoshi', born: null, died: 1336, province: 'hoki', ideology: 'sonno', stats: { tosotsu: 65, chiryaku: 60, busou: 60, suiren: 45 }, loyalty: 85, landDesire: 20 },
+  { id: 'kikuchi_takemitsu', camp: 'nancho', jp: '菊池武光', en: 'Kikuchi Takemitsu', born: 1319, died: 1373, province: 'higo', ideology: 'sonno', stats: { tosotsu: 80, chiryaku: 72, busou: 78, suiren: 25 }, loyalty: 88, landDesire: 20, note: { jp: '九州方面、南朝方の九州拠点', en: 'Kyūshū theater; the Southern Court’s Kyūshū stronghold.' } },
+  { id: 'yuki_munehiro', camp: 'nancho', jp: '結城宗広', en: 'Yūki Munehiro', born: 1266, died: 1338, province: 'mutsu', ideology: 'sonno', stats: { tosotsu: 68, chiryaku: 58, busou: 62, suiren: 10 }, loyalty: 80, landDesire: 25 },
+
+  // ---- 中立・地方勢力（各家が独立勢力。camp は家id自体） ----
+  { id: 'ouchi', camp: 'ouchi', jp: '大内氏', en: 'Ōuchi Clan', born: null, died: null, province: 'suo', ideology: 'genjitsu', stats: { tosotsu: 60, chiryaku: 62, busou: 55, suiren: 45 }, loyalty: 55, landDesire: 30, note: { jp: '情勢次第で南北いずれかへ', en: 'May align with either court depending on circumstances.' } },
+  { id: 'shimazu', camp: 'shimazu', jp: '島津氏', en: 'Shimazu Clan', born: null, died: null, province: 'satsuma', ideology: 'genjitsu', stats: { tosotsu: 65, chiryaku: 60, busou: 58, suiren: 50 }, loyalty: 55, landDesire: 30, note: { jp: '九州、独自勢力維持志向', en: 'Kyūshū; inclined to preserve its own independence.' } },
+  { id: 'date', camp: 'date', jp: '伊達氏', en: 'Date Clan', born: null, died: null, province: 'mutsu', ideology: 'genjitsu', stats: { tosotsu: 58, chiryaku: 55, busou: 55, suiren: 10 }, loyalty: 55, landDesire: 30 },
+  { id: 'soma', camp: 'soma', jp: '相馬氏', en: 'Sōma Clan', born: null, died: null, province: 'mutsu', ideology: 'genjitsu', stats: { tosotsu: 50, chiryaku: 50, busou: 52, suiren: 10 }, loyalty: 55, landDesire: 30 },
+  { id: 'ogasawara', camp: 'ogasawara', jp: '小笠原氏', en: 'Ogasawara Clan', born: null, died: null, province: 'shinano', ideology: 'bakufu', stats: { tosotsu: 62, chiryaku: 58, busou: 64, suiren: 10 }, loyalty: 60, landDesire: 30 },
+  { id: 'hatakeyama', camp: 'hatakeyama', jp: '畠山氏', en: 'Hatakeyama Clan', born: null, died: null, province: 'noto', ideology: 'bakufu', stats: { tosotsu: 60, chiryaku: 62, busou: 58, suiren: 15 }, loyalty: 60, landDesire: 35, note: { jp: '後の管領家、初期は一地方御家人', en: 'Later a Kanrei house; a minor regional vassal at the start.' } },
+  { id: 'kyogoku', camp: 'kyogoku', jp: '京極氏', en: 'Kyōgoku Clan', born: null, died: null, province: 'omi', ideology: 'bakufu', stats: { tosotsu: 58, chiryaku: 60, busou: 55, suiren: 20 }, loyalty: 60, landDesire: 30, note: { jp: '佐々木氏庶流', en: 'A cadet branch of the Sasaki clan.' } },
+  { id: 'momonoi', camp: 'momonoi', jp: '桃井氏', en: 'Momonoi Clan', born: null, died: null, province: 'etchu', ideology: 'bakufu', stats: { tosotsu: 58, chiryaku: 55, busou: 60, suiren: 10 }, loyalty: 60, landDesire: 30 },
+  { id: 'shiba', camp: 'shiba', jp: '斯波氏', en: 'Shiba Clan', born: null, died: null, province: 'mutsu', ideology: 'bakufu', stats: { tosotsu: 60, chiryaku: 60, busou: 58, suiren: 10 }, loyalty: 60, landDesire: 30, note: { jp: '後の管領家', en: 'Later a Kanrei house.' } },
+];
+
+/* 初期の国有領（home の一部のみ。残りは owner:null＝在地勢力の独立国として開始）。
+ * 複数陣営の武将が同一国(mutsu/omi等)に所在する競合は、province.owner を単一化する
+ * 一方で General.province（物理的所在）は独立に保持することで解決している（上記コメント参照）。 */
+const PROVINCE_OWNER_SEED = {
+  mikawa: 'ashikaga', musashi: 'ashikaga', sagami: 'ashikaga', harima: 'ashikaga',
+  mino: 'ashikaga', awa_shikoku: 'ashikaga', suruga: 'ashikaga',
+  yamashiro: 'nancho', yamato: 'nancho', mutsu: 'nancho', ise: 'nancho',
+  kawachi: 'nancho', kozuke: 'nancho', hoki: 'nancho', higo: 'nancho',
+  suo: 'ouchi', satsuma: 'shimazu', shinano: 'ogasawara', noto: 'hatakeyama', etchu: 'momonoi',
+};
+
+/* ---- 兵科（8兵科＋水軍） / Units — spec 4.8節の雛形そのまま ---- */
+const UNITS = {
+  kachi: { jp: '徒武者', en: 'Foot Warrior', move: 3, range: 1, atk: 1.0, def: 1.0, color: '#cbd5e1' },
+  yumi: { jp: '弓武者', en: 'Bow Warrior', move: 3, range: 2, atk: 0.9, def: 0.9, color: '#34d399' },
+  kiba: { jp: '騎馬武者', en: 'Mounted Warrior', move: 5, range: 1, atk: 1.3, def: 0.95, color: '#fbbf24' },
+  naginata: { jp: '薙刀兵', en: 'Naginata Troops', move: 2, range: 1, atk: 1.05, def: 1.2, color: '#a78bfa' },
+  souhei: { jp: '僧兵', en: 'Warrior Monks', move: 2, range: 1, atk: 1.1, def: 1.1, color: '#f97316', moraleBonus: 15 },
+  akutou: { jp: '悪党', en: 'Akutō Irregulars', move: 4, range: 1, atk: 0.85, def: 0.75, color: '#ef4444', ambushBonus: 0.3 },
+  nobushi: { jp: '野伏', en: 'Nobushi Skirmishers', move: 3, range: 1, atk: 0.8, def: 0.8, color: '#84cc16', terrainBonus: { mountain: 0.3, forest: 0.3 } },
+  kaizoku: { jp: '海賊', en: 'Pirates (Naval)', move: 4, range: 2, atk: 1.15, def: 0.9, color: '#22d3ee', navalOnly: true },
+};
+/* 三すくみ: 騎馬武者 > 弓武者 > 徒武者 > 騎馬武者。薙刀兵は騎馬武者に特効(+50%) */
+function advantage(a, d) {
+  if (a === 'kiba' && d === 'yumi') return 1.3;
+  if (a === 'yumi' && d === 'kachi') return 1.3;
+  if (a === 'kachi' && d === 'kiba') return 1.3;
+  if (a === 'naginata' && d === 'kiba') return 1.5;
+  return 1.0;
+}
+/* 特殊兵（Should、spec 4.8節）。BattleScene実装(step7)で参照する下地。Phase Aでは未使用。 */
+const SPECIAL_TROOPS = {
+  kusunoki: { jp: '楠木軍', en: 'Kusunoki Irregulars', mountainBonusMul: 2 },
+  kitabatake: { jp: '北畠騎馬隊', en: 'Kitabatake Cavalry', moveBonus: 2 },
+  akamatsu: { jp: '赤松軍', en: 'Akamatsu Garrison', defBonus: 0.3, requiresTerrain: 'mountain' },
+  kaizoku_naval: { jp: '水軍衆', en: 'Naval Forces', productionCostMul: 0.5 },
+};
+
+/* ---- 施設（Should、spec 2.3節） ---- */
+const FACILITIES = {
+  sekisho: { jp: '関所', en: 'Checkpoint', cost: 300, effect: { tollIncome: 40 } },
+  shukuba: { jp: '宿場', en: 'Post Town', cost: 250, effect: { mobilityBonus: 0.1 } },
+  shoen: { jp: '荘園', en: 'Estate (Shōen)', cost: 400, effect: { kokuBonus: 0.15 } },
+  jisha: { jp: '寺社', en: 'Temple/Shrine', cost: 350, effect: { loyaltyRegen: 2 } },
+  ichi: { jp: '市', en: 'Market', cost: 300, effect: { goldIncome: 60 } },
+  minato: { jp: '港', en: 'Port', cost: 450, effect: { navalRecruitDiscount: 0.2 } },
+  yamajiro: { jp: '山城', en: 'Mountain Castle', cost: 500, effect: { defBonus: 0.25 } },
+  yakata: { jp: '館', en: 'Manor House', cost: 200, effect: { garrisonCap: 200 } },
+  josai: { jp: '城塞', en: 'Fortress', cost: 800, effect: { defBonus: 0.4, garrisonCap: 500 } },
+};
+
+/* ---- 悪党コマンド（spec 4.5節そのまま） ---- */
+const AKUTOU_COMMANDS = {
+  yogeki: { jp: '夜襲', en: 'Night Raid', cost: 80, baseSuccess: 0.55, effect: 'targetGarrison -15%' },
+  housen: { jp: '放火', en: 'Arson', cost: 60, baseSuccess: 0.60, effect: 'targetKoku -20% (3turn)' },
+  ryakudatsu: { jp: '略奪', en: 'Pillage', cost: 40, baseSuccess: 0.70, effect: '自陣営gold +targetKoku*0.3, targetKoku -10%' },
+  jomonhakai: { jp: '城門破壊', en: 'Gate Break', cost: 120, baseSuccess: 0.40, effect: '次合戦の防御側地形ボーナス無効化' },
+};
+
+/* ==========================================================================
+ * Rule — ゲームロジック純関数群 / pure game-logic functions
+ * ========================================================================== */
+
+/* ---- 汎用ヘルパー ---- */
+function srand(state) {
+  // 決定論PRNG（mulberry32・セーブ往復で再現可能）。sengoku.html の srand() を踏襲。
+  state.rngSeq = (state.rngSeq + 0x6D2B79F5) >>> 0;
+  let t = state.rngSeq;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+function neighborsOf(pid) { const p = DATA.provById[pid]; return (p && p.adjacency) || []; }
+function pushLog(state, entry) {
+  state.log.push(Object.assign({ turn: state.turn, year: state.year }, entry));
+  if (state.log.length > 300) state.log.shift();
+}
+function campGenerals(state, campId) {
+  const out = [];
+  for (const g of Object.values(state.generals)) if (g.camp === campId && !g.dead) out.push(g);
+  return out;
+}
+function campAlive(state, campId) {
+  const camp = state.camps[campId];
+  if (!camp || camp.eliminated) return false;
+  for (const p of Object.values(state.provinces)) if (p.owner === campId) return true;
+  for (const g of Object.values(state.generals)) if (g.camp === campId && !g.dead) return true;
+  return false;
+}
+function generalAlive(state, id) { const g = state.generals[id]; return !!g && !g.dead; }
+function generalLoyalty(state, id) { const g = state.generals[id]; return g ? g.loyalty : 0; }
+function campTotalKoku(state, campId) {
+  let sum = 0;
+  for (const p of Object.values(state.provinces)) {
+    if (p.owner === campId) sum += (DATA.provById[p.id] ? DATA.provById[p.id].koku : 0);
+  }
+  return sum;
+}
+function otherCamps(state, excludeId) {
+  return Object.keys(state.camps).filter((id) => id !== excludeId && campAlive(state, id));
+}
+function campGold(state, campId) { const c = state.camps[campId]; return c ? (c.gold || 0) : 0; }
+function spendGold(state, campId, amount) { const c = state.camps[campId]; if (c) c.gold = Math.max(0, (c.gold || 0) - amount); }
+function addGold(state, campId, amount) { const c = state.camps[campId]; if (c) c.gold = (c.gold || 0) + amount; }
+function addPrestige(state, campId, amount) { const c = state.camps[campId]; if (c) c.prestige = (c.prestige || 0) + amount; }
+
+function killGeneral(state, id) {
+  const g = state.generals[id];
+  if (!g || g.dead) return;
+  g.dead = true;
+  if (g.isEmperor) {
+    const court = state.courts[g.isEmperor];
+    if (court) {
+      court.emperor.alive = false;
+      court.heldBy = null;
+      court.legitimacy = Math.round(court.legitimacy * RULE.court.emperorDeathLegitimacyMul);
+    }
+  }
+  pushLog(state, { jp: `${g.jp}が没した`, en: `${g.en} has died.` });
+}
+
+/* ---- 朝廷関係(CourtRelation)ヘルパー ---- */
+function courtRelKey(campId, courtId) { return campId + '|' + courtId; }
+function getCourtRelRec(state, campId, courtId) {
+  const key = courtRelKey(campId, courtId);
+  if (!state.courtRel[key]) state.courtRel[key] = { campId, courtId, courtRel: 0, kaniRank: -1, actedTurn: -1 };
+  return state.courtRel[key];
+}
+function courtRelValue(state, campId, courtId) { return getCourtRelRec(state, campId, courtId).courtRel; }
+function setCourtRel(state, campId, courtId, value) { getCourtRelRec(state, campId, courtId).courtRel = clamp(value, 0, 100); }
+function adjustCourtRelPair(state, campId, courtId, delta) {
+  const rec = getCourtRelRec(state, campId, courtId);
+  rec.courtRel = clamp(rec.courtRel + delta, 0, 100);
+  return rec.courtRel;
+}
+/* spec 4.5節の悪党失敗時ペナルティ呼び出し `adjustCourtRel(state, camp, -8)` は
+ * courtIdを取らない3引数のため、「自陣営が現在属している朝廷」への影響として解決する。
+ * 朝廷に属していない陣営（地方勢力の多くは court:null で開始）には効果がない。 */
+function adjustCourtRel(state, campId, delta) {
+  const camp = state.camps[campId];
+  if (!camp || !camp.court) return null;
+  return adjustCourtRelPair(state, campId, camp.court, delta);
+}
+function adjustLegitimacy(state, courtId, delta) {
+  const c = state.courts[courtId];
+  if (!c) return;
+  c.legitimacy = clamp(c.legitimacy + delta, 0, 100);
+}
+function effectiveLegitimacy(state, courtId) {
+  const c = state.courts[courtId];
+  if (!c) return 0;
+  return clamp(c.legitimacy + (c.heldBy ? RULE.court.keepHolderLegitimacyBonus : 0), 0, 100);
+}
+
+/* ---- 恩賞システム（spec 4.4節） ---- */
+function accrueLandDesire(gen, contributionValue) {
+  gen.landDesire = clamp(gen.landDesire + contributionValue * 0.8, 0, 100);
+}
+function contribution(battleResult) {
+  return battleResult.won ? (10 + (battleResult.provincesCaptured || 0) * 25) : 2;
+}
+function recordContribution(state, generalId, battleResult) {
+  const gen = state.generals[generalId];
+  if (!gen) return { ok: false, reason: 'invalid_general' };
+  const c = contribution(battleResult);
+  gen.pendingContribution = (gen.pendingContribution || 0) + c;
+  accrueLandDesire(gen, c);
+  return { ok: true, contribution: c, landDesire: gen.landDesire };
+}
+function grantDirectReward(state, gen, value) {
+  if (!gen) return { ok: false, reason: 'invalid_general' };
+  gen.recentRewardValue = (gen.recentRewardValue || 0) + value;
+  gen.landDesire = clamp(gen.landDesire - value * 0.5, 0, 100);
+  const camp = state.camps[gen.camp];
+  if (camp) camp.lastRewardOffer = { turn: state.turn, value };
+  return { ok: true, value };
+}
+function evaluateReward(state, campId) {
+  const inGrace = state.flags.jitoGraceUntil && state.turn <= state.flags.jitoGraceUntil;
+  const floor = RULE.reward.minFulfillRatio * (inGrace ? RULE.reward.graceRelaxMul : 1);
+  for (const gen of campGenerals(state, campId)) {
+    if (!gen.pendingContribution) continue;
+    const expected = gen.pendingContribution * (1 + gen.landDesire / 100);
+    const given = gen.recentRewardValue || 0;
+    if (given < expected * floor) {
+      adjustLoyalty(state, gen, -RULE.reward.unrewardedPenalty, 'unrewarded');
+    }
+    gen.pendingContribution = 0;
+    gen.recentRewardValue = 0;
+  }
+}
+
+/* ---- 忠義・思想システム（spec 4.4節） ---- */
+function adjustLoyalty(state, gen, delta, reason) {
+  const table = IDEOLOGY_MUL[gen.ideology];
+  const mul = (table && table[reason] != null) ? table[reason] : 1.0;
+  gen.loyalty = clamp(gen.loyalty + delta * mul, 0, 100);
+  checkDefection(state, gen);
+}
+function checkDefection(state, gen) {
+  if (gen.dead) return;
+  if (gen.loyalty >= RULE.loyalty.defectBelow) return;
+  const dest = pickDefectionTarget(state, gen);
+  if (dest) defect(state, gen, dest);
+}
+function pickDefectionTarget(state, gen) {
+  const myCamp = state.camps[gen.camp];
+  const candidates = otherCamps(state, gen.camp);
+  if (!candidates.length) return null;
+  switch (gen.ideology) {
+    case 'sonno': {
+      const myCourt = myCamp ? myCamp.court : null;
+      const oppositeCourt = myCourt === 'nancho' ? 'hokucho' : (myCourt === 'hokucho' ? 'nancho' : null);
+      const pool = oppositeCourt
+        ? candidates.filter((id) => state.camps[id].court === oppositeCourt)
+        : candidates.filter((id) => state.camps[id].court);
+      if (!pool.length) return null;
+      return pool.reduce((best, id) => (campTotalKoku(state, id) > campTotalKoku(state, best) ? id : best), pool[0]);
+    }
+    case 'bakufu': {
+      const scoreOf = (cid) => (state.camps[cid].battleWins || 0) - (state.camps[cid].battleLosses || 0);
+      return candidates.reduce((best, id) => (scoreOf(id) > scoreOf(best) ? id : best), candidates[0]);
+    }
+    case 'yashin': {
+      const now = state.turn;
+      const withOffer = candidates.filter((id) => state.camps[id].lastRewardOffer && (now - state.camps[id].lastRewardOffer.turn) <= 5);
+      const pool = withOffer.length ? withOffer : candidates;
+      const offerOf = (cid) => (state.camps[cid].lastRewardOffer ? state.camps[cid].lastRewardOffer.value : 0);
+      return pool.reduce((best, id) => (offerOf(id) > offerOf(best) ? id : best), pool[0]);
+    }
+    case 'genjitsu':
+    default:
+      return candidates.reduce((best, id) => (campTotalKoku(state, id) > campTotalKoku(state, best) ? id : best), candidates[0]);
+  }
+}
+function defect(state, gen, destCampId) {
+  const from = gen.camp;
+  gen.camp = destCampId;
+  gen.loyalty = RULE.loyalty.defectBelow + 15;
+  gen.landDesire = Math.round(gen.landDesire * 0.5);
+  const fromJp = (state.camps[from] && state.camps[from].jp) || from;
+  const fromEn = (state.camps[from] && state.camps[from].en) || from;
+  const toJp = (state.camps[destCampId] && state.camps[destCampId].jp) || destCampId;
+  const toEn = (state.camps[destCampId] && state.camps[destCampId].en) || destCampId;
+  pushLog(state, {
+    jp: `${gen.jp}が${fromJp}家から離反し、${toJp}家へ出奔した`,
+    en: `${gen.en} defected from ${fromEn} to ${toEn}.`,
+  });
+}
+function decayLoyalty(state, campId) {
+  for (const gen of campGenerals(state, campId)) {
+    adjustLoyalty(state, gen, -RULE.loyalty.decayPerTurn, 'natural_decay');
+  }
+}
+
+/* ---- 朝廷システム（spec 4.3節） ---- */
+function courtPropose(state, campId, courtId, action, opts) {
+  opts = opts || {};
+  const camp = state.camps[campId];
+  const court = state.courts[courtId];
+  if (!camp || !court) return { ok: false, reason: 'invalid_camp_or_court' };
+  if (!court.active) return { ok: false, reason: 'court_inactive' };
+  const rec = getCourtRelRec(state, campId, courtId);
+  if (rec.actedTurn === state.turn) return { ok: false, reason: 'already_acted_this_turn' };
+  if (action === 'kani') return proposeKani(state, camp, court, rec);
+  if (action === 'onsho') return proposeOnsho(state, camp, court, rec, opts);
+  if (action === 'tobatsurei') return issueTobatsurei(state, courtId, campId, opts.targetCampId);
+  return { ok: false, reason: 'unknown_action' };
+}
+function grantKani(state, campId, courtId) {
+  // 官位授与の実適用（成功時にのみ呼ぶ）。ランクを1つ進め、威信を得る。
+  const rec = getCourtRelRec(state, campId, courtId);
+  const court = state.courts[courtId];
+  if (!court) return null;
+  const nextRank = court.kaniRanks[rec.kaniRank + 1];
+  if (!nextRank) return null;
+  rec.kaniRank += 1;
+  addPrestige(state, campId, nextRank.prestigeGain);
+  return court.kaniRanks[rec.kaniRank];
+}
+function proposeKani(state, camp, court, rec) {
+  const nextRank = court.kaniRanks[rec.kaniRank + 1];
+  if (!nextRank) return { ok: false, reason: 'max_rank' };
+  if (campGold(state, camp.id) < nextRank.cost) return { ok: false, reason: 'insufficient_gold' };
+  // 官位条件を満たしていなくても申請自体は可能。申請でcourtRelを積み上げ、
+  // 条件(courtRel)を満たしている場合のみ任官抽選を行う（sengoku.html _courtPropose踏襲）。
+  const meetsReq = rec.courtRel >= nextRank.rel;
+  spendGold(state, camp.id, nextRank.cost);
+  rec.courtRel = clamp(rec.courtRel + 5, 0, 100);
+  rec.actedTurn = state.turn;
+  const chance = (rec.courtRel / 100) * 0.8;
+  let success = false;
+  if (meetsReq && srand(state) < chance) {
+    grantKani(state, camp.id, court.id);
+    success = true;
+    pushLog(state, { jp: `${camp.jp}が${nextRank.jp}に任官した`, en: `${camp.en} was appointed to ${nextRank.en}.` });
+  }
+  return { ok: true, action: 'kani', success, meetsReq, kaniRank: rec.kaniRank };
+}
+function proposeOnsho(state, camp, court, rec, opts) {
+  const gen = state.generals[opts.generalId];
+  if (!gen) return { ok: false, reason: 'invalid_general' };
+  const relCost = opts.relCost != null ? opts.relCost : 10;
+  if (rec.courtRel < relCost) return { ok: false, reason: 'insufficient_court_rel' };
+  rec.courtRel = clamp(rec.courtRel - relCost, 0, 100);
+  rec.actedTurn = state.turn;
+  const value = opts.value != null ? opts.value : (20 + relCost * 2);
+  gen.recentRewardValue = (gen.recentRewardValue || 0) + value;
+  gen.landDesire = clamp(gen.landDesire - value * 0.5, 0, 100);
+  camp.lastRewardOffer = { turn: state.turn, value };
+  return { ok: true, action: 'onsho', success: true, value };
+}
+function issueTobatsurei(state, courtId, issuingCampId, targetCampId) {
+  // spec 4.3節の疑似コードは issueTobatsurei(state,courtId,targetCampId) の3引数だが、
+  // 「発する側の陣営がcourtRel>=60かつlegitimacy>=50」を判定するには発令元campIdが要る。
+  // 4引数(issuingCampId追加)へ拡張して実装した（仕様の不足点。完了報告で明記）。
+  const court = state.courts[courtId];
+  const camp = state.camps[issuingCampId];
+  if (!court || !camp) return { ok: false, reason: 'invalid_camp_or_court' };
+  if (!court.active) return { ok: false, reason: 'court_inactive' };
+  const rec = getCourtRelRec(state, issuingCampId, courtId);
+  if (rec.actedTurn === state.turn) return { ok: false, reason: 'already_acted_this_turn' };
+  if (rec.courtRel < RULE.court.tobatsureiCourtRelMin || effectiveLegitimacy(state, courtId) < RULE.court.tobatsureiLegitimacyMin) {
+    return { ok: false, reason: 'requirements_not_met' };
+  }
+  if (!targetCampId || !state.camps[targetCampId]) return { ok: false, reason: 'invalid_target' };
+  rec.actedTurn = state.turn;
+  const expiresTurn = state.turn + RULE.court.tobatsureiDurationTurns;
+  for (const cid of Object.keys(state.camps)) {
+    if (state.camps[cid].court !== courtId) continue;
+    state.camps[cid].tobatsureiBuff = {
+      targetCampId, courtId, expiresTurn,
+      atkBonus: RULE.court.tobatsureiCombatBonus,
+      moraleBonus: RULE.court.tobatsureiMoraleBonus,
+    };
+  }
+  adjustLegitimacy(state, courtId, 3);
+  pushLog(state, {
+    jp: `${court.jp}が${camp.jp}の求めに応じ、${state.camps[targetCampId].jp}への討伐令を発した`,
+    en: `The ${court.en} issued a punitive decree against ${state.camps[targetCampId].en} at ${camp.en}’s request.`,
+  });
+  return { ok: true, action: 'tobatsurei', success: true, targetCampId, expiresTurn };
+}
+function regenCourtRel(state) {
+  for (const rec of Object.values(state.courtRel)) {
+    const court = state.courts[rec.courtId];
+    if (!court || !court.active) continue;
+    const camp = state.camps[rec.campId];
+    if (!camp || camp.court !== rec.courtId) continue; // 未所属陣営は自然回復しない
+    const mul = court.heldBy ? RULE.court.courtRelRecoveryHolderMul : 1;
+    rec.courtRel = clamp(rec.courtRel + RULE.court.courtRelRecoveryBase * mul, 0, 100);
+  }
+}
+
+/* ---- 悪党システム（spec 4.5節） ---- */
+function hireAkutou(state, campId, gold) {
+  const pool = state.akutou[campId];
+  if (!pool) return { ok: false, reason: 'invalid_camp' };
+  const bought = Math.floor(gold / RULE.akutou.hireCostPerUnit);
+  if (bought <= 0) return { ok: false, reason: 'insufficient_gold' };
+  spendGold(state, campId, bought * RULE.akutou.hireCostPerUnit);
+  pool.count = Math.min(RULE.akutou.poolCap, pool.count + bought);
+  pool.quality = clamp(pool.quality + 2, 0, 100);
+  return { ok: true, hired: bought, count: pool.count };
+}
+function akutouCommand(state, campId, kind, targetProvinceId) {
+  const cmd = AKUTOU_COMMANDS[kind];
+  const pool = state.akutou[campId];
+  if (!cmd || !pool) return { ok: false, reason: 'invalid_command_or_camp' };
+  if (pool.count <= 0 || pool.cooldown > 0) return { ok: false, reason: 'no_akutou_or_cooldown' };
+  const target = state.provinces[targetProvinceId];
+  if (!target) return { ok: false, reason: 'invalid_target' };
+  const success = srand(state) < cmd.baseSuccess * (0.5 + pool.quality / 200);
+  pool.count -= 1;
+  pool.cooldown = RULE.akutou.cooldownTurns;
+  if (success) {
+    applyAkutouEffect(state, campId, cmd, kind, target);
+  } else {
+    adjustCourtRel(state, campId, -8);
+    pushLog(state, {
+      jp: `${(state.camps[campId] && state.camps[campId].jp) || campId}の悪党働きが露見した`,
+      en: `The akutō raid by ${(state.camps[campId] && state.camps[campId].en) || campId} was exposed.`,
+    });
+  }
+  return { ok: true, kind, success, targetProvinceId };
+}
+function applyAkutouEffect(state, campId, cmd, kind, prov) {
+  const campJp = (state.camps[campId] && state.camps[campId].jp) || campId;
+  const campEn = (state.camps[campId] && state.camps[campId].en) || campId;
+  switch (kind) {
+    case 'yogeki':
+      prov.garrison = Math.max(0, Math.round(prov.garrison * 0.85));
+      break;
+    case 'housen':
+      prov.kokuPenalty = { ratio: 0.8, untilTurn: state.turn + 3 };
+      break;
+    case 'ryakudatsu': {
+      const baseKoku = DATA.provById[prov.id] ? DATA.provById[prov.id].koku : 0;
+      addGold(state, campId, Math.round(baseKoku * 0.3));
+      prov.kokuPenalty = { ratio: 0.9, untilTurn: state.turn + 3 };
+      break;
+    }
+    case 'jomonhakai':
+      prov.defenseDisabledUntilBattle = true;
+      break;
+  }
+  pushLog(state, { jp: `${campJp}の悪党が${cmd.jp}に成功した`, en: `${campEn}’s akutō succeeded at ${cmd.en}.` });
+}
+function pickAkutouTarget(state, campId) {
+  const candidates = Object.values(state.provinces).filter((p) => p.owner && p.owner !== campId);
+  if (!candidates.length) return null;
+  return candidates[Math.floor(srand(state) * candidates.length)].id;
+}
+
+/* ---- 年代記イベント効果ヘルパー（spec 4.6節） ---- */
+function redistributeOwnerlessJito(state) {
+  const unclaimed = Object.values(state.provinces).filter((p) => p.owner === null);
+  for (const p of unclaimed) {
+    const r = srand(state);
+    if (r < 0.35) p.owner = 'nancho';
+    else if (r < 0.55) p.owner = 'ashikaga';
+  }
+  // この直後は恩賞未充足判定を一時緩和し(evaluateReward)、数ターン後に効かせることで
+  // 新田・足利間の恩賞不満という史実の伏線を表現する（spec 4.6節脚注）。
+  state.flags.jitoGraceUntil = state.turn + RULE.reward.gracePeriod;
+  pushLog(state, { jp: '幕府滅亡で空白化した地頭職が再分配された', en: 'Ownerless jitō posts from the fallen shogunate were redistributed.' });
+}
+function bushiIdeologyPenalty(state, ideologies, delta) {
+  for (const gen of Object.values(state.generals)) {
+    if (gen.dead) continue;
+    if (ideologies.indexOf(gen.ideology) >= 0) adjustLoyalty(state, gen, delta, 'court_shift');
+  }
+}
+function setCampCourt(state, campId, courtId) { if (state.camps[campId]) state.camps[campId].court = courtId; }
+function flagAshikagaBreak(state) { state.flags.ashikagaBreak = true; state.flags.ashikagaBreakTurn = state.turn; }
+function activateCourt(state, courtId) {
+  const court = state.courts[courtId];
+  if (!court) return;
+  court.active = true;
+  court.emperor.alive = true;
+  court.legitimacy = Math.max(court.legitimacy, 30);
+}
+function relocateEmperor(state, courtId, provinceId) {
+  const court = state.courts[courtId];
+  if (!court) return;
+  court.capital = provinceId;
+  if (court.emperor.generalId) {
+    const g = state.generals[court.emperor.generalId];
+    if (g) g.province = provinceId;
+  }
+}
+function splitCamp(state, campId, keepIds, newCampIds) {
+  const base = state.camps[campId];
+  if (!base) return null;
+  let n = 0;
+  while (state.camps[campId + '_split_' + n]) n++;
+  const newId = campId + '_split_' + n;
+  state.camps[newId] = {
+    id: newId, jp: base.jp + '（内訌方）', en: base.en + ' (Breakaway)', color: base.color,
+    playable: false, ai: 'aggressive', court: base.court, home: [], parentGroup: base.id,
+    gold: Math.round((base.gold || 0) * 0.3), prestige: Math.round((base.prestige || 0) * 0.5),
+  };
+  state.akutou[newId] = { campId: newId, count: 0, quality: 0, cooldown: 0 };
+  for (const gid of newCampIds) {
+    const g = state.generals[gid];
+    if (g) g.camp = newId;
+  }
+  pushLog(state, { jp: `${base.jp}が分裂した`, en: `${base.en} has split into a breakaway faction.` });
+  return newId;
+}
+
+/* ---- 主要歴史イベント11件（spec 4.6節そのまま。年月はメタデータで、条件は各条件式が主） ---- */
+const TIMELINE_EVENTS = [
+  { id: 'genko_no_ran', jp: '元弘の乱', en: 'Genkō War', year: 1331, month: 5,
+    condition: (st) => st.turn === 0,
+    effect: (st) => { adjustLegitimacy(st, 'nancho', 20); } },
+
+  { id: 'kamakura_bakufu_fall', jp: '鎌倉幕府滅亡', en: 'Fall of the Kamakura Shogunate', year: 1333, month: 5,
+    condition: (st) => campAlive(st, 'nancho') && generalAlive(st, 'nitta_yoshisada'),
+    effect: (st) => { redistributeOwnerlessJito(st); adjustLegitimacy(st, 'nancho', 25); } },
+
+  { id: 'kenmu_shinsei', jp: '建武の新政', en: 'Kenmu Restoration', year: 1333, month: 6,
+    condition: (st) => !!st.firedEvents.kamakura_bakufu_fall,
+    effect: (st) => { st.regime = 'kenmu'; st.flags.kenmuStartTurn = st.turn; bushiIdeologyPenalty(st, ['bakufu', 'yashin'], -10); } },
+
+  { id: 'nakasendai_no_ran', jp: '中先代の乱', en: 'Nakasendai Rebellion', year: 1335, month: 7,
+    condition: (st) => st.regime === 'kenmu' && courtRelValue(st, 'ashikaga', 'nancho') < 25,
+    effect: (st) => { setCampCourt(st, 'ashikaga', null); flagAshikagaBreak(st); } },
+
+  { id: 'minatogawa', jp: '湊川の戦い', en: 'Battle of Minatogawa', year: 1336, month: 5,
+    condition: (st) => st.flags.ashikagaBreak && generalAlive(st, 'kusunoki_masashige'),
+    effect: (st) => { killGeneral(st, 'kusunoki_masashige'); adjustLegitimacy(st, 'nancho', -15); } },
+
+  { id: 'engen_no_ran', jp: '延元の乱', en: 'Engen Disturbance (Two Courts Established)', year: 1337, month: 1,
+    condition: (st) => st.flags.ashikagaBreak && !st.courts.hokucho.active,
+    effect: (st) => { activateCourt(st, 'hokucho'); setCampCourt(st, 'ashikaga', 'hokucho'); relocateEmperor(st, 'nancho', 'yamato'); } },
+
+  { id: 'shijonawate', jp: '四條畷の戦い', en: 'Battle of Shijōnawate', year: 1348, month: 1,
+    condition: (st) => generalAlive(st, 'kusunoki_masatsura') && generalAlive(st, 'ko_moronao'),
+    effect: (st) => { killGeneral(st, 'kusunoki_masatsura'); adjustLegitimacy(st, 'nancho', -10); } },
+
+  { id: 'kanno_no_jouran', jp: '観応の擾乱', en: 'Kannō Disturbance', year: 1350, month: 10,
+    condition: (st) => generalAlive(st, 'ashikaga_tadayoshi') && generalLoyalty(st, 'ashikaga_tadayoshi') < 35,
+    effect: (st) => { splitCamp(st, 'ashikaga', ['ashikaga_takauji'], ['ashikaga_tadayoshi']); } },
+
+  { id: 'shohei_ittou', jp: '正平一統', en: 'Shōhei Unification (Temporary)', year: 1351, month: 11,
+    condition: (st) => !!st.firedEvents.kanno_no_jouran,
+    effect: (st) => { setCourtRel(st, 'ashikaga', 'hokucho', 0); adjustLegitimacy(st, 'nancho', 30); st.flags.shoheiTemp = st.turn; } },
+
+  { id: 'oan_no_wayaku', jp: '応安の和約', en: 'Ōan Accord', year: 1370, month: 1,
+    condition: (st) => courtRelValue(st, 'ashikaga', 'hokucho') >= 70 && courtRelValue(st, 'nancho', 'nancho') >= 60 && (st.turn - (st.flags.lastBattleTurn != null ? st.flags.lastBattleTurn : -100)) >= 8,
+    effect: (st) => { st.flags.peaceTrackOpen = true; } },
+
+  { id: 'nanboku_gouitsu', jp: '南北朝合一', en: 'Unification of the Courts', year: 1392, month: 10,
+    condition: (st) => !!st.flags.peaceTrackOpen,
+    // checkEndings(step9で本実装)が読む共通フラグとして立てる。spec原文は直接 st.ending='tenka_taihei'
+    // だが、エンディング確定は checkEndings に一本化する設計としたため、フラグ経由に変更した。
+    effect: (st) => { st.flags.courtsUnified = true; } },
+];
+
+function checkTimelineEvents(state) {
+  const scenario = SCENARIOS.filter((s) => s.id === state.scenarioId)[0] || SCENARIOS[0];
+  for (const ev of TIMELINE_EVENTS) {
+    if (state.firedEvents[ev.id]) continue;
+    // year/monthは本来メタデータだが、条件式が状態フラグのみで年不問のため、
+    // 史実年より早すぎる発火を防ぐ実務上の下限ゲートとして流用する（完了報告で明記する追加仕様）。
+    const minTurn = ev.year - scenario.startYear;
+    if (state.turn < minTurn) continue;
+    let met = false;
+    try { met = !!ev.condition(state); } catch (e) { met = false; }
+    if (!met) continue;
+    state.firedEvents[ev.id] = state.turn;
+    try { ev.effect(state); } catch (e) { console.error('[Taihei] event effect error:', ev.id, e); }
+    pushLog(state, { jp: `【${ev.year}年】${ev.jp}`, en: `[${ev.year}] ${ev.en}` });
+  }
+}
+
+/* ---- エンディング判定（spec 6章 step9で本実装。Phase Aはフックのみ） ---- */
+function checkEndings(state) {
+  // TODO(step9): 2.2節の6エンディング優先度表を実装する。Phase Aでは呼び出し経路のみ用意。
+  return null;
+}
+
+/* ---- ターン制御: buildState / applyActions / endTurn / aiTurn ---- */
+function cloneCampArchetype(def) {
+  return { id: def.id, jp: def.jp, en: def.en, color: def.color, playable: def.playable, ai: def.ai, court: def.court, home: def.home.slice() };
+}
+function buildState(opts) {
+  opts = opts || {};
+  const scenarioId = opts.scenarioId || RULE.scenario.defaultId;
+  const scenario = SCENARIOS.filter((s) => s.id === scenarioId)[0] || SCENARIOS[0];
+  const playerCamp = opts.playerCamp || 'nancho';
+
+  const state = {
+    version: SAVE_VERSION,
+    scenarioId: scenario.id,
+    turn: 0,
+    year: scenario.startYear,
+    month: scenario.startMonth || 5,
+    rngSeq: (opts.seed != null ? opts.seed : 0x9e3779b9) >>> 0,
+    playerCamp,
+    regime: 'kamakura_end',
+    ending: null,
+    flags: { lastBattleTurn: -100 },
+    firedEvents: {},
+    log: [],
+    camps: {},
+    generals: {},
+    provinces: {},
+    courts: {},
+    courtRel: {},
+    akutou: {},
+  };
+
+  // 陣営: 足利方・南朝方 + 地方9家（各家が独立陣営）
+  state.camps.ashikaga = cloneCampArchetype(CAMPS.ashikaga);
+  state.camps.nancho = cloneCampArchetype(CAMPS.nancho);
+  for (const h of CHIHOU_HOUSES) {
+    state.camps[h.id] = { id: h.id, jp: h.jp, en: h.en, color: h.color, playable: true, ai: h.ai || 'opportunist', court: null, home: h.home.slice() };
+  }
+
+  // 国データ
+  for (const p of DATA.provinces || []) {
+    const owner = PROVINCE_OWNER_SEED[p.id] || null;
+    state.provinces[p.id] = {
+      id: p.id, owner, facility: null,
+      garrison: owner ? Math.round(120 + p.koku * 0.4) : Math.round(40 + p.koku * 0.15),
+    };
+  }
+
+  // 経済初期値（本国の石高に応じた概算。詳細な内政計算は後続Phase）
+  for (const campId of Object.keys(state.camps)) {
+    const koku = campTotalKoku(state, campId);
+    state.camps[campId].gold = Math.round(300 + koku * 1.2);
+    state.camps[campId].prestige = 10;
+    state.camps[campId].battleWins = 0;
+    state.camps[campId].battleLosses = 0;
+  }
+
+  // 武将
+  for (const g of GENERALS_DEF) {
+    state.generals[g.id] = {
+      id: g.id, camp: g.camp, jp: g.jp, en: g.en, born: g.born, died: g.died,
+      province: g.province, stats: Object.assign({}, g.stats),
+      loyalty: g.loyalty, landDesire: g.landDesire, ideology: g.ideology,
+      dead: false, pendingContribution: 0, recentRewardValue: 0,
+      isEmperor: g.isEmperor || null,
+    };
+  }
+
+  // 朝廷
+  for (const cid of Object.keys(COURTS_DEF)) {
+    const def = COURTS_DEF[cid];
+    state.courts[cid] = {
+      id: cid, jp: def.jp, en: def.en,
+      emperor: Object.assign({}, def.emperor),
+      legitimacy: def.legitimacy, active: def.active, heldBy: def.heldBy, capital: def.capital,
+      kaniRanks: COURT_KANI_RANKS.map((r) => Object.assign({}, r)),
+    };
+  }
+  state.courts.nancho.heldBy = 'nancho'; // 後醍醐帝は自陣営(南朝)が身柄を保持した状態で開始
+
+  // 悪党プール（全camp分。未雇用ならcount:0）
+  for (const cid of Object.keys(state.camps)) {
+    state.akutou[cid] = { campId: cid, count: 0, quality: 0, cooldown: 0 };
+  }
+
+  // turn===0 条件のイベント（元弘の乱＝開幕イベント）を拾うため、endTurn()を待たず
+  // 初期状態の時点で一度だけ判定する（checkTimelineEventsは通常endTurn内から呼ばれ、
+  // その時点ではturnが既に1以上へ進んでいるためturn===0を検出できない）。
+  checkTimelineEvents(state);
+
+  return state;
+}
+
+function applyOneAction(state, campId, action) {
+  switch (action.type) {
+    case 'courtKani': return courtPropose(state, campId, action.courtId, 'kani');
+    case 'courtOnsho': return courtPropose(state, campId, action.courtId, 'onsho', { generalId: action.generalId, relCost: action.relCost, value: action.value });
+    case 'tobatsurei': return issueTobatsurei(state, action.courtId, campId, action.targetCampId);
+    case 'hireAkutou': return hireAkutou(state, campId, action.gold);
+    case 'akutouCommand': return akutouCommand(state, campId, action.kind, action.targetProvinceId);
+    case 'directReward': return grantDirectReward(state, state.generals[action.generalId], action.value);
+    case 'recordContribution': return recordContribution(state, action.generalId, action.battleResult);
+    default: return { ok: false, reason: 'unknown_action_type:' + action.type };
+  }
+}
+function applyActions(state, campId, actions) {
+  const results = [];
+  for (const action of actions || []) results.push(applyOneAction(state, campId, action));
+  return results;
+}
+
+function advanceCalendar(state) { state.year += 1; } // 1ターン=1年（spec 2.1節）
+
+function aiTurn(state, campId) {
+  const camp = state.camps[campId];
+  if (!camp || !campAlive(state, campId)) return;
+  let actions = 0;
+  const maxA = RULE.ai.maxActions;
+
+  // 1) 恩賞配分: landDesireが高い武将から簡易に手当てする
+  const gens = campGenerals(state, campId).slice().sort((a, b) => b.landDesire - a.landDesire);
+  for (const g of gens) {
+    if (actions >= maxA) break;
+    if (g.landDesire > 50 && campGold(state, campId) > 20) {
+      const value = Math.min(campGold(state, campId), Math.round(20 + g.landDesire * 0.3));
+      spendGold(state, campId, value);
+      grantDirectReward(state, g, value);
+      actions++;
+    }
+  }
+
+  // 2) 朝廷工作: 所属朝廷があればcourtRel/kaniの引き上げを狙う
+  if (camp.court && actions < maxA) {
+    const rel = courtRelValue(state, campId, camp.court);
+    if (rel < 95) { courtPropose(state, campId, camp.court, 'kani'); actions++; }
+  }
+
+  // 3) 悪党運用: 保有していれば低頻度で使用
+  const pool = state.akutou[campId];
+  if (pool && pool.count > 0 && pool.cooldown <= 0 && actions < maxA && srand(state) < 0.3) {
+    const kinds = Object.keys(AKUTOU_COMMANDS);
+    const kind = kinds[Math.floor(srand(state) * kinds.length)];
+    const target = pickAkutouTarget(state, campId);
+    if (target) { akutouCommand(state, campId, kind, target); actions++; }
+  }
+}
+
+function endTurn(state) {
+  state.turn += 1;
+  advanceCalendar(state);
+
+  for (const campId of Object.keys(state.camps)) evaluateReward(state, campId);
+  for (const campId of Object.keys(state.camps)) decayLoyalty(state, campId);
+
+  for (const campId of Object.keys(state.camps)) {
+    if (campId === state.playerCamp) continue;
+    aiTurn(state, campId);
+  }
+
+  regenCourtRel(state);
+
+  for (const pool of Object.values(state.akutou)) if (pool.cooldown > 0) pool.cooldown -= 1;
+
+  checkTimelineEvents(state);
+
+  if (!state.ending) {
+    const result = checkEndings(state);
+    if (result) state.ending = result;
+  }
+  const scenario = SCENARIOS.filter((s) => s.id === state.scenarioId)[0] || SCENARIOS[0];
+  if (!state.ending && state.turn >= scenario.maxTurns) {
+    // 2.2節: 上限ターン到達時は暫定の「全国統一」寄りエンドを表示する（本実装はstep9）。
+    state.ending = 'scenario_end_fallback';
+  }
+  return state;
+}
+
+/* ---- Rule 名前空間（外部から呼ぶ入口をここに集約） ---- */
+const Rule = {
+  buildState, applyActions, endTurn, aiTurn,
+  courtPropose, issueTobatsurei, grantKani,
+  accrueLandDesire, contribution, recordContribution, evaluateReward,
+  adjustLoyalty, checkDefection, pickDefectionTarget, defect,
+  hireAkutou, akutouCommand,
+  checkTimelineEvents, checkEndings,
+  grantDirectReward,
+  // 補助（テスト・後続フェーズから直接使う想定のヘルパー類）
+  srand, campAlive, generalAlive, generalLoyalty, campGenerals, campTotalKoku,
+  courtRelValue, setCourtRel, adjustCourtRel, adjustLegitimacy, effectiveLegitimacy,
+  killGeneral, migrateState,
+};
+
+/* ==========================================================================
+ * シーン（プレースホルダ） / Scenes — Phase Aでは最小限のみ
+ * 本実装（全国マップ・朝廷パネル・悪党パネル等）は spec 6章 step5〜9 で差し替える。
+ * ========================================================================== */
+class BootScene extends GameKit.Scene {
+  enter(g) {
+    this.status = { jp: '読み込み中…', en: 'Loading…' };
+    dataReady.then(() => {
+      this.status = { jp: '読み込み完了', en: 'Loaded' };
+      g.changeScene(new TitleScene());
+    }).catch((e) => {
+      console.error('[Taihei] provinces load failed:', e);
+      this.status = { jp: '読み込みに失敗しました', en: 'Failed to load data' };
+    });
+  }
+  update() {}
+  draw(ctx) {
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(0, 0, W, H);
+    GameKit.UI.text(ctx, '太平風雲記 Taihei Fuuunki', W / 2, H / 2 - 40, { font: 'bold 32px "Segoe UI", sans-serif', color: '#22d3ee' });
+    GameKit.UI.text(ctx, this.status.jp + ' / ' + this.status.en, W / 2, H / 2 + 10, { color: '#a78bfa' });
+  }
+}
+class TitleScene extends GameKit.Scene {
+  enter() { this.particles = new GameKit.Particles(W, H, { count: 70 }); this.t = 0; }
+  update(dt) { this.t += dt; this.particles.update(dt); }
+  draw(ctx) {
+    ctx.fillStyle = '#05070d';
+    ctx.fillRect(0, 0, W, H);
+    this.particles.draw(ctx);
+    GameKit.UI.glassPanel(ctx, W / 2 - 320, H / 2 - 130, 640, 260);
+    GameKit.UI.text(ctx, '太平風雲記', W / 2, H / 2 - 80, { font: 'bold 44px "Segoe UI", sans-serif', color: '#22d3ee' });
+    GameKit.UI.text(ctx, 'Taihei Fuuunki — Chronicle of the Northern and Southern Courts', W / 2, H / 2 - 30, { color: '#a78bfa', font: '16px sans-serif' });
+    GameKit.UI.text(ctx, '(Phase A: ロジック骨格のみ / logic scaffold only — 画面は後続Phaseで実装)', W / 2, H / 2 + 20, { color: '#94a3b8', font: '13px sans-serif' });
+    const provCount = DATA.provinces ? DATA.provinces.length : 0;
+    GameKit.UI.text(ctx, `国データ ${provCount}件 / 武将 ${GENERALS_DEF.length}名 ロード済み`, W / 2, H / 2 + 60, { color: '#e2e8f0', font: '13px sans-serif' });
+    GameKit.UI.text(ctx, 'Provinces loaded: ' + provCount + ' / Generals: ' + GENERALS_DEF.length, W / 2, H / 2 + 84, { color: '#e2e8f0', font: '12px sans-serif' });
+  }
+}
+
+game.changeScene(new BootScene());
+game.start();
+
+/* ---- テスト用ブリッジ / debug bridge (headless console verification) ----
+ * sanguo.html の window.SANGUO_DEBUG パターンを踏襲。新しい関数・定数を足したら
+ * ここにも追加すること（CLAUDE.md準拠）。 */
+window.TAIHEI_READY = dataReady;
+window.TAIHEI_DEBUG = {
+  RULE, CAMPS, CHIHOU_HOUSES, COURT_KANI_RANKS, COURTS_DEF, SCENARIOS,
+  IDEOLOGY, IDEOLOGY_MUL, GENERALS_DEF, PROVINCE_OWNER_SEED,
+  UNITS, advantage, SPECIAL_TROOPS, FACILITIES, AKUTOU_COMMANDS, TIMELINE_EVENTS,
+  Rule, DATA, game,
+};
+</script>
+</body>
+</html>
