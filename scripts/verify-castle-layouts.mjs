@@ -40,7 +40,13 @@ const server = http.createServer((req, res) => {
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-const browser = await chromium.launch();
+// 他の verify-*.mjs と同じくブラウザ実体の場所を明示する。
+// 素の chromium.launch() は playwright パッケージの版に紐づくビルド番号を要求するため、
+// プリインストール環境（PLAYWRIGHT_BROWSERS_PATH 配下の別ビルド）では
+// 「Executable doesn't exist」で落ちる。この1行が無いせいで本検査だけ実行できなかった。
+const browser = await chromium.launch({
+  executablePath: process.env.CHROMIUM_PATH || (fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined)
+});
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const pageErrors = [];
 page.on('pageerror', e => pageErrors.push(String(e)));
