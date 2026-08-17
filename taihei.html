@@ -36,8 +36,8 @@
 <body>
 <canvas id="game"></canvas>
 <p class="hint">
-  太平風雲記 — 南北朝・太平記時代(1331-1392)の戦略シミュレーション（実装中 / under construction: Phase B タイトル〜合戦まで遊べます。歴史イベント演出・エンディング画面は後続フェーズ）<br>
-  Taihei Fuuunki — a strategy sim set in the Nanboku-chō era (1331-1392). Phase B: playable from title through battle; timeline-event polish and a dedicated ending screen ship in a later phase.
+  太平風雲記 — 南北朝・太平記時代(1331-1392)の戦略シミュレーション<br>
+  Taihei Fuuunki — a strategy sim set in the Nanboku-chō era (1331-1392).
 </p>
 
 <script src="gamekit/gamekit.js"></script>
@@ -92,10 +92,15 @@ const EMBED = {
 
 async function loadProvinces() {
   let provinces = null;
-  try {
-    const res = await fetch('assets/taihei/provinces.json', { cache: 'no-store' });
-    if (res.ok) provinces = (await res.json()).provinces;
-  } catch (e) { /* file:// 等でfetchが使えない環境は埋め込みへ */ }
+  // file:// で開いた場合、fetchはCORSエラーになると分かっているので試みない（genpei.html踏襲）。
+  // ここで試みるとブラウザがネットワークエラーをconsole.errorへ出してしまい、
+  // try/catchで捕まえてもコンソール上は「例外が出た」ように見える。
+  if (location.protocol !== 'file:') {
+    try {
+      const res = await fetch('assets/taihei/provinces.json', { cache: 'no-store' });
+      if (res.ok) provinces = (await res.json()).provinces;
+    } catch (e) { /* http(s)配信でも念のためフォールバック */ }
+  }
   if (!provinces || !provinces.length) provinces = EMBED.provinces.provinces;
   DATA.provinces = provinces;
   DATA.provById = Object.fromEntries(provinces.map((p) => [p.id, p]));
@@ -127,6 +132,18 @@ const RULE = {
   ai: { maxActions: 3 },
   // 後続フェーズ(BattleScene)向けの下地。Phase Aでは未使用。
   combat: { breakBelow: 35, routBelow: 15 },
+  // エンディング判定（spec 2.2節）。優先度③④⑥の制圧国数割合は spec 本文が明示する
+  // 「例:80%」「例:90%」をそのまま採用。①②は spec が数値を与えていない箇所のため、
+  // 「史実の中先代の乱トリガー最速ターン(4)を十分に超えて安定が続いた」目安としてここで決めた
+  // 数値（完了報告で明記する仕様の補完）。
+  ending: {
+    kenmuHoldTurns: 15,             // ①建武の新政成功: 建武の新政開始からこのターン数、中先代の乱が不発のまま経過
+    newBakufuAshikagaKokuRatio: 0.30, // ②新幕府樹立: 足利方が全国石高の30%以上を維持
+    newBakufuNanchoKokuRatio: 0.08,   // ②新幕府樹立: 南朝方勢力の総石高が全国の8%未満に低下
+    unificationProvinceRatio: 0.80,   // ③④南朝統一/北朝統一: 制圧国数の閾値（spec 2.2節の例示どおり80%）
+    legitimacyCollapse: 15,           // ③④: 相手方朝廷の正統性がこの値以下なら「courtRel系が破綻」とみなす
+    fullConquestProvinceRatio: 0.90,  // ⑥全国統一: 制圧国数の閾値（spec 2.2節の例示どおり90%）
+  },
 };
 
 /* ---- 陣営（3陣営の型） / Camp archetypes ----
@@ -774,49 +791,93 @@ function splitCamp(state, campId, keepIds, newCampIds) {
 const TIMELINE_EVENTS = [
   { id: 'genko_no_ran', jp: '元弘の乱', en: 'Genkō War', year: 1331, month: 5,
     condition: (st) => st.turn === 0,
-    effect: (st) => { adjustLegitimacy(st, 'nancho', 20); } },
+    effect: (st) => { adjustLegitimacy(st, 'nancho', 20); },
+    lines: [
+      { jp: '元弘元年（1331年）五月。後醍醐天皇、笠置山にて鎌倉幕府打倒の兵を挙げる。', en: 'Genkō 1 (1331), the fifth month. Emperor Go-Daigo raises his banner against the Kamakura Shogunate at Mount Kasagi.' },
+      { jp: '楠木正成をはじめ、各地の悪党と呼ばれた者たちがこれに応じて蜂起した。', en: 'Kusunoki Masashige and akutō rebels across the land rise in answer to the call.' },
+    ] },
 
   { id: 'kamakura_bakufu_fall', jp: '鎌倉幕府滅亡', en: 'Fall of the Kamakura Shogunate', year: 1333, month: 5,
     condition: (st) => campAlive(st, 'nancho') && generalAlive(st, 'nitta_yoshisada'),
-    effect: (st) => { redistributeOwnerlessJito(st); adjustLegitimacy(st, 'nancho', 25); } },
+    effect: (st) => { redistributeOwnerlessJito(st); adjustLegitimacy(st, 'nancho', 25); },
+    lines: [
+      { jp: '元弘三年（1333年）五月。新田義貞、鎌倉へ攻め入り北条一門を滅ぼす。', en: 'Genkō 3 (1333), the fifth month. Nitta Yoshisada storms Kamakura and destroys the Hōjō clan.' },
+      { jp: '百五十年におよんだ鎌倉幕府はここに滅び、空白となった地頭職は各地で再分配される。', en: 'The Kamakura Shogunate, after a century and a half, falls at last — its vacated jitō posts are redistributed across the provinces.' },
+    ] },
 
   { id: 'kenmu_shinsei', jp: '建武の新政', en: 'Kenmu Restoration', year: 1333, month: 6,
     condition: (st) => !!st.firedEvents.kamakura_bakufu_fall,
-    effect: (st) => { st.regime = 'kenmu'; st.flags.kenmuStartTurn = st.turn; bushiIdeologyPenalty(st, ['bakufu', 'yashin'], -10); } },
+    effect: (st) => { st.regime = 'kenmu'; st.flags.kenmuStartTurn = st.turn; bushiIdeologyPenalty(st, ['bakufu', 'yashin'], -10); },
+    lines: [
+      { jp: '後醍醐天皇、親政を宣言し「建武」と改元。武家を排した公家一統の政が始まる。', en: 'Emperor Go-Daigo declares direct imperial rule and changes the era name to Kenmu — nobility-led governance, with warriors sidelined, begins.' },
+      { jp: '恩賞への不満が、幕府派・野心家の武士たちの間で早くもくすぶり始めている。', en: 'Discontent over rewards is already smoldering among the shogunate-partisan and ambitious warriors.' },
+    ] },
 
   { id: 'nakasendai_no_ran', jp: '中先代の乱', en: 'Nakasendai Rebellion', year: 1335, month: 7,
     condition: (st) => st.regime === 'kenmu' && courtRelValue(st, 'ashikaga', 'nancho') < 25,
-    effect: (st) => { setCampCourt(st, 'ashikaga', null); flagAshikagaBreak(st); } },
+    effect: (st) => { setCampCourt(st, 'ashikaga', null); flagAshikagaBreak(st); },
+    lines: [
+      { jp: '北条の残党が信濃で挙兵。これを鎮めるため東国へ下った足利尊氏は、そのまま鎌倉に居座る。', en: 'Remnants of the Hōjō rise in Shinano. Ashikaga Takauji marches east to crush them — and simply stays in Kamakura.' },
+      { jp: '恩賞なき朝廷への不満はついに臨界に達し、足利方は建武政権から事実上離反した。', en: 'Resentment over unpaid rewards reaches its limit — the Ashikaga effectively break from the Kenmu regime.' },
+    ] },
 
   { id: 'minatogawa', jp: '湊川の戦い', en: 'Battle of Minatogawa', year: 1336, month: 5,
     condition: (st) => st.flags.ashikagaBreak && generalAlive(st, 'kusunoki_masashige'),
-    effect: (st) => { killGeneral(st, 'kusunoki_masashige'); adjustLegitimacy(st, 'nancho', -15); } },
+    effect: (st) => { killGeneral(st, 'kusunoki_masashige'); adjustLegitimacy(st, 'nancho', -15); },
+    lines: [
+      { jp: '建武三年（1336年）五月。摂津湊川にて楠木正成、寡兵をもって足利の大軍を迎え撃つ。', en: 'Kenmu 3 (1336), the fifth month. At Minatogawa in Settsu, Kusunoki Masashige, badly outnumbered, meets the Ashikaga host head-on.' },
+      { jp: '衆寡敵せず、正成は弟正季と刺し違えて果てる。「七生報国」の言葉を遺して。', en: 'Overwhelmed, Masashige dies alongside his brother Masasue, leaving behind the vow to serve his country seven times over.' },
+    ] },
 
   { id: 'engen_no_ran', jp: '延元の乱', en: 'Engen Disturbance (Two Courts Established)', year: 1337, month: 1,
     condition: (st) => st.flags.ashikagaBreak && !st.courts.hokucho.active,
-    effect: (st) => { activateCourt(st, 'hokucho'); setCampCourt(st, 'ashikaga', 'hokucho'); relocateEmperor(st, 'nancho', 'yamato'); } },
+    effect: (st) => { activateCourt(st, 'hokucho'); setCampCourt(st, 'ashikaga', 'hokucho'); relocateEmperor(st, 'nancho', 'yamato'); },
+    lines: [
+      { jp: '足利尊氏、光厳上皇の院宣を得て新たな天皇（北朝）を擁立し、京に幕府を開く。', en: 'Ashikaga Takauji secures the retired Emperor Kōgon\'s authority, enthrones a new Northern Court emperor, and opens a shogunate in Kyoto.' },
+      { jp: '後醍醐天皇は三種の神器を奉じて吉野へ潜幸。ここに朝廷は南北に分かれた。', en: 'Emperor Go-Daigo, bearing the Three Sacred Treasures, withdraws to Yoshino. The imperial court splits into North and South.' },
+    ] },
 
   { id: 'shijonawate', jp: '四條畷の戦い', en: 'Battle of Shijōnawate', year: 1348, month: 1,
     condition: (st) => generalAlive(st, 'kusunoki_masatsura') && generalAlive(st, 'ko_moronao'),
-    effect: (st) => { killGeneral(st, 'kusunoki_masatsura'); adjustLegitimacy(st, 'nancho', -10); } },
+    effect: (st) => { killGeneral(st, 'kusunoki_masatsura'); adjustLegitimacy(st, 'nancho', -10); },
+    lines: [
+      { jp: '正平三年（1348年）正月。高師直の大軍、河内四條畷にて楠木正行の軍を包囲する。', en: 'Shōhei 3 (1348), the first month. Kō no Moronao\'s vast army encircles Kusunoki Masatsura\'s force at Shijōnawate in Kawachi.' },
+      { jp: '父の遺志を継いだ正行もまた、ここに討死。南朝は畿内の要を失う。', en: 'Masatsura, who took up his father\'s cause, falls here as well — the Southern Court loses its foothold in the capital region.' },
+    ] },
 
   { id: 'kanno_no_jouran', jp: '観応の擾乱', en: 'Kannō Disturbance', year: 1350, month: 10,
     condition: (st) => generalAlive(st, 'ashikaga_tadayoshi') && generalLoyalty(st, 'ashikaga_tadayoshi') < 35,
-    effect: (st) => { splitCamp(st, 'ashikaga', ['ashikaga_takauji'], ['ashikaga_tadayoshi']); } },
+    effect: (st) => { splitCamp(st, 'ashikaga', ['ashikaga_takauji'], ['ashikaga_tadayoshi']); },
+    lines: [
+      { jp: '観応元年（1350年）。将軍尊氏の執事・高師直と、政務を統べる弟・直義の対立が激化する。', en: 'Kannō 1 (1350). The rift widens between Shogun Takauji\'s steward Kō no Moronao and his brother Tadayoshi, who oversees civil affairs.' },
+      { jp: 'ついに足利兄弟は袂を分かち、幕府そのものが分裂して相戦う内訌に突入した。', en: 'The Ashikaga brothers finally part ways — the shogunate itself splits and turns on itself.' },
+    ] },
 
   { id: 'shohei_ittou', jp: '正平一統', en: 'Shōhei Unification (Temporary)', year: 1351, month: 11,
     condition: (st) => !!st.firedEvents.kanno_no_jouran,
-    effect: (st) => { setCourtRel(st, 'ashikaga', 'hokucho', 0); adjustLegitimacy(st, 'nancho', 30); st.flags.shoheiTemp = st.turn; } },
+    effect: (st) => { setCourtRel(st, 'ashikaga', 'hokucho', 0); adjustLegitimacy(st, 'nancho', 30); st.flags.shoheiTemp = st.turn; },
+    lines: [
+      { jp: '正平六年（1351年）。内訌に苦しむ足利尊氏は弟直義討伐のため、一時的に南朝へ帰順する。', en: 'Shōhei 6 (1351). Beleaguered by the internal strife, Ashikaga Takauji temporarily submits to the Southern Court to move against his brother.' },
+      { jp: '北朝はいったん廃され、南朝による一統が成る。だが、この和睦は長くは続かない。', en: 'The Northern Court is briefly abolished and the realm nominally reunites under the South — though this peace will not last.' },
+    ] },
 
   { id: 'oan_no_wayaku', jp: '応安の和約', en: 'Ōan Accord', year: 1370, month: 1,
     condition: (st) => courtRelValue(st, 'ashikaga', 'hokucho') >= 70 && courtRelValue(st, 'nancho', 'nancho') >= 60 && (st.turn - (st.flags.lastBattleTurn != null ? st.flags.lastBattleTurn : -100)) >= 8,
-    effect: (st) => { st.flags.peaceTrackOpen = true; } },
+    effect: (st) => { st.flags.peaceTrackOpen = true; },
+    lines: [
+      { jp: '応安年間。長く続いた戦乱に双方が疲弊し、南北朝廷の間で和議への機運が高まる。', en: 'During the Ōan era, both courts, worn down by decades of war, move toward reconciliation.' },
+      { jp: '大規模な合戦のないまま歳月が流れ、ついに合一への道が開かれた。', en: 'Years pass without a major clash, and the path to unification finally opens.' },
+    ] },
 
   { id: 'nanboku_gouitsu', jp: '南北朝合一', en: 'Unification of the Courts', year: 1392, month: 10,
     condition: (st) => !!st.flags.peaceTrackOpen,
     // checkEndings(step9で本実装)が読む共通フラグとして立てる。spec原文は直接 st.ending='tenka_taihei'
     // だが、エンディング確定は checkEndings に一本化する設計としたため、フラグ経由に変更した。
-    effect: (st) => { st.flags.courtsUnified = true; } },
+    effect: (st) => { st.flags.courtsUnified = true; },
+    lines: [
+      { jp: '明徳三年（1392年）十月。南朝の後亀山天皇、三種の神器を北朝の後小松天皇へ譲り渡す。', en: 'Meitoku 3 (1392), the tenth month. Emperor Go-Kameyama of the Southern Court hands the Three Sacred Treasures to Emperor Go-Komatsu of the North.' },
+      { jp: '元弘の乱よりおよそ六十一年。ついに南北朝はひとつに合わさった。', en: 'Roughly sixty-one years after the Genkō War began, the Northern and Southern Courts are one at last.' },
+    ] },
 ];
 
 function checkTimelineEvents(state) {
@@ -836,10 +897,114 @@ function checkTimelineEvents(state) {
   }
 }
 
-/* ---- エンディング判定（spec 6章 step9で本実装。Phase Aはフックのみ） ---- */
+/* ---- エンディング判定（spec 2.2節・6章 step9） ----
+ * ヘルパー群。総石高・制圧国数は DATA.provinces（provinces.json 由来、koku固定値）から
+ * 都度計算する。camp.court は「現在どちらの朝廷に属しているか」（4.2節注記）なので、
+ * 「南朝方/北朝方」勢力の合計は court===courtId の陣営を合算する形で求める。 */
+function totalProvinceCount(state) { return Object.keys(state.provinces).length; }
+function campControlledProvinceCount(state, campId) {
+  let n = 0;
+  for (const p of Object.values(state.provinces)) if (p.owner === campId) n++;
+  return n;
+}
+function courtCamps(state, courtId) {
+  return Object.keys(state.camps).filter((cid) => state.camps[cid].court === courtId);
+}
+function courtCampsAlive(state, courtId) {
+  return courtCamps(state, courtId).filter((cid) => campAlive(state, cid));
+}
+function courtControlledProvinceCount(state, courtId) {
+  const camps = new Set(courtCamps(state, courtId));
+  let n = 0;
+  for (const p of Object.values(state.provinces)) if (p.owner && camps.has(p.owner)) n++;
+  return n;
+}
+function courtTotalKoku(state, courtId) {
+  return courtCamps(state, courtId).reduce((sum, cid) => sum + campTotalKoku(state, cid), 0);
+}
+function grandTotalKoku(state) {
+  let sum = 0;
+  for (const p of Object.values(state.provinces)) sum += (DATA.provById[p.id] ? DATA.provById[p.id].koku : 0);
+  return sum;
+}
+/* checkEndings: spec 2.2節の表の優先度順（①→⑥）に評価し、最初に成立した1件のみ返す。
+ * 呼び出し元(endTurn)は !state.ending のときのみ呼ぶため、一度確定したら以後は評価しない。 */
 function checkEndings(state) {
-  // TODO(step9): 2.2節の6エンディング優先度表を実装する。Phase Aでは呼び出し経路のみ用意。
+  const totalProv = totalProvinceCount(state);
+  if (totalProv <= 0) return null;
+  const R = RULE.ending;
+
+  // ①建武の新政成功: 建武の新政が続いたまま(regime==='kenmu')、中先代の乱が
+  //   不発(flags.ashikagaBreakが立っていない)のまま既定ターン数が経過した。
+  if (state.regime === 'kenmu' && !state.flags.ashikagaBreak && state.flags.kenmuStartTurn != null
+      && (state.turn - state.flags.kenmuStartTurn) >= R.kenmuHoldTurns) {
+    return 'kenmu_success';
+  }
+
+  // ②新幕府樹立: 観応の擾乱(内訌)を経ても足利方が全国石高の一定割合を維持し、
+  //   南朝方勢力(court==='nancho'の陣営合算)の総石高が閾値未満に落ち込んだ。
+  if (state.firedEvents.kanno_no_jouran) {
+    const grand = grandTotalKoku(state);
+    if (grand > 0 && campAlive(state, 'ashikaga')) {
+      const ashiRatio = campTotalKoku(state, 'ashikaga') / grand;
+      const nanchoRatio = courtTotalKoku(state, 'nancho') / grand;
+      if (ashiRatio >= R.newBakufuAshikagaKokuRatio && nanchoRatio < R.newBakufuNanchoKokuRatio) {
+        return 'shinbakufu';
+      }
+    }
+  }
+
+  // ③南朝統一: 南朝方(court==='nancho')の制圧国数割合が閾値以上、かつ
+  //   北朝方の勢力そのものが消滅しているか、北朝の正統性が破綻している。
+  if (courtControlledProvinceCount(state, 'nancho') / totalProv >= R.unificationProvinceRatio
+      && (courtCampsAlive(state, 'hokucho').length === 0 || effectiveLegitimacy(state, 'hokucho') <= R.legitimacyCollapse)) {
+    return 'nancho_unification';
+  }
+
+  // ④北朝統一: ③の対称形。南朝方勢力が消滅しているか南朝の正統性が破綻している。
+  if (courtControlledProvinceCount(state, 'hokucho') / totalProv >= R.unificationProvinceRatio
+      && (courtCampsAlive(state, 'nancho').length === 0 || effectiveLegitimacy(state, 'nancho') <= R.legitimacyCollapse)) {
+    return 'hokucho_unification';
+  }
+
+  // ⑤天下泰平: 南北朝合一イベント(nanboku_gouitsu)がstate.flags.courtsUnifiedを立てる。
+  if (state.flags.courtsUnified) return 'tenka_taihei';
+
+  // ⑥全国統一: いずれの朝廷正統性条件も満たさないが、単独勢力が制圧国数の閾値に到達。
+  for (const campId of Object.keys(state.camps)) {
+    if (!campAlive(state, campId)) continue;
+    if (campControlledProvinceCount(state, campId) / totalProv >= R.fullConquestProvinceRatio) {
+      return 'zenkoku_toitsu';
+    }
+  }
+
   return null;
+}
+/* 上限ターン到達時の暫定エンド（scenario_end_fallback）用: この時点で最も国土を
+ * 制圧している陣営を返す。EndingSceneの本文生成に使う（spec 2.2節注記）。 */
+function leadingCamp(state) {
+  let bestId = null, bestN = -1;
+  for (const campId of Object.keys(state.camps)) {
+    if (!campAlive(state, campId)) continue;
+    const n = campControlledProvinceCount(state, campId);
+    if (n > bestN) { bestN = n; bestId = campId; }
+  }
+  return { campId: bestId, provinces: Math.max(0, bestN), ratio: totalProvinceCount(state) > 0 ? bestN / totalProvinceCount(state) : 0 };
+}
+/* このターンで新たに発火したがカットシーン未表示のTIMELINE_EVENTSを取り出し、
+ * 表示済みとして記録する（spec 6章 step8）。buildState直後(genko_no_ran)・endTurn直後の
+ * 両方から呼ばれる想定で、firedEvents(発火記録)とcutscenesShown(表示記録)を分離することで、
+ * 「同一ターンで複数イベントが連鎖発火した場合にキューへ積んで連続表示する」を実現する。 */
+function dequeueCutscenes(state) {
+  if (!state.flags.cutscenesShown) state.flags.cutscenesShown = {};
+  const out = [];
+  for (const ev of TIMELINE_EVENTS) {
+    if (state.firedEvents[ev.id] == null) continue;
+    if (state.flags.cutscenesShown[ev.id]) continue;
+    state.flags.cutscenesShown[ev.id] = true;
+    out.push(ev);
+  }
+  return out;
 }
 
 /* ---- ターン制御: buildState / applyActions / endTurn / aiTurn ---- */
@@ -862,7 +1027,7 @@ function buildState(opts) {
     playerCamp,
     regime: 'kamakura_end',
     ending: null,
-    flags: { lastBattleTurn: -100 },
+    flags: { lastBattleTurn: -100, cutscenesShown: {} },
     firedEvents: {},
     log: [],
     camps: {},
@@ -1025,13 +1190,16 @@ const Rule = {
   accrueLandDesire, contribution, recordContribution, evaluateReward,
   adjustLoyalty, checkDefection, pickDefectionTarget, defect,
   hireAkutou, akutouCommand,
-  checkTimelineEvents, checkEndings,
+  checkTimelineEvents, checkEndings, dequeueCutscenes, leadingCamp,
   grantDirectReward,
   buildFacility, strongestGeneralIn, transferProvinceOwner, recordBattleOccurred,
   // 補助（テスト・後続フェーズから直接使う想定のヘルパー類）
   srand, campAlive, generalAlive, generalLoyalty, campGenerals, campTotalKoku,
   courtRelValue, setCourtRel, adjustCourtRel, adjustLegitimacy, effectiveLegitimacy,
   killGeneral, migrateState, campGold, spendGold, addGold, neighborsOf, pushLog,
+  // エンディング判定用の集計ヘルパー（spec 6章 step9）
+  totalProvinceCount, campControlledProvinceCount, courtCamps, courtCampsAlive,
+  courtControlledProvinceCount, courtTotalKoku, grandTotalKoku,
 };
 
 /* ==========================================================================
@@ -1048,8 +1216,11 @@ const Rule = {
  *    Phase A の akutouCommand() 実装もコストを消費しない。UIもそれに合わせ、
  *    費用が実行時に引かれるとは示唆しない表記にした
  *  - ヘックス合戦に一騎討ち・潮汐（水軍の間合い変化）は実装しない（Should超）
- *  - checkEndings は Phase A のスタブ（spec 6章 step9）のまま。エンディング成立時は
- *    MapScene上に通知を出すのみで、専用のEndingScene描画は後続Phaseに委ねる
+ *
+ * Phase C（spec 6章 step8〜9）で追加した部分:
+ *  - checkEndings を2.2節の6エンディング優先度表どおりに実装し、CutsceneScene / EndingScene を
+ *    新設した。MapScene._endTurn は「発火したTIMELINE_EVENTSのカットシーン表示 → （あれば）
+ *    エンディング画面遷移」の順に処理する
  * ========================================================================== */
 
 /* ---- 汎用描画ヘルパー（genpei.html/sengoku.html の frame/txt/button パターン踏襲） ---- */
@@ -1440,8 +1611,12 @@ class OpeningScene extends GameKit.Scene {
     if (hit(this.next, p)) {
       g.audio.jingle([{ f: 330, d: 0.12 }, { f: 440, d: 0.12 }, { f: 587, d: 0.22 }]);
       const state = Rule.buildState({ playerCamp: this.campId });
+      // buildState内でturn===0条件の元弘の乱イベントが既に発火済み（checkTimelineEvents呼び出し）。
+      // そのカットシーンを、マップに入る前に見せる（spec 6章 step8）。
+      const pending = Rule.dequeueCutscenes(state);
       save.set('autosave', state);
-      g.changeScene(new MapScene(state));
+      if (pending.length) g.changeScene(new CutsceneScene(state, pending, () => new MapScene(state)));
+      else g.changeScene(new MapScene(state));
     }
     if (hit(this.back, p)) g.changeScene(new FactionSelectScene());
   }
@@ -1460,6 +1635,189 @@ class OpeningScene extends GameKit.Scene {
     const p = g.input.pointer;
     button(ctx, this.next, hit(this.next, p));
     button(ctx, this.back, hit(this.back, p));
+  }
+}
+
+/* ============================================================================
+ * CutsceneScene — 歴史イベント演出（spec 6章 step8）
+ * TIMELINE_EVENTS発火時に lines[] をGlassmorphismカードで順に表示する。
+ * 同一ターンで複数イベントが連鎖発火した場合（例: 鎌倉幕府滅亡→建武の新政）は
+ * events配列に複数積んでキュー表示し、最後まで見終えたら nextSceneFactory() へ遷移する。
+ * ========================================================================== */
+class CutsceneScene extends GameKit.Scene {
+  constructor(state, events, nextSceneFactory) {
+    super();
+    this.state = state;
+    this.events = events;
+    this.nextSceneFactory = nextSceneFactory;
+    this.idx = 0;
+  }
+  enter() {
+    this.bd = new Backdrop();
+    this.t = 0;
+    this.next = { x: W / 2 - 150, y: H - 96, w: 300, h: 56, jp: '次へ', en: 'Next' };
+  }
+  _current() { return this.events[this.idx]; }
+  _shownLineCount() {
+    const lines = this._current().lines || [];
+    return Math.min(lines.length, Math.floor(this.t / 0.35) + 1);
+  }
+  update(dt, g) {
+    this.t += dt; this.bd.update(dt);
+    const p = g.input.pointer;
+    if (!p.justPressed) return;
+    const lines = this._current().lines || [];
+    if (this._shownLineCount() < lines.length) {
+      // 1クリック目はテキスト送りを飛ばして全文を即座に表示する（OpeningScene踏襲）
+      this.t = lines.length * 0.35;
+      return;
+    }
+    if (!hit(this.next, p)) return;
+    g.audio.jingle([{ f: 349, d: 0.08 }, { f: 440, d: 0.12 }]);
+    this.idx += 1;
+    if (this.idx >= this.events.length) { g.changeScene(this.nextSceneFactory()); return; }
+    this.t = 0;
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    const ev = this._current();
+    txt(ctx, `【${ev.year}年】${ev.jp}`, W / 2, 92, { font: '600 30px "Hiragino Mincho ProN", serif', color: '#22d3ee', align: 'center' });
+    txt(ctx, `[${ev.year}] ${ev.en}`, W / 2, 132, { font: '13px sans-serif', color: '#a78bfa', align: 'center' });
+    frame(ctx, 180, 170, W - 360, H - 170 - 146, { fill: 'rgba(10,14,22,0.85)', stroke: 'rgba(34,211,238,0.32)', radius: 14 });
+    const lines = ev.lines || [];
+    const shown = this._shownLineCount();
+    let y = 216;
+    for (let i = 0; i < shown; i++) {
+      txt(ctx, lines[i].jp, W / 2, y, { font: '16px "Hiragino Mincho ProN", serif', color: '#e2e8f0', align: 'center' });
+      y += 28;
+      txt(ctx, lines[i].en, W / 2, y, { font: '11px sans-serif', color: '#8b98ab', align: 'center' });
+      y += 30;
+    }
+    txt(ctx, `${this.idx + 1} / ${this.events.length}`, W / 2, H - 128, { font: '11px sans-serif', color: '#64748b', align: 'center' });
+    const p = g.input.pointer;
+    button(ctx, this.next, hit(this.next, p));
+  }
+}
+
+/* ============================================================================
+ * EndingScene — エンディング画面（spec 2.2節・6章 step9）
+ * 6種の確定エンディング＋上限ターン到達時の暫定フォールバック(scenario_end_fallback)を
+ * 日英併記のGlassmorphismカードで表示する。
+ * ========================================================================== */
+const ENDING_TEXTS = {
+  kenmu_success: {
+    title: { jp: '建武の新政成功', en: 'The Kenmu Restoration Endures' },
+    body: [
+      { jp: '足利尊氏はついに弓を引かず、恩賞を求める武士たちの不満は朝廷の内側で吸収された。', en: 'Ashikaga Takauji never turned his bow against the throne; the warriors\' grievances over rewards were absorbed from within the court itself.' },
+      { jp: '公家一統の政は武家の離反を招くことなく続き、南北朝という分裂そのものが歴史から姿を消した。', en: 'The nobility-led restoration continued without a warrior rebellion — the very split into Northern and Southern Courts never came to pass.' },
+    ],
+  },
+  shinbakufu: {
+    title: { jp: '新幕府樹立', en: 'A New Shogunate Is Founded' },
+    body: [
+      { jp: '観応の擾乱の混乱を乗り越えた足利家は、揺らぐことなく武家政権としての地歩を固めた。', en: 'Having weathered the chaos of the Kannō Disturbance, the Ashikaga house cemented its place as the ruling warrior government.' },
+      { jp: '南朝はもはや朝廷としての実を失い、吉野の山中に残るのみとなった。武家の世が確立する。', en: 'The Southern Court, stripped of any real power, survives only in the mountains of Yoshino. The age of the warrior state is confirmed.' },
+    ],
+  },
+  nancho_unification: {
+    title: { jp: '南朝統一', en: 'The Southern Court Prevails' },
+    body: [
+      { jp: '北朝を奉じた勢力は次々と瓦解し、後醍醐帝の正統は日本全土にその威光を取り戻した。', en: 'The forces upholding the Northern Court crumbled one after another, and Emperor Go-Daigo\'s line reclaimed its authority across the realm.' },
+      { jp: '忠義に厚い将たちが守り抜いた南朝の正統性は、ついに天下を統べる力となった。', en: 'The legitimacy the loyalist generals fought so hard to protect finally became the power that ruled the realm.' },
+    ],
+  },
+  hokucho_unification: {
+    title: { jp: '北朝統一', en: 'The Northern Court Prevails' },
+    body: [
+      { jp: '南朝の旗を掲げた者たちは各地で力尽き、光厳天皇を戴く北朝がついに天下に号令する。', en: 'Those who carried the Southern Court\'s banner were worn down one region at a time, and the Northern Court, upholding Emperor Kōgon, at last commands the realm.' },
+      { jp: '恩賞と実力によって武士を束ねた足利家の政略は、ここに天下泰平をもたらす結実を見た。', en: 'The Ashikaga house\'s strategy of binding warriors through reward and strength finally bore fruit in a realm at peace.' },
+    ],
+  },
+  tenka_taihei: {
+    title: { jp: '天下泰平（南北朝合一）', en: 'Peace at Last (Unification of the Courts)' },
+    body: [
+      { jp: '明徳三年、南朝の後亀山天皇は三種の神器を北朝の後小松天皇へ譲り、六十一年の分裂に幕が下りた。', en: 'In Meitoku 3 (1392), Emperor Go-Kameyama of the Southern Court hands the Three Sacred Treasures to Emperor Go-Komatsu of the North, closing sixty-one years of division.' },
+      { jp: '大規模な衝突を経ずして迎えたこの合一は、太平記の世に最も穏やかな結末をもたらした。', en: 'Reached without a final great clash, this unification brings the gentlest possible close to the age of the Taiheiki.' },
+    ],
+  },
+  zenkoku_toitsu: {
+    title: { jp: '全国統一', en: 'Military Unification of the Realm' },
+    body: [
+      { jp: 'いずれの朝廷の正統性でもなく、ただ軍事力のみによってこの国はひとつにまとめ上げられた。', en: 'Not by the legitimacy of either court, but by military force alone, the realm has been forged into one.' },
+      { jp: '忠義も官位も、最後にはこの一勢力の武威の前に膝を屈した。', en: 'In the end, loyalty and court rank alike bowed before this single power\'s might.' },
+    ],
+  },
+};
+/* scenario_end_fallback（上限ターン到達の暫定エンド）は最優勢陣営名を差し込む必要があるため、
+ * 静的テキストではなく実行時に組み立てる（spec 2.2節注記どおり「勢力比較で最も優勢な陣営の視点エンド」）。 */
+function fallbackEndingText(state) {
+  const lead = Rule.leadingCamp(state);
+  const label = lead.campId ? campLabelOf(state, lead.campId) : { jp: '不明の勢力', en: 'an unknown power' };
+  const pct = Math.round(lead.ratio * 100);
+  return {
+    title: { jp: `${label.jp}、優勢のまま六十一年が暮れる`, en: `${label.en} Holds the Upper Hand as an Era Draws to a Close` },
+    body: [
+      { jp: 'いずれの朝廷も天下を完全に制することなく、六十一年におよぶ争乱はひとまずの区切りを迎えた。', en: 'Neither court ever fully claimed the realm, and sixty-one years of strife reach only a provisional close.' },
+      { jp: `国土の${pct}パーセントを制した${label.jp}が、この時点で最も優勢な勢力として物語を引き継ぐ。`, en: `${label.en}, controlling ${pct}% of the realm, carries the story forward as the era's most dominant power.` },
+    ],
+  };
+}
+class EndingScene extends GameKit.Scene {
+  constructor(state) { super(); this.state = state; }
+  enter() {
+    this.bd = new Backdrop();
+    this.t = 0;
+    this.toTitle = { x: W / 2 - 150, y: H - 92, w: 300, h: 56, jp: 'タイトルへ戻る', en: 'Return to Title' };
+    // エンディング確定状態を保存する。TitleSceneのContinueは`!saved.ending`をhasSaveの
+    // 条件にしているため、これにより「終わった対局を続きから」は自動的に選べなくなる。
+    save.set('autosave', this.state);
+  }
+  update(dt, g) {
+    this.t += dt; this.bd.update(dt);
+    const p = g.input.pointer;
+    if (p.justPressed && hit(this.toTitle, p)) g.changeScene(new TitleScene());
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    const state = this.state;
+    const def = state.ending === 'scenario_end_fallback' ? fallbackEndingText(state) : (ENDING_TEXTS[state.ending] || ENDING_TEXTS.zenkoku_toitsu);
+    txt(ctx, '結末 / Ending', W / 2, 54, { font: '12px sans-serif', color: '#8b98ab', align: 'center' });
+    txt(ctx, def.title.jp, W / 2, 84, { font: '600 36px "Hiragino Mincho ProN", serif', color: '#22d3ee', align: 'center' });
+    txt(ctx, def.title.en, W / 2, 130, { font: '13px sans-serif', color: '#a78bfa', align: 'center' });
+    frame(ctx, 160, 168, W - 320, 220, { fill: 'rgba(10,14,22,0.85)', stroke: 'rgba(34,211,238,0.35)', radius: 16 });
+    let y = 208;
+    for (const line of def.body) {
+      txt(ctx, line.jp, W / 2, y, { font: '16px "Hiragino Mincho ProN", serif', color: '#e2e8f0', align: 'center' });
+      y += 28;
+      txt(ctx, line.en, W / 2, y, { font: '11px sans-serif', color: '#8b98ab', align: 'center' });
+      y += 34;
+    }
+    this._drawStandings(ctx, 160, 404, W - 320, 210);
+    const p = g.input.pointer;
+    button(ctx, this.toTitle, hit(this.toTitle, p));
+  }
+  _drawStandings(ctx, x, y, w, h) {
+    const state = this.state;
+    frame(ctx, x, y, w, h, { fill: 'rgba(10,14,22,0.78)', stroke: 'rgba(255,255,255,0.14)', radius: 12 });
+    txt(ctx, `最終情勢（第${state.turn}ターン・${state.year}年） / Final Standings (turn ${state.turn}, ${state.year})`, x + 20, y + 14, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#22d3ee' });
+    const total = Rule.totalProvinceCount(state) || 1;
+    const rows = Object.keys(state.camps)
+      .filter((cid) => Rule.campAlive(state, cid))
+      .map((cid) => ({ cid, n: Rule.campControlledProvinceCount(state, cid) }))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 5);
+    let yy = y + 42;
+    for (const row of rows) {
+      const label = campLabelOf(state, row.cid);
+      const pct = Math.round((row.n / total) * 100);
+      drawKamon(ctx, row.cid, x + 30, yy + 8, 11);
+      txt(ctx, `${label.jp} / ${label.en}`, x + 54, yy, { font: '12px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
+      txt(ctx, `${row.n}国 (${pct}%)`, x + w - 20, yy, { font: '12px sans-serif', color: '#a78bfa', align: 'right' });
+      const barW = w - 74;
+      frame(ctx, x + 54, yy + 18, barW, 6, { fill: 'rgba(255,255,255,0.06)', stroke: 'rgba(255,255,255,0.1)', radius: 3 });
+      ctx.fillStyle = campColorOf(row.cid); ctx.fillRect(x + 54, yy + 18, barW * (row.n / total), 6);
+      yy += 32;
+    }
   }
 }
 
@@ -1524,10 +1882,12 @@ class MapScene extends GameKit.Scene {
     Rule.endTurn(this.state);
     save.set('autosave', this.state);
     g.audio.jingle([{ f: 294, d: 0.08 }, { f: 370, d: 0.08 }, { f: 440, d: 0.14 }]);
-    this._notice({ jp: `${this.state.year}年へ進んだ（第${this.state.turn}ターン）`, en: `Advanced to ${this.state.year} (turn ${this.state.turn}).` });
-    if (this.state.ending) {
-      this._notice({ jp: `結末: ${this.state.ending}（エンディング画面は後続フェーズで実装）`, en: `Ending reached: ${this.state.ending} (a dedicated ending screen ships in a later phase).` });
-    }
+    const state = this.state;
+    const pending = Rule.dequeueCutscenes(state);
+    const nextFactory = () => (state.ending ? new EndingScene(state) : new MapScene(state));
+    if (pending.length) { g.changeScene(new CutsceneScene(state, pending, nextFactory)); return; }
+    if (state.ending) { g.changeScene(new EndingScene(state)); return; }
+    this._notice({ jp: `${state.year}年へ進んだ（第${state.turn}ターン）`, en: `Advanced to ${state.year} (turn ${state.turn}).` });
   }
   _launchAttack(g, fromId, toId) {
     const gen = Rule.strongestGeneralIn(this.state, this.player, fromId);
@@ -2262,6 +2622,8 @@ window.TAIHEI_DEBUG = {
   ASSETS_RT, MAP_ASSET, MAP_NATIVE_W, MAP_NATIVE_H, mapTransform, provScreenXY, loadMapImage,
   HEX, TERRAIN_T, TBattle, initBattle, pickUnitMix, hexToPixel, hexDistance, hexNeighbors,
   campColorOf, campLabelOf, campCourtOf, factionInfo, FACTION_CHOICES, KAMON_STYLE, save,
+  // Phase C（歴史イベント演出・エンディング判定）で追加したシーン・定数
+  CutsceneScene, EndingScene, ENDING_TEXTS, fallbackEndingText,
 };
 </script>
 </body>
