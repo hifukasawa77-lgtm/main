@@ -46,6 +46,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0021-routine-schedule-single-source]] — Routineスケジュールの正をCLAUDE.md「定期実行（Routine）一覧」へ単一ソース化＋lint検査#11、/self-improveを週次Routine化（日曜21:00 JST）
 - [[0022-asset-reencode-safety]] — アセット再エンコードの安全策（切り出し矩形の解像度非依存化・後読みの同時数/上限）＋マップ描画の機械検査を新設
 - [[0023-verification-integrity-and-daily-backfill]] — 検査スクリプトの健全性を横断ルール化＋Daily骨組み生成を機械化（backfill-daily.sh）
+- [[0024-encoding-and-required-check-guards]] — 文字化け・const二重定義・必須検査の未実行を release-check で機械検出＋検査#4の腐り修正
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
