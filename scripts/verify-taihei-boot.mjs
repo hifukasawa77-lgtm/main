@@ -15,7 +15,11 @@
  *   4. デスクトップ（非タッチ）ではゲートに taihei-touch クラスが付かず常時非表示
  *   5. 陣営選択→オープニング→MapScene まで到達しフレームを回す
  *   6. ターン終了を1回通す
- *   7. 上記すべてで例外が0件（ページ全体の未捕捉例外＋GameKitがフレーム内で捕捉した例外）
+ *   7. 隣国への出兵→BattleSceneでヘックス合戦を最大10ラウンド消化→MapSceneへ帰還
+ *   8. 3陣営（足利方・南朝方・地方勢力1家）それぞれ最大65ターン自動進行させ、
+ *      CutsceneScene（年代記イベント演出）・EndingScene（南北朝合一エンディング）への
+ *      到達を含めて例外が出ないか確認する
+ *   9. 上記すべてで例外が0件（ページ全体の未捕捉例外＋GameKitがフレーム内で捕捉した例外）
  *
  * 使い方: node scripts/verify-taihei-boot.mjs
  * 終了コード: 全PASS=0 / FAILあり=1
@@ -146,10 +150,94 @@ async function runFlow(port) {
   await page.waitForTimeout(1500);
   step(`5. ターン終了を1回（${endedOk}）`, n, await total());
 
+  n = await total();
+  const battleSetup = await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG;
+    const st = D.Rule.buildState({ playerCamp: 'nancho' });
+    D.game.changeScene(new D.MapScene(st));
+    const player = st.playerCamp;
+    const mine = Object.values(st.provinces).find(pv => pv.owner === player);
+    const provDef = D.DATA.provById[mine.id];
+    const enemyNeighborId = (provDef.adjacency || []).find(id => st.provinces[id] && st.provinces[id].owner !== player);
+    if (!enemyNeighborId) return { ok: false };
+    D.game.scene._launchAttack(D.game, mine.id, enemyNeighborId);
+    return { ok: true, scene: D.game.scene.constructor.name };
+  });
+  await page.waitForTimeout(400);
+  step(`6. 出兵→BattleSceneへ突入（${JSON.stringify(battleSetup)}）`, n, await total());
+
+  n = await total();
+  const battleOutcome = await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG;
+    let rounds = 0;
+    while (!D.game.scene.result && rounds < 12) { D.game.scene._endRound(D.game); rounds++; }
+    const result = D.game.scene.result;
+    if (result) D.game.scene.onDone(result);
+    return { rounds, result, finalScene: D.game.scene.constructor.name };
+  });
+  await page.waitForTimeout(800);
+  step(`7. 合戦を消化しMapSceneへ帰還（rounds=${battleOutcome.rounds}, finalScene=${battleOutcome.finalScene}）`, n, await total());
+  check('7b. 合戦からMapSceneへ帰還できた', battleOutcome.finalScene === 'MapScene', JSON.stringify(battleOutcome));
+
   const finalScene = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
   const framed = await frameErrors();
   await browser.close();
   return { steps, errors: errors.concat(framed.map(r => `${r.key}（${r.count}回）`)), finalScene };
+}
+
+async function runLongPlay(port, camp) {
+  const browser = await chromium.launch({ executablePath: chromePath, args: ['--autoplay-policy=no-user-gesture-required'] });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', e => errors.push((e.stack || String(e)).split('\n').slice(0, 3).join(' | ')));
+  await page.goto(`http://127.0.0.1:${port}/taihei.html`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => typeof window.TAIHEI_DEBUG !== 'undefined', null, { timeout: 60000 });
+
+  const canvas = await page.$('#game');
+  async function clickCanvas(cx, cy) {
+    const box = await canvas.boundingBox();
+    await page.mouse.click(box.x + box.width * (cx / 1440), box.y + box.height * (cy / 810));
+    await page.waitForTimeout(50);
+  }
+  const frameErrors = async () => page.evaluate(() =>
+    (window.TAIHEI_DEBUG.game.errors || []).map(r => ({ key: r.key, count: r.count }))).catch(() => []);
+
+  await page.evaluate((camp) => {
+    const D = window.TAIHEI_DEBUG;
+    const st = D.Rule.buildState({ playerCamp: camp });
+    D.game.changeScene(new D.MapScene(st));
+  }, camp);
+  await page.waitForTimeout(100);
+
+  let turns = 0, cutscenes = 0, endingReached = false, stuckOn = null;
+  for (let i = 0; i < 65; i++) {
+    const name = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
+    if (name === 'MapScene') {
+      await page.evaluate(() => window.TAIHEI_DEBUG.game.scene._endTurn(window.TAIHEI_DEBUG.game));
+      await page.waitForTimeout(70);
+      turns++;
+    } else if (name === 'CutsceneScene') {
+      cutscenes++;
+      let guard = 0;
+      while ((await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name)) === 'CutsceneScene' && guard < 30) {
+        await clickCanvas(720, 742); // 「次へ」ボタン中央（1クリック目は文字送りスキップも兼ねる）
+        guard++;
+      }
+    } else if (name === 'EndingScene') {
+      endingReached = true;
+      break;
+    } else {
+      stuckOn = name;
+      break;
+    }
+  }
+  const finalScene = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
+  const framed = await frameErrors();
+  await browser.close();
+  return {
+    camp, turns, cutscenes, endingReached, stuckOn, finalScene,
+    errors: errors.concat(framed.map(r => `${r.key}（${r.count}回）`)),
+  };
 }
 
 async function main() {
@@ -160,14 +248,20 @@ async function main() {
   await checkGate(port, '横画面(Pixel 5 landscape)', { ...devices['Pixel 5 landscape'] }, false, true);
   await checkGate(port, 'デスクトップ(非タッチ)', { viewport: { width: 1440, height: 900 } }, false, false);
 
-  // --- 起動〜MapScene〜ターン終了のフロー ---
+  // --- 起動〜MapScene〜合戦〜ターン終了のフロー ---
   const flow = await runFlow(port);
+
+  // --- 3陣営のロングラン（65ターン上限・カットシーン/エンディング到達を含む） ---
+  const longPlays = [];
+  for (const camp of ['ashikaga', 'nancho', 'ouchi']) {
+    longPlays.push(await runLongPlay(port, camp));
+  }
   server.close();
 
   console.log('\n=== ゲート表示条件 ===');
   results.forEach(r => console.log(`  ${r.ok ? '[PASS]' : '[FAIL]'} ${r.name}${r.ok ? '' : '  ' + r.detail}`));
 
-  console.log('\n=== 起動フロー ===');
+  console.log('\n=== 起動〜合戦フロー ===');
   flow.steps.forEach(s => console.log(`  ${s.count === 0 ? '[PASS]' : '[FAIL]'} ${s.name}${s.count ? `  例外${s.count}件` : ''}`));
   console.log(`  最終シーン: ${flow.finalScene}`);
   if (flow.errors.length) {
@@ -175,10 +269,18 @@ async function main() {
     [...new Set(flow.errors)].slice(0, 8).forEach(e => console.log('   ✗ ' + e));
   }
 
+  console.log('\n=== 3陣営ロングラン ===');
+  longPlays.forEach(r => {
+    const ok = r.errors.length === 0 && !r.stuckOn;
+    console.log(`  ${ok ? '[PASS]' : '[FAIL]'} ${r.camp}: turns=${r.turns} cutscenes=${r.cutscenes} endingReached=${r.endingReached} stuckOn=${r.stuckOn || '-'} finalScene=${r.finalScene}`);
+    if (r.errors.length) [...new Set(r.errors)].slice(0, 5).forEach(e => console.log('     ✗ ' + e));
+  });
+
   const gateFail = results.filter(r => !r.ok).length;
   const flowFail = flow.steps.reduce((a, s) => a + (s.count > 0 ? 1 : 0), 0) + (flow.errors.length ? 1 : 0);
-  const totalFail = gateFail + flowFail;
-  console.log(`\n${totalFail === 0 ? 'PASS' : 'FAIL'}: ゲート${gateFail}件・フロー${flowFail}件の不合格`);
+  const longPlayFail = longPlays.reduce((a, r) => a + (r.errors.length > 0 || r.stuckOn ? 1 : 0), 0);
+  const totalFail = gateFail + flowFail + longPlayFail;
+  console.log(`\n${totalFail === 0 ? 'PASS' : 'FAIL'}: ゲート${gateFail}件・フロー${flowFail}件・ロングラン${longPlayFail}件の不合格`);
   process.exit(totalFail === 0 ? 0 : 1);
 }
 
