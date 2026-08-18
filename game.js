@@ -50,6 +50,19 @@
     document.querySelectorAll('[data-action]').forEach(button => button.onclick = () => doAction(button.dataset.action));
     $('#factions').innerHTML = GAME_DATA.factions.map(f => `<div><i style="background:${f.color}"></i><span>${f.name}</span><small>${f.attitude}</small></div>`).join('');
   }
+  function renderFeaturedRoster() {
+    const target = $('#aizu-roster');
+    if (!target) return;
+    const people = GAME_DATA.people.filter(person => person.faction === '会津藩');
+    target.innerHTML = people.map(person => `<button class="featured-person" data-featured-person="${person.id}" title="${person.name}"><img src="${person.portrait}" alt="${person.name}"><span>${person.name}</span><small>${person.role}</small></button>`).join('');
+    target.querySelectorAll('[data-featured-person]').forEach(button => button.onclick = () => {
+      const index = GAME_DATA.people.findIndex(person => person.id === button.dataset.featuredPerson);
+      if (index < 0) return;
+      state.person = index;
+      state.inspector = 'person';
+      renderInspector();
+    });
+  }
   function renderLog(target) { target.innerHTML = `<div class="inspector-heading"><p class="eyebrow">風聞・出来事</p><h2>情勢報告</h2></div><ol>${state.log.map(l => `<li class="${l.kind}">${l.text}</li>`).join('') || '<li>浦賀沖の異国船について、江戸中で噂が広がっている。</li>'}</ol>`; }
   function renderInspector() {
     const target = $('#inspector-content');
@@ -59,7 +72,7 @@
     if (state.inspector === 'chronicle') renderLog(target);
   }
   function renderMapFeed() { $('#map-feed-content').innerHTML = state.log.slice(0, 4).map((entry, index) => `<div><i>${String(state.month).padStart(2,'0')}/${String(Math.max(1, 12 - index)).padStart(2,'0')}</i>${entry.text}</div>`).join(''); }
-  function render() { renderStatus(); renderMap(); renderInspector(); renderActions(); renderMapFeed(); }
+  function render() { renderStatus(); renderMap(); renderInspector(); renderActions(); renderFeaturedRoster(); renderMapFeed(); }
   function doAction(id) {
     const action = GAME_DATA.actions.find(a => a.id === id); if (state.treasury < action.cost) return;
     state.treasury -= action.cost; Object.entries(action.effect).forEach(([key, value]) => state[key] = clamp(state[key] + value));
