@@ -15,6 +15,9 @@
 <meta property="og:image:height" content="630">
 <meta property="og:site_name" content="hide_0001 Portfolio">
 <meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Yuji+Boku&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #05070d;
@@ -36,12 +39,40 @@
   }
   canvas {
     max-width: 96vw;
+    max-height: 88vh;
     border-radius: 16px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: var(--bg);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    touch-action: none;
   }
   .hint { font-size: 13px; color: #94a3b8; text-align: center; }
+  @media (orientation: landscape) and (max-height: 600px) {
+    body { padding: 4px; gap: 4px; }
+    canvas { max-width: 99.5vw; max-height: 97vh; }
+    .hint { display: none; }
+  }
+  .landscape-gate {
+    display: none; position: fixed; inset: 0; z-index: 50; place-items: center;
+    padding: 24px; background: rgba(5,7,13,0.94); text-align: center;
+  }
+  .landscape-gate .gate-card {
+    max-width: 380px; padding: 28px 24px; border: 1px solid rgba(167,139,250,0.35); border-radius: 16px;
+    background: linear-gradient(145deg, rgba(20,26,34,0.98), rgba(8,11,16,0.98));
+    box-shadow: 0 18px 60px rgba(0,0,0,0.7);
+  }
+  .landscape-gate .gate-icon { font-size: 48px; line-height: 1; color: var(--accent-cyan); }
+  .landscape-gate h2 { margin: 12px 0 8px; color: var(--accent-purple); font-size: 22px; letter-spacing: .04em; }
+  .landscape-gate p { margin: 0; color: #94a3b8; line-height: 1.7; font-size: 14px; }
+  .landscape-gate p.en { font-size: 11px; margin-top: 6px; }
+  .landscape-gate button {
+    margin-top: 20px; padding: 10px 22px; border-radius: 10px; border: 1px solid var(--accent-cyan);
+    background: linear-gradient(135deg, rgba(34,211,238,0.22), rgba(34,211,238,0.10));
+    color: var(--accent-cyan); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer;
+  }
+  @media (max-width: 760px) and (orientation: portrait) {
+    body.taihei-touch .landscape-gate { display: grid; }
+  }
 </style>
 </head>
 <body>
@@ -52,6 +83,15 @@
   太平風雲記 — 南北朝・太平記時代(1331-1392)の戦略シミュレーション<br>
   Taihei Fuuunki — a strategy sim set in the Nanboku-chō era (1331-1392).
 </p>
+<div id="landscapeGate" class="landscape-gate" role="dialog" aria-label="横向き推奨 / Landscape recommended">
+  <div class="gate-card">
+    <div class="gate-icon">📱↔️</div>
+    <h2>横向きでプレイ</h2>
+    <p>太平風雲記は横画面表示に最適化されています。<br>端末を横向きにしてください。</p>
+    <p class="en">Landscape mode is recommended for this game.</p>
+    <button type="button">横向き全画面で開始 / Rotate &amp; play</button>
+  </div>
+</div>
 
 <script src="gamekit/gamekit.js"></script>
 <script>
@@ -81,6 +121,35 @@ const canvas = document.getElementById('game');
 const game = new GameKit.Engine(canvas, { width: W, height: H });
 const save = new GameKit.Save('taihei');
 const clamp = GameKit.MathX.clamp;
+
+/* タイトル文字（草書体風の毛筆Webフォント）。読み込み前に描画すると既定フォントへ
+ * フォールバックした状態がちらつくため、BootSceneの Promise.all に合流させて
+ * TitleScene へ遷移する前に確実に読み込みを終える。 */
+const TITLE_FONT = '"Yuji Boku", "Hiragino Mincho ProN", "Segoe UI", serif';
+const fontReady = (document.fonts && document.fonts.load)
+  ? Promise.all([
+      document.fonts.load('600 34px "Yuji Boku"'),
+      document.fonts.load('600 64px "Yuji Boku"'),
+    ]).catch(() => null)
+  : Promise.resolve();
+
+/* モバイル横画面ゲート（sengoku.html/sanguo.html/genpei.html と同じ方式）。
+ * タッチ端末の縦画面でのみ表示し、ボタンで全画面化＋横向き固定を試みる。
+ * screen.orientation.lock は非対応環境もあるため、失敗しても案内文自体で足りる。 */
+(function () {
+  const touchCapable = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 0;
+  document.body.classList.toggle('taihei-touch', touchCapable);
+  const gate = document.getElementById('landscapeGate');
+  gate.querySelector('button').onclick = () => {
+    const el = document.documentElement;
+    const request = el.requestFullscreen || el.webkitRequestFullscreen;
+    try {
+      Promise.resolve(request ? request.call(el) : null).then(() => {
+        if (screen.orientation && screen.orientation.lock) return screen.orientation.lock('landscape');
+      }).catch(() => {});
+    } catch (e) {}
+  };
+})();
 
 const SAVE_VERSION = 1;
 function migrateState(raw) {
@@ -1150,8 +1219,15 @@ function aiTurn(state, campId) {
     }
   }
 
-  // 2) 朝廷工作: 所属朝廷があればcourtRel/kaniの引き上げを狙う
-  if (camp.court && actions < maxA) {
+  // 2) 朝廷工作: 所属朝廷があればcourtRel/kaniの引き上げを狙う。
+  // ただし足利方がAI操作（プレイヤーが他陣営を選択）でcourt==='nancho'かつ未離反の間はスキップする。
+  // このステップは成否に関わらずcourtRelを毎ターン+5前後押し上げるため、史実イベント
+  // 「中先代の乱」（nakasendai_no_ran, courtRel<25で発火し足利方が離反する）をturn4より前に
+  // 機械的に封じてしまい、「①建武の新政成功がturn17でほぼ自動確定する」不具合があった
+  // （2026-08-18 game-balanceエージェント診断。足利方をプレイヤーが選ぶと離反は史実通り発火するが、
+  // 今度はAIに侵攻ロジックが無いため他のエンディングにも到達できずturn61まで進む非対称も判明）。
+  const isAshikagaBeforeBreak = campId === 'ashikaga' && camp.court === 'nancho' && !state.flags.ashikagaBreak;
+  if (camp.court && actions < maxA && !isAshikagaBeforeBreak) {
     const rel = courtRelValue(state, campId, camp.court);
     if (rel < 95) { courtPropose(state, campId, camp.court, 'kani'); actions++; }
   }
@@ -1440,7 +1516,7 @@ function provScreenXY(rect, prov) {
 class BootScene extends GameKit.Scene {
   enter(g) {
     this.status = { jp: '読み込み中…', en: 'Loading…' };
-    Promise.all([dataReady, loadMapImage()]).then(() => {
+    Promise.all([dataReady, loadMapImage(), fontReady]).then(() => {
       this.status = { jp: '読み込み完了', en: 'Loaded' };
       g.changeScene(new TitleScene());
     }).catch((e) => {
@@ -1451,7 +1527,7 @@ class BootScene extends GameKit.Scene {
   update() {}
   draw(ctx) {
     ctx.fillStyle = '#05070d'; ctx.fillRect(0, 0, W, H);
-    txt(ctx, '太平風雲記', W / 2, H / 2 - 46, { font: '600 34px "Hiragino Mincho ProN", "Segoe UI", serif', color: '#22d3ee', align: 'center' });
+    txt(ctx, '太平風雲記', W / 2, H / 2 - 46, { font: `600 34px ${TITLE_FONT}`, color: '#22d3ee', align: 'center' });
     txt(ctx, 'Taihei Fuuunki', W / 2, H / 2 - 8, { font: '13px sans-serif', color: '#a78bfa', align: 'center' });
     txt(ctx, this.status.jp + ' / ' + this.status.en, W / 2, H / 2 + 30, { font: '13px sans-serif', color: '#94a3b8', align: 'center' });
   }
@@ -1494,7 +1570,7 @@ class TitleScene extends GameKit.Scene {
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, 'rgba(5,7,13,0.35)'); grad.addColorStop(1, 'rgba(5,7,13,0.92)');
     ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
-    txt(ctx, '太 平 風 雲 記', W / 2, 210, { font: '600 64px "Hiragino Mincho ProN", "Segoe UI", serif', color: '#e2e8f0', align: 'center' });
+    txt(ctx, '太平風雲記', W / 2, 210, { font: `600 76px ${TITLE_FONT}`, color: '#e2e8f0', align: 'center' });
     txt(ctx, 'TAIHEI FUUUNKI', W / 2, 296, { font: '15px "Segoe UI", sans-serif', color: '#22d3ee', align: 'center' });
     txt(ctx, '南北朝・太平記の時代　1331 — 1392', W / 2, 330, { font: '14px "Hiragino Mincho ProN", serif', color: '#8b98ab', align: 'center' });
     txt(ctx, '忠義は移ろい、朝廷は割れる。 / Loyalty shifts. The court itself is split in two.', W / 2, 368, { font: '13px sans-serif', color: '#a78bfa', align: 'center' });
@@ -1539,7 +1615,7 @@ class FactionSelectScene extends GameKit.Scene {
   }
   draw(ctx, g) {
     this.bd.draw(ctx);
-    txt(ctx, '陣営を選ぶ', 60, 50, { font: '600 30px "Hiragino Mincho ProN", "Segoe UI", serif', color: '#e2e8f0' });
+    txt(ctx, '陣営を選ぶ', 60, 50, { font: `600 34px ${TITLE_FONT}`, color: '#e2e8f0' });
     txt(ctx, 'Choose Your Power', 60, 90, { font: '11px sans-serif', color: '#8b98ab' });
     const p = g.input.pointer;
     let lastGroup = null;
@@ -1635,7 +1711,7 @@ class OpeningScene extends GameKit.Scene {
   }
   draw(ctx, g) {
     this.bd.draw(ctx);
-    txt(ctx, '元弘の乱 / Genkō War', W / 2, 60, { font: '600 30px "Hiragino Mincho ProN", serif', color: '#e2e8f0', align: 'center' });
+    txt(ctx, '元弘の乱 / Genkō War', W / 2, 60, { font: `600 34px ${TITLE_FONT}`, color: '#e2e8f0', align: 'center' });
     frame(ctx, 180, 130, W - 360, H - 130 - 140);
     const shown = Math.min(GENKO_OPENING.jp.length, Math.floor(this.t / 0.32) + 1);
     let y = 168;
@@ -1694,6 +1770,8 @@ class CutsceneScene extends GameKit.Scene {
   draw(ctx, g) {
     this.bd.draw(ctx);
     const ev = this._current();
+    // 年号（算用数字）を含むため毛筆体は使わない: Yuji Bokuは"1"が"7"に見える崩し字形で、
+    // 「1331年」が「7337年」と誤読されるバグを2026-08-18に発見した（見出し全般への展開時に検出）。
     txt(ctx, `【${ev.year}年】${ev.jp}`, W / 2, 92, { font: '600 30px "Hiragino Mincho ProN", serif', color: '#22d3ee', align: 'center' });
     txt(ctx, `[${ev.year}] ${ev.en}`, W / 2, 132, { font: '13px sans-serif', color: '#a78bfa', align: 'center' });
     frame(ctx, 180, 170, W - 360, H - 170 - 146, { fill: 'rgba(10,14,22,0.85)', stroke: 'rgba(34,211,238,0.32)', radius: 14 });
@@ -1795,7 +1873,7 @@ class EndingScene extends GameKit.Scene {
     const state = this.state;
     const def = state.ending === 'scenario_end_fallback' ? fallbackEndingText(state) : (ENDING_TEXTS[state.ending] || ENDING_TEXTS.zenkoku_toitsu);
     txt(ctx, '結末 / Ending', W / 2, 54, { font: '12px sans-serif', color: '#8b98ab', align: 'center' });
-    txt(ctx, def.title.jp, W / 2, 84, { font: '600 36px "Hiragino Mincho ProN", serif', color: '#22d3ee', align: 'center' });
+    txt(ctx, def.title.jp, W / 2, 84, { font: `600 40px ${TITLE_FONT}`, color: '#22d3ee', align: 'center' });
     txt(ctx, def.title.en, W / 2, 130, { font: '13px sans-serif', color: '#a78bfa', align: 'center' });
     frame(ctx, 160, 168, W - 320, 220, { fill: 'rgba(10,14,22,0.85)', stroke: 'rgba(34,211,238,0.35)', radius: 16 });
     let y = 208;
@@ -1837,12 +1915,15 @@ class EndingScene extends GameKit.Scene {
 /* ============================================================================
  * MapScene — 全国図・コマンドバー・朝廷パネル・悪党パネル・年代記ログ（spec 6章 step6）
  * ========================================================================== */
+// コマンドバーのタップ判定がスマホ横画面で小さすぎた（実測21px相当）ため、
+// map/side を16px縮め、その分をcmdバーの高さへ回してボタンを52→68pxへ拡大した
+// （2026-08-18 ブラッシュアップ。全体の縦の合計・各余白は変更前と同一値を維持）。
 const ML = {
   top:  { x: 8, y: 8,   w: W - 16, h: 34 },
-  map:  { x: 8, y: 50,  w: 950, h: 560 },
-  side: { x: 966, y: 50, w: W - 966 - 8, h: 560 },
-  log:  { x: 8, y: 618, w: 950, h: 104 },
-  cmd:  { x: 8, y: 730, w: W - 16, h: 72 },
+  map:  { x: 8, y: 50,  w: 950, h: 544 },
+  side: { x: 966, y: 50, w: W - 966 - 8, h: 544 },
+  log:  { x: 8, y: 602, w: 950, h: 104 },
+  cmd:  { x: 8, y: 714, w: W - 16, h: 88 },
 };
 const MAP_COMMANDS = [
   { id: 'domestic',  jp: '政務', en: 'Domestic' },
@@ -2247,12 +2328,12 @@ class MapScene extends GameKit.Scene {
       const col = i % 2, row = Math.floor(i / 2);
       const bw = (w - 16) / 2;
       const b = {
-        x: x + col * (bw + 16), y: y + row * 58, w: bw, h: 48, jp: def.jp, en: def.en,
+        x: x + col * (bw + 16), y: y + row * 68, w: bw, h: 58, jp: def.jp, en: def.en,
         disabled: pool.count <= 0 || pool.cooldown > 0, onClick: (gg) => this._akutouCommand(gg, kind),
       };
       this.buttons.push(b);
       button(ctx, b, hit(b, p) && !b.disabled);
-      txt(ctx, `基礎成功率 ${Math.round(def.baseSuccess * 100)}%`, b.x + b.w / 2, b.y + b.h - 14, { font: '9px sans-serif', color: '#64748b', align: 'center' });
+      txt(ctx, `基礎成功率 ${Math.round(def.baseSuccess * 100)}%`, b.x + b.w / 2, b.y + b.h - 12, { font: '9px sans-serif', color: '#64748b', align: 'center' });
     });
   }
   _drawChroniclePanel(ctx, g) {
