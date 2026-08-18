@@ -210,7 +210,11 @@ async function runLongPlay(port, camp) {
   await page.waitForTimeout(100);
 
   let turns = 0, cutscenes = 0, endingReached = false, stuckOn = null;
-  for (let i = 0; i < 65; i++) {
+  // イテレーション予算はターン進行だけでなくカットシーンの送りクリックも1回として消費するため、
+  // シナリオ上限(61ターン)へ確実に到達できるよう61より十分大きい値にしてある
+  // （2026-08-18 AIの朝廷工作バグ修正後、全陣営で史実イベントが均等に発火するようになり、
+  // 旧予算65では一部陣営がターン61到達前に打ち切られていた）。
+  for (let i = 0; i < 90; i++) {
     const name = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
     if (name === 'MapScene') {
       await page.evaluate(() => window.TAIHEI_DEBUG.game.scene._endTurn(window.TAIHEI_DEBUG.game));
