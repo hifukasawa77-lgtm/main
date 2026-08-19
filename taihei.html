@@ -52,6 +52,16 @@
     canvas { max-width: 99.5vw; max-height: 97vh; }
     .hint { display: none; }
   }
+  /* フルスクリーン×横向き時は左右の黒帯を解消し画面いっぱいに引き伸ばす（sengoku.html踏襲）。
+     アスペクト比(16:9)と実機比率が違うと伸縮するが、フルスクリーンではその方が
+     「小さくて見づらい」より優先度が高いという深澤の要望（2026-08-19）に基づく。 */
+  body.is-fullscreen { padding: 0; gap: 0; }
+  @media (orientation: landscape) {
+    body.is-fullscreen canvas {
+      width: 100vw; height: 100vh; max-width: none; max-height: none; border-radius: 0; border: 0;
+    }
+    body.is-fullscreen .hint { display: none; }
+  }
   .landscape-gate {
     display: none; position: fixed; inset: 0; z-index: 50; place-items: center;
     padding: 24px; background: rgba(5,7,13,0.94); text-align: center;
@@ -135,7 +145,9 @@ const fontReady = (document.fonts && document.fonts.load)
 
 /* モバイル横画面ゲート（sengoku.html/sanguo.html/genpei.html と同じ方式）。
  * タッチ端末の縦画面でのみ表示し、ボタンで全画面化＋横向き固定を試みる。
- * screen.orientation.lock は非対応環境もあるため、失敗しても案内文自体で足りる。 */
+ * screen.orientation.lock は非対応環境もあるため、失敗しても案内文自体で足りる。
+ * フルスクリーン状態は body.is-fullscreen に反映し、CSS側で横向き時にcanvasを
+ * 100vw/100vhへ引き伸ばして左右の黒帯を消す（sengoku.htmlのis-fullscreen踏襲）。 */
 (function () {
   const touchCapable = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 0;
   document.body.classList.toggle('taihei-touch', touchCapable);
@@ -149,6 +161,12 @@ const fontReady = (document.fonts && document.fonts.load)
       }).catch(() => {});
     } catch (e) {}
   };
+  const onFSChange = () => {
+    const on = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    document.body.classList.toggle('is-fullscreen', on);
+  };
+  document.addEventListener('fullscreenchange', onFSChange);
+  document.addEventListener('webkitfullscreenchange', onFSChange);
 })();
 
 const SAVE_VERSION = 1;
@@ -1951,20 +1969,142 @@ class MapScene extends GameKit.Scene {
     this.panel = null; this.courtTab = 'nancho';
     this.notice = null; this.noticeT = 0;
     this.buttons = [];
+    this.t = 0;
+    // 地図の拡大縮小（deep澤要望2026-08-19）。cx/cyはワールド座標（zoom=1のときの
+    // provScreenXY基準）での中心。zoom=1が「地図全体を映す」既定倍率で下限に固定する。
+    this.cam = { zoom: 1, cx: ML.map.x + ML.map.w / 2, cy: ML.map.y + ML.map.h / 2, min: 1, max: 3.5 };
+    this._touchState = null;
+    this._panState = null;
+    this._suppressClickUntil = 0;
+    this._bindMapZoomPan();
     save.set('autosave', this.state);
   }
+  exit() { this._unbindMapZoomPan(); }
   _notice(m) { this.notice = m; this.noticeT = 3.2; }
+  _mapCenter() { return { x: ML.map.x + ML.map.w / 2, y: ML.map.y + ML.map.h / 2 }; }
+  _camApply(ctx) {
+    const c = this.cam, m = this._mapCenter();
+    ctx.translate(m.x, m.y); ctx.scale(c.zoom, c.zoom); ctx.translate(-c.cx, -c.cy);
+  }
+  _screenToWorld(sx, sy) {
+    const c = this.cam, m = this._mapCenter();
+    return { x: (sx - m.x) / c.zoom + c.cx, y: (sy - m.y) / c.zoom + c.cy };
+  }
+  _worldToScreen(wx, wy) {
+    const c = this.cam, m = this._mapCenter();
+    return { x: (wx - c.cx) * c.zoom + m.x, y: (wy - c.cy) * c.zoom + m.y };
+  }
+  _clampCam() {
+    const c = this.cam;
+    c.zoom = clamp(c.zoom, c.min, c.max);
+    const halfW = (ML.map.w / 2) / c.zoom, halfH = (ML.map.h / 2) / c.zoom;
+    c.cx = clamp(c.cx, ML.map.x + halfW, ML.map.x + ML.map.w - halfW);
+    c.cy = clamp(c.cy, ML.map.y + halfH, ML.map.y + ML.map.h - halfH);
+  }
+  _zoomAt(sx, sy, factor) {
+    const before = this._screenToWorld(sx, sy);
+    this.cam.zoom = clamp(this.cam.zoom * factor, this.cam.min, this.cam.max);
+    const m = this._mapCenter();
+    this.cam.cx = before.x - (sx - m.x) / this.cam.zoom;
+    this.cam.cy = before.y - (sy - m.y) / this.cam.zoom;
+    this._clampCam();
+  }
+  _clientToCanvasXY(clientX, clientY) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (clientX - r.left) / r.width * W, y: (clientY - r.top) / r.height * H };
+  }
+  /* 地図エリアのホイール拡大・ピンチ拡大・ドラッグ移動・ダブルクリックでリセット。
+   * GameKit.Input（mousedown/touchstart等）とは別に canvas へ直接張る
+   * （複数指の距離やホイールdeltaはGameKitの単純ポインタでは取れないため）。
+   * 複数リスナーが同じイベントに載っても preventDefault は互いを妨げない。 */
+  _bindMapZoomPan() {
+    this._onWheel = (e) => {
+      if (this.panel) return;
+      const p = this._clientToCanvasXY(e.clientX, e.clientY);
+      if (!inRectXY(ML.map, p)) return;
+      e.preventDefault();
+      this._zoomAt(p.x, p.y, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+    };
+    this._onTouchStart = (e) => {
+      if (this.panel) return;
+      if (e.touches.length === 2) {
+        const p1 = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
+        const p2 = this._clientToCanvasXY(e.touches[1].clientX, e.touches[1].clientY);
+        if (!inRectXY(ML.map, p1) && !inRectXY(ML.map, p2)) return;
+        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        this._touchState = { dist, zoom: this.cam.zoom, world: this._screenToWorld(mid.x, mid.y) };
+        this._panState = null;
+        e.preventDefault();
+      } else if (e.touches.length === 1) {
+        const p = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
+        if (!inRectXY(ML.map, p)) return;
+        this._panState = { startX: p.x, startY: p.y, camCx: this.cam.cx, camCy: this.cam.cy, dragging: false };
+      }
+    };
+    this._onTouchMove = (e) => {
+      if (e.touches.length === 2 && this._touchState) {
+        const p1 = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
+        const p2 = this._clientToCanvasXY(e.touches[1].clientX, e.touches[1].clientY);
+        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        this.cam.zoom = clamp(this._touchState.zoom * (dist / Math.max(1, this._touchState.dist)), this.cam.min, this.cam.max);
+        const m = this._mapCenter();
+        this.cam.cx = this._touchState.world.x - (mid.x - m.x) / this.cam.zoom;
+        this.cam.cy = this._touchState.world.y - (mid.y - m.y) / this.cam.zoom;
+        this._clampCam();
+        e.preventDefault();
+      } else if (e.touches.length === 1 && this._panState) {
+        const p = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
+        const dx = p.x - this._panState.startX, dy = p.y - this._panState.startY;
+        if (Math.abs(dx) + Math.abs(dy) > 6) this._panState.dragging = true;
+        if (this._panState.dragging && this.cam.zoom > 1.001) {
+          this.cam.cx = this._panState.camCx - dx / this.cam.zoom;
+          this.cam.cy = this._panState.camCy - dy / this.cam.zoom;
+          this._clampCam();
+          e.preventDefault();
+        }
+      }
+    };
+    this._onTouchEnd = (e) => {
+      if (e.touches.length < 2 && this._touchState) { this._touchState = null; this._suppressClickUntil = this.t + 0.3; }
+      if (e.touches.length === 0 && this._panState) {
+        if (this._panState.dragging) this._suppressClickUntil = this.t + 0.15;
+        this._panState = null;
+      }
+    };
+    this._onDblClick = (e) => {
+      if (this.panel) return;
+      const p = this._clientToCanvasXY(e.clientX, e.clientY);
+      if (!inRectXY(ML.map, p)) return;
+      this.cam.zoom = this.cam.min; this.cam.cx = ML.map.x + ML.map.w / 2; this.cam.cy = ML.map.y + ML.map.h / 2;
+    };
+    canvas.addEventListener('wheel', this._onWheel, { passive: false });
+    canvas.addEventListener('touchstart', this._onTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', this._onTouchMove, { passive: false });
+    canvas.addEventListener('touchend', this._onTouchEnd);
+    canvas.addEventListener('dblclick', this._onDblClick);
+  }
+  _unbindMapZoomPan() {
+    if (this._onWheel) canvas.removeEventListener('wheel', this._onWheel);
+    if (this._onTouchStart) canvas.removeEventListener('touchstart', this._onTouchStart);
+    if (this._onTouchMove) canvas.removeEventListener('touchmove', this._onTouchMove);
+    if (this._onTouchEnd) canvas.removeEventListener('touchend', this._onTouchEnd);
+    if (this._onDblClick) canvas.removeEventListener('dblclick', this._onDblClick);
+  }
   _provAt(px, py) {
-    let best = null, bd = 11;
+    const w = this._screenToWorld(px, py);
+    let best = null, bd = 11 / this.cam.zoom;
     for (const prov of DATA.provinces) {
       const p = provScreenXY(ML.map, prov);
-      const d = Math.hypot(p.x - px, p.y - py);
+      const d = Math.hypot(p.x - w.x, p.y - w.y);
       if (d < bd) { bd = d; best = prov.id; }
     }
     return best;
   }
   update(dt, g) {
     this.bd.update(dt);
+    this.t += dt;
     if (this.noticeT > 0) this.noticeT -= dt;
     const p = g.input.pointer;
     this.hoverProv = (!this.panel && inRectXY(ML.map, p)) ? this._provAt(p.x, p.y) : null;
@@ -1974,6 +2114,7 @@ class MapScene extends GameKit.Scene {
       b.onClick(g);
       return;
     }
+    if (this._touchState || this.t < this._suppressClickUntil) return;
     if (!this.panel && this.hoverProv) {
       this.sel = this.hoverProv;
       g.audio.jingle([{ f: 440, d: 0.05 }]);
@@ -2090,13 +2231,17 @@ class MapScene extends GameKit.Scene {
     frame(ctx, ML.map.x, ML.map.y, ML.map.w, ML.map.h, { fill: '#070b13' });
     ctx.save();
     ctx.beginPath(); ctx.rect(ML.map.x, ML.map.y, ML.map.w, ML.map.h); ctx.clip();
+    // ズーム/パンが掛かる内容（地図画像・街道線・国マーカー）はワールド座標のまま描き、
+    // ctx.scaleで拡大する。線幅・半径はズームで太らないよう毎回 /this.cam.zoom で相殺する。
+    ctx.save();
+    this._camApply(ctx);
     if (ASSETS_RT.mapReady) {
       const t = mapTransform(ML.map);
       ctx.save(); ctx.globalAlpha = 0.55;
       ctx.drawImage(ASSETS_RT.map, t.ox, t.oy, t.dw, t.dh);
       ctx.restore();
     }
-    ctx.save(); ctx.strokeStyle = 'rgba(148,163,184,0.18)'; ctx.lineWidth = 1;
+    ctx.save(); ctx.strokeStyle = 'rgba(148,163,184,0.18)'; ctx.lineWidth = 1 / this.cam.zoom;
     const seen = new Set();
     for (const prov of DATA.provinces) {
       const a = provScreenXY(ML.map, prov);
@@ -2115,19 +2260,27 @@ class MapScene extends GameKit.Scene {
       const owner = pstate ? pstate.owner : null;
       const color = owner ? campColorOf(owner) : '#475569';
       const isSel = this.sel === prov.id, isHover = this.hoverProv === prov.id;
-      ctx.beginPath(); ctx.arc(sp.x, sp.y, isSel ? 7 : isHover ? 6 : 4.5, 0, Math.PI * 2);
+      const r = (isSel ? 7 : isHover ? 6 : 4.5) / this.cam.zoom;
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
       ctx.fillStyle = color; ctx.fill();
-      ctx.lineWidth = isSel ? 2.4 : 1; ctx.strokeStyle = isSel ? '#22d3ee' : 'rgba(0,0,0,0.6)'; ctx.stroke();
+      ctx.lineWidth = (isSel ? 2.4 : 1) / this.cam.zoom; ctx.strokeStyle = isSel ? '#22d3ee' : 'rgba(0,0,0,0.6)'; ctx.stroke();
       if (pstate && pstate.facility) {
-        ctx.beginPath(); ctx.arc(sp.x, sp.y, (isSel ? 7 : 4.5) + 3, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(167,139,250,0.85)'; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.beginPath(); ctx.arc(sp.x, sp.y, r + 3 / this.cam.zoom, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(167,139,250,0.85)'; ctx.lineWidth = 1.2 / this.cam.zoom; ctx.stroke();
       }
     }
+    ctx.restore();
+    // ツールチップ（選択/ホバー中の国名ラベル）はズームの影響を受けないよう、
+    // ワールド座標→スクリーン座標に変換した位置に固定サイズで描く。
     if (this.sel || this.hoverProv) {
       const id = this.hoverProv || this.sel;
-      const prov = DATA.provById[id], sp = provScreenXY(ML.map, prov);
+      const prov = DATA.provById[id], wp = provScreenXY(ML.map, prov), sp = this._worldToScreen(wp.x, wp.y);
       frame(ctx, sp.x + 8, sp.y - 20, 150, 20, { fill: 'rgba(5,7,13,0.88)', stroke: 'rgba(34,211,238,0.4)', radius: 4 });
       txt(ctx, fitText(ctx, `${prov.jp} / ${prov.en}`, 140, '11px sans-serif'), sp.x + 14, sp.y - 16, { font: '11px sans-serif', color: '#e2e8f0' });
+    }
+    if (this.cam.zoom > 1.02) {
+      txt(ctx, `拡大 ${Math.round(this.cam.zoom * 100)}% ・ ダブルクリックでリセット / ${Math.round(this.cam.zoom * 100)}% zoom, double-click to reset`,
+        ML.map.x + ML.map.w - 10, ML.map.y + ML.map.h - 18, { font: '10px sans-serif', color: 'rgba(226,232,240,0.7)', align: 'right' });
     }
     ctx.restore();
   }
