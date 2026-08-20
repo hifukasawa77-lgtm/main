@@ -48,6 +48,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0023-verification-integrity-and-daily-backfill]] — 検査スクリプトの健全性を横断ルール化＋Daily骨組み生成を機械化（backfill-daily.sh）
 - [[0024-encoding-and-required-check-guards]] — 文字化け・const二重定義・必須検査の未実行を release-check で機械検出＋検査#4の腐り修正
 - [[0025-csv-sync-direction-and-newline-preservation]] — 正本CSVはゲームへ追随（同期は検査FAIL箇所だけ）＋改行/BOM保持・派生列の再生成スクリプト
+- [[0026-vault-boundary-docs-and-known-bug-lint]] — claudechord-vault/obsidian-vaultの境界明文化＋肖像index/source-rect直書きを横断機械検査化
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
