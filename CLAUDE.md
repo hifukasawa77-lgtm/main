@@ -9,7 +9,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
-- `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。詳細: `claudechord-vault/README.md`）
+- `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。`obsidian-vault/`（第二の脳）とは別物。使い分けは「Obsidian メモリ層（Claudechord Vault）」節の早見表を参照。詳細: `claudechord-vault/README.md`）
 
 ## デザイン・スタイルのルール
 - カラースキーム: 黒背景 + アクセントカラー（シアン / パープル系）※サイバーパンク的演出は使用禁止
@@ -47,6 +47,26 @@ node scripts/verify-game-assets.mjs                               # 全ページ
 - `verify-game-assets.mjs` は「全参照が実在ファイルを指すか」の静的検査と、
   実際にページを開いた404検出の2段。**静的検査だけでは動的パスを見逃す**
 
+## 既知の無言バグパターンの機械検査（横断・全ゲーム共通）
+
+「肖像スロットのindexずれ」「source-rectの解像度直書き」はどちらも例外もエラーも出さずに
+絵だけが無言でずれる/消えるバグで、sengoku/sanguo/taihei で複数回踏んできた（このファイルの
+各所に個別の知見として記載）。目視レビュー任せだと再発するため、横断の機械検査を用意した。
+
+```bash
+node scripts/verify-known-bug-patterns.mjs   # 肖像アトラスindex配列の末尾追加チェック＋drawImage直書き監査
+```
+
+- **検査A（✗ブロッキング）**: 肖像アトラスのindex割り当てに使う配列（`assets/sengoku/generals.json`
+  の `generals` / `sanguo.html` の `GENERAL_IDS` 等）は「末尾追加のみ」が不変条件。スクリプト内の
+  `KNOWN_INDEX_SENSITIVE_ARRAYS` に登録した配列について、比較対象（既定HEAD）時点の並びが現在の
+  並びの先頭一致（prefix）になっているかを機械確認する。**新しいゲームで肖像アトラス等の
+  index依存割り当てを足したら、この登録簿に追加すること**（登録し忘れると検査がすり抜ける）
+- **検査B（△警告・非ブロッキング）**: 全ゲームHTMLを横断し、`drawImage` の9引数呼び出しで
+  source-rect（sx,sy,sWidth,sHeight）が数値リテラル直書きになっている箇所を検出する。
+  該当箇所は `scaleSrcRect`（`sengoku.html` に実装例あり）等で解像度非依存化しているか、
+  対象アセットの解像度が今後変わらない前提かを目視確認すること
+
 ## 戦国風雲記の攻城ヘックス（侵入可否）
 
 攻城戦のヘックスは「侵入出来る／破壊すれば侵入出来る／侵入出来ない」の3分類で、
@@ -78,6 +98,7 @@ node scripts/verify-castle-layouts.mjs                      # 全24城を機械�
 
 ```bash
 node scripts/verify-sanguo-boot.mjs   # 起動→マップ→増援→政務→肖像→一騎打ち→AI→セーブ互換（17項目）
+node scripts/verify-known-bug-patterns.mjs # GENERAL_IDSの末尾追加チェック含む（横断・全ゲーム共通）
 ```
 
 - 検査は `window.__SANGUO_TEST=true` を `addInitScript` で立てて `window.SANGUO_DEBUG` ブリッジを開ける。
@@ -100,6 +121,7 @@ node scripts/verify-castle-layouts.mjs # 攻城レイアウト24城
 node scripts/verify-map-assets.mjs     # マップアイコンが実際に絵として描かれるか（アセットを差し替えたら必須）
 node scripts/verify-force-list.mjs     # force_list.csv の全行がゲーム内マーカーと一致するか
 node scripts/verify-sengoku-balance.mjs # 長期進行（150ターン×3試行）で停止・例外・勢力淘汰の破綻がないか
+node scripts/verify-known-bug-patterns.mjs # generals.jsonの末尾追加チェック含む（横断・全ゲーム共通）
 ```
 
 - **タイトル画面が出た＝起動成功ではない**。描画ループの例外は「背景画像だけ残してUIが出ない」形で現れ、タイトルは無事に出る。必ず `verify-sengoku-boot.mjs` でマップ画面まで入って確かめること（2026-08-02: `_drawRoads` の `preview is not defined` を「アセット読込が重い」「roundRect非対応」と誤診して3コミット費やした）
@@ -200,6 +222,7 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 - 重要な意思決定・学び・「メモして」等の指示があった場合は `obsidian-vault/` へ追記する。書き込みルールの詳細は `.claude/skills/second-brain/SKILL.md` を参照
 - **再帰的自己改善ループ**: 蓄積（`/second-brain`）→ 想起（recall hook）→ 反映（`/self-improve`）の閉ループで運用する。セッションの区切りや同種のミス再発時は `/self-improve` で、Vaultの学びを最も狭く効く宛先（該当エージェント定義 / CLAUDE.md / スキル / フック）へ昇格させる。詳細は `.claude/skills/self-improve/SKILL.md`
 - PMOの `pmo/`（Google Drive、ステークホルダー向け進捗管理）とは役割が異なる。本Vaultは個人の知的資産（意思決定の理由・学び）を蓄積する
+- `claudechord-vault/`（後述）とは役割が異なる二重の「Obsidian メモリ層」。書き込み先に迷ったら後述の使い分け早見表を参照
 
 ## Git
 - メインブランチ: `main`
@@ -211,6 +234,18 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 
 `claudechord-vault/` を Claudechord（本エージェントハーネス）の**単一ナレッジ／メモリ層**とする。
 要件定義・設計・評価・リスク・マーケ等の成果物をここに集約し、エージェントは `[[ウィキリンク]]` で相互参照する。
+
+### `obsidian-vault/` との使い分け早見表
+
+どちらも「Obsidian メモリ層」と呼んでいるため紛らわしいが、**主体と中身が違う**。書き込み先に迷ったら以下で判定する。
+
+| 観点 | `obsidian-vault/`（第二の脳） | `claudechord-vault/`（本セクション） |
+|---|---|---|
+| 主体 | Claude Code自身の永続メモリ | エージェントパイプライン（Planner〜Marketer）の成果物置き場 |
+| 中身 | ADR（意思決定ログ）・知見・Daily作業記録 | 要件定義書・設計書・評価/法務レポート等の**成果物そのもの** |
+| 読み書き | Claude Code（SessionStart hookが自動想起） | 各エージェント（Planner/Evaluator/Legal-Checker等）が作成・参照 |
+| frontmatter | `type`/`tags`等（second-brainスキルの書式） | `type`/`project`/`status`/`agent`等（Dataview集計前提・規約厳守） |
+| 迷ったときの目安 | 「このセッションで学んだこと・決めたこと」 | 「パイプラインが生成した成果物ドキュメント」 |
 
 - **正本**: `claudechord-vault/`（git 管理）。Google Drive `pmo/` は配布用ミラー
 - **frontmatter 規約必須**: `type / project / status / agent` ＋（評価）`eval_score / spec_score / revision_count / verdict`、（法務）`risk_level`。語彙は規約から外さない（Dataview 集計が壊れる）
