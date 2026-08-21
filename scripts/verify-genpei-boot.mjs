@@ -245,7 +245,18 @@ const phase3 = await page.evaluate(() => {
   const siege = D.initBattle(st, { fid: 'kamakura', from: 'tachi_kamakura', to: 'kisaku_odawara', troops: 3000 });
   out.modes = { field: field.mode, siege: siege.mode };
   out.units = { field: field.units.length, siege: siege.units.length };
-  out.walls = siege.terrain.flat().filter((t) => t === 'saku' || t === 'sakamogi').length;
+  out.walls = siege.terrain.flat().filter((t) => ['saku', 'sakamogi', 'palisade'].includes(t)).length;
+  const fort = D.initBattle(st, { fid: 'kamakura', from: 'kokufu_izu', to: 'toride_hashimoto', troops: 3000 });
+  const seki = D.initBattle(st, { fid: 'kamakura', from: 'kokufu_izu', to: 'sekisho_usui', troops: 3000 });
+  const temple = D.initBattle(st, { fid: 'kamakura', from: 'kokufu_izu', to: 'tera_enryakuji', troops: 3000 });
+  const gosho = D.initBattle(st, { fid: 'kamakura', from: 'kokufu_izu', to: 'tachi_hiraizumi', troops: 3000 });
+  out.art = { 城柵: siege.artId, 砦: fort.artId, 関: seki.artId, 寺: temple.artId,
+              御所: gosho.artId, 国府: field.artId };
+  out.collision = {
+    谷底不可: !B.canEnter(seki, seki.units[0], D.TERRAIN.ravine),
+    関の柵あり: seki.terrain.flat().includes('palisade'),
+    関の虎口あり: seki.terrain.flat().includes('gate'),
+  };
 
   // (b) ★騎射の間合い — 距離1の威力が距離2の半分以下に落ちること
   const b = field;
@@ -284,8 +295,12 @@ const phase3 = await page.evaluate(() => {
   return out;
 });
 check('19. 合戦の盤面が組める（野戦・攻城）',
-  phase3.modes.field === 'field' && phase3.modes.siege === 'siege' && phase3.walls > 0,
-  JSON.stringify({ ...phase3.modes, 柵: phase3.walls, 隊: phase3.units }));
+  phase3.modes.field === 'field' && phase3.modes.siege === 'siege' && phase3.walls > 0
+  && phase3.art.城柵 === 'josaku_siege' && phase3.art.砦 === 'fort_siege'
+  && phase3.art.関 === 'seki' && phase3.art.寺 === 'temple'
+  && phase3.art.御所 === 'gosho' && phase3.art.国府 === 'kokufu'
+  && phase3.collision.谷底不可 && phase3.collision.関の柵あり && phase3.collision.関の虎口あり,
+  JSON.stringify({ ...phase3.modes, 柵: phase3.walls, 隊: phase3.units, art: phase3.art, collision: phase3.collision }));
 // ★騎射の間合いが効いていること。密着で威力が落ちないなら「近づかせない」戦術が消える
 check('20. ★騎射は密着すると威力が落ちる',
   phase3.kisha.melee < phase3.kisha.ranged * 0.6, JSON.stringify(phase3.kisha));
@@ -313,10 +328,11 @@ const phase4 = await page.evaluate(() => {
   // (c) ★海を越える出兵は海戦になる
   const nav = D.initBattle(st, { fid: 'kamakura', from: acrossFrom.id, to: acrossTo.id, troops: 4000 });
   out.mode = nav.mode;
-  out.sea = nav.terrain.flat().filter((t) => t === 'sea').length;
+  out.sea = nav.terrain.flat().filter((t) => t === 'sea' || t === 'deep_sea').length;
 
   // (d) ★潮が反転し、順潮側の移動力と射程が伸びる
   const u = nav.units.find((x) => x.side === 'atk');
+  out.token = D.hexTokenKind(nav, u);
   const before = { tide: nav.tide, move: B.moveOf(nav, u), range: B.rangeOf(nav, u)[1] };
   nav.round = 1 + 4; B.tickTide(nav);
   const after = { tide: nav.tide, move: B.moveOf(nav, u), range: B.rangeOf(nav, u)[1] };
@@ -338,8 +354,9 @@ check('23. 水軍が起きている', phase4.suigun.length === 4, phase4.suigun.
 check('24. ★湊を持たない勢力は海を越えられない',
   phase4.noPort && phase4.noPort.ok === false && phase4.withPort && phase4.withPort.ok === true,
   JSON.stringify({ 湊なし: phase4.noPort, 湊あり: phase4.withPort }));
-check('25. ★海を越える出兵は海戦になる', phase4.mode === 'naval' && phase4.sea > 0,
-  JSON.stringify({ mode: phase4.mode, 海マス: phase4.sea }));
+check('25. ★海を越える出兵は海戦になり、船型の駒を使う',
+  phase4.mode === 'naval' && phase4.sea > 0 && phase4.token === 'ship',
+  JSON.stringify({ mode: phase4.mode, 海マス: phase4.sea, 駒: phase4.token }));
 check('26. ★潮が反転し順潮側の移動力と射程が伸びる',
   phase4.tide.before.tide !== phase4.tide.after.tide
   && (phase4.tide.before.move !== phase4.tide.after.move || phase4.tide.before.range !== phase4.tide.after.range),
@@ -580,6 +597,26 @@ check('38. ★地形は拠点ごとに変わる／自勢力は一覧に残る／
   && brush.duel.death && brush.duel.討死ログ && brush.duel.敗者側士気.every((m) => m < 100 - 18),
   JSON.stringify({ seed: brush.seed, side: brush.side, duel: brush.duel }));
 
+/* 39. 実際の BattleScene で背景と可動駒の画像が読み込まれること */
+await page.evaluate(() => window.GENPEI_DEBUG.gotoBattle('s1180', 'kamakura', 'kokufu_izu', 'sekisho_usui'));
+await page.waitForFunction(() => {
+  const G = window.GENPEI_DEBUG, sc = G.game.scene;
+  return sc && sc.constructor.name === 'BattleScene' && G.ASSETS.hexBattleBg.seki
+    && sc.b.units.every((u) => G.ASSETS.hexBattleTokens[G.hexTokenKey(sc.b, u)]);
+}, null, { timeout: 20000 }).catch(() => {});
+const battleAssets = await page.evaluate(() => {
+  const G = window.GENPEI_DEBUG, b = G.game.scene.b;
+  return { artId: b.artId, background: !!G.ASSETS.hexBattleBg[b.artId],
+    tokens: b.units.filter((u) => !!G.ASSETS.hexBattleTokens[G.hexTokenKey(b, u)]).length,
+    units: b.units.length };
+});
+check('39. GPT-image ヘックス背景と可動駒が合戦画面へ読み込まれる',
+  battleAssets.artId === 'seki' && battleAssets.background && battleAssets.tokens === battleAssets.units,
+  JSON.stringify(battleAssets));
+
+const battleShot = path.join(ROOT, 'genpei-battle.png');
+await page.screenshot({ path: battleShot });
+
 /* 11. ★例外の合算（pageerror だけでは素通りする） */
 const engineErrors = await page.evaluate(() => window.GENPEI_DEBUG.errors().map((e) => `${e.key} ×${e.count}`));
 check('10. pageerror が0件', pageErrors.length === 0, pageErrors.slice(0, 3).join(' / '));
@@ -597,5 +634,6 @@ if (ctxServer) ctxServer.server.close();
 console.log(`\n源平争乱記 起動検査（${USE_FILE ? 'file://' : 'http'}）`);
 for (const c of checks) console.log(`  ${c.ok ? '✓' : '✗'} ${c.name}${c.detail ? ` — ${c.detail}` : ''}`);
 console.log(`  スクリーンショット: ${path.relative(ROOT, shot)}`);
+console.log(`  合戦スクリーンショット: ${path.relative(ROOT, battleShot)}`);
 if (fails.length) { console.error(`\n✗ FAIL ${fails.length}件`); process.exit(1); }
 console.log('\n✓ PASS — 起動して遊べる');

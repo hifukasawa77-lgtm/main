@@ -1436,6 +1436,68 @@ const BATTLE_BG_MATCH = [
   [/宇治/, 'ujigawa'], [/一ノ谷|一谷/, 'ichinotani'], [/屋島/, 'yashima'], [/壇/, 'dannoura'],
 ];
 function battleBgFor(jp) { const m = BATTLE_BG_MATCH.find(([re]) => re.test(jp)); return m ? m[1] : null; }
+/* 可動ヘックス戦の背景と駒。背景の絵と、移動・侵入判定を行う論理盤面は別レイヤーにする。 */
+const HEX_BATTLE_ROOT = 'assets/genpei/hex-battles/';
+const HEX_BATTLE_BG_FILES = {
+  uji_byodoin: 'backgrounds/01-uji-byodoin-bg.png',
+  ishibashiyama: 'backgrounds/02-ishibashiyama-bg.png',
+  fujigawa: 'backgrounds/03-fujigawa-bg.png',
+  sunomata: 'backgrounds/04-sunomata-bg.png',
+  hiuchi_castle: 'backgrounds/05-hiuchi-castle-bg.png',
+  kurikara_pass: 'backgrounds/06-kurikara-pass-bg.png',
+  mizushima: 'backgrounds/07-mizushima-bg.png',
+  uji_river: 'backgrounds/08-uji-river-bg.png',
+  awazu: 'backgrounds/09-awazu-bg.png',
+  ichinotani: 'backgrounds/10-ichinotani-bg.png',
+  fujito: 'backgrounds/11-fujito-bg.png',
+  yashima: 'backgrounds/12-yashima-bg.png',
+  dannoura: 'backgrounds/13-dannoura-bg.png',
+  josaku_siege: 'backgrounds/14-josaku-siege-bg.png',
+  fort_siege: 'backgrounds/15-fort-siege-bg.png',
+  seki: 'backgrounds/16-seki-bg.png',
+  temple: 'backgrounds/17-temple-bg.png',
+  gosho: 'backgrounds/18-gosho-bg.png',
+  kokufu: 'backgrounds/19-kokufu-bg.png',
+};
+const HEX_BATTLE_TOKEN_FILES = {
+  genji_infantry: 'tokens/genji-infantry.png', genji_archer: 'tokens/genji-archer.png',
+  genji_cavalry: 'tokens/genji-cavalry.png', genji_commander: 'tokens/genji-commander.png',
+  genji_ship: 'tokens/genji-ship.png',
+  taira_infantry: 'tokens/taira-infantry.png', taira_archer: 'tokens/taira-archer.png',
+  taira_cavalry: 'tokens/taira-cavalry.png', taira_commander: 'tokens/taira-commander.png',
+  taira_ship: 'tokens/taira-ship.png',
+};
+const HEX_BATTLE_HISTORICAL_MATCH = [
+  [/平等院/, 'uji_byodoin'], [/石橋山/, 'ishibashiyama'], [/富士川/, 'fujigawa'],
+  [/墨俣/, 'sunomata'], [/燧|火打/, 'hiuchi_castle'], [/倶利伽羅/, 'kurikara_pass'],
+  [/水島/, 'mizushima'], [/宇治川/, 'uji_river'], [/粟津/, 'awazu'],
+  [/一ノ谷|一谷/, 'ichinotani'], [/藤戸/, 'fujito'], [/屋島/, 'yashima'],
+  [/壇[ノ之]?浦/, 'dannoura'],
+];
+function hexBattleBgFor(target, mode) {
+  if (!target) return null;
+  const jp = target.jp || '';
+  const historical = HEX_BATTLE_HISTORICAL_MATCH.find(([re]) => re.test(jp));
+  if (historical) return historical[1];
+  if (/御所|御所跡|殿$/.test(jp)) return 'gosho';
+  if (target.type === 'kisaku') return 'josaku_siege';
+  if (target.type === 'toride') return 'fort_siege';
+  if (target.type === 'sekisho') return 'seki';
+  if (target.type === 'tera' || target.type === 'jinja') return 'temple';
+  if (target.type === 'tachi') return 'gosho';
+  if (target.type === 'kokufu') return 'kokufu';
+  return mode === 'siege' ? 'fort_siege' : null;
+}
+function hexTokenSide(fid) { return fid === 'taira' ? 'taira' : 'genji'; }
+function terrainUnitKind(u) {
+  return u.type === 'kisha' ? 'cavalry' : u.type === 'yumi' ? 'archer' : 'infantry';
+}
+function hexTokenKind(b, u) {
+  if (b.mode === 'naval' || u.type === 'kako') return 'ship';
+  if (/0$/.test(u.id)) return 'commander';
+  return terrainUnitKind(u);
+}
+function hexTokenKey(b, u) { return `${hexTokenSide(u.faction)}_${hexTokenKind(b, u)}`; }
 const EVENT_ART_ROOT = 'assets/genpei/events/';
 const EVENT_ART_IDS = ['mochihito-decree', 'kiyomori-death', 'nanto-shoutou', 'miyako-ochi', 'atsumori', 'nasu-no-yoichi', 'antoku-suibotsu', 'koromogawa'];
 const EVENT_ART_BY_FX = { nanto: 'nanto-shoutou', kiyomori_death: 'kiyomori-death', miyako_ochi: 'miyako-ochi', dannoura: 'antoku-suibotsu' };
@@ -1457,6 +1519,7 @@ const ASSETS = {
   portraits: {}, portraitsReady: false,
   siteIcons: { province: {}, local: {}, detail: {} }, siteIconsReady: false,
   battleBg: {}, battleBgReady: false,
+  hexBattleBg: {}, hexBattleTokens: {}, hexBattlePending: {},
   eventArt: {}, eventArtReady: false,
 };
 const MAP_NATIVE_W = 1672;
@@ -1514,6 +1577,29 @@ function loadBattleBg() {
     ASSETS.battleBgReady = true;
     return loaded.filter(Boolean).length;
   });
+}
+function loadHexBattleImage(bucket, key, file) {
+  if (ASSETS[bucket][key]) return Promise.resolve(true);
+  const pendingKey = `${bucket}:${key}`;
+  if (ASSETS.hexBattlePending[pendingKey]) return ASSETS.hexBattlePending[pendingKey];
+  ASSETS.hexBattlePending[pendingKey] = new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { ASSETS[bucket][key] = img; delete ASSETS.hexBattlePending[pendingKey]; resolve(true); };
+    img.onerror = () => { delete ASSETS.hexBattlePending[pendingKey]; resolve(false); };
+    img.src = HEX_BATTLE_ROOT + file;
+  });
+  return ASSETS.hexBattlePending[pendingKey];
+}
+function ensureHexBattleAssets(b) {
+  const jobs = [];
+  if (b.artId && HEX_BATTLE_BG_FILES[b.artId]) {
+    jobs.push(loadHexBattleImage('hexBattleBg', b.artId, HEX_BATTLE_BG_FILES[b.artId]));
+  }
+  const keys = new Set(b.units.map((u) => hexTokenKey(b, u)));
+  for (const key of keys) if (HEX_BATTLE_TOKEN_FILES[key]) {
+    jobs.push(loadHexBattleImage('hexBattleTokens', key, HEX_BATTLE_TOKEN_FILES[key]));
+  }
+  return Promise.all(jobs);
 }
 function loadEventArt() {
   const jobs = EVENT_ART_IDS.map((id) => new Promise((resolve) => {
@@ -3198,14 +3284,38 @@ const TROOP_TYPES = {
   kako:  { jp: '水手・梶取', en: 'Boatman',      color: '#7fc7d9', move: 3, range: [1, 1], power: 10, melee: 0.6 },
 };
 const TERRAIN = {
-  plain:  { jp: '平地', color: '#3f5133', cost: 1, def: 1.00 },
-  forest: { jp: '林',   color: '#2f4429', cost: 2, def: 0.85, blocksRange: true },
-  hill:   { jp: '丘',   color: '#5a5a3c', cost: 2, def: 0.80 },
-  river:  { jp: '川',   color: '#2d5a72', cost: 3, def: 1.15 },
-  saku:   { jp: '柵',   color: '#7a5a34', cost: 99, def: 1.00, wall: true },
-  sakamogi:{ jp: '逆茂木', color: '#6b4a2a', cost: 99, def: 1.00, wall: true },
-  sea:    { jp: '海',   color: '#123a52', cost: 1, def: 1.00, water: true },
-  shore:  { jp: '岸',   color: '#3a4a3a', cost: 1, def: 0.95, water: true },
+  plain:  { jp: '平地', color: '#3f5133', cost: 1, def: 1.00, land: true, naval: false },
+  road:   { jp: '道',   color: '#8b7048', cost: 1, def: 1.00, land: true, naval: false },
+  forest: { jp: '林',   color: '#2f4429', cost: 2, def: 0.85, land: true, naval: false, blocksRange: true },
+  hill:   { jp: '丘',   color: '#5a5a3c', cost: 2, def: 0.80, land: true, naval: false },
+  mountain:{ jp: '険山', color: '#504b3b', cost: 3, def: 0.72, land: true, naval: false,
+              allowedUnits: ['infantry', 'archer'] },
+  river:  { jp: '浅瀬', color: '#2d5a72', cost: 3, def: 1.15, land: true, naval: false },
+  ford:   { jp: '渡河点', color: '#47798e', cost: 3, def: 1.12, land: true, naval: true },
+  bridge: { jp: '橋', color: '#8c6b45', cost: 1, def: 1.00, land: true, naval: false },
+  marsh:  { jp: '湿地', color: '#3d5547', cost: 3, def: 1.05, land: true, naval: false,
+             disallowedUnits: ['cavalry'] },
+  mudflat:{ jp: '干潟', color: '#6b6549', cost: 2, def: 1.05, land: true, naval: false },
+  rice_paddy:{ jp: '水田', color: '#66724a', cost: 3, def: 1.08, land: true, naval: false,
+               disallowedUnits: ['cavalry'] },
+  earthwork:{ jp: '土塁', color: '#6c583d', cost: 2, def: 0.76, land: true, naval: false },
+  gate:   { jp: '虎口', color: '#9c7447', cost: 2, def: 0.92, land: true, naval: false },
+  saku:   { jp: '柵',   color: '#7a5a34', cost: 99, def: 1.00, land: false, naval: false, wall: true },
+  sakamogi:{ jp: '逆茂木', color: '#6b4a2a', cost: 99, def: 1.00, land: false, naval: false, wall: true },
+  palisade:{ jp: '城柵', color: '#765333', cost: 99, def: 0.82, land: false, naval: false, wall: true },
+  cliff:  { jp: '断崖', color: '#423a33', cost: 99, def: 0.72, land: false, naval: false, wall: true },
+  ravine: { jp: '谷底', color: '#392f2c', cost: 99, def: 1.00, land: false, naval: false, wall: true },
+  deep_river:{ jp: '深い川', color: '#244e67', cost: 99, def: 1.15, land: false, naval: true, wall: false },
+  wet_moat:{ jp: '水堀', color: '#294a51', cost: 99, def: 1.10, land: false, naval: false, wall: true },
+  earthen_wall:{ jp: '築地・土塁', color: '#6b5238', cost: 99, def: 0.82, land: false, naval: false, wall: true },
+  building:{ jp: '建物', color: '#5a3f2e', cost: 99, def: 0.85, land: false, naval: false, wall: true },
+  garden_pond:{ jp: '池', color: '#315665', cost: 99, def: 1.00, land: false, naval: false, wall: true },
+  irrigation_channel:{ jp: '用水路', color: '#315665', cost: 99, def: 1.00, land: false, naval: false, wall: true },
+  sea:    { jp: '海',   color: '#123a52', cost: 1, def: 1.00, land: false, naval: true, water: true },
+  deep_sea:{ jp: '深い海', color: '#0e3248', cost: 1, def: 1.00, land: false, naval: true, water: true },
+  fast_current:{ jp: '急潮', color: '#19506a', cost: 2, def: 1.00, land: false, naval: true, water: true },
+  rocky_islet:{ jp: '岩礁', color: '#504b42', cost: 99, def: 1.00, land: false, naval: false, wall: true },
+  shore:  { jp: '岸',   color: '#3a4a3a', cost: 1, def: 0.95, land: true, naval: true, water: true },
 };
 
 /* odd-r offset のヘックス */
@@ -3262,6 +3372,90 @@ function mulberry(seed) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 
+function setBattleTerrain(terrain, x, y, type) {
+  if (x >= 0 && y >= 0 && x < HEX.cols && y < HEX.rows) terrain[y][x] = type;
+}
+/* 背景画像の見た目から当たり判定を推測しない。各戦場の論理地形をここで明示する。 */
+function applyBattleTerrainProfile(terrain, artId, mode) {
+  if (!artId) return;
+  const set = (x, y, t) => setBattleTerrain(terrain, x, y, t);
+  const road = (y = 4) => { for (let x = 0; x < HEX.cols; x++) set(x, y, 'road'); };
+  const barrier = (x, type, gates = [4]) => {
+    for (let y = 0; y < HEX.rows; y++) set(x, y, gates.includes(y) ? 'gate' : type);
+  };
+
+  if (mode === 'naval') {
+    for (let y = 0; y < HEX.rows; y++) for (let x = 2; x < HEX.cols - 2; x++) set(x, y, 'deep_sea');
+    if (artId === 'dannoura') {
+      for (let y = 1; y < HEX.rows; y += 3) set(6, y, 'fast_current');
+      set(7, 2, 'rocky_islet'); set(5, 7, 'rocky_islet');
+    } else if (artId === 'mizushima') {
+      set(5, 2, 'rocky_islet'); set(8, 6, 'rocky_islet');
+    } else if (artId === 'yashima') {
+      for (let y = 0; y < HEX.rows; y++) set(HEX.cols - 3, y, 'shore');
+    }
+    return;
+  }
+
+  switch (artId) {
+    case 'uji_byodoin':
+      for (let y = 0; y < HEX.rows; y++) set(6, y, y === 4 ? 'bridge' : 'deep_river');
+      set(9, 2, 'building'); set(9, 6, 'building'); road(4); set(6, 4, 'bridge'); break;
+    case 'ishibashiyama':
+      [[3,7],[4,6],[5,6],[6,5],[7,5],[8,4],[9,3]].forEach(([x,y]) => set(x, y, 'ravine'));
+      [[3,1],[4,1],[8,1],[9,2],[7,7],[8,7]].forEach(([x,y]) => set(x, y, 'cliff'));
+      road(4); break;
+    case 'fujigawa': case 'sunomata':
+      for (let y = 0; y < HEX.rows; y++) set(6, y, y === 4 ? 'ford' : 'deep_river');
+      [[4,3],[4,5],[5,2],[7,6],[8,3]].forEach(([x,y]) => set(x, y, 'marsh'));
+      road(4); set(6, 4, 'ford'); break;
+    case 'hiuchi_castle':
+      for (let y = 0; y < HEX.rows; y++) set(8, y, y === 4 ? 'bridge' : 'wet_moat');
+      barrier(9, 'palisade'); road(4); set(8, 4, 'bridge'); set(9, 4, 'gate'); break;
+    case 'kurikara_pass':
+      for (let x = 3; x < 11; x++) { set(x, x % 2 ? 1 : 0, 'cliff'); set(x, x % 2 ? 7 : 8, 'ravine'); }
+      for (let x = 4; x < 10; x += 2) { set(x, 2, 'mountain'); set(x, 6, 'mountain'); }
+      road(4); break;
+    case 'uji_river':
+      for (let y = 0; y < HEX.rows; y++) set(6, y, y === 2 ? 'bridge' : y === 6 ? 'ford' : 'deep_river');
+      break;
+    case 'awazu':
+      [[3,2],[4,3],[5,2],[7,6],[8,5],[9,6]].forEach(([x,y]) => set(x, y, 'marsh'));
+      road(4); break;
+    case 'ichinotani':
+      for (let x = 4; x < 11; x++) set(x, x % 2, 'cliff');
+      barrier(9, 'palisade', [4, 7]); road(4); set(9, 4, 'gate'); break;
+    case 'fujito':
+      [[4,2],[5,3],[6,2],[7,5],[8,6],[9,5]].forEach(([x,y]) => set(x, y, 'mudflat'));
+      [[5,1],[8,7]].forEach(([x,y]) => set(x, y, 'deep_river')); road(4); break;
+    case 'yashima':
+      for (let y = 0; y < HEX.rows; y++) set(8, y, y === 4 ? 'ford' : 'deep_river');
+      barrier(9, 'palisade'); road(4); set(8, 4, 'ford'); set(9, 4, 'gate'); break;
+    case 'dannoura':
+      [[5,1],[6,2],[7,6],[8,7]].forEach(([x,y]) => set(x, y, 'cliff')); road(4); break;
+    case 'josaku_siege':
+      for (let y = 0; y < HEX.rows; y++) set(8, y, y === 4 ? 'bridge' : 'wet_moat');
+      barrier(9, 'palisade'); road(4); set(8, 4, 'bridge'); set(9, 4, 'gate'); break;
+    case 'fort_siege':
+      for (let x = 5; x < 11; x++) { set(x, 0, 'cliff'); set(x, 8, 'cliff'); }
+      barrier(9, 'palisade'); road(4); set(9, 4, 'gate'); break;
+    case 'seki':
+      for (let x = 3; x < 11; x++) { set(x, x % 2, 'cliff'); set(x, 8 - (x % 2), 'cliff'); }
+      barrier(8, 'palisade', [4, 7]); road(4); set(8, 4, 'gate'); set(8, 7, 'gate'); break;
+    case 'temple':
+      barrier(9, 'earthen_wall'); set(10, 2, 'building'); set(10, 6, 'building');
+      road(4); set(9, 4, 'gate'); break;
+    case 'gosho':
+      barrier(9, 'earthen_wall', [3, 5]); set(10, 4, 'garden_pond'); set(11, 1, 'building'); set(11, 7, 'building');
+      road(4); set(9, 4, 'gate'); break;
+    case 'kokufu':
+      for (let y = 0; y < HEX.rows; y++) set(7, y, y === 4 ? 'bridge' : 'irrigation_channel');
+      barrier(9, 'earthen_wall');
+      [[3,2],[3,6],[4,1],[4,7],[5,2],[5,6]].forEach(([x,y]) => set(x, y, 'rice_paddy'));
+      road(4); set(7, 4, 'bridge'); set(9, 4, 'gate'); break;
+  }
+}
+
 /* 合戦の盤面をつくる。攻守の兵を隊に割り、地形と柵を敷く */
 function initBattle(state, spec) {
   // 地形は「どこを攻めるか」で決まる。同じ土地を同じ月に攻めれば同じ盤面が出る（再現性）
@@ -3271,6 +3465,7 @@ function initBattle(state, spec) {
   // ★海を越える出兵は海戦になる。屋島も壇ノ浦もここを通る
   const mode = (from && Rule.needsSeaCrossing(from, target)) ? 'naval'
     : ['tachi', 'kisaku', 'toride'].includes(target.type) ? 'siege' : 'field';
+  const artId = hexBattleBgFor(target, mode);
   const terrain = [];
   for (let y = 0; y < HEX.rows; y++) {
     terrain[y] = [];
@@ -3292,6 +3487,7 @@ function initBattle(state, spec) {
       terrain[y][wallX] = y % 2 ? 'saku' : 'sakamogi';
     }
   }
+  applyBattleTerrainProfile(terrain, artId, mode);
   const mk = (fid, troops, side) => {
     const gens = GENERALS.filter((g) => g.faction === fid && g.born <= state.year && g.died >= state.year);
     const mix = mode === 'naval' ? ['kako', 'yumi', 'kisha', 'kako', 'yumi']
@@ -3318,14 +3514,17 @@ function initBattle(state, spec) {
   // 検査やデバッグから直接呼ばれたときに同士討ちの画面が出ると紛らわしい）
   let defFid = state.kyoten[spec.to].owner || 'goshirakawa';
   if (defFid === spec.fid) defFid = 'goshirakawa';
+  const units = [...mk(spec.fid, spec.troops, 'atk'), ...mk(defFid, defTroops, 'def')];
+  // 配置地点だけは必ず足場にする。絵の構図や地形プロファイルが変わっても初期駒を埋めない。
+  for (const u of units) terrain[u.hy][u.hx] = mode === 'naval' ? 'shore' : 'plain';
   return {
-    mode, spec, target, terrain, rng,
+    mode, artId, spec, target, terrain, rng,
     round: 1, maxRounds: mode === 'siege' ? RULE.siege.maxTurns : 14,
     // 潮。開始の向きは月で決まり、以後 tidePeriod 合ごとに反転する
     tide: (state.month % 2) ? 'east' : 'west',
     defected: [],
     phase: 'atk', duels: 0, log: [],
-    units: [...mk(spec.fid, spec.troops, 'atk'), ...mk(defFid, defTroops, 'def')],
+    units,
   };
 }
 
@@ -3353,6 +3552,14 @@ const Battle = {
     const [lo, hi] = TROOP_TYPES[u.type].range;
     return [lo, hi + (Battle.withTide(b, u) > 0 ? RULE.naval.withTideRange : 0)];
   },
+  canEnter(b, u, t) {
+    if (!t || t.wall) return false;
+    const kind = b.mode === 'naval' ? 'ship' : terrainUnitKind(u);
+    if (b.mode === 'naval' ? t.naval === false : t.land === false) return false;
+    if (t.allowedUnits && !t.allowedUnits.includes(kind)) return false;
+    if (t.disallowedUnits && t.disallowedUnits.includes(kind)) return false;
+    return true;
+  },
   tickTide(b) {
     if (b.mode !== 'naval') return false;
     if ((b.round - 1) % RULE.naval.tidePeriod !== 0 || b.round === 1) return false;
@@ -3370,7 +3577,7 @@ const Battle = {
       const cur = q.shift();
       for (const n of hexNeighbors(cur.hx, cur.hy)) {
         const t = Battle.terrainAt(b, n.hx, n.hy);
-        if (t.wall) continue;
+        if (!Battle.canEnter(b, u, t)) continue;
         const c = cur.c + t.cost;
         if (c > mv) continue;
         const k = `${n.hx},${n.hy}`;
@@ -3597,6 +3804,7 @@ class BattleScene extends GameKit.Scene {
     this.ox = BL.board.x + 20 + s * Math.sqrt(3) / 2;
     this.oy = BL.board.y + 20 + s;
     this.buttons = [];
+    ensureHexBattleAssets(this.b);
   }
   _hexAt(px, py) {
     let best = null, bd = this.hs;
@@ -3746,8 +3954,12 @@ class BattleScene extends GameKit.Scene {
 
     // 盤面。★地形は動かないので毎フレーム 117 個のパスを組み直さず、焼いたものを貼る
     frame(ctx, BL.board.x, BL.board.y, BL.board.w, BL.board.h, { fill: '#0a1119' });
+    const battleArt = b.artId && ASSETS.hexBattleBg[b.artId];
+    if (battleArt) this._drawBattlefieldArt(ctx, battleArt);
     if (!this._terrainCache) this._bakeTerrain();
     ctx.drawImage(this._terrainCache, BL.board.x, BL.board.y);
+    frame(ctx, BL.board.x, BL.board.y, BL.board.w, BL.board.h,
+      { fill: 'rgba(0,0,0,0)', stroke: 'rgba(216,178,106,0.52)' });
     // 動く層だけ毎フレーム描く（移動可能マスとカーソル）
     if (this.reach) {
       for (const k of this.reach.keys()) {
@@ -3767,17 +3979,38 @@ class BattleScene extends GameKit.Scene {
       if (u.troops <= 0) continue;
       const p = hexToPixel(u.hx, u.hy, this.hs), cx = this.ox + p.x, cy = this.oy + p.y;
       const col = FACTIONS[u.faction] ? FACTIONS[u.faction].color : '#94a3b8';
-      ctx.beginPath(); ctx.arc(cx, cy, this.hs * 0.62, 0, Math.PI * 2);
-      ctx.fillStyle = hexA(col, u.acted ? 0.45 : 0.9); ctx.fill();
-      ctx.lineWidth = this.sel === u ? 3 : 1.4;
-      ctx.strokeStyle = this.sel === u ? '#f9d423' : 'rgba(0,0,0,0.7)'; ctx.stroke();
-      ctx.beginPath(); ctx.arc(cx, cy - this.hs * 0.06, this.hs * 0.34, 0, Math.PI * 2);
-      ctx.fillStyle = TROOP_TYPES[u.type].color; ctx.fill();
+      const tokenKind = hexTokenKind(b, u), token = ASSETS.hexBattleTokens[hexTokenKey(b, u)];
+      if (token) {
+        const maxW = this.hs * (tokenKind === 'ship' ? 2.35 : 1.72);
+        const maxH = this.hs * (tokenKind === 'ship' ? 1.55 : 1.72);
+        const scale = Math.min(maxW / token.naturalWidth, maxH / token.naturalHeight);
+        const dw = token.naturalWidth * scale, dh = token.naturalHeight * scale;
+        ctx.save();
+        ctx.globalAlpha = u.acted ? 0.52 : 1;
+        ctx.shadowColor = this.sel === u ? '#f9d423' : hexA(col, 0.9);
+        ctx.shadowBlur = this.sel === u ? 12 : 5;
+        ctx.drawImage(token, cx - dw / 2, cy - dh * 0.58, dw, dh);
+        ctx.restore();
+        ctx.beginPath();
+        if (tokenKind === 'ship') ctx.ellipse(cx, cy + this.hs * 0.2, this.hs * 1.02, this.hs * 0.43, 0, 0, Math.PI * 2);
+        else ctx.arc(cx, cy, this.hs * 0.68, 0, Math.PI * 2);
+        ctx.lineWidth = this.sel === u ? 3 : 1.2;
+        ctx.strokeStyle = this.sel === u ? '#f9d423' : hexA(col, 0.88); ctx.stroke();
+      } else {
+        // 通信中・読み込み失敗時も操作不能にしないため、従来駒へフォールバックする。
+        ctx.beginPath(); ctx.arc(cx, cy, this.hs * 0.62, 0, Math.PI * 2);
+        ctx.fillStyle = hexA(col, u.acted ? 0.45 : 0.9); ctx.fill();
+        ctx.lineWidth = this.sel === u ? 3 : 1.4;
+        ctx.strokeStyle = this.sel === u ? '#f9d423' : 'rgba(0,0,0,0.7)'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx, cy - this.hs * 0.06, this.hs * 0.34, 0, Math.PI * 2);
+        ctx.fillStyle = TROOP_TYPES[u.type].color; ctx.fill();
+      }
       // 士気バー
       const bw = this.hs * 1.0;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(cx - bw / 2, cy + this.hs * 0.42, bw, 4);
+      const by = cy + this.hs * 0.54;
+      ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(cx - bw / 2, by, bw, 5);
       ctx.fillStyle = u.morale > 50 ? '#5eead4' : u.morale > 25 ? '#f9d423' : '#fca5a5';
-      ctx.fillRect(cx - bw / 2, cy + this.hs * 0.42, bw * (u.morale / 100), 4);
+      ctx.fillRect(cx - bw / 2, by, bw * (u.morale / 100), 5);
       ctx.save();
       ctx.font = '10px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
       ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.9)';
@@ -3808,6 +4041,18 @@ class BattleScene extends GameKit.Scene {
       txt(ctx, 'クリックで戦評へ / Click to continue', W / 2, H / 2 + 44, { font: '12px "Segoe UI", sans-serif', color: '#6b7787', align: 'center' });
     }
   }
+  _drawBattlefieldArt(ctx, img) {
+    // GPT-image 背景中央のヘックスをほぼ原寸で切り出す。論理13×9盤と目盛りを近づけるため、
+    // 1536×1024 の外周装飾は盤面では使わず、戦場部分だけを表示する。
+    const sw = Math.min(img.naturalWidth, img.naturalWidth * 0.64);
+    const sh = Math.min(img.naturalHeight, img.naturalHeight * 0.62);
+    const sx = (img.naturalWidth - sw) / 2, sy = (img.naturalHeight - sh) / 2;
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(BL.board.x, BL.board.y, BL.board.w, BL.board.h, 6); ctx.clip();
+    ctx.drawImage(img, sx, sy, sw, sh, BL.board.x, BL.board.y, BL.board.w, BL.board.h);
+    ctx.fillStyle = 'rgba(5,7,11,0.12)'; ctx.fillRect(BL.board.x, BL.board.y, BL.board.w, BL.board.h);
+    ctx.restore();
+  }
   /* 地形を1枚に焼く。盤面のあいだ変わらないので初回だけ組む */
   _bakeTerrain() {
     const cv = document.createElement('canvas');
@@ -3826,14 +4071,27 @@ class BattleScene extends GameKit.Scene {
     for (let y = 0; y < HEX.rows; y++) for (let x = 0; x < HEX.cols; x++) {
       const p = hexToPixel(x, y, this.hs), t = Battle.terrainAt(this.b, x, y);
       path(ox + p.x, oy + p.y);
-      c.fillStyle = t.color; c.fill();
-      c.lineWidth = 1; c.strokeStyle = 'rgba(0,0,0,0.45)'; c.stroke();
-      if (!t.wall) continue;
-      c.save(); c.strokeStyle = '#c8a06a'; c.lineWidth = 2;
-      for (let i = -1; i <= 1; i++) {
+      c.fillStyle = this.b.artId ? hexA(t.color, t.wall || t.land === false ? 0.34 : 0.10) : t.color; c.fill();
+      c.lineWidth = 1; c.strokeStyle = this.b.artId ? 'rgba(232,211,165,0.34)' : 'rgba(0,0,0,0.45)'; c.stroke();
+      const blocked = t.wall || (this.b.mode === 'naval' ? t.naval === false : t.land === false);
+      if (!blocked) continue;
+      const terrainId = this.b.terrain[y][x];
+      const constructed = ['saku', 'sakamogi', 'palisade', 'earthen_wall', 'building'].includes(terrainId);
+      c.save(); c.strokeStyle = constructed ? '#d5a262' : '#d77a6d'; c.lineWidth = 2;
+      if (constructed) {
+        for (let i = -1; i <= 1; i++) {
+          c.beginPath();
+          c.moveTo(ox + p.x + i * this.hs * 0.4, oy + p.y - this.hs * 0.5);
+          c.lineTo(ox + p.x + i * this.hs * 0.4, oy + p.y + this.hs * 0.5);
+          c.stroke();
+        }
+      } else {
+        // 崖・谷底・深い水域は柵と区別し、斜線で「侵入不可」を示す。
         c.beginPath();
-        c.moveTo(ox + p.x + i * this.hs * 0.4, oy + p.y - this.hs * 0.5);
-        c.lineTo(ox + p.x + i * this.hs * 0.4, oy + p.y + this.hs * 0.5);
+        c.moveTo(ox + p.x - this.hs * 0.32, oy + p.y - this.hs * 0.32);
+        c.lineTo(ox + p.x + this.hs * 0.32, oy + p.y + this.hs * 0.32);
+        c.moveTo(ox + p.x + this.hs * 0.32, oy + p.y - this.hs * 0.32);
+        c.lineTo(ox + p.x - this.hs * 0.32, oy + p.y + this.hs * 0.32);
         c.stroke();
       }
       c.restore();
@@ -4027,6 +4285,7 @@ window.GENPEI_DEBUG = {
   tryBloodlessOpen, declareChoteki, donateCourt, grantAndo, grantShinon, purgeBand, tryRecruit, aiPolitics, buildBands,
   pillage, donateJisha, PILLAGE_TYPES, hexLine, strHash,
   GENERALS, TROOP_TYPES, TERRAIN, HEX, Battle, initBattle, hexDistance, BattleScene, SUIGUN, islandOf,
+  ASSETS, HEX_BATTLE_BG_FILES, HEX_BATTLE_TOKEN_FILES, hexBattleBgFor, hexTokenKind, hexTokenKey, applyBattleTerrainProfile,
   PREHISTORY, GEN_NOTE, RetsudenScene, OpeningScene, drawPortrait, drawKamon,
   gotoRetsuden: () => { game.changeScene(new RetsudenScene(buildState('s1180', 'kamakura'), () => new TitleScene())); return true; },
   gotoBattle: (scnId, fid, from, to) => { const st = buildState(scnId, fid);
