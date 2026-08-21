@@ -20,6 +20,12 @@
  *      CutsceneScene（年代記イベント演出）・EndingScene（南北朝合一エンディング）への
  *      到達を含めて例外が出ないか確認する
  *   9. 上記すべてで例外が0件（ページ全体の未捕捉例外＋GameKitがフレーム内で捕捉した例外）
+ *  10. シナリオ選択UI（'genko'本編／'kanno'観応の擾乱、ブラッシュアップで追加）:
+ *      実クリックでTitle→ScenarioSelectScene→FactionSelectScene→OpeningScene→MapScene
+ *      までscenarioIdが正しく引き継がれること、buildState()の'kanno'側で開始年より前に
+ *      没した武将がdead:true・史実イベントの誤発火なし・北朝成立補正が効いていること
+ *      （'genko'側は非該当のリグレッション確認）、武将肖像(drawGeneralPortrait)の描画で
+ *      例外が出ないこと、武将名鑑パネル('roster')が全武将を一覧しクリック選択できること
  *
  * 使い方: node scripts/verify-taihei-boot.mjs
  * 終了コード: 全PASS=0 / FAILあり=1
@@ -244,6 +250,148 @@ async function runLongPlay(port, camp) {
   };
 }
 
+/*
+ * runScenarioChecks — シナリオ選択UI（'genko'本編／'kanno'観応の擾乱）のブラッシュアップ検証。
+ *   A. 実クリックでTitle→ScenarioSelectScene→FactionSelectScene→OpeningSceneまでボタン配線を確認
+ *      （UI組み込みの正しさを検証。他フローはデバッグブリッジ直接呼び出しで速度優先しているため、
+ *      新設シーンの遷移だけは意図的に本物のクリックで通す）
+ *   B. buildState()の直接呼び出しで、'kanno'(1350年開始)側のみ:
+ *      - 開始年より前に没した武将(後醍醐帝・楠木正成)がdead:trueで初期化されること
+ *      - 開始年時点で存命の武将(足利直義)はdead:falseのままであること
+ *      - 北朝(hokucho)が開始時点で成立済み(active:true)として補正されること
+ *      - シナリオ開始年より前の史実イベント(湊川の戦い等)がturn===0時点で誤発火しないこと
+ *        （このガードが無いと、開始年の遅いシナリオでは過去の全イベントが連鎖発火する）
+ *      'genko'(1331年開始)側は上記いずれも該当しないことをリグレッションとして確認する
+ *   C. 武将肖像(drawGeneralPortrait)がFactionSelectScene描画・MapScene人事パネル描画のいずれでも
+ *      例外を出さないこと
+ *   D. 武将名鑑パネル('roster')が例外なく描画され、全武将（GENERALS_DEF全件）がクリック可能な
+ *      行として存在し、行クリックで選択(rosterSel)が切り替わること
+ */
+async function runScenarioChecks(port) {
+  const browser = await chromium.launch({ executablePath: chromePath, args: ['--autoplay-policy=no-user-gesture-required'] });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const pageErrors = [];
+  page.on('pageerror', e => pageErrors.push('pageerror: ' + (e.message || String(e))));
+  await page.goto(`http://127.0.0.1:${port}/taihei.html`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => typeof window.TAIHEI_DEBUG !== 'undefined', null, { timeout: 60000 });
+
+  const canvas = await page.$('#game');
+  async function clickCanvas(cx, cy) {
+    const box = await canvas.boundingBox();
+    await page.mouse.click(box.x + box.width * (cx / 1440), box.y + box.height * (cy / 810));
+    await page.waitForTimeout(70);
+  }
+  const frameErrCount = async () => (await page.evaluate(() =>
+    (window.TAIHEI_DEBUG.game.errors || []).map(r => r.count))).reduce((a, b) => a + b, 0);
+
+  // --- A. 実クリックでのシーン遷移 ---
+  await page.evaluate(() => { window.TAIHEI_DEBUG.game.changeScene(new window.TAIHEI_DEBUG.TitleScene()); });
+  await page.waitForTimeout(120);
+  await clickCanvas(720, 499); // TitleScene「新規に始める」ボタン中心
+  let scene = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
+  check('シナリオUI: 「新規に始める」→ScenarioSelectScene', scene === 'ScenarioSelectScene', `scene=${scene}`);
+
+  await clickCanvas(720, 392); // rows[1]='kanno' 行中心
+  await clickCanvas(1230, 752); // 「このシナリオで始める」ボタン中心
+  scene = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
+  let scenarioId = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.scenarioId);
+  check('シナリオUI: 「観応の擾乱」選択→FactionSelectScene(scenarioId継承)', scene === 'FactionSelectScene' && scenarioId === 'kanno', `scene=${scene} scenarioId=${scenarioId}`);
+
+  await clickCanvas(270, 234); // FACTION_CHOICES[1]='nancho' 行中心
+  await clickCanvas(1230, 752); // 「この陣営で始める」ボタン中心
+  scene = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
+  scenarioId = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.scenarioId);
+  check('シナリオUI: 陣営決定→OpeningScene(scenarioId継承)', scene === 'OpeningScene' && scenarioId === 'kanno', `scene=${scene} scenarioId=${scenarioId}`);
+
+  await clickCanvas(720, 738); // OpeningScene「陣営を確定する」ボタン中心
+  await page.waitForTimeout(300);
+  const built = await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG;
+    const sc = D.game.scene;
+    const st = sc.constructor.name === 'MapScene' ? sc.state
+      : (sc.constructor.name === 'CutsceneScene' ? sc.state : null);
+    return { scene: sc.constructor.name, scenarioId: st ? st.scenarioId : null, year: st ? st.year : null };
+  });
+  check('シナリオUI: 開始確定→MapScene(またはCutscene)到達・scenarioId="kanno"・year=1350',
+    (built.scene === 'MapScene' || built.scene === 'CutsceneScene') && built.scenarioId === 'kanno' && built.year === 1350,
+    JSON.stringify(built));
+
+  // --- B. buildState()のシナリオ別データ整合性（デバッグブリッジ直接呼び出し） ---
+  const dataCheck = await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG;
+    const kanno = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'kanno' });
+    const genko = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'genko' });
+    return {
+      kannoYear: kanno.year,
+      kannoGodaigoDead: kanno.generals.godaigo.dead,
+      kannoKusunokiDead: kanno.generals.kusunoki_masashige.dead,
+      kannoTadayoshiAlive: !kanno.generals.ashikaga_tadayoshi.dead,
+      kannoHokuchoActive: kanno.courts.hokucho.active,
+      kannoNoEarlyEvents: !kanno.firedEvents.kamakura_bakufu_fall && !kanno.firedEvents.minatogawa && !kanno.firedEvents.engen_no_ran,
+      genkoYear: genko.year,
+      genkoGodaigoAlive: !genko.generals.godaigo.dead,
+      genkoHokuchoInactive: !genko.courts.hokucho.active,
+    };
+  });
+  check('buildState: kanno開始年=1350', dataCheck.kannoYear === 1350, JSON.stringify(dataCheck));
+  check('buildState: kannoは後醍醐帝(没1339)が開始時点で故人', dataCheck.kannoGodaigoDead, JSON.stringify(dataCheck));
+  check('buildState: kannoは楠木正成(没1336)が開始時点で故人', dataCheck.kannoKusunokiDead, JSON.stringify(dataCheck));
+  check('buildState: kannoは足利直義(没1352)が開始時点で存命', dataCheck.kannoTadayoshiAlive, JSON.stringify(dataCheck));
+  check('buildState: kannoは北朝が開始時点で成立済み', dataCheck.kannoHokuchoActive, JSON.stringify(dataCheck));
+  check('buildState: kannoでシナリオ開始年より前の史実イベントが誤発火しない', dataCheck.kannoNoEarlyEvents, JSON.stringify(dataCheck));
+  check('buildState: genko開始年=1331（リグレッション）', dataCheck.genkoYear === 1331, JSON.stringify(dataCheck));
+  check('buildState: genkoは後醍醐帝が開始時点で存命（リグレッション）', dataCheck.genkoGodaigoAlive, JSON.stringify(dataCheck));
+  check('buildState: genkoは北朝が開始時点で未成立（リグレッション）', dataCheck.genkoHokuchoInactive, JSON.stringify(dataCheck));
+
+  // --- C. 武将肖像の描画が例外を出さないこと ---
+  let before = await frameErrCount();
+  await page.evaluate(() => { window.TAIHEI_DEBUG.game.changeScene(new window.TAIHEI_DEBUG.FactionSelectScene('genko')); });
+  await page.waitForTimeout(200);
+  let after = await frameErrCount();
+  check('武将肖像: FactionSelectScene描画で例外0件', after === before, `before=${before} after=${after}`);
+
+  before = after;
+  await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG;
+    const st = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'genko' });
+    D.game.changeScene(new D.MapScene(st));
+  });
+  await page.waitForTimeout(150);
+  await page.evaluate(() => { window.TAIHEI_DEBUG.game.scene.panel = 'personnel'; });
+  await page.waitForTimeout(200);
+  after = await frameErrCount();
+  check('武将肖像: MapScene人事パネル描画で例外0件', after === before, `before=${before} after=${after}`);
+
+  // --- D. 武将名鑑パネル（'roster'）: 全武将が一覧され、選択クリックで詳細が切り替わること ---
+  before = after;
+  await page.evaluate(() => { window.TAIHEI_DEBUG.game.scene.panel = 'roster'; });
+  await page.waitForTimeout(200);
+  after = await frameErrCount();
+  check('武将名鑑: パネル描画で例外0件', after === before, `before=${before} after=${after}`);
+
+  const rosterInfo = await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG;
+    return { rowCount: D.game.scene.buttons.length, generalCount: D.GENERALS_DEF.length, selBefore: D.game.scene.rosterSel };
+  });
+  check('武将名鑑: 全武将分の行がクリック対象として存在する', rosterInfo.rowCount >= rosterInfo.generalCount, JSON.stringify(rosterInfo));
+
+  // 一覧の最後の行（末尾の武将）をクリックして選択が切り替わることを確認する
+  before = after;
+  const lastRowBox = await page.evaluate(() => {
+    const b = window.TAIHEI_DEBUG.game.scene.buttons;
+    const row = b[b.length - 1];
+    return { x: row.x, y: row.y, w: row.w, h: row.h };
+  });
+  await clickCanvas(lastRowBox.x + lastRowBox.w / 2, lastRowBox.y + lastRowBox.h / 2);
+  const rosterSelAfter = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.rosterSel);
+  after = await frameErrCount();
+  check('武将名鑑: 行クリックで選択武将が切り替わる', rosterSelAfter !== rosterInfo.selBefore, `before=${rosterInfo.selBefore} after=${rosterSelAfter}`);
+  check('武将名鑑: 選択切り替え後も例外0件', after === before, `before=${before} after=${after}`);
+
+  check('シナリオUI一式: ページ全体の未捕捉例外0件', pageErrors.length === 0, pageErrors.join(' | '));
+  await browser.close();
+}
+
 async function main() {
   const { server, port } = await serve(ROOT);
 
@@ -255,6 +403,9 @@ async function main() {
   // --- 起動〜MapScene〜合戦〜ターン終了のフロー ---
   const flow = await runFlow(port);
 
+  // --- シナリオ選択UI（'kanno'観応の擾乱）ブラッシュアップの検証 ---
+  await runScenarioChecks(port);
+
   // --- 3陣営のロングラン（65ターン上限・カットシーン/エンディング到達を含む） ---
   const longPlays = [];
   for (const camp of ['ashikaga', 'nancho', 'ouchi']) {
@@ -262,7 +413,7 @@ async function main() {
   }
   server.close();
 
-  console.log('\n=== ゲート表示条件 ===');
+  console.log('\n=== ゲート表示条件・シナリオ選択UI ===');
   results.forEach(r => console.log(`  ${r.ok ? '[PASS]' : '[FAIL]'} ${r.name}${r.ok ? '' : '  ' + r.detail}`));
 
   console.log('\n=== 起動〜合戦フロー ===');
@@ -284,7 +435,7 @@ async function main() {
   const flowFail = flow.steps.reduce((a, s) => a + (s.count > 0 ? 1 : 0), 0) + (flow.errors.length ? 1 : 0);
   const longPlayFail = longPlays.reduce((a, r) => a + (r.errors.length > 0 || r.stuckOn ? 1 : 0), 0);
   const totalFail = gateFail + flowFail + longPlayFail;
-  console.log(`\n${totalFail === 0 ? 'PASS' : 'FAIL'}: ゲート${gateFail}件・フロー${flowFail}件・ロングラン${longPlayFail}件の不合格`);
+  console.log(`\n${totalFail === 0 ? 'PASS' : 'FAIL'}: ゲート/シナリオUI${gateFail}件・フロー${flowFail}件・ロングラン${longPlayFail}件の不合格`);
   process.exit(totalFail === 0 ? 0 : 1);
 }
 

@@ -987,6 +987,10 @@ function checkTimelineEvents(state) {
     // year/monthは本来メタデータだが、条件式が状態フラグのみで年不問のため、
     // 史実年より早すぎる発火を防ぐ実務上の下限ゲートとして流用する（完了報告で明記する追加仕様）。
     const minTurn = ev.year - scenario.startYear;
+    // イベントの史実年がシナリオ開始年より前＝このシナリオの時間軸には含まれない
+    // （'kanno'開始(1350年)より前の元弘の乱期イベント等）ため対象外にする。
+    // これが無いと開始年の遅いシナリオでturn===0の時点で過去の全イベントが連鎖発火してしまう。
+    if (minTurn < 0) continue;
     if (state.turn < minTurn) continue;
     let met = false;
     try { met = !!ev.condition(state); } catch (e) { met = false; }
@@ -1163,13 +1167,17 @@ function buildState(opts) {
     state.camps[campId].battleLosses = 0;
   }
 
-  // 武将
+  // 武将（born/diedはspec 4.2節の史実準拠データ。シナリオ開始年より前に没している人物は
+  // 最初から dead:true とし、生存武将のみが行動可能な一覧・肖像等に現れるようにする。
+  // 'genko'(1331年開始)ではほぼ全員が該当しないが、'kanno'(1350年開始)では
+  // 後醍醐帝(没1339)・楠木正成(没1336)・北畠顕家(没1338)等が既に鬼籍に入っている）
   for (const g of GENERALS_DEF) {
     state.generals[g.id] = {
       id: g.id, camp: g.camp, jp: g.jp, en: g.en, born: g.born, died: g.died,
       province: g.province, stats: Object.assign({}, g.stats),
       loyalty: g.loyalty, landDesire: g.landDesire, ideology: g.ideology,
-      dead: false, pendingContribution: 0, recentRewardValue: 0,
+      dead: !!(g.died != null && g.died < scenario.startYear),
+      pendingContribution: 0, recentRewardValue: 0,
       isEmperor: g.isEmperor || null,
     };
   }
@@ -1184,7 +1192,18 @@ function buildState(opts) {
       kaniRanks: COURT_KANI_RANKS.map((r) => Object.assign({}, r)),
     };
   }
-  state.courts.nancho.heldBy = 'nancho'; // 後醍醐帝は自陣営(南朝)が身柄を保持した状態で開始
+  state.courts.nancho.heldBy = 'nancho'; // 後醍醐帝(または代替わり後の帝)は自陣営(南朝)が身柄を保持した状態で開始
+  if (scenario.id === 'kanno') {
+    // 観応元年(1350年)時点の朝廷情勢を簡略補正する（既知の簡略化。武将データに
+    // 後継の天皇を個別武将として持たないため、玉座は特定武将に紐付けない形で継続扱いとし、
+    // 討死による正統性崩壊イベントは発生しない。国ごとの領有(PROVINCE_OWNER_SEED)は
+    // 引き続き'genko'開始時点の割り当てを流用する近似とする＝完了報告で明記する簡略化）。
+    state.courts.nancho.emperor = { jp: '後村上天皇', en: 'Emperor Go-Murakami', generalId: null, alive: true };
+    state.courts.hokucho.active = true;
+    state.courts.hokucho.emperor = { jp: '崇光天皇', en: 'Emperor Sukō', generalId: null, alive: true };
+    state.courts.hokucho.legitimacy = 55;
+    state.courts.hokucho.heldBy = 'ashikaga';
+  }
 
   // 悪党プール（全camp分。未雇用ならcount:0）
   for (const cid of Object.keys(state.camps)) {
@@ -1493,6 +1512,125 @@ const KAMON_STYLE = {
   momonoi: 'tsuki', shiba: 'take',
 };
 
+/* ---- 武将肖像（プロシージャル描画・spec 2.3節Could要件） ----
+ * 実画像は用意せず、公家/武家の2型を軸に camp色・思想・生年でバリエーションを出す。
+ * 座標は100x100の設計単位で書き、u=size/100で実寸へ落とす（sengoku.html の
+ * drawProceduralPortrait と同じ設計方針。taihei向けに新規実装、コードは共用しない）。 */
+function shadeHexT(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (i) => { const v = (n >> (16 - i * 8)) & 255; return Math.round(k >= 0 ? v + (255 - v) * k : v * (1 + k)); };
+  return 'rgb(' + ch(0) + ',' + ch(1) + ',' + ch(2) + ')';
+}
+function drawGeneralPortrait(ctx, gen, x, y, size) {
+  let h = 2166136261 >>> 0;
+  const seed = String(gen.id);
+  for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  const jit = (i, a, b) => a + (((h >>> ((i * 4) % 28)) & 15) / 15) * (b - a);
+  const u = size / 100, X = (v) => x + v * u, Y = (v) => y + v * u;
+  const campColor = campColorOf(gen.camp);
+  const isKuge = !!gen.isEmperor;
+  const skinBase = jit(0, 0, 1) < 0.5 ? '#e7c49c' : '#dcb489';
+  const old = gen.born != null && gen.born <= 1300; // 生年の早い武将ほど年配の顔立ちにする簡易近似
+  const faceW = jit(1, 16, 19) * u, faceH = jit(2, 21, 24) * u;
+  const cx = X(50), cy = Y(jit(3, 40, 43));
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x, y, size, size); ctx.clip();
+  const bg = ctx.createLinearGradient(x, y, x + size, y + size);
+  bg.addColorStop(0, shadeHexT(campColor, 0.7)); bg.addColorStop(1, shadeHexT(campColor, -0.6));
+  ctx.fillStyle = bg; ctx.fillRect(x, y, size, size);
+  const vg = ctx.createRadialGradient(X(50), Y(34), size * 0.05, X(50), Y(54), size * 0.72);
+  vg.addColorStop(0, 'rgba(255,255,255,0.10)'); vg.addColorStop(1, 'rgba(0,0,0,0.46)');
+  ctx.fillStyle = vg; ctx.fillRect(x, y, size, size);
+
+  // 首（肩装束より先に描いて根元を隠す）
+  ctx.fillStyle = shadeHexT(skinBase, -0.3);
+  ctx.beginPath(); ctx.moveTo(X(43), Y(54)); ctx.lineTo(X(57), Y(54)); ctx.lineTo(X(59), Y(76)); ctx.lineTo(X(41), Y(76)); ctx.closePath(); ctx.fill();
+
+  // 装束（公家＝白直垂ふう、武家＝camp色の陣羽織ふう）
+  const robeMain = isKuge ? '#e8e2d4' : campColor;
+  const robe = ctx.createLinearGradient(x, Y(64), x, y + size);
+  robe.addColorStop(0, robeMain); robe.addColorStop(1, shadeHexT(robeMain, -0.42));
+  ctx.fillStyle = robe;
+  ctx.beginPath();
+  ctx.moveTo(X(-4), Y(104));
+  ctx.bezierCurveTo(X(6), Y(84), X(26), Y(70), X(38), Y(66));
+  ctx.lineTo(X(62), Y(66));
+  ctx.bezierCurveTo(X(74), Y(70), X(94), Y(84), X(104), Y(104));
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = Math.max(1, 2.2 * u); ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(X(38), Y(66)); ctx.lineTo(X(50), Y(90)); ctx.lineTo(X(62), Y(66)); ctx.stroke();
+  if (!isKuge) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = Math.max(1, 1.6 * u);
+    ctx.beginPath(); ctx.moveTo(X(30), Y(104)); ctx.lineTo(X(37), Y(72)); ctx.moveTo(X(70), Y(104)); ctx.lineTo(X(63), Y(72)); ctx.stroke();
+  }
+
+  // 顔（顎に向けて細るベジェ輪郭）
+  const facePath = () => {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - faceH);
+    ctx.bezierCurveTo(cx + faceW * 1.05, cy - faceH * 0.9, cx + faceW * 0.92, cy + faceH * 0.38, cx, cy + faceH);
+    ctx.bezierCurveTo(cx - faceW * 0.92, cy + faceH * 0.38, cx - faceW * 1.05, cy - faceH * 0.9, cx, cy - faceH);
+    ctx.closePath();
+  };
+  const faceFill = ctx.createRadialGradient(cx - faceW * 0.35, cy - faceH * 0.45, faceW * 0.1, cx, cy, faceH * 1.2);
+  faceFill.addColorStop(0, shadeHexT(skinBase, 0.15)); faceFill.addColorStop(0.6, skinBase); faceFill.addColorStop(1, shadeHexT(skinBase, -0.3));
+  facePath(); ctx.fillStyle = faceFill; ctx.fill();
+  ctx.save(); facePath(); ctx.clip();
+  const cheekShade = ctx.createLinearGradient(cx + faceW * 0.15, y, cx + faceW * 1.05, y);
+  cheekShade.addColorStop(0, 'rgba(0,0,0,0)'); cheekShade.addColorStop(1, 'rgba(0,0,0,0.28)');
+  ctx.fillStyle = cheekShade; ctx.fillRect(x, y, size, size);
+  ctx.restore();
+
+  // 眉・目（思想でわずかに眉の角度を変える）
+  const eyeY = cy - faceH * 0.1, eyeDX = faceW * 0.44;
+  const browTilt = gen.ideology === 'yashin' ? -0.32 : gen.ideology === 'sonno' ? 0.06 : -0.08;
+  ctx.strokeStyle = shadeHexT('#3a2a1e', old ? 0.25 : -0.1); ctx.lineWidth = Math.max(1, 1.6 * u); ctx.lineCap = 'round';
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + s * (eyeDX - faceW * 0.16), eyeY - faceH * 0.14);
+    ctx.quadraticCurveTo(cx + s * eyeDX, eyeY - faceH * (0.14 + browTilt * 0.3), cx + s * (eyeDX + faceW * 0.12), eyeY - faceH * 0.08);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#1c140e';
+  for (const s of [-1, 1]) {
+    ctx.beginPath(); ctx.ellipse(cx + s * eyeDX, eyeY, faceW * 0.1, faceH * 0.045, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  // 口
+  ctx.strokeStyle = shadeHexT('#8a4a3a', -0.1); ctx.lineWidth = Math.max(1, 1.4 * u);
+  ctx.beginPath();
+  ctx.moveTo(cx - faceW * 0.24, cy + faceH * 0.52);
+  ctx.quadraticCurveTo(cx, cy + faceH * (0.52 + jit(4, 0.02, 0.09)), cx + faceW * 0.24, cy + faceH * 0.52);
+  ctx.stroke();
+  if (old) { // 年配の武将は口髭を足す
+    ctx.strokeStyle = 'rgba(40,32,26,0.85)'; ctx.lineWidth = Math.max(1, 1.8 * u);
+    ctx.beginPath();
+    ctx.moveTo(cx - faceW * 0.3, cy + faceH * 0.4);
+    ctx.quadraticCurveTo(cx, cy + faceH * 0.5, cx + faceW * 0.3, cy + faceH * 0.4);
+    ctx.stroke();
+  }
+
+  // 頭部（公家＝立烏帽子/冠、武家＝烏帽子＋camp色の鉢巻）
+  if (isKuge) {
+    ctx.fillStyle = '#15181f';
+    ctx.beginPath();
+    ctx.moveTo(cx - faceW * 0.62, cy - faceH * 0.62);
+    ctx.bezierCurveTo(cx - faceW * 0.5, cy - faceH * 1.5, cx + faceW * 0.3, cy - faceH * 1.7, cx + faceW * 0.18, cy - faceH * 1.02);
+    ctx.bezierCurveTo(cx + faceW * 0.5, cy - faceH * 0.86, cx + faceW * 0.66, cy - faceH * 0.5, cx + faceW * 0.6, cy - faceH * 0.62);
+    ctx.bezierCurveTo(cx + faceW * 0.3, cy - faceH * 0.86, cx - faceW * 0.3, cy - faceH * 0.86, cx - faceW * 0.62, cy - faceH * 0.62);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = Math.max(1, 1 * u);
+    ctx.beginPath(); ctx.moveTo(cx - faceW * 0.4, cy - faceH * 0.72); ctx.lineTo(cx + faceW * 0.4, cy - faceH * 0.72); ctx.stroke();
+  } else {
+    ctx.fillStyle = '#20242c';
+    ctx.beginPath(); ctx.ellipse(cx, cy - faceH * 0.62, faceW * 0.78, faceH * 0.46, 0, Math.PI, 0); ctx.fill();
+    ctx.strokeStyle = campColor; ctx.lineWidth = Math.max(1, 3 * u); ctx.globalAlpha = 0.9;
+    ctx.beginPath(); ctx.moveTo(cx - faceW * 0.86, cy - faceH * 0.36); ctx.lineTo(cx + faceW * 0.86, cy - faceH * 0.36); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
 /* 背景のアニメーションパーティクル（サイト共通の演出、genpei.html踏襲） */
 class Backdrop {
   constructor() { this.p = new GameKit.Particles(W, H, { count: 46 }); }
@@ -1576,7 +1714,7 @@ class TitleScene extends GameKit.Scene {
     for (const b of this.buttons) {
       if (!hit(b, p) || b.disabled) continue;
       g.audio.jingle([{ f: 392, d: 0.09 }, { f: 523, d: 0.14 }]);
-      if (b.id === 'new') g.changeScene(new FactionSelectScene());
+      if (b.id === 'new') g.changeScene(new ScenarioSelectScene());
       else {
         const st = migrateState(save.get('autosave', null));
         if (st && st.version === SAVE_VERSION) g.changeScene(new MapScene(st));
@@ -1607,6 +1745,49 @@ class TitleScene extends GameKit.Scene {
   }
 }
 
+/* ---- シナリオ選択 / ScenarioSelectScene（spec 2.3節Should要件: 'genko'本編／'kanno'観応の擾乱） ---- */
+class ScenarioSelectScene extends GameKit.Scene {
+  enter() {
+    this.bd = new Backdrop();
+    this.sel = 0;
+    this.rows = SCENARIOS.map((s, i) => ({ x: 100, y: 210 + i * 128, w: W - 200, h: 108, i }));
+    this.back = { x: 60, y: H - 84, w: 180, h: 52, jp: '戻る', en: 'Back' };
+    this.go = { x: W - 60 - 300, y: H - 84, w: 300, h: 52, jp: 'このシナリオで始める', en: 'Begin' };
+  }
+  update(dt, g) {
+    this.bd.update(dt);
+    const p = g.input.pointer;
+    if (!p.justPressed) return;
+    for (const r of this.rows) if (hit(r, p)) { this.sel = r.i; g.audio.jingle([{ f: 440, d: 0.07 }]); }
+    if (hit(this.back, p)) g.changeScene(new TitleScene());
+    if (hit(this.go, p)) {
+      g.audio.jingle([{ f: 392, d: 0.1 }, { f: 523, d: 0.1 }, { f: 659, d: 0.2 }]);
+      g.changeScene(new FactionSelectScene(SCENARIOS[this.sel].id));
+    }
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    txt(ctx, 'シナリオを選ぶ', 60, 50, { font: `600 34px ${TITLE_FONT}`, color: '#e2e8f0' });
+    txt(ctx, 'Choose a Scenario', 60, 90, { font: '11px sans-serif', color: '#8b98ab' });
+    const p = g.input.pointer;
+    SCENARIOS.forEach((s, i) => {
+      const r = this.rows[i], on = i === this.sel;
+      frame(ctx, r.x, r.y, r.w, r.h, {
+        fill: on ? 'rgba(34,211,238,0.14)' : hit(r, p) ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.03)',
+        stroke: on ? 'rgba(34,211,238,0.75)' : 'rgba(255,255,255,0.12)', radius: 10,
+      });
+      txt(ctx, s.jp, r.x + 24, r.y + 14, { font: '600 20px "Hiragino Mincho ProN", serif', color: '#e2e8f0' });
+      txt(ctx, s.en, r.x + 24, r.y + 42, { font: '11px sans-serif', color: '#22d3ee' });
+      txt(ctx, `${s.startYear}年開始 ・ 最大${s.maxTurns}ターン / From ${s.startYear}, up to ${s.maxTurns} turns`,
+        r.x + r.w - 24, r.y + 14, { font: '10px sans-serif', color: '#64748b', align: 'right' });
+      wrapText(ctx, s.desc.jp, r.x + 24, r.y + 66, r.w - 48, 18, { font: '12px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
+      wrapText(ctx, s.desc.en, r.x + 24, r.y + 86, r.w - 48, 16, { font: '10px sans-serif', color: '#8b98ab' });
+    });
+    button(ctx, this.back, hit(this.back, p));
+    button(ctx, this.go, hit(this.go, p));
+  }
+}
+
 /* ---- 陣営選択 / FactionSelectScene（spec 3.2節: 北朝・足利方／南朝方／地方勢力9家から1家） ---- */
 const FACTION_CHOICES = [
   { id: 'ashikaga', group: 'main' },
@@ -1619,11 +1800,21 @@ function factionInfo(id) {
   return h ? { id: h.id, jp: h.jp, en: h.en, color: h.color } : { id, jp: id, en: id, color: '#94a3b8' };
 }
 class FactionSelectScene extends GameKit.Scene {
+  constructor(scenarioId) { super(); this.scenarioId = scenarioId || RULE.scenario.defaultId; }
   enter() {
     this.bd = new Backdrop();
     this.list = FACTION_CHOICES;
     this.sel = 0;
-    this.rows = this.list.map((f, i) => ({ x: 60, y: 150 + i * 50, w: 420, h: 44, i }));
+    // グループ('main'→'chihou')が切り替わる境目だけ余白を足す。均等間隔のままだと
+    // グループ見出し（r.y-20に描画）が直前の行と重なる（2026-08-21のブラッシュアップで発覚）。
+    this.rows = [];
+    let rowY = 168, lastGroup = null;
+    this.list.forEach((f, i) => {
+      if (lastGroup !== null && f.group !== lastGroup) rowY += 26;
+      this.rows.push({ x: 60, y: rowY, w: 420, h: 40, i });
+      lastGroup = f.group;
+      rowY += 46;
+    });
     this.back = { x: 60, y: H - 84, w: 180, h: 52, jp: '戻る', en: 'Back' };
     this.go = { x: W - 60 - 300, y: H - 84, w: 300, h: 52, jp: 'この陣営で始める', en: 'Begin' };
   }
@@ -1632,16 +1823,18 @@ class FactionSelectScene extends GameKit.Scene {
     const p = g.input.pointer;
     if (!p.justPressed) return;
     for (const r of this.rows) if (hit(r, p)) { this.sel = r.i; g.audio.jingle([{ f: 440, d: 0.07 }]); }
-    if (hit(this.back, p)) g.changeScene(new TitleScene());
+    if (hit(this.back, p)) g.changeScene(new ScenarioSelectScene());
     if (hit(this.go, p)) {
       g.audio.jingle([{ f: 392, d: 0.1 }, { f: 523, d: 0.1 }, { f: 659, d: 0.2 }]);
-      g.changeScene(new OpeningScene(this.list[this.sel].id));
+      g.changeScene(new OpeningScene(this.list[this.sel].id, this.scenarioId));
     }
   }
   draw(ctx, g) {
     this.bd.draw(ctx);
     txt(ctx, '陣営を選ぶ', 60, 50, { font: `600 34px ${TITLE_FONT}`, color: '#e2e8f0' });
     txt(ctx, 'Choose Your Power', 60, 90, { font: '11px sans-serif', color: '#8b98ab' });
+    const scenario = SCENARIOS.find((s) => s.id === this.scenarioId) || SCENARIOS[0];
+    txt(ctx, `シナリオ: ${scenario.jp} / ${scenario.en}`, 60, 118, { font: '11px sans-serif', color: '#a78bfa' });
     const p = g.input.pointer;
     let lastGroup = null;
     this.rows.forEach((r, i) => {
@@ -1672,10 +1865,13 @@ class FactionSelectScene extends GameKit.Scene {
     wrapText(ctx, blurb, px + 24, 246, pw - 48, 20, { font: '13px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
     txt(ctx, `武将 ${gens.length}名 ・ 初期石高 概算${totalKoku}貫`, px + 24, 300, { font: '12px sans-serif', color: '#8b98ab' });
     let y = 336;
-    txt(ctx, '所属武将 / Generals', px + 24, y, { font: '11px sans-serif', color: '#64748b' }); y += 22;
+    txt(ctx, '所属武将 / Generals', px + 24, y, { font: '11px sans-serif', color: '#64748b' }); y += 24;
+    const portSize = 30;
     for (const gg of gens.slice(0, 8)) {
-      txt(ctx, `${gg.jp}（${IDEOLOGY[gg.ideology].jp}）`, px + 24, y, { font: '13px "Hiragino Mincho ProN", serif', color: '#e2e8f0' });
-      y += 22;
+      drawGeneralPortrait(ctx, gg, px + 24, y, portSize);
+      txt(ctx, `${gg.jp}（${IDEOLOGY[gg.ideology].jp}）`, px + 24 + portSize + 12, y + 4, { font: '13px "Hiragino Mincho ProN", serif', color: '#e2e8f0' });
+      txt(ctx, gg.en, px + 24 + portSize + 12, y + 20, { font: '10px sans-serif', color: '#8b98ab' });
+      y += portSize + 8;
     }
     button(ctx, this.back, hit(this.back, p));
     button(ctx, this.go, hit(this.go, p));
@@ -1711,10 +1907,37 @@ const GENKO_OPENING = {
     'which banner will you carry through sixty-one years of strife?',
   ],
 };
+/* 'kanno'シナリオ用の史実イントロ（spec 2.3節Should要件）。GENKO_OPENINGと同じ表示尺で、
+ * 観応元年(1350年)時点の情勢――幕府は既に成立済みで、高師直と足利直義の内訌が起点――を示す。 */
+const KANNO_OPENING = {
+  jp: [
+    '観応元年（1350年）。',
+    '室町幕府は既に諸国を治めるに至ったが、その内側で亀裂が走っていた。',
+    '将軍・足利尊氏の執事、高師直の専横と、',
+    '政務を統べる弟・足利直義との対立は、もはや修復し難い。',
+    '',
+    '南朝はいまだ吉野に拠り、この内訌に乗じて勢力回復を窺う。',
+    '',
+    'わずか十数年に凝縮されたこの争いは、足利政権の行く末を左右する。',
+    'あなたはどの陣営として、観応の擾乱を乗り切るか。',
+  ],
+  en: [
+    'Kannō 1 (1350 CE).',
+    'The Muromachi Shogunate now rules most of the land, but a rift is opening within it.',
+    'The high-handed rule of Shogun Ashikaga Takauji\'s steward, Kō no Moronao,',
+    'has brought him into open conflict with the Shogun\'s own brother Tadayoshi, who governs civil affairs.',
+    '',
+    'The Southern Court, still holding out at Yoshino, watches for its chance to strike.',
+    '',
+    'Compressed into little more than a decade, this feud will decide the Ashikaga regime\'s fate.',
+    'Which banner will you carry through the Kannō Disturbance?',
+  ],
+};
 class OpeningScene extends GameKit.Scene {
-  constructor(campId) { super(); this.campId = campId; }
+  constructor(campId, scenarioId) { super(); this.campId = campId; this.scenarioId = scenarioId || RULE.scenario.defaultId; }
   enter() {
     this.bd = new Backdrop(); this.t = 0;
+    this.lines = this.scenarioId === 'kanno' ? KANNO_OPENING : GENKO_OPENING;
     this.next = { x: W / 2 - 150, y: H - 100, w: 300, h: 56, jp: '陣営を確定する', en: 'Confirm & Begin' };
     this.back = { x: 70, y: H - 100, w: 160, h: 56, jp: '戻る', en: 'Back' };
   }
@@ -1724,24 +1947,25 @@ class OpeningScene extends GameKit.Scene {
     if (!p.justPressed) return;
     if (hit(this.next, p)) {
       g.audio.jingle([{ f: 330, d: 0.12 }, { f: 440, d: 0.12 }, { f: 587, d: 0.22 }]);
-      const state = Rule.buildState({ playerCamp: this.campId });
-      // buildState内でturn===0条件の元弘の乱イベントが既に発火済み（checkTimelineEvents呼び出し）。
+      const state = Rule.buildState({ playerCamp: this.campId, scenarioId: this.scenarioId });
+      // buildState内でturn===0条件の開幕イベント（元弘の乱／観応の擾乱）が既に発火済み（checkTimelineEvents呼び出し）。
       // そのカットシーンを、マップに入る前に見せる（spec 6章 step8）。
       const pending = Rule.dequeueCutscenes(state);
       save.set('autosave', state);
       if (pending.length) g.changeScene(new CutsceneScene(state, pending, () => new MapScene(state)));
       else g.changeScene(new MapScene(state));
     }
-    if (hit(this.back, p)) g.changeScene(new FactionSelectScene());
+    if (hit(this.back, p)) g.changeScene(new FactionSelectScene(this.scenarioId));
   }
   draw(ctx, g) {
     this.bd.draw(ctx);
-    txt(ctx, '元弘の乱 / Genkō War', W / 2, 60, { font: `600 34px ${TITLE_FONT}`, color: '#e2e8f0', align: 'center' });
+    const heading = this.scenarioId === 'kanno' ? '観応の擾乱 / Kannō Disturbance' : '元弘の乱 / Genkō War';
+    txt(ctx, heading, W / 2, 60, { font: `600 34px ${TITLE_FONT}`, color: '#e2e8f0', align: 'center' });
     frame(ctx, 180, 130, W - 360, H - 130 - 140);
-    const shown = Math.min(GENKO_OPENING.jp.length, Math.floor(this.t / 0.32) + 1);
+    const shown = Math.min(this.lines.jp.length, Math.floor(this.t / 0.32) + 1);
     let y = 168;
     for (let i = 0; i < shown; i++) {
-      const jp = GENKO_OPENING.jp[i], en = GENKO_OPENING.en[i];
+      const jp = this.lines.jp[i], en = this.lines.en[i];
       txt(ctx, jp, W / 2, y, { font: '17px "Hiragino Mincho ProN", serif', color: '#e2e8f0', align: 'center' });
       y += jp === '' ? 12 : 26;
       if (jp !== '') { txt(ctx, en, W / 2, y, { font: '10px sans-serif', color: '#6b7787', align: 'center' }); y += 20; }
@@ -1820,6 +2044,9 @@ class CutsceneScene extends GameKit.Scene {
  * 6種の確定エンディング＋上限ターン到達時の暫定フォールバック(scenario_end_fallback)を
  * 日英併記のGlassmorphismカードで表示する。
  * ========================================================================== */
+/* 既知の簡略化: 本文は'genko'(1331年開始)の史実固有名詞（後醍醐帝・光厳天皇・明徳三年等）を
+ * ベースに書かれている。'kanno'(1350年開始)側でも到達可能なエンディングだが、両シナリオの
+ * 固有名詞を動的に差し替える対応はしていない（scenario_end_fallbackのみ年数を動的化済み）。 */
 const ENDING_TEXTS = {
   kenmu_success: {
     title: { jp: '建武の新政成功', en: 'The Kenmu Restoration Endures' },
@@ -1870,10 +2097,13 @@ function fallbackEndingText(state) {
   const lead = Rule.leadingCamp(state);
   const label = lead.campId ? campLabelOf(state, lead.campId) : { jp: '不明の勢力', en: 'an unknown power' };
   const pct = Math.round(lead.ratio * 100);
+  // 経過年数は実行中シナリオのターン数から算出する（'genko'は61年、'kanno'は15年など。
+  // シナリオ名を固定値でハードコードしないための対応）。
+  const years = Math.max(1, state.turn);
   return {
-    title: { jp: `${label.jp}、優勢のまま六十一年が暮れる`, en: `${label.en} Holds the Upper Hand as an Era Draws to a Close` },
+    title: { jp: `${label.jp}、優勢のまま${years}年が暮れる`, en: `${label.en} Holds the Upper Hand as an Era Draws to a Close` },
     body: [
-      { jp: 'いずれの朝廷も天下を完全に制することなく、六十一年におよぶ争乱はひとまずの区切りを迎えた。', en: 'Neither court ever fully claimed the realm, and sixty-one years of strife reach only a provisional close.' },
+      { jp: `いずれの朝廷も天下を完全に制することなく、${years}年におよぶ争乱はひとまずの区切りを迎えた。`, en: `Neither court ever fully claimed the realm, and ${years} years of strife reach only a provisional close.` },
       { jp: `国土の${pct}パーセントを制した${label.jp}が、この時点で最も優勢な勢力として物語を引き継ぐ。`, en: `${label.en}, controlling ${pct}% of the realm, carries the story forward as the era's most dominant power.` },
     ],
   };
@@ -1957,6 +2187,7 @@ const MAP_COMMANDS = [
   { id: 'court',     jp: '朝廷', en: 'Court' },
   { id: 'akutou',    jp: '悪党', en: 'Akutō' },
   { id: 'chronicle', jp: '記録', en: 'Chronicle' },
+  { id: 'roster',    jp: '武将名鑑', en: 'Roster' },
   { id: 'endTurn',   jp: 'ターン終了', en: 'End Turn' },
 ];
 const PANEL_RECT = { x: 140, y: 66, w: W - 280, h: H - 66 - 70 };
@@ -2359,6 +2590,7 @@ class MapScene extends GameKit.Scene {
     const titleMap = {
       domestic: ['政務', 'Domestic'], military: ['軍事', 'Military'], personnel: ['人事・恩賞', 'Vassals & Rewards'],
       court: ['朝廷', 'Court'], akutou: ['悪党', 'Akutō'], chronicle: ['記録', 'Chronicle'],
+      roster: ['武将名鑑', 'Roster'],
     };
     const tt = titleMap[this.panel] || ['', ''];
     txt(ctx, tt[0], r.x + 24, r.y + 16, { font: '600 22px "Hiragino Mincho ProN", serif', color: '#e2e8f0' });
@@ -2370,6 +2602,7 @@ class MapScene extends GameKit.Scene {
     else if (this.panel === 'court') this._drawCourtPanel(ctx, g);
     else if (this.panel === 'akutou') this._drawAkutouPanel(ctx, g);
     else if (this.panel === 'chronicle') this._drawChroniclePanel(ctx, g);
+    else if (this.panel === 'roster') this._drawRosterPanel(ctx, g);
   }
   _drawDomesticPanel(ctx, g) {
     const r = PANEL_RECT, x = r.x + 24, w = r.w - 48;
@@ -2433,8 +2666,10 @@ class MapScene extends GameKit.Scene {
     gens.slice(0, 9).forEach((gen, i) => {
       const rowY = y + i * 50;
       frame(ctx, x, rowY, w, 42, { fill: 'rgba(255,255,255,0.03)', stroke: 'rgba(255,255,255,0.1)' });
-      txt(ctx, `${gen.jp} / ${gen.en}`, x + 12, rowY + 6, { font: '12px "Hiragino Mincho ProN", serif', color: '#e2e8f0' });
-      txt(ctx, `忠義 ${Math.round(gen.loyalty)}　欲求 ${Math.round(gen.landDesire)}　${IDEOLOGY[gen.ideology].jp}`, x + 12, rowY + 22, { font: '10px sans-serif', color: '#8b98ab' });
+      drawGeneralPortrait(ctx, gen, x + 5, rowY + 5, 32);
+      const tx = x + 46;
+      txt(ctx, `${gen.jp} / ${gen.en}`, tx, rowY + 6, { font: '12px "Hiragino Mincho ProN", serif', color: '#e2e8f0' });
+      txt(ctx, `忠義 ${Math.round(gen.loyalty)}　欲求 ${Math.round(gen.landDesire)}　${IDEOLOGY[gen.ideology].jp}`, tx, rowY + 22, { font: '10px sans-serif', color: '#8b98ab' });
       const b = { x: x + w - 108, y: rowY + 5, w: 96, h: 32, jp: '恩賞', en: 'Reward', disabled: Rule.campGold(this.state, this.player) < 60, onClick: (gg) => this._grantReward(gg, gen.id) };
       this.buttons.push(b);
       button(ctx, b, hit(b, p) && !b.disabled);
@@ -2505,6 +2740,78 @@ class MapScene extends GameKit.Scene {
       if (y > r.y + r.h - 40) break;
       txt(ctx, `${e.year}年 ${e.jp}`, x, y, { font: '12px "Hiragino Mincho ProN", serif', color: '#dbe4ee' }); y += 16;
       txt(ctx, e.en, x, y, { font: '10px sans-serif', color: '#64748b' }); y += 20;
+    }
+  }
+  /* 武将名鑑 / RosterPanel（spec 2.3節Should要件「年代記/史書ビュー」相当）。
+   * genpei.htmlのRetsudenSceneと違い独立シーンにはせず、既存の記録パネルと並ぶ
+   * コマンドバー項目として追加した（MapScene内の他パネルと実装パターンを揃えるため）。
+   * 全30武将データ（GENERALS_DEF、camp不問）を一覧し、選択した1名の詳細（肖像・経歴・
+   * 現在の状態）を右側に表示する。存命/死没は現在進行中のstate.generalsを参照する。 */
+  _drawRosterPanel(ctx, g) {
+    const r = PANEL_RECT, x = r.x + 24, w = r.w - 48;
+    const listW = 260, listTop = r.y + 74, rowH = 18, headH = 14;
+    const detailX = x + listW + 24, detailW = w - listW - 24;
+    const p = g.input.pointer;
+    // 一覧が縦に収まるよう、camp単位ではなく北朝/南朝/地方勢力の3グループのみで見出しを出す
+    // （地方9家をcampごとに見出し分けすると11見出し分の高さが要り、パネルからはみ出すため）。
+    const groupOf = (campId) => campId === 'ashikaga' ? 0 : campId === 'nancho' ? 1 : 2;
+    const groupLabel = [
+      { jp: '北朝・足利方', en: 'Northern Court / Ashikaga' },
+      { jp: '南朝方', en: 'Southern Court' },
+      { jp: '地方勢力', en: 'Regional Houses' },
+    ];
+    const sorted = GENERALS_DEF.slice().sort((a, b) => {
+      const ga = groupOf(a.camp), gb = groupOf(b.camp);
+      return ga !== gb ? ga - gb : a.jp.localeCompare(b.jp, 'ja');
+    });
+    if (!this.rosterSel || !sorted.some((gg) => gg.id === this.rosterSel)) this.rosterSel = sorted[0].id;
+
+    let lastGroup = -1, y = listTop;
+    for (const gg of sorted) {
+      const grp = groupOf(gg.camp);
+      if (grp !== lastGroup) {
+        txt(ctx, `${groupLabel[grp].jp} / ${groupLabel[grp].en}`, x, y, { font: '9px sans-serif', color: '#64748b' });
+        y += headH; lastGroup = grp;
+      }
+      const liveGen = this.state.generals[gg.id];
+      const dead = !!(liveGen && liveGen.dead);
+      const row = { x, y, w: listW, h: rowH, onClick: () => { this.rosterSel = gg.id; } };
+      this.buttons.push(row);
+      const on = this.rosterSel === gg.id;
+      if (on || hit(row, p)) frame(ctx, row.x, row.y, row.w, row.h, { fill: on ? 'rgba(34,211,238,0.16)' : 'rgba(255,255,255,0.05)', stroke: 'transparent' });
+      drawKamon(ctx, gg.camp, row.x + 8, row.y + rowH / 2, 5.5);
+      txt(ctx, `${dead ? '† ' : ''}${gg.jp}`, row.x + 18, row.y + 3, {
+        font: `${on ? '600 ' : ''}10.5px "Hiragino Mincho ProN", serif`, color: dead ? '#64748b' : '#e2e8f0',
+      });
+      y += rowH;
+    }
+
+    const def = GENERALS_DEF.find((gg) => gg.id === this.rosterSel);
+    const live = this.state.generals[this.rosterSel];
+    const portSize = 108;
+    drawGeneralPortrait(ctx, def, detailX, listTop, portSize);
+    const infoX = detailX + portSize + 20;
+    let dy = listTop;
+    txt(ctx, def.jp, infoX, dy, { font: '600 20px "Hiragino Mincho ProN", serif', color: '#e2e8f0' }); dy += 28;
+    txt(ctx, def.en, infoX, dy, { font: '12px sans-serif', color: '#8b98ab' }); dy += 22;
+    const campLabel = campLabelOf(this.state, def.camp);
+    txt(ctx, `${campLabel.jp} / ${campLabel.en}　${IDEOLOGY[def.ideology].jp} / ${IDEOLOGY[def.ideology].en}`, infoX, dy, { font: '11px sans-serif', color: '#a78bfa' }); dy += 20;
+    const bornDied = `${def.born != null ? def.born + '年生' : '生年不詳'} — ${def.died != null ? def.died + '年没' : '没年不詳'}`;
+    const bornDiedEn = `b. ${def.born != null ? def.born : '?'} — d. ${def.died != null ? def.died : '?'}`;
+    txt(ctx, `${bornDied}　${bornDiedEn}`, infoX, dy, { font: '11px sans-serif', color: '#8b98ab' }); dy += 26;
+    if (live) {
+      const statusJp = live.dead ? '故人（このシナリオでは既に没している）' : `存命　忠義${Math.round(live.loyalty)}　恩賞欲求${Math.round(live.landDesire)}`;
+      const statusEn = live.dead ? 'Deceased (already passed before this scenario opens).' : `Alive — loyalty ${Math.round(live.loyalty)}, reward desire ${Math.round(live.landDesire)}`;
+      txt(ctx, statusJp, infoX, dy, { font: '12px "Hiragino Mincho ProN", serif', color: live.dead ? '#64748b' : '#67e8f9' }); dy += 18;
+      txt(ctx, statusEn, infoX, dy, { font: '10px sans-serif', color: '#64748b' }); dy += 26;
+    }
+    let statLine = '';
+    if (def.stats) statLine = `統率${def.stats.tosotsu}　知略${def.stats.chiryaku}　武勇${def.stats.busou}　水練${def.stats.suiren}`;
+    if (statLine) { txt(ctx, statLine, infoX, dy, { font: '11px sans-serif', color: '#dbe4ee' }); dy += 26; }
+    if (def.note) {
+      wrapText(ctx, def.note.jp, infoX, dy, detailW - portSize - 20, 18, { font: '12px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
+      dy += 40;
+      wrapText(ctx, def.note.en, infoX, dy, detailW - portSize - 20, 16, { font: '10px sans-serif', color: '#8b98ab' });
     }
   }
 }
@@ -2878,6 +3185,8 @@ window.TAIHEI_DEBUG = {
   campColorOf, campLabelOf, campCourtOf, factionInfo, FACTION_CHOICES, KAMON_STYLE, save,
   // Phase C（歴史イベント演出・エンディング判定）で追加したシーン・定数
   CutsceneScene, EndingScene, ENDING_TEXTS, fallbackEndingText,
+  // ブラッシュアップ（シナリオ選択UI・武将肖像）で追加したシーン・定数
+  ScenarioSelectScene, KANNO_OPENING, GENKO_OPENING, drawGeneralPortrait,
 };
 </script>
 </body>
