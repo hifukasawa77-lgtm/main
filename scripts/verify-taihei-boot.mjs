@@ -321,6 +321,9 @@ async function runScenarioChecks(port) {
     const D = window.TAIHEI_DEBUG;
     const kanno = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'kanno' });
     const genko = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'genko' });
+    const kannoOwners = Object.values(kanno.provinces).map((p) => p.owner);
+    const kannoAshikagaCount = kannoOwners.filter((o) => o === 'ashikaga').length;
+    const kannoTotal = kannoOwners.length;
     return {
       kannoYear: kanno.year,
       kannoGodaigoDead: kanno.generals.godaigo.dead,
@@ -328,9 +331,17 @@ async function runScenarioChecks(port) {
       kannoTadayoshiAlive: !kanno.generals.ashikaga_tadayoshi.dead,
       kannoHokuchoActive: kanno.courts.hokucho.active,
       kannoNoEarlyEvents: !kanno.firedEvents.kamakura_bakufu_fall && !kanno.firedEvents.minatogawa && !kanno.firedEvents.engen_no_ran,
+      kannoNanchoCore: ['yamato', 'kawachi', 'kii'].every((pid) => kanno.provinces[pid].owner === 'nancho'),
+      kannoChihouHomeKept: kanno.provinces.suo.owner === 'ouchi' && kanno.provinces.satsuma.owner === 'shimazu',
+      kannoAshikagaMajority: kannoAshikagaCount / kannoTotal,
+      kannoTotal,
+      kannoAshikagaCourtIsHokucho: kanno.camps.ashikaga.court === 'hokucho',
+      kannoNoInstantEnding: kanno.ending === null, // buildState直後（0ターン目）で即エンディング確定していないか
       genkoYear: genko.year,
       genkoGodaigoAlive: !genko.generals.godaigo.dead,
       genkoHokuchoInactive: !genko.courts.hokucho.active,
+      genkoNanchoOwnsYamashiro: genko.provinces.yamashiro.owner === 'nancho', // 'kanno'補正が'genko'に混入していないか
+      genkoAshikagaCourtIsNancho: genko.camps.ashikaga.court === 'nancho', // 建武期の史実初期値（リグレッション）
     };
   });
   check('buildState: kanno開始年=1350', dataCheck.kannoYear === 1350, JSON.stringify(dataCheck));
@@ -339,9 +350,30 @@ async function runScenarioChecks(port) {
   check('buildState: kannoは足利直義(没1352)が開始時点で存命', dataCheck.kannoTadayoshiAlive, JSON.stringify(dataCheck));
   check('buildState: kannoは北朝が開始時点で成立済み', dataCheck.kannoHokuchoActive, JSON.stringify(dataCheck));
   check('buildState: kannoでシナリオ開始年より前の史実イベントが誤発火しない', dataCheck.kannoNoEarlyEvents, JSON.stringify(dataCheck));
+  check('buildState: kannoは南朝が大和・河内・紀伊の3国に縮小している', dataCheck.kannoNanchoCore, JSON.stringify(dataCheck));
+  check('buildState: kannoでも地方5家の本国は維持される', dataCheck.kannoChihouHomeKept, JSON.stringify(dataCheck));
+  check('buildState: kannoは足利方が全国の過半数を領有している（幕府平定後の近似）', dataCheck.kannoAshikagaMajority > 0.5 && dataCheck.kannoTotal === 66, JSON.stringify(dataCheck));
   check('buildState: genko開始年=1331（リグレッション）', dataCheck.genkoYear === 1331, JSON.stringify(dataCheck));
   check('buildState: genkoは後醍醐帝が開始時点で存命（リグレッション）', dataCheck.genkoGodaigoAlive, JSON.stringify(dataCheck));
   check('buildState: genkoは北朝が開始時点で未成立（リグレッション）', dataCheck.genkoHokuchoInactive, JSON.stringify(dataCheck));
+  check('buildState: genkoの領有はkanno補正の影響を受けない（リグレッション）', dataCheck.genkoNanchoOwnsYamashiro, JSON.stringify(dataCheck));
+
+  // --- E. エンディング文言のシナリオ対応（endingTextFor）と三種の神器演出（drawSanshuNoJingi） ---
+  const endingCheck = await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG;
+    const kanno = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'kanno' });
+    kanno.ending = 'nancho_unification';
+    const nanchoBody = D.endingTextFor(kanno).body.map((l) => l.jp + l.en).join(' ');
+    const genko = D.Rule.buildState({ playerCamp: 'ashikaga', scenarioId: 'genko' });
+    genko.ending = 'hokucho_unification';
+    const hokuchoBody = D.endingTextFor(genko).body.map((l) => l.jp + l.en).join(' ');
+    return {
+      kannoUsesGomurakami: nanchoBody.includes('後村上天皇') && !nanchoBody.includes('{'),
+      genkoHokuchoUsesKougon: hokuchoBody.includes('光厳天皇') && !hokuchoBody.includes('{'),
+    };
+  });
+  check('endingTextFor: kannoの南朝統一エンディングは後村上天皇を差し込む', endingCheck.kannoUsesGomurakami, JSON.stringify(endingCheck));
+  check('endingTextFor: genkoの北朝統一エンディングは光厳天皇のまま（リグレッション）', endingCheck.genkoHokuchoUsesKougon, JSON.stringify(endingCheck));
 
   // --- C. 武将肖像の描画が例外を出さないこと ---
   let before = await frameErrCount();
@@ -387,6 +419,22 @@ async function runScenarioChecks(port) {
   after = await frameErrCount();
   check('武将名鑑: 行クリックで選択武将が切り替わる', rosterSelAfter !== rosterInfo.selBefore, `before=${rosterInfo.selBefore} after=${rosterSelAfter}`);
   check('武将名鑑: 選択切り替え後も例外0件', after === before, `before=${before} after=${after}`);
+
+  // --- F. 朝廷パネル（三種の神器演出 drawSanshuNoJingi）が玉座保持あり（南朝）で例外0件、
+  //        かつ drawSanshuNoJingi自体が未保持時のグレー配色でも例外を出さないこと ---
+  before = after;
+  await page.evaluate(() => { window.TAIHEI_DEBUG.game.scene.panel = 'court'; window.TAIHEI_DEBUG.game.scene.courtTab = 'nancho'; });
+  await page.waitForTimeout(150);
+  after = await frameErrCount();
+  check('三種の神器: 朝廷パネル(南朝・玉座保持あり)描画で例外0件', after === before, `before=${before} after=${after}`);
+
+  const jingiUnheldOk = await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG;
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    try { D.drawSanshuNoJingi(ctx, 100, 100, 11, '#475569'); return true; } catch (e) { return false; }
+  });
+  check('三種の神器: 未保持（グレー配色）でも例外を出さない', jingiUnheldOk, '');
 
   check('シナリオUI一式: ページ全体の未捕捉例外0件', pageErrors.length === 0, pageErrors.join(' | '));
   await browser.close();

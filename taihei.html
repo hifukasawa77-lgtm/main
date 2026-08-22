@@ -376,6 +376,26 @@ const PROVINCE_OWNER_SEED = {
   kawachi: 'nancho', kozuke: 'nancho', hoki: 'nancho', higo: 'nancho',
   suo: 'ouchi', satsuma: 'shimazu', shinano: 'ogasawara', noto: 'hatakeyama', etchu: 'momonoi',
 };
+/* 'kanno'(観応元年・1350年開始)シナリオ用の領有初期値。'genko'(1331年)用の
+ * PROVINCE_OWNER_SEEDは「元弘の乱直後、抵抗の芽が各地に散在する」疎らな割り当てで、
+ * 幕府成立から19年が経った1350年時点にはそぐわない（ブラッシュアップ提案4）。
+ * 全66国の厳密な史料再現ではなく「南朝は吉野周辺（大和・河内・紀伊）へ縮小、
+ * 本国持ちの地方5家（大内・島津・小笠原・畠山・桃井）はそのまま、それ以外は
+ * 室町幕府がほぼ平定済み＝足利方」という簡略近似とする（完了報告で明記する既知の簡略化）。
+ * DATA.provincesの読込完了後（buildState呼び出し時点）にしか全国データを参照できないため、
+ * 静的オブジェクトではなく関数として持つ。 */
+const NANCHO_KANNO_CORE_PROVINCES = ['yamato', 'kawachi', 'kii'];
+function buildKannoProvinceOwnerSeed() {
+  const chihouHome = {};
+  for (const h of CHIHOU_HOUSES) for (const pid of h.home) chihouHome[pid] = h.id;
+  const seed = {};
+  for (const p of DATA.provinces || []) {
+    if (NANCHO_KANNO_CORE_PROVINCES.indexOf(p.id) >= 0) seed[p.id] = 'nancho';
+    else if (chihouHome[p.id]) seed[p.id] = chihouHome[p.id];
+    else seed[p.id] = 'ashikaga';
+  }
+  return seed;
+}
 
 /* ---- 兵科（8兵科＋水軍） / Units — spec 4.8節の雛形そのまま ---- */
 const UNITS = {
@@ -1149,9 +1169,10 @@ function buildState(opts) {
     state.camps[h.id] = { id: h.id, jp: h.jp, en: h.en, color: h.color, playable: true, ai: h.ai || 'opportunist', court: null, home: h.home.slice() };
   }
 
-  // 国データ
+  // 国データ（'kanno'は幕府成立後19年分の平定を反映した専用シードを使う）
+  const ownerSeed = scenario.id === 'kanno' ? buildKannoProvinceOwnerSeed() : PROVINCE_OWNER_SEED;
   for (const p of DATA.provinces || []) {
-    const owner = PROVINCE_OWNER_SEED[p.id] || null;
+    const owner = ownerSeed[p.id] || null;
     state.provinces[p.id] = {
       id: p.id, owner, facility: null,
       garrison: owner ? Math.round(120 + p.koku * 0.4) : Math.round(40 + p.koku * 0.15),
@@ -1196,13 +1217,19 @@ function buildState(opts) {
   if (scenario.id === 'kanno') {
     // 観応元年(1350年)時点の朝廷情勢を簡略補正する（既知の簡略化。武将データに
     // 後継の天皇を個別武将として持たないため、玉座は特定武将に紐付けない形で継続扱いとし、
-    // 討死による正統性崩壊イベントは発生しない。国ごとの領有(PROVINCE_OWNER_SEED)は
-    // 引き続き'genko'開始時点の割り当てを流用する近似とする＝完了報告で明記する簡略化）。
+    // 討死による正統性崩壊イベントは発生しない。国ごとの領有はbuildKannoProvinceOwnerSeed()で
+    // 別途1350年近似へ補正済み）。
     state.courts.nancho.emperor = { jp: '後村上天皇', en: 'Emperor Go-Murakami', generalId: null, alive: true };
     state.courts.hokucho.active = true;
     state.courts.hokucho.emperor = { jp: '崇光天皇', en: 'Emperor Sukō', generalId: null, alive: true };
     state.courts.hokucho.legitimacy = 55;
     state.courts.hokucho.heldBy = 'ashikaga';
+    // CAMPS.ashikaga.court は既定で'nancho'（建武期は南朝の一員として挙兵した史実を表す、
+    // 'genko'では中先代の乱→延元の乱で'hokucho'へ離反するまでの初期値）。'kanno'(1350年開始)は
+    // その離反イベント自体をスキップする（minTurn<0ガード）ため、ここで明示的に'hokucho'へ
+    // 補正しないとcourtControlledProvinceCount('nancho')が足利方の領国まで誤って合算してしまい、
+    // 南朝が瞬時に「統一」判定される（バランス検証スクリプトで実際に検出したバグ）。
+    state.camps.ashikaga.court = 'hokucho';
   }
 
   // 悪党プール（全camp分。未雇用ならcount:0）
@@ -1631,6 +1658,45 @@ function drawGeneralPortrait(ctx, gen, x, y, size) {
   ctx.restore();
 }
 
+/* 三種の神器（八咫鏡・八尺瓊勾玉・草薙剣）の簡略ベクター意匠（spec 2.3節Could要件:
+ * 「南朝・北朝の玉座UI演出」）。実在の宝物・意匠のトレースではない自作の幾何学的表現。
+ * 玉座を保持する陣営の色で彩色し、呼び出し側は未保持時にグレーを渡すことを想定する。 */
+function drawSanshuNoJingi(ctx, x, y, size, color) {
+  const u = size;
+  ctx.save(); ctx.translate(x, y);
+  // 鏡（八咫鏡）: 光沢のある円盤
+  ctx.save(); ctx.translate(-u * 1.15, 0);
+  const mg = ctx.createRadialGradient(-u * 0.08, -u * 0.08, u * 0.03, 0, 0, u * 0.42);
+  mg.addColorStop(0, 'rgba(255,255,255,0.85)'); mg.addColorStop(0.6, shadeHexT(color, 0.05)); mg.addColorStop(1, shadeHexT(color, -0.35));
+  ctx.fillStyle = mg;
+  ctx.beginPath(); ctx.arc(0, 0, u * 0.42, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = shadeHexT(color, -0.2); ctx.lineWidth = Math.max(1, u * 0.08); ctx.stroke();
+  ctx.restore();
+  // 勾玉（八尺瓊勾玉）: コンマ形のベジェ曲線
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(0, -u * 0.42);
+  ctx.bezierCurveTo(u * 0.46, -u * 0.42, u * 0.46, u * 0.18, u * 0.06, u * 0.18);
+  ctx.bezierCurveTo(-u * 0.12, u * 0.18, -u * 0.12, -u * 0.02, u * 0.04, -u * 0.06);
+  ctx.bezierCurveTo(u * 0.16, -u * 0.1, u * 0.14, -u * 0.3, 0, -u * 0.42);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.arc(u * 0.05, -u * 0.02, u * 0.06, 0, Math.PI * 2); ctx.fillStyle = shadeHexT(color, -0.55); ctx.fill();
+  ctx.restore();
+  // 剣（草薙剣）: 縦の刀身
+  ctx.save(); ctx.translate(u * 1.15, 0);
+  const sg = ctx.createLinearGradient(-u * 0.14, -u * 0.5, u * 0.14, u * 0.5);
+  sg.addColorStop(0, 'rgba(255,255,255,0.85)'); sg.addColorStop(0.5, shadeHexT(color, 0)); sg.addColorStop(1, shadeHexT(color, -0.4));
+  ctx.fillStyle = sg;
+  ctx.beginPath();
+  ctx.moveTo(0, -u * 0.5); ctx.lineTo(u * 0.13, u * 0.28); ctx.lineTo(u * 0.05, u * 0.4); ctx.lineTo(-u * 0.05, u * 0.4); ctx.lineTo(-u * 0.13, u * 0.28);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = shadeHexT(color, -0.5); ctx.lineWidth = Math.max(1, u * 0.32); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-u * 0.3, u * 0.06); ctx.lineTo(u * 0.3, u * 0.06); ctx.stroke();
+  ctx.restore();
+  ctx.restore();
+}
+
 /* 背景のアニメーションパーティクル（サイト共通の演出、genpei.html踏襲） */
 class Backdrop {
   constructor() { this.p = new GameKit.Particles(W, H, { count: 46 }); }
@@ -2044,9 +2110,11 @@ class CutsceneScene extends GameKit.Scene {
  * 6種の確定エンディング＋上限ターン到達時の暫定フォールバック(scenario_end_fallback)を
  * 日英併記のGlassmorphismカードで表示する。
  * ========================================================================== */
-/* 既知の簡略化: 本文は'genko'(1331年開始)の史実固有名詞（後醍醐帝・光厳天皇・明徳三年等）を
- * ベースに書かれている。'kanno'(1350年開始)側でも到達可能なエンディングだが、両シナリオの
- * 固有名詞を動的に差し替える対応はしていない（scenario_end_fallbackのみ年数を動的化済み）。 */
+/* 本文中の天皇名は{nanchoEmperor}/{hokuchoEmperor}（jp）と{nanchoEmperorEn}/{hokuchoEmperorEn}（en）
+ * のプレースホルダーで持ち、EndingScene描画時にendingTextFor()がstate.courtsの現在の帝で
+ * 埋める（'kanno'では後村上天皇/崇光天皇、'genko'では後醍醐帝/光厳天皇になる。buildState参照）。
+ * 'tenka_taihei'(南北朝合一)は年1392の史実イベント固定で'kanno'(最大15ターン)側では到達
+ * 不能なため、'genko'の明徳三年の史実文言のまま静的にしてある（ブラッシュアップ提案1）。 */
 const ENDING_TEXTS = {
   kenmu_success: {
     title: { jp: '建武の新政成功', en: 'The Kenmu Restoration Endures' },
@@ -2065,14 +2133,14 @@ const ENDING_TEXTS = {
   nancho_unification: {
     title: { jp: '南朝統一', en: 'The Southern Court Prevails' },
     body: [
-      { jp: '北朝を奉じた勢力は次々と瓦解し、後醍醐帝の正統は日本全土にその威光を取り戻した。', en: 'The forces upholding the Northern Court crumbled one after another, and Emperor Go-Daigo\'s line reclaimed its authority across the realm.' },
+      { jp: '北朝を奉じた勢力は次々と瓦解し、{nanchoEmperor}の正統は日本全土にその威光を取り戻した。', en: 'The forces upholding the Northern Court crumbled one after another, and {nanchoEmperorEn}\'s line reclaimed its authority across the realm.' },
       { jp: '忠義に厚い将たちが守り抜いた南朝の正統性は、ついに天下を統べる力となった。', en: 'The legitimacy the loyalist generals fought so hard to protect finally became the power that ruled the realm.' },
     ],
   },
   hokucho_unification: {
     title: { jp: '北朝統一', en: 'The Northern Court Prevails' },
     body: [
-      { jp: '南朝の旗を掲げた者たちは各地で力尽き、光厳天皇を戴く北朝がついに天下に号令する。', en: 'Those who carried the Southern Court\'s banner were worn down one region at a time, and the Northern Court, upholding Emperor Kōgon, at last commands the realm.' },
+      { jp: '南朝の旗を掲げた者たちは各地で力尽き、{hokuchoEmperor}を戴く北朝がついに天下に号令する。', en: 'Those who carried the Southern Court\'s banner were worn down one region at a time, and the Northern Court, upholding {hokuchoEmperorEn}, at last commands the realm.' },
       { jp: '恩賞と実力によって武士を束ねた足利家の政略は、ここに天下泰平をもたらす結実を見た。', en: 'The Ashikaga house\'s strategy of binding warriors through reward and strength finally bore fruit in a realm at peace.' },
     ],
   },
@@ -2108,6 +2176,22 @@ function fallbackEndingText(state) {
     ],
   };
 }
+/* ENDING_TEXTSの{nanchoEmperor}等のプレースホルダーをstate.courtsの現在の帝で埋める。
+ * fallbackEndingText()の出力にはプレースホルダーが含まれないため素通りする（無害）。 */
+function fillEndingTemplate(str, state) {
+  return str
+    .replace(/\{nanchoEmperorEn\}/g, state.courts.nancho.emperor.en)
+    .replace(/\{nanchoEmperor\}/g, state.courts.nancho.emperor.jp)
+    .replace(/\{hokuchoEmperorEn\}/g, state.courts.hokucho.emperor.en)
+    .replace(/\{hokuchoEmperor\}/g, state.courts.hokucho.emperor.jp);
+}
+function endingTextFor(state) {
+  const def = state.ending === 'scenario_end_fallback' ? fallbackEndingText(state) : (ENDING_TEXTS[state.ending] || ENDING_TEXTS.zenkoku_toitsu);
+  return {
+    title: def.title,
+    body: def.body.map((line) => ({ jp: fillEndingTemplate(line.jp, state), en: fillEndingTemplate(line.en, state) })),
+  };
+}
 class EndingScene extends GameKit.Scene {
   constructor(state) { super(); this.state = state; }
   enter() {
@@ -2126,7 +2210,7 @@ class EndingScene extends GameKit.Scene {
   draw(ctx, g) {
     this.bd.draw(ctx);
     const state = this.state;
-    const def = state.ending === 'scenario_end_fallback' ? fallbackEndingText(state) : (ENDING_TEXTS[state.ending] || ENDING_TEXTS.zenkoku_toitsu);
+    const def = endingTextFor(state);
     txt(ctx, '結末 / Ending', W / 2, 54, { font: '12px sans-serif', color: '#8b98ab', align: 'center' });
     txt(ctx, def.title.jp, W / 2, 84, { font: `600 40px ${TITLE_FONT}`, color: '#22d3ee', align: 'center' });
     txt(ctx, def.title.en, W / 2, 130, { font: '13px sans-serif', color: '#a78bfa', align: 'center' });
@@ -2693,6 +2777,13 @@ class MapScene extends GameKit.Scene {
     }
     const relValue = Rule.courtRelValue(this.state, this.player, this.courtTab);
     txt(ctx, `${court.emperor.jp} ／ 正統性 ${Math.round(Rule.effectiveLegitimacy(this.state, this.courtTab))} ／ 玉座保持: ${court.heldBy ? campLabelOf(this.state, court.heldBy).jp : 'なし'}`, x, y, { font: '13px "Hiragino Mincho ProN", serif', color: '#dbe4ee' }); y += 22;
+    // 三種の神器の所在を視覚的に表示する（spec 2.3節Could要件）。玉座を保持する陣営の色で彩色し、
+    // 未保持（玉座が空位）ならグレーで表示する。
+    const jingiColor = court.heldBy ? campColorOf(court.heldBy) : '#475569';
+    const jingiLabel = court.heldBy ? campLabelOf(this.state, court.heldBy) : { jp: '所在不明', en: 'whereabouts unknown' };
+    drawSanshuNoJingi(ctx, x + 15, y + 10, 11, jingiColor);
+    txt(ctx, `三種の神器の所在: ${jingiLabel.jp} / Three Sacred Treasures: ${jingiLabel.en}`, x + 44, y + 3, { font: '11px sans-serif', color: '#8b98ab' });
+    y += 26;
     txt(ctx, `自陣営との関係 ${Math.round(relValue)}`, x, y, { font: '12px sans-serif', color: '#a78bfa' }); y += 30;
     const actions = [
       { id: 'kani', jp: '官位を申請', en: 'Petition for Rank' },
@@ -3187,6 +3278,9 @@ window.TAIHEI_DEBUG = {
   CutsceneScene, EndingScene, ENDING_TEXTS, fallbackEndingText,
   // ブラッシュアップ（シナリオ選択UI・武将肖像）で追加したシーン・定数
   ScenarioSelectScene, KANNO_OPENING, GENKO_OPENING, drawGeneralPortrait,
+  // ブラッシュアップ第2弾（エンディング文言のシナリオ対応・三種の神器演出・kanno領有近似）で追加
+  buildKannoProvinceOwnerSeed, NANCHO_KANNO_CORE_PROVINCES, endingTextFor, fillEndingTemplate,
+  drawSanshuNoJingi,
 };
 </script>
 </body>
