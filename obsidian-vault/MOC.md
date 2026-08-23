@@ -51,6 +51,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0025-csv-sync-direction-and-newline-preservation]] — 正本CSVはゲームへ追随（同期は検査FAIL箇所だけ）＋改行/BOM保持・派生列の再生成スクリプト
 - [[0026-vault-boundary-docs-and-known-bug-lint]] — claudechord-vault/obsidian-vaultの境界明文化＋肖像index/source-rect直書きを横断機械検査化
 - [[0027-chatgpt-proposal-phased-implementation]] — 外部由来の大規模改善提案（ChatGPT）を5フェーズに分割して実装する進め方
+- [[0028-agent-consolidation-and-pipeline-placement]] — 重複エージェント2体を統合し孤立7体をパイプラインへ配置＋harness-lint検査#13
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
