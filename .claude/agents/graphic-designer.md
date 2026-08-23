@@ -44,9 +44,11 @@ OAuth接続のMCPコネクタはCLAUDE.mdの「有料APIキー禁止」に抵触
 - 静的画像が必要なら Canvas で描画 → `canvas.toDataURL()` / Playwright スクリーンショットでPNG化する
 - **`GameKit.Gen`（GPT Image 2.0相当の代替ツール）**: `gamekit/gamekit.js` に、シード付き乱数・2Dノイズ・カラーパレット（`cyanPurple`/`auroraTeal`/`roseQuartz`/`emberViolet`）・ネビュラ背景・スターフィールド・タイルパターン（dots/hexgrid/waves/grain）・オーブ/ポリゴンバッジアイコンの生成関数を用意している。`gamekit/generator.html` をブラウザ（またはPlaywright）で開き、アセット種類・パレット・シード・サイズをUIで指定 → 「PNGダウンロード」でエクスポート → `assets/art/` 配下へ配置、の流れで量産する
 
-### A-2. 外部ツールで生成（ローカル生成/編集）
-用途に応じて最適ツールを選ぶ（環境に無い場合は導入手順を提示し、導入後に作業を継続）。
-- ラスタ生成: Stable Diffusion（例: AUTOMATIC1111 / ComfyUI）+ ControlNet（構図固定が必要な場合）
+### A-2. 外部ツールで生成・編集（ローカルにモデルを持たない）
+用途に応じて最適ツールを選ぶ。**ローカルでのStable Diffusion等の生成モデル実行は禁止**
+（SSD容量を大きく消費するうえ、A-0のMCPコネクタで得られる成果物の水準に見合わないため。
+2026-08-23にComfyUI_windows_portable（11GB）を撤去済み）。ラスタのAI生成が必要な場合は
+A-0（Adobe Firefly等のMCPコネクタ）を使う。
 - 2D編集: Krita / GIMP / Photoshop（任意） / Photopea（ブラウザ）
 - ベクター: Inkscape / Figma
 - ピクセル: Aseprite / Piskel
