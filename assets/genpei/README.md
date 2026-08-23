@@ -50,6 +50,26 @@
 - **通行判定**: 画像の見た目から推測せず、`terrain-rules.json` を正本とする。石橋山の谷底・岩壁は侵入不可
 - **生成プロンプト**: `hex-battles/generation-prompts.md` に記録
 
+## 個別AI生成肖像（`assets/genpei/ai-portraits/*.png`）— 出所未記録（要確認）
+
+`genpei.html` は `PORTRAIT_ROOT = 'assets/genpei/ai-portraits/'` から `<武将id>.png` を読み込み、
+`GENERALS`（存命50＋前史8＝58件）の肖像として実装済み（`assets/genpei/portraits/*.webp`
+という当初設計のアトラス方式は不使用となり2026-08-06に削除済み。詳細は `obsidian-vault/01-Daily/2026-08-20.md`）。
+
+**この58枚について、生成ツール名・生成日・生成者・プロンプトの記録がリポジトリ内のどこにも見つからない。**
+`git log --follow` でも履歴を追えず（大規模な一括インポートコミットにまとめて含まれている）、
+本README・`hex-battles/generation-prompts.md` 等の既存の出所記録にも記載がない。
+画像は384×384のRGBA PNGで、写実的な肖像画スタイル（絵巻調ではなくポートレート写真調）であり、
+本ディレクトリの他アセット（Pillowプロシージャル生成／GPT Image 2）とは明らかに手法が異なる。
+
+- **法務上の懸念そのものではない**（実在するのは12世紀に没した歴史上人物のみで、肖像権・存命人格権の問題はない）。
+  懸念は「後から誰も生成元を辿れない」こと（本チェックの指摘に基づく暫定記録）
+- 2026-08-06時点の法務チェック（`claudechord-vault/deliverables/genpei_法務チェック.md`）は
+  「肖像は`drawPortrait()`によるプロシージャル描画のみで画像アセットは0枚」という前提でGREEN判定していたが、
+  現状（ai-portraits導入後）はこの前提が崩れており**再チェックが必要**
+- **是正アクション（推奨）**: 深澤に実際の生成ツール名・生成日を確認し、本セクションを実データで上書きする。
+  過去の類似事例（`assets/sengoku/README.md` の地図アセット）と同じ手順で解消できる
+
 ## 再生成について
 
 構図を調整する場合は `assets/genpei/_gen/scenes.py` の該当関数を編集し、
