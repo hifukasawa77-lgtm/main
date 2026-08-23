@@ -7,7 +7,7 @@
 - Issue: #330 `太平風雲記 UI全面見直し`
 
 ## 目的
-`taihei.html` の既存ゲームロジックを壊さず、南北朝・太平記らしい中世和風UIへ刷新する。あわせて登場人物の顔グラフィックを個別PNGアセット化し、ゲーム内で実画像として利用する。
+`taihei.html` の既存ゲームロジックを壊さず、南北朝・太平記らしい中世和風UIへ刷新する。あわせて登場人物の顔グラフィックを個別WebPアセット化し、ゲーム内で実画像として利用する。
 
 ## UI方針
 - 配色: 墨黒 / 焦茶 / 生成り / 朱 / 金
@@ -21,8 +21,10 @@
 ## 現在の実装状況
 - `taihei-ui-preview.html` を作成済み。中世和風UIのプレビューとして利用。
 - `scripts/apply-taihei-ui-redesign.mjs` を作成済み。本体Canvas UIへ変換をかけるための試作スクリプト。
-- `.github/workflows/taihei-ui-redesign.yml` を作成済み。ただしChatGPT側APIコミットではActionsが期待どおり自動実行されなかったため、本体 `taihei.html` への変換適用は未完了。
-- 公開中の `main/taihei.html` はまだ本番UI置換をしていない。
+- 中世和風UIは本体 `taihei.html` のCanvas描画へ統合済み。
+- `GENERALS_DEF` 29件を正本として `assets/taihei/characters/index.json` を作成済み。
+- 29名の個別WebPを `assets/taihei/characters/<id>.webp` として配置済み。全画像512x512、文字・枠・家紋なし、統一した暗い和紙背景。
+- `loadGeneralPortraits` / キャッシュ / プロシージャル肖像フォールバックを実装済み。
 - `taihei.html` には既に GameKit ベースの全国マップ、国選択、武将、朝廷、恩賞、忠義、悪党、年代記、戦闘、セーブなどのロジックがある。UI層を中心に改修すること。
 
 ## 重要な既存データ
@@ -49,10 +51,10 @@
 最終配置例:
 ```
 assets/taihei/characters/
-  ashikaga_takauji.png
-  ashikaga_tadayoshi.png
-  ko_moronao.png
-  akamatsu_enshin.png
+  ashikaga_takauji.webp
+  ashikaga_tadayoshi.webp
+  ko_moronao.webp
+  akamatsu_enshin.webp
   ...
 ```
 
@@ -67,7 +69,17 @@ assets/taihei/characters/
 - 写実寄り歴史シミュレーションゲームの統一画風
 
 ## 画像生成の現状
-ChatGPTの画像生成で以下を作成済みだが、これらは会話内生成物でありリポジトリには未格納。
+2026-08-24にGPT Imageで `GENERALS_DEF` 全29件の人物肖像を個別生成し、リポジトリへ格納済み。
+
+- 生成方式: 1人物につき1回の個別生成
+- 共通仕様: 半写実の歴史シミュレーション画、胸上、暗い和紙背景、文字・枠・家紋なし
+- 時代考証: 鎌倉末〜南北朝初期の甲冑・装束・烏帽子・冠を優先し、戦国期の大兜や江戸期装束を除外
+- 配置先: `assets/taihei/characters/<id>.webp`
+- 配信用最適化: 全29件を512x512、WebP品質84へ縮小・圧縮（生成PNG原本はCodex生成画像保管先に保持）
+- 整合性検査: manifest 29件、実ファイル29件、欠損0、余剰0、重複0
+- 実機能確認: タイトル画面で `29 generals loaded`、陣営選択と武将名鑑で実画像表示を確認
+
+過去の会話内参考生成物として以下も存在するが、ゲーム用アセットの正本ではない。
 - UI完成イメージ画像
 - 足利尊氏の単独ポートレート
 - 主要人物30名の一覧グリッド画像
@@ -84,7 +96,7 @@ ChatGPTの画像生成で以下を作成済みだが、これらは会話内生�
 6. Android横画面で操作しやすいタップ領域を確保する。
 7. `GENERALS_DEF` から人物ID一覧を抽出し、`assets/taihei/characters/index.json` を作る。
 8. 画像が未配置の場合でもプロシージャル肖像にフォールバックする実装を残す。
-9. 個別PNGが配置されたら `drawGeneralPortrait` より実画像を優先して描画する `loadGeneralPortraits` / キャッシュ機構を追加する。
+9. 個別WebPが配置されたら `drawGeneralPortrait` より実画像を優先して描画する `loadGeneralPortraits` / キャッシュ機構を追加する。
 10. 変更後に構文エラー、起動エラー、主要画面遷移を確認し、PR #331へコミットする。
 
 ## 受入条件
@@ -94,10 +106,10 @@ ChatGPTの画像生成で以下を作成済みだが、これらは会話内生�
 - 実データの金/兵/威信/忠義/朝廷/恩賞がHUDへ反映される
 - 選択国と武将情報が右パネルへ反映される
 - Android横画面でメニュー操作可能
-- 人物画像が存在する場合はPNGを表示、存在しない場合は既存のプロシージャル肖像へフォールバック
+- 人物画像が存在する場合はWebPを表示、存在しない場合は既存のプロシージャル肖像へフォールバック
 - `main` へは直接コミットせず、PR #331でレビュー可能な状態を維持
 
 ## Codex向け開始プロンプト
 以下をそのままCodexへ渡してよい:
 
-> `hifukasawa77-lgtm/main` の `taihei-ui-redesign` ブランチで作業してください。まず `docs/taihei_codex_handoff.md`、`specs/taihei_spec.md`、`taihei.html`、`taihei-ui-preview.html`、`scripts/apply-taihei-ui-redesign.mjs` を読み、Draft PR #331の作業を引き継いでください。目的は太平風雲記の既存ゲームロジックを壊さず、中世和風UIを本体Canvasへ統合し、`GENERALS_DEF` を正本として人物PNGアセット対応を実装することです。mainへ直接コミットせず、`taihei-ui-redesign` にコミットしてください。`
+> `hifukasawa77-lgtm/main` の `taihei-ui-redesign` ブランチで作業してください。まず `docs/taihei_codex_handoff.md`、`specs/taihei_spec.md`、`taihei.html`、`taihei-ui-preview.html`、`scripts/apply-taihei-ui-redesign.mjs` を読み、Draft PR #331の作業を引き継いでください。目的は太平風雲記の既存ゲームロジックを壊さず、中世和風UIを本体Canvasへ統合し、`GENERALS_DEF` を正本として人物WebPアセット対応を実装することです。mainへ直接コミットせず、`taihei-ui-redesign` にコミットしてください。`
