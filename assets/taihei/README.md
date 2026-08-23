@@ -24,8 +24,14 @@
   で校正した座標系のため、v1でなければ国ノードの位置が地図と合わない。
 - 新規生成ではなく既存アセットのコピーのため、Graphic-Designerへの発注はせず
   Code-Generator（MapScene実装）が直接コピーした。
+- **生成元・権利者**: このコピー元 `sengoku-japan-map-user-v1.webp` は
+  ChatGPT/DALL-E系のAI画像生成ツールで深澤本人が生成したもの。記録は
+  `assets/sengoku/README.md`（「旧日本地図」節）が正本（`[[genpei_法務チェック]]` で確認済み）。
 
-## 未着手（後続Phase）
+## assets/og/taihei.jpg / taihei-thumb.webp（焼き込み配布・法務チェック済み）
 
-- `taihei-thumb.webp`（index.html掲載用サムネイル）は未着手（spec 6章 step10、
-  Evaluator合格後に `game-release` スキル手順で作成）。
+- `scripts/gen-taihei-og.mjs` が MapScene を実描画→スクリーンショットして生成する
+  （2026-08-21、legal-checkerによる法務チェック時点で既に生成済み）。
+  すなわち `taihei-japan-map.webp`（上記・AI生成物のコピー）を**含む画面をそのまま焼き込んで配布**している。
+- 出所は上記「taihei-japan-map.webp」節の記録（`assets/sengoku/README.md`）に一本化されており、
+  `assets/og/sengoku.jpg` 等の先例と同じ扱い。追跡可能なため権利者上の懸念なし（GREEN）。

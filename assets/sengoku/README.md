@@ -20,3 +20,16 @@
 
 `gpt/` 配下の他アセットは `gpt/prompts/*.txt` にAI生成プロンプトが残っているが、これらの地図は
 深澤が直接生成した経緯のため対応するプロンプトファイルは存在しない。
+
+## 武将データの出典（`general_chronicles_researched.js` / `general_lifespans.js` / `.csv`）
+
+- `general_chronicles_researched.js`: Wikipedia日本語版の記事本文を要約して収録（MediaWiki Action API 経由、
+  2026年7月25日取得）。レコードごとに `sourceTitle`（記事名）・`sourceUrl`（記事URL）・`source`
+  （「Wikipedia日本語版「◯◯」を要約（取得日、CC BY-SA 4.0）」の帰属表記）を保持し、
+  ゲーム内の武将列伝パネル（`_generalChronicleText` / `_drawGeneralChronicle`、`sengoku.html`）で
+  プレイヤーにもこの帰属表記が表示される。CC BY-SA 4.0 の要求（帰属・改変の明示・ライセンス名の表示）に対応
+- `general_lifespans.js` / `general_lifespans.csv`: Wikidata（CC0 パブリックドメイン提供、P569/P570生年没年プロパティ）
+  および既存文献による確認情報。CC0のため帰属表示義務なし
+- 上記以外の武将能力値・エピソード短文（`GENERAL_HISTORICAL_CHRONICLES` 等、`sengoku.html` 内）は
+  国立国会図書館リサーチ・ナビ「戦国大名・戦国武将を調べる」を調査の手がかりとした独自要約であり、
+  他者著作物からの逐語転記ではない
