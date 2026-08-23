@@ -21,6 +21,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[second-brain-system]] — このセカンドブレイン基盤自体
 - [[recursive-self-improvement]] — 学び→反映の閉ループ（自己改善基盤）
 - [[guide-agent-evolution]] — 案内エージェントの週次自己進化＋週次サイト提案基盤
+- [[幕末風雲記]] — 幕末戦略シミュレーション（スマホ対応・藩論/京都政局/外国勢力/人物/歴史分岐の5システム実装済み）
 
 ## 📚 意思決定ログ
 - [[0001-second-brain-vault-structure]]
@@ -49,12 +50,14 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0024-encoding-and-required-check-guards]] — 文字化け・const二重定義・必須検査の未実行を release-check で機械検出＋検査#4の腐り修正
 - [[0025-csv-sync-direction-and-newline-preservation]] — 正本CSVはゲームへ追随（同期は検査FAIL箇所だけ）＋改行/BOM保持・派生列の再生成スクリプト
 - [[0026-vault-boundary-docs-and-known-bug-lint]] — claudechord-vault/obsidian-vaultの境界明文化＋肖像index/source-rect直書きを横断機械検査化
+- [[0027-chatgpt-proposal-phased-implementation]] — 外部由来の大規模改善提案（ChatGPT）を5フェーズに分割して実装する進め方
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
 - [[static-hosting-security-limits]] — GitHub Pagesのセキュリティ制約・XSS/escHtmlのハマりどころ
 - [[harness-maintenance-patterns]] — ハーネス保守のパターン・ハマりどころ（色ドリフト/スキル/hook2段/bash罠）
 - [[web-audio-singing-synthesis]] — Web Audioでの歌声合成（放射特性/音量正規化/広いCanvasのGrid突き抜け/WAV解析で検証）
+- [[native-dialog-toplayer-pitfall]] — ネイティブ`<dialog>`のトップレイヤーがposition:fixed要素を隠す不具合と対処
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール
