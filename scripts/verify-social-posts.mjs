@@ -15,7 +15,7 @@
  * 終了コード: 問題なし=0 / 問題あり=1
  */
 import { createRequire } from 'node:module';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -114,6 +114,53 @@ console.log('== 5. 投稿文のゲーム本数が実データと一致するか 
   const wrong = [...new Set(claims.filter(n => n !== actual))];
   if (wrong.length === 0) ok(`本数の記載はすべて実データ（${actual}本）と一致`);
   else bad(`実データ ${actual}本 と食い違う記載: ${wrong.join(', ')}（marketing/social_*.md も併せて直す）`);
+}
+
+// ── 6. 正本（marketing/social_*.md）と実行用の写しの一致 ──────
+// 投稿文は「正本のMarkdown」と「post-social.js の配列」の2箇所にある。
+// 片方だけ直す事故を防ぐため、写しの各投稿が正本のコードブロックに存在することを確認する。
+console.log('== 6. 正本 marketing/social_*.md と post-social.js の一致 ==');
+{
+  const dir = path.join(ROOT, 'marketing');
+  const files = readdirSync(dir).filter(f => /^social_.*\.md$/.test(f));
+  if (files.length === 0) {
+    bad('marketing/social_*.md（正本）が無い');
+  } else {
+    // 正本に書かれたコードブロック（```で囲まれた部分）を集める
+    const blocks = [];
+    for (const f of files) {
+      const md = readFileSync(path.join(dir, f), 'utf8');
+      for (const m of md.matchAll(/```\n([\s\S]*?)```/g)) blocks.push(m[1].trim());
+    }
+    const norm = (t) => t.replace(/\s+/g, ' ').trim();
+    const normalized = blocks.map(norm);
+
+    const check = (label, text) => {
+      if (normalized.includes(norm(text))) ok(`${label}: 正本と一致`);
+      else bad(`${label}: 正本 marketing/social_*.md に同じ文面が無い（どちらか片方だけ直している）`);
+    };
+    social.X_POSTS.forEach((t, i) => check(`X-${i + 1}`, t));
+    social.INSTAGRAM_POSTS.forEach((p, i) => check(`IG-${i + 1}`, p.caption));
+  }
+}
+
+// ── 7. 旧マーケ資料の取り違え防止 ─────────────────────────
+// 運用を終えた資料が「アーカイブ」の明示なく残っていると、次のセッションが古い数字で投稿してしまう。
+console.log('== 7. marketing/ の旧資料にアーカイブ表示があるか ==');
+{
+  const dir = path.join(ROOT, 'marketing');
+  const { GAMES } = require(path.join(ROOT, 'assets', 'js', 'agent-data.js'));
+  for (const f of readdirSync(dir).filter(f => f.endsWith('.md'))) {
+    const md = readFileSync(path.join(dir, f), 'utf8');
+    const archived = /アーカイブ|運用を終了/.test(md.split('\n').slice(0, 8).join('\n'));
+    if (archived) { ok(`${f}: アーカイブ表示あり（検査対象外）`); continue; }
+    // 現役の資料は総数の記載が実データと一致していること
+    const claims = [...md.matchAll(/(?:ゲームを|本格ゲームを)\s*(\d+)\s*本/g),
+                    ...md.matchAll(/(\d+)\+?\s*(?:free\s+)?browser games/gi)].map(m => Number(m[1]));
+    const wrong = [...new Set(claims.filter(n => n !== GAMES.length))];
+    if (wrong.length === 0) ok(`${f}: 総数の記載に食い違いなし`);
+    else bad(`${f}: 実データ ${GAMES.length}本 と食い違う記載: ${wrong.join(', ')}（更新するか、先頭にアーカイブ表示を入れる）`);
+  }
 }
 
 console.log('');
