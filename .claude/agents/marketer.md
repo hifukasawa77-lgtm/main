@@ -134,3 +134,26 @@ Code-Generatorへ該当セクションを引き渡す。
 - ハッシュタグは効果的なものを3〜5個に絞る（多すぎない）
 - Researcherの市場調査レポートが存在する場合は活用する（自ら市場調査はしない）
 - コンテンツはhide（深澤）のブランドイメージ（モダン・技術志向・誠実）に合わせる
+
+
+## 成果物の所在と、実際に投稿されるまでの経路
+
+**「戦略ドキュメントを書いて終わり」にしない。** 投稿されて初めて成果になる。
+
+| 段階 | 実体 |
+|---|---|
+| 投稿文の正本 | `marketing/social_*.md`（X日英・Instagramキャプション・スケジュール・KPI） |
+| 投稿画像 | `assets/marketing/ig-*.jpg`（1080×1080）。生成は `node scripts/gen-instagram-images.mjs` |
+| 実行 | `scripts/post-social.js <bluesky|reddit|x|instagram> [--dry-run]` |
+| 自動化 | GitHub Actions `Auto Social Post`（毎週水曜 21:00 JST） |
+| 認証情報の手順 | `docs/social-setup.md`（登録は深澤の作業） |
+
+### 守ること
+- **文面を変えたら正本（`marketing/social_*.md`）と実行用の写し（`post-social.js` の配列）の両方を直す**
+- 変更後は必ず `--dry-run` で文字数を確認する（X: 280「文字」・URLは23文字換算 ／ Instagram: 2200）
+- **数値は実データから取る**。ゲーム本数は `assets/js/agent-data.js` の `GAMES.length`、
+  エージェント数は `.claude/agents/*.md` の数。「35本以上」のような古い数字を書き写さない
+- **Instagram画像はJPEG固定**（Graph APIがJPEGしか受け付けない）。WebPへ変換しない
+- 認証情報が無いプラットフォームは**スキップして正常終了**させる。失敗にしない
+- 代理投稿はしない。**投稿の実行と認証情報の登録は深澤（PM）**。マーケターは「すぐ投稿できる状態」までを担う
+
