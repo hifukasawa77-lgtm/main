@@ -43,6 +43,23 @@ obsidian-vault/
 - **ノートを多数追加した日は `vault-gc` を回す**: `harness-lint` はハーネス（`.claude/`・CLAUDE.md）を検査するがVaultの健全性は見ない。ADR・Daily・wikilinkをまとめて追加した後は `bash .claude/skills/vault-gc/vault-gc.sh` でwikilink切れ・孤立ノートを確認する
 - **学びの昇格マーカー規約**: Dailyの学びが `/self-improve` で処理されたら、該当箇所または末尾に `♻️ **昇格済み（YYYY-MM-DD）**: → <還元先>` を追記する。ハーネスへ昇格せず他経路で反映確認した場合は `反映済み`、一回限りで昇格対象外と判断した場合は `昇格しない` と明記する。このマーカーが harness-lint 検査#8（未昇格の学びDaily検出・警告△）の判定基準になる（[[0015-unpromoted-learning-lint]]）
 
+## Dailyの取りこぼしを埋める（backfill）
+
+`harness-lint` 検査#9 が「作業コミットはあるのに Daily が無い日」を △ で警告する。その骨組みは機械で起こせる:
+
+```bash
+bash .claude/skills/second-brain/backfill-daily.sh            # 直近14日・dry-run（作成対象の確認）
+bash .claude/skills/second-brain/backfill-daily.sh --write     # 実際に作る（既存Dailyは絶対に上書きしない）
+bash .claude/skills/second-brain/backfill-daily.sh --days 30 --write
+```
+
+- 生成されるのは `## 作業記録（遡及・git log から再構成）`（コミット件名＋触れた領域）まで。
+  **`### 学び` は空欄のまま残す**——コミット件名から学びを書くと**捏造**になる。当時の差分を見て書くか、
+  無ければ「特記なし」と明記して空のまま放置しない。
+- 学びが判明している日は本文を追記し、既にハーネスへ反映済みなら昇格マーカーも付ける。
+- **薄いDailyが最新日になると recall の情報量が落ちる**（recall hookは直近Dailyを全文投入する）。
+  最新日が骨組みのままなら本文を手で足すこと。
+
 ## 書かないこと（禁止事項）
 - APIキー・パスワード・個人の機微情報は書かない（このVaultはgit管理されGitHub Pagesと同じリポジトリにある）
 - PMOエージェントが管理する `pmo/`（Google Drive）の進捗・リスク・KPI文書とは役割分担する。Vaultは「個人の知的資産・意思決定の理由・学び」、PMOは「ステークホルダー向け進捗管理」を担当する

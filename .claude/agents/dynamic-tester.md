@@ -22,14 +22,36 @@ git diff HEAD --name-only | grep '\.html$'
 
 ---
 
-## Phase 2: Playwright スクリプト生成・実行
+## Phase 2: 検証の実行
 
-対象HTMLファイルごとに以下の一時スクリプトを生成して実行する。
+### まず既存の検査を使う（推奨）
 
-### スクリプト生成（`/tmp/dynamic-test.cjs`）
+検証実体の**正本はリポジトリ直下の `dynamic-test-auto.cjs`**、その実行ラッパーが
+`.claude/skills/dynamic-test/run.sh` である。原則こちらを使う:
+
+```bash
+bash .claude/skills/dynamic-test/run.sh <対象.html> ...   # 複数可
+bash .claude/skills/dynamic-test/run.sh --changed          # git diff HEAD から自動検出
+```
+
+正本は以下を織り込み済みで、**一時スクリプトを自作すると必ずこれらが抜けて偽のFAILが出る**:
+
+- **リポジトリ直下を一時HTTPサーバで配信して開く**（`file://` だと `fetch()` が必ずCORSで落ち、
+  JSONを読むページが常にFAILする。canvasのtaintで `getImageData` が落ちる問題も同時に消える）
+- **外部オリジン（CDN・Webフォント）の読込失敗は `externalLoadErrors` へ分離**しFAILにしない。
+  ローカル資産の読込失敗は従来どおりFAIL
+- **canvas描画確認は全canvas・全面走査**（左上100×100pxだけ見るとパーティクル背景を「描画なし」と誤判定）
+- 対象ファイルの存在チェック／`favicon.ico` は204で黙らせる
+
+### 参考: 検証スクリプトの中身（正本を読む代わりの概説）
+
+以下は正本のおおまかな構造。**この写しを編集して使わない**（正本と乖離する）。
+シーン直起動など個別の検証が必要なときだけ、正本を土台に page.evaluate を足す。
 
 ```javascript
-const { chromium } = require('/opt/node22/lib/node_modules/playwright');
+
+```javascript
+const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
@@ -151,7 +173,10 @@ node /tmp/dynamic-test.cjs /home/user/main/<対象ファイル>.html
 - Playwright の require パスは `/opt/node22/lib/node_modules/playwright` を使用する
 - **シーン直起動でスモークテストを超えた検証ができる**: シーン制ゲームは `page.evaluate` から状態ファクトリ＋シーン遷移（例: `buildGameState()` → `game.changeScene(new BattleScene(state))`）を直接叩くと、UI操作なしで任意のシーン・任意の状態を検証できる（トップレベル `const` は後続の evaluate から参照可能）。内部状態の機械抽出（座標×地形等）とスクリーンショットを併用する（sengoku.html 全26戦場の検証で実証）
 - **ヘッドレスでは requestAnimationFrame が絞られる**ことがあり、シーン切替後もスクリーンショットが古いフレームのままになる → 撮影前に描画メソッド（例: `sc.draw(game.ctx, game)`）を明示呼びして最新フレームを描かせる
-- Canvas の `getImageData` は `file://` プロトコルでセキュリティエラーになる場合がある → エラーは `hasDrawing: null` として記録し、FAILにはしない
+- Canvas の `getImageData` が全canvasで失敗した場合は `hasDrawing: null` として記録し、FAILにはしない
+  （正本はHTTP配信で開くため、`file://` 由来のtaintでは落ちない）
+- **検査自体を直したら、故障を仕込んで✗が出ることを必ず確かめる**（JSエラー・ローカル404・未描画canvasの3種）。
+  「緑になった」を成果にしない。偽のFAILを放置すると本物の不具合まで無視されるようになる
 - `test-screenshots/` ディレクトリは `.gitignore` 対象（コミット不要）
 - 複数HTMLが変更された場合はすべてに対してテストを実行する
 - 1ファイルでもFAILがあれば全体をFAILとしてCode-Generatorへ返す

@@ -101,7 +101,10 @@
 
 ## ✅ GOOD（適切に実装されている点）
 
-- `index.html:6`: `<meta http-equiv="X-Frame-Options" content="DENY">` — クリックジャッキング対策が適切に設定されている。
+- `index.html` / `agents.html`: クリックジャッキング対策はJSフレームバスター（`if (self !== top) { top.location = self.location; }`）で実装。
+  ※以前は `<meta http-equiv="X-Frame-Options" content="DENY">` を置いていたが、**meta 配信の X-Frame-Options はブラウザに無視される**
+  （HTTPヘッダ専用。コンソールに警告が出るだけで防御になっていなかった）。CSP の `frame-ancestors` も meta では無効。
+  GitHub Pages はレスポンスヘッダを付与できないため、JSでの代替が現実的な上限（[[static-hosting-security-limits]]）。
 - `index.html:7`: `<meta name="referrer" content="strict-origin-when-cross-origin">` — リファラポリシーが適切に設定されている。
 - `index.html:3209-3210`: Leaflet（地図ライブラリ）のCDN読み込みに `integrity` + `crossorigin` 属性（SRI）が正しく設定されている。
 - `index.html` 内の `innerHTML` 代入（約30箇所、`5234`〜`10680` 付近）は、ほぼ全て自前の HTMLエスケープ関数 `escHtml()`（`index.html:5149` で定義、`&` `<` `>` `"` `'` をエンコード）または `escH()`（`index.html:10665, 10696` で定義、`&` `<` `>` `"` をエンコード）を通した上で組み立てられており、動的データをそのまま挿入していない。XSS対策として機能していることをサンプル箇所で確認した（`5234, 5290, 6151, 7511, 8280, 10680` 等）。
@@ -123,6 +126,6 @@
 それ以外の所見（admin認証アーキテクチャ、CSPの`unsafe-inline`、CORSプロキシ利用等）は、アーキテクチャ変更を伴う・個人用サイトとしての許容範囲内とユーザーが判断したため、本レポートへの記載のみとし、コード変更は行っていない。
 
 ## 総評
-全体として、XSS対策（HTMLエスケープの徹底、`eval`/`document.write`不使用）、クリックジャッキング対策（X-Frame-Options）、外部リンクの`rel`属性、CDN読み込みのSRIなど、静的なポートフォリオサイトとして抑えるべき基本的なセキュリティ対策は概ね実装されている。
+全体として、XSS対策（HTMLエスケープの徹底、`eval`/`document.write`不使用）、クリックジャッキング対策（JSフレームバスター）、外部リンクの`rel`属性、CDN読み込みのSRIなど、静的なポートフォリオサイトとして抑えるべき基本的なセキュリティ対策は概ね実装されている。
 
 唯一、明確に是正が望ましいのは **管理画面（admin）の認証アーキテクチャ**（CRITICAL #1〜3）であり、現状は「鍵をかけているように見えるが鍵が機能していない」状態に近い。個人用ホビーサイトとして実害が出にくい設計（admin裏に機密情報を置かない）であれば直ちに致命的ではないが、将来的にadmin機能の重要度が増す場合は、サーバーサイド認証への移行を検討することを推奨する。

@@ -276,6 +276,64 @@ else
 fi
 
 echo ""
+echo "== 13. エージェント定義 ⇄ CLAUDE.md ⇄ agents.html の整合 =="
+# 目的: 「定義はあるがどのパイプラインからも呼ばれない孤立エージェント」と、
+# 「サイトの図には居るのに CLAUDE.md には無い（またはその逆）」の食い違いを機械検出する。
+# 2026-08-23: 21体中9体が孤立、Release は agents.html の図にだけ存在していた実績あり。
+if command -v python3 >/dev/null 2>&1; then
+  AG=$(python3 - <<'PYEOF'
+import os, re, glob
+out = []
+names = sorted(os.path.basename(p)[:-3] for p in glob.glob('.claude/agents/*.md'))
+claude = open('CLAUDE.md', encoding='utf-8').read()
+site = open('agents.html', encoding='utf-8').read() if os.path.exists('agents.html') else ''
+skills = ''
+for p in glob.glob('.claude/skills/*/*'):
+    if os.path.isfile(p):
+        try: skills += open(p, encoding='utf-8', errors='replace').read()
+        except OSError: pass
+
+for n in names:
+    # (a) CLAUDE.md のエージェント節に載っているか（`agent-name` のバッククォート表記で照合）
+    if '`%s`' % n not in claude:
+        out.append('FAIL:%s: CLAUDE.md のエージェント一覧に無い（役割とフロー上の位置を追記する）' % n)
+    # (b) パイプライン上の位置が分かるか — CLAUDE.md のフロー図か、スキルからの呼び出しがあるか
+    label = n.replace('-agent', '').replace('-', '[- ]?')
+    in_flow = re.search(r'\[%s' % label, claude, re.I) is not None
+    called  = re.search(r'\b%s\b' % re.escape(n), skills, re.I) is not None
+    body = open('.claude/agents/%s.md' % n, encoding='utf-8').read()
+    declares = 'パイプライン上の位置' in body
+    if not (in_flow or called or declares):
+        out.append('FAIL:%s: どのフロー図・スキルからも参照されず「パイプライン上の位置」節も無い（孤立）' % n)
+    # (c) サイトのメンバー表に載っているか
+    card = 'designer' if n == 'graphic-designer' else n   # graphic-designer のカード画像は designer.svg
+    if site and ('assets/agents/%s.svg' % card) not in site:
+        out.append('WARN:%s: agents.html にカードが無い（サイトの紹介と実体がずれる）' % n)
+
+# (d) 逆方向 — 定義が消えたのにサイト/CLAUDE.md に残っていないか
+if site:
+    for m in re.findall(r'assets/agents/([a-z0-9-]+)\.svg', site):
+        if m not in names and m != 'designer':   # designer.svg = graphic-designer のカード画像
+            out.append('FAIL:%s: agents.html が参照するが .claude/agents/%s.md が無い（削除漏れ）' % (m, m))
+print('\n'.join(out))
+PYEOF
+)
+  if [ -z "$AG" ]; then
+    ok "全エージェントが CLAUDE.md・agents.html・パイプラインと整合"
+  else
+    while IFS= read -r l; do
+      [ -z "$l" ] && continue
+      case "$l" in
+        FAIL:*) note_fail "${l#FAIL:}" ;;
+        WARN:*) note_warn "${l#WARN:}" ;;
+      esac
+    done <<< "$AG"
+  fi
+else
+  echo "  - python3なし（スキップ）"
+fi
+
+echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then
     echo "==> harness-lint: 問題なし ✅"

@@ -7,6 +7,26 @@ description: ゲームのHTML/JSコードからパラメータ定数を抽出・
 ゲームのプレイ体験（難易度・テンポ・爽快感）を調整するためにパラメータ定数を分析・提案することが責務です。
 ゲームロジック・描画コード・UIの変更は行いません。
 
+## パイプライン上の位置
+
+**公開後の改善ループ（Post-Release Loop）** — Optimizer / Refactoring / Achievement と同じフェーズ。
+
+```
+Release（公開） → ┌ Optimizer（性能）
+                  ├ Refactoring（構造）
+                  ├ Game Balance（遊び心地）
+                  └ Achievement（やり込み要素）
+                        ↓ 変更が入ったら
+                  Dynamic-Tester で回帰確認 → 深澤へ報告
+```
+
+- **起動条件**（いずれか）:
+  - 深澤またはプレイヤーから「難しすぎる」「簡単すぎる」「序盤が単調」等のプレイ体験の指摘があった
+  - 新規ゲームの公開後、初回の遊び心地チューニング
+  - 長期進行の検査（例: `verify-sengoku-balance.mjs`）で勢力淘汰・停滞の破綻が出た
+- **パラメータ定数のみ変更する**。ゲームロジック・描画・UIの変更は Code-Generator の担当
+- 変更後は Dynamic-Tester で回帰確認し、調整の意図と before/after を深澤へ報告する
+
 ## 入力
 
 呼び出し時にゲームファイル名（例: `game.html`, `shogi_rpg.html`）を受け取る。

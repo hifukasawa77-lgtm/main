@@ -40,6 +40,32 @@
 | `antoku-suibotsu.webp` | 安徳天皇入水（1185年3月） | 荒天の海。遠景に小舟と淡い光（三種の神器を象徴、人物の写実描写なし）、波間に漂う赤旗の断片、同心円の波紋。灰緑の沈鬱な色調で遠景・象徴表現に徹し、直接的な描写を避けた |
 | `koromogawa.webp` | 衣川（1189年4月） | 夕・雪残る山峡。木造の館（板葺き・柵、天守閣ではない）、煙、垣上に立つ孤影の武者（薙刀）、降雪パーティクル220粒。紫〜灰の静謐な色調 |
 
+## 可動ヘックス戦アセット（`assets/genpei/hex-battles/`）
+
+- **ツール**: OpenAI GPT Image 2
+- **生成日**: 2026-08-20
+- **構成**: 駒を含まない合戦背景13枚と汎用拠点背景6枚、透明背景の源氏・平氏ユニット駒10枚、マニフェスト、地形ルール
+- **時代考証**: 平安末期の山城・館・柵・堀を採用し、天守閣、近世城郭、火縄銃を除外
+- **レイヤー分離**: 背景と可動駒は別ファイル。船は円形アイコンではなく和船型のミニチュア駒
+- **通行判定**: 画像の見た目から推測せず、`terrain-rules.json` を正本とする。石橋山の谷底・岩壁は侵入不可
+- **生成プロンプト**: `hex-battles/generation-prompts.md` に記録
+
+## 個別AI生成肖像（`assets/genpei/ai-portraits/*.png`）
+
+`genpei.html` は `PORTRAIT_ROOT = 'assets/genpei/ai-portraits/'` から `<武将id>.png` を読み込み、
+`GENERALS`（存命50＋前史8＝58件）の肖像として実装済み（`assets/genpei/portraits/*.webp`
+という当初設計のアトラス方式は不使用となり2026-08-06に削除済み。詳細は `obsidian-vault/01-Daily/2026-08-20.md`）。
+
+- **生成元**: GPT Image 2（深澤が2026-08-23に確認）。個別のプロンプトファイルは
+  `hex-battles/generation-prompts.md` のような形では残っていないが、
+  生成ツールは `gpt/` 配下の他アセット（`assets/sengoku/gpt/` 等）と同一系統
+- 画像は384×384のRGBA PNGで、写実的な肖像画スタイル（絵巻調ではなくポートレート写真調）
+- 実在するのは12世紀に没した歴史上人物のみで、肖像権・存命人格権の問題はない
+- 2026-08-06時点の法務チェック（`claudechord-vault/deliverables/genpei_法務チェック.md`）は
+  「肖像は`drawPortrait()`によるプロシージャル描画のみで画像アセットは0枚」という前提で
+  GREEN判定していたが、その後ai-portraits方式へ切替済み。本セクションで前提を更新し、
+  2026-08-23の法務チェック（`claude/legal-check-historical-titles-v8uep6`）でGREEN確認済み
+
 ## 再生成について
 
 構図を調整する場合は `assets/genpei/_gen/scenes.py` の該当関数を編集し、
