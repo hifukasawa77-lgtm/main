@@ -53,6 +53,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0027-chatgpt-proposal-phased-implementation]] — 外部由来の大規模改善提案（ChatGPT）を5フェーズに分割して実装する進め方
 - [[0028-agent-consolidation-and-pipeline-placement]] — 重複エージェント2体を統合し孤立7体をパイプラインへ配置＋harness-lint検査#13
 - [[0029-dynamic-test-false-failures]] — 動的テストの偽のFAILを一掃（HTTP配信/外部エラー分離/全canvas走査）＋無効なX-Frame-Options metaをJSフレームバスターへ
+- [[0030-marketer-social-automation]] — マーケターの成果をSNS投稿まで到達させる（X/Instagram自動投稿＋認証情報なしで走る検査）
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約

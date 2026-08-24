@@ -28,6 +28,10 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 リポジトリを 1.6GB → 264MB（assets は 1.5GB → 209MB）に縮小した。GitHub Pages の
 公開サイト上限1GBを下回るために必要。新規アセットも WebP で追加すること。
 
+**例外: `assets/marketing/ig-*.jpg`（Instagram投稿画像）は JPEG のまま置く**。
+Instagram Graph API は JPEG しか受け付けず、WebPへ変換すると投稿が通らなくなる。
+再生成は `node scripts/gen-instagram-images.mjs`（`optimize-assets.py` の対象にしないこと）。
+
 ```bash
 python3 scripts/optimize-assets.py --dir assets/<game> --dry-run  # 変換量の確認
 python3 scripts/optimize-assets.py --dir assets/<game>            # 変換＋参照書換＋元削除
@@ -355,6 +359,14 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - 任意成果物: ランディングページコピー（Code-Generatorへ引き渡し）・記事アウトライン・プレスリリース
 - 出力先: `marketing/[プロダクト名]_strategy.md` と `marketing/[プロダクト名]_content.md`
 - Researcherの市場調査レポートが存在する場合は活用する（自ら市場調査はしない）
+- **SNS自動投稿**: GitHub Actions `Auto Social Post`（毎週水曜 21:00 JST）が X / Instagram / Bluesky / Reddit へ投稿する。
+  実装は `scripts/post-social.js`、Secretsの登録手順は `docs/social-setup.md`。
+  **認証情報が未設定のプラットフォームはスキップして正常終了する**（未設定のまま毎週赤くなると本物の失敗に気づけないため）
+- **投稿文の正本は `marketing/social_*.md`**。`scripts/post-social.js` の配列はその実行用の写しなので**両方直す**。
+  変更後は `node scripts/post-social.js <platform> --dry-run` で文字数（X:280 / Instagram:2200）を確認する
+- Instagram用の1080×1080画像は `node scripts/gen-instagram-images.mjs` で生成（JPEG固定・上記アセット方針の例外）
+- **投稿文・画像を変えたら `node scripts/verify-social-posts.mjs` を実行する**（署名アルゴリズム・文字数上限・
+  画像の実在・ゲーム本数の焼き付きを機械検査。認証情報が無くても走る）
 
 ### 公開後の改善ループ（Post-Release Loop）
 リリース済み成果物を継続的に改善するフェーズ。4体は独立に起動でき、**変更を入れたら必ずDynamic-Testerで回帰確認する**。
