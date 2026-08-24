@@ -198,6 +198,7 @@ async function runLongPlay(port, camp) {
   page.on('pageerror', e => errors.push((e.stack || String(e)).split('\n').slice(0, 3).join(' | ')));
   await page.goto(`http://127.0.0.1:${port}/taihei.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => typeof window.TAIHEI_DEBUG !== 'undefined', null, { timeout: 60000 });
+  await page.evaluate(() => window.TAIHEI_READY); // BootSceneの遅延完了によるTitleScene上書きを防ぐ
 
   const canvas = await page.$('#game');
   async function clickCanvas(cx, cy) {
@@ -217,9 +218,7 @@ async function runLongPlay(port, camp) {
 
   let turns = 0, cutscenes = 0, endingReached = false, stuckOn = null;
   // イテレーション予算はターン進行だけでなくカットシーンの送りクリックも1回として消費するため、
-  // シナリオ上限(61ターン)へ確実に到達できるよう61より十分大きい値にしてある
-  // （2026-08-18 AIの朝廷工作バグ修正後、全陣営で史実イベントが均等に発火するようになり、
-  // 旧予算65では一部陣営がターン61到達前に打ち切られていた）。
+  // 90回の操作予算で、月次イベント・カットシーン・早期エンディングを含む安定性を確認する。
   for (let i = 0; i < 90; i++) {
     const name = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
     if (name === 'MapScene') {
@@ -288,20 +287,21 @@ async function runScenarioChecks(port) {
   await page.evaluate(() => { window.TAIHEI_DEBUG.game.changeScene(new window.TAIHEI_DEBUG.TitleScene()); });
   await page.waitForTimeout(120);
   await clickCanvas(720, 499); // TitleScene「新規に始める」ボタン中心
+  await page.waitForTimeout(200); // requestAnimationFrame後のchangeScene反映を待つ
   let scene = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
   check('シナリオUI: 「新規に始める」→ScenarioSelectScene', scene === 'ScenarioSelectScene', `scene=${scene}`);
 
-  await clickCanvas(720, 392); // rows[1]='kanno' 行中心
+  await clickCanvas(720, 640); // rows[5]='genchu_itto' 行中心
   await clickCanvas(1230, 752); // 「このシナリオで始める」ボタン中心
   scene = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
   let scenarioId = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.scenarioId);
-  check('シナリオUI: 「観応の擾乱」選択→FactionSelectScene(scenarioId継承)', scene === 'FactionSelectScene' && scenarioId === 'kanno', `scene=${scene} scenarioId=${scenarioId}`);
+  check('シナリオUI: 「元中の一統」選択→FactionSelectScene(scenarioId継承)', scene === 'FactionSelectScene' && scenarioId === 'genchu_itto', `scene=${scene} scenarioId=${scenarioId}`);
 
   await clickCanvas(270, 234); // FACTION_CHOICES[1]='nancho' 行中心
   await clickCanvas(1230, 752); // 「この陣営で始める」ボタン中心
   scene = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.constructor.name);
   scenarioId = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.scenarioId);
-  check('シナリオUI: 陣営決定→OpeningScene(scenarioId継承)', scene === 'OpeningScene' && scenarioId === 'kanno', `scene=${scene} scenarioId=${scenarioId}`);
+  check('シナリオUI: 陣営決定→OpeningScene(scenarioId継承)', scene === 'OpeningScene' && scenarioId === 'genchu_itto', `scene=${scene} scenarioId=${scenarioId}`);
 
   await clickCanvas(720, 738); // OpeningScene「陣営を確定する」ボタン中心
   await page.waitForTimeout(300);
@@ -310,10 +310,10 @@ async function runScenarioChecks(port) {
     const sc = D.game.scene;
     const st = sc.constructor.name === 'MapScene' ? sc.state
       : (sc.constructor.name === 'CutsceneScene' ? sc.state : null);
-    return { scene: sc.constructor.name, scenarioId: st ? st.scenarioId : null, year: st ? st.year : null };
+    return { scene: sc.constructor.name, scenarioId: st ? st.scenarioId : null, year: st ? st.year : null, month: st ? st.month : null };
   });
-  check('シナリオUI: 開始確定→MapScene(またはCutscene)到達・scenarioId="kanno"・year=1350',
-    (built.scene === 'MapScene' || built.scene === 'CutsceneScene') && built.scenarioId === 'kanno' && built.year === 1350,
+  check('シナリオUI: 開始確定→MapScene到達・scenarioId="genchu_itto"・1392年9月',
+    built.scene === 'MapScene' && built.scenarioId === 'genchu_itto' && built.year === 1392 && built.month === 9,
     JSON.stringify(built));
 
   // --- B. buildState()のシナリオ別データ整合性（デバッグブリッジ直接呼び出し） ---
@@ -321,6 +321,14 @@ async function runScenarioChecks(port) {
     const D = window.TAIHEI_DEBUG;
     const kanno = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'kanno' });
     const genko = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'genko' });
+    const sixScenarios = D.SCENARIOS.map((s) => ({ id: s.id, year: s.startYear, month: s.startMonth, maxTurns: s.maxTurns }));
+    const monthly = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'genko' });
+    D.Rule.endTurn(monthly);
+    const yearRollover = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'genko' });
+    yearRollover.year = 1331; yearRollover.month = 12;
+    D.Rule.endTurn(yearRollover);
+    const finale = D.Rule.buildState({ playerCamp: 'nancho', scenarioId: 'genchu_itto' });
+    D.Rule.endTurn(finale);
     const kannoOwners = Object.values(kanno.provinces).map((p) => p.owner);
     const kannoAshikagaCount = kannoOwners.filter((o) => o === 'ashikaga').length;
     const kannoTotal = kannoOwners.length;
@@ -342,6 +350,12 @@ async function runScenarioChecks(port) {
       genkoHokuchoInactive: !genko.courts.hokucho.active,
       genkoNanchoOwnsYamashiro: genko.provinces.yamashiro.owner === 'nancho', // 'kanno'補正が'genko'に混入していないか
       genkoAshikagaCourtIsNancho: genko.camps.ashikaga.court === 'nancho', // 建武期の史実初期値（リグレッション）
+      sixScenarios,
+      monthlyDate: [monthly.year, monthly.month],
+      yearRolloverDate: [yearRollover.year, yearRollover.month],
+      finaleDate: [finale.year, finale.month],
+      finaleEnding: finale.ending,
+      genkoFactionLabels: [D.factionInfo('ashikaga', 'genko').jp, D.factionInfo('nancho', 'genko').jp],
     };
   });
   check('buildState: kanno開始年=1350', dataCheck.kannoYear === 1350, JSON.stringify(dataCheck));
@@ -357,6 +371,12 @@ async function runScenarioChecks(port) {
   check('buildState: genkoは後醍醐帝が開始時点で存命（リグレッション）', dataCheck.genkoGodaigoAlive, JSON.stringify(dataCheck));
   check('buildState: genkoは北朝が開始時点で未成立（リグレッション）', dataCheck.genkoHokuchoInactive, JSON.stringify(dataCheck));
   check('buildState: genkoの領有はkanno補正の影響を受けない（リグレッション）', dataCheck.genkoNanchoOwnsYamashiro, JSON.stringify(dataCheck));
+  check('シナリオ構成: 指定された6本を正しい開始年で登録',
+    JSON.stringify(dataCheck.sixScenarios.map((s) => [s.id, s.year])) === JSON.stringify([['genko',1331],['kenmu',1334],['nanboku',1338],['kanno',1350],['yoshimitsu',1378],['genchu_itto',1392]]), JSON.stringify(dataCheck.sixScenarios));
+  check('月ターン: 1331年5月→1331年6月（年が進まない）', JSON.stringify(dataCheck.monthlyDate) === '[1331,6]', JSON.stringify(dataCheck));
+  check('月ターン: 12月→翌年1月だけ年を繰り上げる', JSON.stringify(dataCheck.yearRolloverDate) === '[1332,1]', JSON.stringify(dataCheck));
+  check('最終シナリオ: 1392年9月→10月で南北朝合一エンド', JSON.stringify(dataCheck.finaleDate) === '[1392,10]' && dataCheck.finaleEnding === 'tenka_taihei', JSON.stringify(dataCheck));
+  check('1331年陣営名: 北朝・南朝を使わない', dataCheck.genkoFactionLabels[0] === '鎌倉幕府・足利方' && dataCheck.genkoFactionLabels[1] === '後醍醐・倒幕方', JSON.stringify(dataCheck));
 
   // --- E. エンディング文言のシナリオ対応（endingTextFor）と三種の神器演出（drawSanshuNoJingi） ---
   const endingCheck = await page.evaluate(() => {
