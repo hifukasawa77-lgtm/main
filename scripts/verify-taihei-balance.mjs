@@ -15,13 +15,11 @@
  *   4. 正統性(legitimacy)がNaN/Infinityに発散しない（南朝・北朝とも有限の数値）
  *   5. 忠義・恩賞システムが実際に機能している（離反が1回以上発生、または恩賞付与が
  *      蓄積している＝「殴るだけで内政システムが空回りしている」ゲームになっていないか）。
- *      ※'kanno'（最大15ターン）はこの検査を受動的AI進行のみでは満たせないことが判明
- *      している（唯一の初期高landDesire武将が没年で不在・自然減衰が15ターンでは足りない）
- *      ため、'kanno'側は情報表示のみでブロッキングにしない（コード内コメント参照）
+ *      ※'kanno'は開始時点の武将構成により、この検査を受動的AI進行のみでは満たしにくいため、
+ *      システム稼働状況は情報表示に留める（コード内コメント参照）。
  *   6. pageerrorが0件
  *
- * 'kanno'（観応の擾乱、最大15ターン）は'genko'よりずっと短く安価に多数回試せるため、
- * 既定で両シナリオをそれぞれ既定試行数だけ走らせる。
+ * 既定で'genko'と'kanno'をそれぞれ既定試行数だけ走らせる。
  *
  * 使い方: node scripts/verify-taihei-balance.mjs [--trials 5] [--kanno-trials 8]
  * 終了コード: 全PASS=0 / FAILあり=1
@@ -130,13 +128,9 @@ function evalScenario(label, runs, maxTurns, opts) {
     `${badLegit.length}件が非数値（南朝平均${avg(runs, (r) => finite(r.nanchoLegit) ? r.nanchoLegit : 0).toFixed(1)}・北朝平均${avg(runs, (r) => finite(r.hokuchoLegit) ? r.hokuchoLegit : 0).toFixed(1)}）`);
   const idleDetail = `離反0件・恩賞付与0の試行が${systemsIdle.length}/${runs.length}件（離反平均${avg(runs, (r) => r.defections).toFixed(1)}回・恩賞付与平均${avg(runs, (r) => r.rewardTotal).toFixed(0)}）`;
   if (opts.systemsCheckInformational) {
-    // 'kanno'は開始年より前に没した武将を機械的に除外する（Should要件、既知の簡略化）ため、
-    // 唯一初期landDesireが50を超えるnitta_yoshisada(landDesire:55)が没年1338で不在となり、
-    // 恩賞ロジックが立ち上がらない。忠義の自然減衰(0.3/ターン)も15ターンでは最大-4.5にしか
-    // ならず、看板イベントkanno_no_jouran(足利直義の忠義<35で発火)に届く見込みが薄い。
-    // これは戦闘（AI同士の攻城）を伴わない本検査の性質上の限界でもあり、実プレイでの
-    // 到達可能性を否定するものではないため、'kanno'側はブロッキングにはせず情報表示に留める
-    // （2026-08-22 ブラッシュアップ提案2で発見。恩賞武将の選定/自然減衰の調整は別途要検討）。
+    // 'kanno'は開始以前に没した武将を除外し、初期忠義・恩賞構成も本編と異なる。
+    // 戦闘（AI同士の攻城）を伴わない本検査だけで実プレイ時の到達可能性を断定しないため、
+    // この項目はブロッキングにせず情報表示に留める。
     console.log(`  ℹ [${label}] 5. 忠義・恩賞システムは受動的AI進行のみでは実質作動しない — ${idleDetail}`);
   } else {
     check(`[${label}] 5. ★忠義・恩賞システムが機能している（離反or恩賞付与が発生）`, systemsIdle.length === 0, idleDetail);
