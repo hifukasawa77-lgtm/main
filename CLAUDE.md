@@ -5,7 +5,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 
 ## ファイル構成
 - `index.html` — メインポートフォリオページ（シングルページ）
-- `game.html` — ZELDA QUEST（Canvas APIのみで作ったトップビューRPG）
+- `zelda_like.html` — ファーレンクエスト（Canvas APIのみで作ったトップビューRPG）※旧 `game.html` / 旧称 ZELDA QUEST（法務チェックで改称: `legal/zelda_quest_legal_report.md`）
 - `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG

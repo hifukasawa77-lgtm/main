@@ -34,7 +34,11 @@ if [ -z "$CHANGED_HTML" ]; then ok "変更HTMLなし"; else
   SRI_OK=1
   while IFS= read -r f; do
     [ -f "$f" ] || continue
-    NOSRI=$(grep -oE '<script[^>]*src="https://[^"]*"[^>]*>' "$f" | grep -cv 'integrity=' || true)
+    # SRI適用不可として除外するホスト: 配信側がファイルを無告知で更新するため integrity を付けると壊れる。
+    # 除外は「提供元がSRI非対応と明示しているもの」に限る（追加時は理由をここに書くこと）。
+    #   - accounts.google.com/gsi/client … Google Identity Services。Googleがハッシュを固定しない
+    SRI_EXEMPT='accounts\.google\.com/gsi/client'
+    NOSRI=$(grep -oE '<script[^>]*src="https://[^"]*"[^>]*>' "$f" | grep -v 'integrity=' | grep -cvE "$SRI_EXEMPT" || true)
     if [ "${NOSRI:-0}" -gt 0 ]; then note_fail "$f: SRIなしのCDNスクリプト ×${NOSRI}"; SRI_OK=0; fi
   done <<< "$CHANGED_HTML"
   [ "$SRI_OK" = 1 ] && ok "SRI欠落なし"
