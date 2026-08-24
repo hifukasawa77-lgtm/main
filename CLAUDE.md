@@ -5,7 +5,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 
 ## ファイル構成
 - `index.html` — メインポートフォリオページ（シングルページ）
-- `game.html` — ZELDA QUEST（Canvas APIのみで作ったトップビューRPG）
+- `zelda_like.html` — ファーレンクエスト（Canvas APIのみで作ったトップビューRPG）※旧 `game.html` / 旧称 ZELDA QUEST（法務チェックで改称: `legal/zelda_quest_legal_report.md`）
 - `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
@@ -270,11 +270,18 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - 週次ステータスレポート・デイリーブリーフィングを担当する
 - KPI管理（evaluator合格率・平均修正回数・ベロシティ）を行う
 
+### Researcherエージェント (`researcher`)
+- 市場調査・ニーズ発掘に特化したリサーチエージェント。**市場調査はResearcherの専管事項**（Planner自身は市場調査を行わない）
+- PM（深澤）から調査依頼を受け、指定領域の市場を調査して構造化レポートをPlannerへ渡す
+- レポート項目: 市場規模・競合分析・ペインポイント・差別化余地・Plannerへの申し送り事項
+- `/site-proposal` スキル（週次Routine）からもトレンド調査のために起動される
+
 ### Plannerエージェント (`planner`)
 - 深澤から要件をヒアリングする
 - Researcherから市場調査レポートが渡された場合はそれを要件定義に反映する
 - 市場調査はResearcherの専管。Planner自身は市場調査を行わない
 - 要件定義書 → 基本設計書 → 詳細設計書の順で仕様書を作成
+- **ゲーム企画時は `specs/[スラッグ].md` への保存とGameKitコードスケルトン生成まで行う**（旧 spec-agent の責務を統合。2026-08-23）
 - 深澤の承認後、Graphic-Designer / Music-Generator / Code-Generatorへ仕様書を引き渡す
 
 ### Graphic-Designerエージェント (`graphic-designer`)
@@ -306,6 +313,19 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
   - コード起因の問題 → [Code-Generator] へ直接フィードバック
 - 単独で実行することも、Evaluatorへの提出前に呼び出すことも可能
 
+### Securityエージェント (`security`)
+- ソースコードの脆弱性（XSS・eval系・安全でないDOM操作・SRI未設定・外部ライブラリリスク）を静的解析する品質ゲート
+- **Legal-Checker・i18nと並列で実行**し、Dynamic-Testerの前に完了させる
+- リスクを CRITICAL / WARN / OK の3段階で分類し、該当行と修正案を添えて報告する
+- **CRITICALが1件でも残る場合はDynamic-Testerへ進ませない**（Code-Generatorへ差し戻す）。Evaluatorの「セキュリティ即不合格」まで持ち越すと手戻りが大きい
+- 単独起動（「セキュリティチェックして」）も可能
+
+### i18nエージェント (`i18n`)
+- 「UIは日英バイリンガル表記」方針を担保する品質ゲート。翻訳漏れの検出・用語統一・対訳適用を担当
+- **Legal-Checker・Securityと並列で実行**し、Dynamic-Testerの前に完了させる
+- 機械検査（`.claude/skills/i18n-check/i18n-check.sh`）を先に回し、その検出結果に訳語を当てて用語を統一する役割
+- デザイン・ロジック・スタイルの変更は行わない。漏れが残る場合は対訳付きでCode-Generatorへ差し戻す
+
 ### Dynamic-Testerエージェント (`dynamic-tester`)
 - Playwright（ヘッドレスChromium）でHTMLファイルを実際に起動し動作確認する品質ゲート
 - 確認内容: JSランタイムエラー・Canvas描画・404アセット・スクリーンショット取得
@@ -319,6 +339,13 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - 不合格時: 具体的なフィードバックをCode-Generatorへ返す
 - 合格時: 深澤へ結果報告 → `kai_001` ブランチへコミット＆プッシュ → Marketerへ成果物情報を引き渡す（任意）
 - **前提**: Dynamic-TesterのPASS結果を受け取ってから採点を開始する
+- **単独診断モード**: パイプライン外で「バグを洗って」と単発依頼された場合は、採点せずバグ・コード品質の診断レポートを出す（旧 debug-agent の責務を統合。2026-08-23）。性能はOptimizer、脆弱性はSecurity、重複・責務はRefactoringへ振り分ける
+
+### Releaseエージェント (`release`)
+- Evaluator合格後のリリース作業を担当する。`kai_001` → `main` のマージ・セマンティックバージョンタグ付け・CHANGELOG.md生成・GitHub Pages疎通確認
+- **前提**: Evaluatorが合格（80点以上 かつ 仕様適合性16点以上）を出し、`kai_001` へのプッシュが完了していること
+- `/game-release` スキルから起動された場合は、そのスキルの手順（動的テスト→SEO/a11y監査→index.htmlへのカード追加→スクリーンショット→デプロイ検証）完了後に本作業へ入る
+- リリース完了後はPMOへ結果（バージョン・公開URL・CHANGELOG差分）を渡しKPIへ反映する
 
 ### Marketerエージェント (`marketer`)
 - 完成した成果物のマーケティング戦略立案とコンテンツ生成を一貫して担当
@@ -328,6 +355,25 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - 任意成果物: ランディングページコピー（Code-Generatorへ引き渡し）・記事アウトライン・プレスリリース
 - 出力先: `marketing/[プロダクト名]_strategy.md` と `marketing/[プロダクト名]_content.md`
 - Researcherの市場調査レポートが存在する場合は活用する（自ら市場調査はしない）
+
+### 公開後の改善ループ（Post-Release Loop）
+リリース済み成果物を継続的に改善するフェーズ。4体は独立に起動でき、**変更を入れたら必ずDynamic-Testerで回帰確認する**。
+
+#### Optimizerエージェント (`optimizer`)
+- パフォーマンスボトルネックの特定と修正（FPS改善・メモリリーク・Canvas描画最適化）。機能変更・バグ修正は行わない
+- **起動条件**: `/perf-audit` の実測でFPS低下・ページ重量超過が出た ／ 深澤から「重い」「カクつく」の報告 ／ 描画・ループに手が入る大きめの機能追加の後
+
+#### Refactoringエージェント (`refactoring`)
+- 外部挙動を変えずに内部構造を改善（重複コードの統合・共通ユーティリティ抽出・責務分離）
+- **起動条件**: Evaluatorの採点で「コード品質」が繰り返し減点された ／ Evaluatorの単独診断モードが重複・責務混在を検出して回してきた ／ 同一ファイルへの機能追加が続き深澤から「整理して」の依頼
+
+#### Game-Balanceエージェント (`game-balance`)
+- パラメータ定数の抽出・難易度曲線の分析・調整案の提示。**深澤の承認後にパラメータのみ変更**（ロジック・描画・UIは変更しない）
+- **起動条件**: 「難しすぎる」「簡単すぎる」「序盤が単調」等のプレイ体験の指摘 ／ 新規ゲーム公開後の初回チューニング ／ 長期進行の検査（例: `verify-sengoku-balance.mjs`）で破綻が出た
+
+#### Achievement-Agentエージェント (`achievement-agent`)
+- ゲームメカニクスを読み解き、ゲーム固有の実績称号20個をJSファイルとして生成する。ゲーム本体は改変しない（組み込みはCode-Generator）
+- **起動条件**: 新規ゲーム公開直後（`/game-release` 完了後）のやり込み要素追加 ／ 新メカニクス追加で実績が実態に合わなくなったとき ／ 深澤からの依頼
 
 ### English-Teacherエージェント (`english-teacher`)
 - ネイティブ英語講師として深澤の英語学習を支援する独立ユーティリティ（制作パイプラインとは独立して単発で利用する）
@@ -354,19 +400,21 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
        │ 深澤(PM)へ報告（常時稼働）              │ 課金発生時に通知→承認→累計¥5,000上限チェック＆報告
        ▼                                          ▼
 深澤(PM) → [Researcher] 市場調査（必要な場合）→ [Planner] レポート受け取り
-深澤(PM) → [Planner] 要件定義・設計書作成（市場調査なしの場合）
+深澤(PM) → [Planner] 要件定義・設計書作成（市場調査なしの場合／ゲーム企画は specs/ 保存＋スケルトンまで）
           ├→ [Graphic-Designer] グラフィック制作（並行）
           ├→ [Music-Generator]  音楽・SE制作（並行）
           └→ [Code-Generator]   実装（グラフィック・音楽納品後）
                ↓
-          → [Legal-Checker] 著作権・ライセンス法務チェック ※任意/Evaluator前推奨
+     ┌─────────── 品質ゲート（3体を並列実行）───────────┐
+     │ [Legal-Checker] 法務  [Security] 脆弱性  [i18n] 日英 │
+     └──────────────────────────────────────────────────┘
                ↓ RED/YELLOW（グラフィック起因）
             [Graphic-Designer] 修正 → [Code-Generator] へ再連携 → [Legal-Checker] 再チェック
                ↓ RED/YELLOW（音楽・SE起因）
             [Music-Generator] 修正 → [Code-Generator] へ再連携 → [Legal-Checker] 再チェック
-               ↓ RED/YELLOW（コード起因）
-            [Code-Generator] 修正 → [Legal-Checker] 再チェック
-               ↓ GREEN
+               ↓ RED/YELLOW（コード起因）／ CRITICAL（脆弱性）／ 翻訳漏れ
+            [Code-Generator] 修正 → 該当ゲートへ再チェック
+               ↓ GREEN / OK（3体すべて通過）
           → [Dynamic-Tester] 動的実行チェック（Playwright）※必須
                ↓ FAIL
             [Code-Generator] 修正・再提出 → [Dynamic-Tester] 再検証
@@ -376,8 +424,19 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
             [Code-Generator] 修正・再提出 → [Evaluator] 再検証
                ↓ 合格
             深澤(PM)へ報告 → [PMO] 記録・KPI更新 → GitHub push (kai_001)
+               ↓
+          → [Release] kai_001→main マージ・バージョンタグ・CHANGELOG・Pages疎通確認
                ↓ ※任意
             [Marketer] 戦略立案・コンテンツ生成 → 深澤(PM)へ納品
+               ↓
+     ┌──── 公開後の改善ループ（起動条件を満たしたとき個別に起動）────┐
+     │ [Optimizer] 性能   [Refactoring] 構造                          │
+     │ [Game-Balance] 遊び心地   [Achievement-Agent] やり込み要素     │
+     └───────────────────────────────────────────────────────────────┘
+               ↓ 変更が入ったら
+            [Dynamic-Tester] 回帰確認 → 深澤(PM)へ報告
+
+※ [English-Teacher] は制作パイプラインとは独立した単独起動エージェント
 ```
 
 ## 注意事項

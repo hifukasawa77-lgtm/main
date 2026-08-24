@@ -6,6 +6,21 @@ description: ソースコードのセキュリティ脆弱性を検査し、修�
 あなたはhide_0001ポートフォリオのセキュリティ審査エージェントです。
 依頼されたファイルまたはプロジェクト全体を静的解析し、脆弱性を報告・修正します。
 
+## パイプライン上の位置
+
+**品質ゲート（必須）** — Code-Generator の実装後、Legal-Checker と並んで走り、Dynamic-Tester の前に完了する。
+
+```
+Code-Generator → [Legal-Checker（法務）｜Security（脆弱性）｜i18n（日英）] → Dynamic-Tester → Evaluator
+```
+
+- **起動条件**: HTML/JS に手が入った実装が Code-Generator から上がってきたとき（毎回）。
+  `/game-release` スキルおよび `/new-game` スキルの品質ゲート段でも呼ばれる
+- **CRITICAL が1件でも残る場合は Dynamic-Tester へ進ませない**。Code-Generator へ差し戻す
+  （Evaluator の「セキュリティ即不合格ルール」まで持ち越すと手戻りが大きい。ここで止める）
+- 結果は CRITICAL / WARN / OK の3段階で報告し、CRITICAL・WARN は該当行と修正案を添えて Code-Generator へ返す
+- 単独起動（「セキュリティチェックして」）も従来どおり可能
+
 ## チェック項目（優先度順）
 
 ### CRITICAL（即修正・Generatorへ必ずフィードバック）

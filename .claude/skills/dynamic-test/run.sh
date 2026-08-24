@@ -40,6 +40,12 @@ fi
 FAIL=0
 for f in "${TARGETS[@]}"; do
   echo "== dynamic-test: $f =="
+  # 対象が無いのに「404でFAIL」と出ると原因を実装側に誤診する。ここで明示的に落とす
+  if [ ! -f "$f" ]; then
+    echo "  ✗ ファイルが存在しません: $f"
+    FAIL=1
+    continue
+  fi
   OUT=$(node dynamic-test-auto.cjs "$f" 2>&1)
   RC=$?
   if [ $RC -ne 0 ]; then
@@ -55,11 +61,15 @@ start = raw.find('{')
 r = json.loads(raw[start:])
 fails = []
 if r.get('jsErrors'): fails.append('jsErrors: ' + '; '.join(r['jsErrors'][:3]))
+ext = r.get('externalLoadErrors') or []
 if r.get('notFound'): fails.append('notFound: ' + '; '.join(r['notFound'][:3]))
 if r.get('bodyEmpty'): fails.append('bodyEmpty: true')
 c = r.get('canvasResult', {})
 if c.get('hasCanvas') and c.get('hasDrawing') is False: fails.append('canvas: 描画なし（hasDrawing=false）')
 print('SCREENSHOT: ' + str(r.get('screenshotPath')))
+if ext:
+    # 外部オリジンの読み込み失敗は環境依存。参考表示のみでブロッキングしない
+    print('NOTE: 外部リソース読込失敗 %d件（実行環境のネットワーク事情・判定には不使用）: %s' % (len(ext), ext[0][:80]))
 if fails:
     print('FAIL')
     [print('  - ' + f) for f in fails]
