@@ -27,9 +27,13 @@ function startServer(rootDir) {
       if (urlPath === '/favicon.ico' && !fs.existsSync(path.join(rootDir, 'favicon.ico'))) {
         res.writeHead(204); res.end(); return;
       }
-      const target = path.join(rootDir, urlPath);
-      // ルート外への参照を拒否（../ 対策）
-      if (!path.resolve(target).startsWith(path.resolve(rootDir))) {
+      const target = path.resolve(rootDir, '.' + path.sep + urlPath);
+      // ルート外への参照を拒否（../ 対策）。
+      // startsWith(root) だけで判定すると、root が /home/user/main のとき
+      // /home/user/main-evil のような「同じ接頭辞を持つ兄弟ディレクトリ」を通してしまう。
+      // 区切り文字まで含めて比較する（root 自身へのアクセスは別途許可）。
+      const rootResolved = path.resolve(rootDir);
+      if (target !== rootResolved && !target.startsWith(rootResolved + path.sep)) {
         res.writeHead(403); res.end('forbidden'); return;
       }
       fs.readFile(target, (err, buf) => {
