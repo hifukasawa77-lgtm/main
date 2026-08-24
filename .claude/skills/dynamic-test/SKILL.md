@@ -23,14 +23,28 @@ bash .claude/skills/dynamic-test/run.sh --changed
 
 | フィールド | FAIL条件 | 意味 |
 |---|---|---|
-| `jsErrors` | 1件以上 | console.error / pageerror（ランタイム例外） |
+| `jsErrors` | 1件以上 | console.error / pageerror（ランタイム例外・ローカル資産の読込失敗） |
 | `notFound` | 1件以上 | 404になったアセット参照 |
-| `canvasResult.hasDrawing` | `false` | canvasは存在するが**何も描画されていない**（初期化失敗の典型） |
+| `canvasResult.hasDrawing` | `false` | canvasが**全枚数・全面走査して1pxも描かれていない**（初期化失敗の典型） |
 | `bodyEmpty` | `true` | bodyが空（ロード失敗） |
+| `externalLoadErrors` | — | **FAILにしない**。外部オリジン（CDN・Webフォント等）の読込失敗＝実行環境のネットワーク事情 |
 | `screenshotPath` | — | `test-screenshots/` に保存。目視確認に使う |
 
-- `hasDrawing: null`（getImageData失敗）はCORS等の環境要因。FAILにはしないがスクショで目視確認する。典型原因は **`file://` 配信で画像を描画したcanvasのtaint**（オリジン不一致扱いで `getImageData` が例外）。ピクセル検証が必要な場合は `python3 -m http.server` 等のHTTP配信で開くか、スクリーンショット比較で代替する。
+- `hasDrawing: null`（全canvasでgetImageData失敗）はFAILにしない。スクショで目視確認する。
 - canvasが無いページ（ツール系HTML）は `hasCanvas: false` でスキップ扱い（FAILではない）。
+
+### 偽のFAILを出さないための設計（2026-08-23に是正）
+検査が理由なく赤いままだと、本物の不具合まで無視されるようになる。以下は**検査側の欠陥**として直した:
+
+| 症状 | 原因 | 対処 |
+|---|---|---|
+| `fetch()` が必ずCORSで落ちる | `file://` で開いていた | **リポジトリ直下を一時HTTPサーバで配信**し `http://127.0.0.1:<port>/…` で開く（ポートは毎回自動割当・`favicon.ico` は204） |
+| Webフォント/CDNの読込失敗でFAIL | 外部オリジンの失敗を `jsErrors` に混ぜていた | `externalLoadErrors` に分離。**ローカル資産（テストサーバのオリジン）の失敗は今までどおりFAIL** |
+| パーティクル背景が「描画なし」 | 左上100×100pxしか見ていなかった | 全canvasを**全面走査**し、1枚でも描けていればPASS |
+| 対象ファイルが無いのに404でFAIL | 存在確認をしていなかった | 実行前に存在チェックして明示的に落とす |
+
+**検査を変えたら必ず故障を仕込んで✗が出ることを確かめる**（JSエラー・ローカル404・未描画canvasの3種）。
+検査が緑になったこと自体を成果にしない。
 
 ## FAIL時の差し戻しフォーマット（→ code-generator）
 
@@ -44,7 +58,7 @@ bash .claude/skills/dynamic-test/run.sh --changed
 ```
 
 ## 注意
-- `file://` で開くため、`fetch()` 依存の外部API部分はエラーになり得る（本番のみ動く箇所は jsErrors の内容で判断する）
+- ローカルHTTP配信で開くため同一オリジンの `fetch()` は通る。**外部API依存の箇所**はネットワーク環境次第で落ちるが `externalLoadErrors` 側に出る（判定には使わない）
 - スクリーンショットは `test-screenshots/` に溜まる。コミットに含めない
 - ヘッドレスでは `confirm()`/`alert()` が**自動キャンセル**される。確認ダイアログを通る正常系（保存/削除等）を検証するときは `page.on('dialog', d => d.accept())` を入れないと正常系がFAILに見える（誤検知の実例あり）
 - スクリーンショットは直前のタブ操作の**スクロール位置を引き継ぐ**。撮影前に `window.scrollTo(0,0)` を挟むこと

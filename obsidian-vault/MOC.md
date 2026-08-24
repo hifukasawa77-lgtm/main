@@ -21,6 +21,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[second-brain-system]] — このセカンドブレイン基盤自体
 - [[recursive-self-improvement]] — 学び→反映の閉ループ（自己改善基盤）
 - [[guide-agent-evolution]] — 案内エージェントの週次自己進化＋週次サイト提案基盤
+- [[幕末風雲記]] — 幕末戦略シミュレーション（スマホ対応・藩論/京都政局/外国勢力/人物/歴史分岐の5システム実装済み）
 
 ## 📚 意思決定ログ
 - [[0001-second-brain-vault-structure]]
@@ -45,12 +46,21 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0020-perf-cost-placement-and-canvas-layout-promotion]] — 前処理コストの置き場所（静止時ベイクの罠/補償ハック撤去）をcodingへ、Canvas絶対座標レイアウトの整合（分岐の全要素更新/描画倍率とレイアウト予約の一致）をgame-devへ昇格＋7営業日分の遡及Daily整備
 - [[0021-routine-schedule-single-source]] — Routineスケジュールの正をCLAUDE.md「定期実行（Routine）一覧」へ単一ソース化＋lint検査#11、/self-improveを週次Routine化（日曜21:00 JST）
 - [[0022-asset-reencode-safety]] — アセット再エンコードの安全策（切り出し矩形の解像度非依存化・後読みの同時数/上限）＋マップ描画の機械検査を新設
+- [[0023-verification-integrity-and-daily-backfill]] — 検査スクリプトの健全性を横断ルール化＋Daily骨組み生成を機械化（backfill-daily.sh）
+- [[0024-encoding-and-required-check-guards]] — 文字化け・const二重定義・必須検査の未実行を release-check で機械検出＋検査#4の腐り修正
+- [[0025-csv-sync-direction-and-newline-preservation]] — 正本CSVはゲームへ追随（同期は検査FAIL箇所だけ）＋改行/BOM保持・派生列の再生成スクリプト
+- [[0026-vault-boundary-docs-and-known-bug-lint]] — claudechord-vault/obsidian-vaultの境界明文化＋肖像index/source-rect直書きを横断機械検査化
+- [[0027-chatgpt-proposal-phased-implementation]] — 外部由来の大規模改善提案（ChatGPT）を5フェーズに分割して実装する進め方
+- [[0028-agent-consolidation-and-pipeline-placement]] — 重複エージェント2体を統合し孤立7体をパイプラインへ配置＋harness-lint検査#13
+- [[0029-dynamic-test-false-failures]] — 動的テストの偽のFAILを一掃（HTTP配信/外部エラー分離/全canvas走査）＋無効なX-Frame-Options metaをJSフレームバスターへ
+- [[0030-marketer-social-automation]] — マーケターの成果をSNS投稿まで到達させる（X/Instagram自動投稿＋認証情報なしで走る検査）
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
 - [[static-hosting-security-limits]] — GitHub Pagesのセキュリティ制約・XSS/escHtmlのハマりどころ
 - [[harness-maintenance-patterns]] — ハーネス保守のパターン・ハマりどころ（色ドリフト/スキル/hook2段/bash罠）
 - [[web-audio-singing-synthesis]] — Web Audioでの歌声合成（放射特性/音量正規化/広いCanvasのGrid突き抜け/WAV解析で検証）
+- [[native-dialog-toplayer-pitfall]] — ネイティブ`<dialog>`のトップレイヤーがposition:fixed要素を隠す不具合と対処
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール

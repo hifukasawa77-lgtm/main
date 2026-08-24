@@ -1,19 +1,30 @@
 name: Auto Social Post
 
+# 週1でSNSへ告知する。認証情報（Secrets）が未設定のプラットフォームは
+# 「失敗」ではなく「スキップ」する（未設定のまま毎週赤くなると本物の失敗に気づけないため）。
+# Secretsの登録手順: docs/social-setup.md
+
 on:
   schedule:
-    - cron: '0 0 * * 1'  # 毎週月曜 9:00 JST (= UTC 00:00)
+    - cron: '0 12 * * 3'  # 毎週水曜 21:00 JST (= UTC 12:00)
   workflow_dispatch:
     inputs:
       platform:
         description: 'Post to which platform?'
         required: false
-        default: 'bluesky'
+        default: 'all'
         type: choice
         options:
+          - all
+          - x
+          - instagram
           - bluesky
           - reddit
-          - both
+      dry_run:
+        description: '投稿せず内容だけ表示する'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   social-post:
@@ -25,17 +36,42 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Resolve options
+        id: opt
+        run: |
+          PLATFORM="${{ github.event.inputs.platform }}"
+          [ -z "$PLATFORM" ] && PLATFORM="all"   # scheduleでは inputs が空
+          echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "flag=--dry-run" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post to X
+        if: steps.opt.outputs.platform == 'all' || steps.opt.outputs.platform == 'x'
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+        run: node scripts/post-social.js x ${{ steps.opt.outputs.flag }}
+
+      - name: Post to Instagram
+        if: steps.opt.outputs.platform == 'all' || steps.opt.outputs.platform == 'instagram'
+        env:
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+        run: node scripts/post-social.js instagram ${{ steps.opt.outputs.flag }}
+
       - name: Post to Bluesky
-        if: |
-          github.event_name == 'schedule' ||
-          github.event.inputs.platform == 'bluesky' ||
-          github.event.inputs.platform == 'both'
+        if: steps.opt.outputs.platform == 'all' || steps.opt.outputs.platform == 'bluesky'
         env:
           BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
           BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
-        run: node scripts/post-social.js bluesky
+        run: node scripts/post-social.js bluesky ${{ steps.opt.outputs.flag }}
 
-      - name: Check first Monday of month
+      - name: Check first week of month
         id: date-check
         run: |
           DAY=$(date +%d)
@@ -45,14 +81,14 @@ jobs:
             echo "IS_FIRST_WEEK=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Post to Reddit (first Monday of month)
+      # Redditは同一リンクの連投を嫌うため月1回（第1週）だけにする
+      - name: Post to Reddit (first week of month)
         if: |
-          github.event.inputs.platform == 'reddit' ||
-          github.event.inputs.platform == 'both' ||
-          (github.event_name == 'schedule' && steps.date-check.outputs.IS_FIRST_WEEK == 'true')
+          steps.opt.outputs.platform == 'reddit' ||
+          (steps.opt.outputs.platform == 'all' && steps.date-check.outputs.IS_FIRST_WEEK == 'true')
         env:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
           REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
-        run: node scripts/post-social.js reddit
+        run: node scripts/post-social.js reddit ${{ steps.opt.outputs.flag }}

@@ -10,6 +10,11 @@ GitHub Pages は HTTP レスポンスヘッダを自由に付与できないた�
 
 ## ヘッダが使えないことによる制約
 - **`X-Frame-Options`** は `<meta http-equiv>` では**無効**（ブラウザが警告を出す。HTTPヘッダ専用）。
+  - 2026-08-23: `index.html` / `agents.html` に置いていた meta を**JSフレームバスターへ置換済み**。
+    ただし採用したのは `if (self !== top) { top.location = self.location; }` の**非隠蔽版**。
+    下記の `html{display:none}` 版はJS無効環境で白紙になるため、公開ポートフォリオでは採らない。
+  - この meta はコンソールに警告を出し続け、**dynamic-test を恒常FAILさせていた**（＝検査が信用されなくなる）。
+    「防御になっていない上に検査を汚す」ものは早く消す。
   - 代替: JSフレームバスター。`<head>` 冒頭で
     ```html
     <style id="anti-clickjack">html{display:none}</style>

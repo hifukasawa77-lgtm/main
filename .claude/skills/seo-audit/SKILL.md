@@ -32,6 +32,7 @@ bash .claude/skills/seo-audit/seo-audit.sh zelda_like.html # 指定ファイル�
 
 - **og:image の方針**: 1200x630。ダーク背景（#0a0a12系）＋シアン/パープルのアクセントで既存ビジュアルと統一（サイバーパンク演出禁止）。ゲームは `test-screenshots/` のスクショを加工して使ってよい。専用画像が無い間は index.html が使っているサイト共通OG画像へフォールバックする
 - **形式**: 写真的・スクショ的な内容は **JPEG** で書き出す（PNGだと桁違いに重くなりクローラ取得が遅い。実例: sengoku 969KB PNG→79KB JPEG）。フラットな図形/文字主体ならPNGでよい。テンプレの `og:image` 拡張子は実ファイルに合わせる
+- **OGP画像だけは WebP にしない**: CLAUDE.md の「アセットは原則WebP」は**サイト内表示用の方針**で、`og:image` には適用しない。SNS/チャットのクローラはWebP対応がまちまちで、カードが**無表示**になる事故が起きる。同じ生成スクリプトから作るサムネイル（サイト内表示）はWebPでよい
 - **Canvasゲームの専用OG画像は自動生成できる**: Playwrightでタイトル画面を表示し、`canvas` 要素から中央帯を1200x630にクロップ合成して書き出す（ページ全体のスクショだと viewport fit のレターボックス黒帯が入るため、canvasからのクロップが確実）。ブランド統一されたOG画像がスクショ加工なしで得られる
 - **日英**: title は「日本語名 | 英語名」併記が既存慣例（index.html 準拠）
 - ゲームページは index.html の JSON-LD（`SoftwareApplication` の ItemList）にもエントリを追加する
@@ -41,5 +42,6 @@ bash .claude/skills/seo-audit/seo-audit.sh zelda_like.html # 指定ファイル�
 新規ページ公開時は `sitemap.xml` に `<url><loc>...</loc></url>` を1エントリ追加する（存在確認: リポジトリ直下）。
 
 ## 運用
+- **OG画像は「実画面のスクショを撮る道具」として持つ**: 手描きのモックをOGPにすると、UIを変えたあとも古い画面がSNSに残り続ける。`scripts/gen-<page>-og.mjs` を1本用意して**OGP（1200x630 JPEG）と作品カード用サムネイル（960x540 WebP）を同時に書き出す**形にし、**UIを変えたら回し直す**（既存例: `gen-genpei-og.mjs` / `gen-synth-eq-og.mjs`）。クロップは中央基準ではなく**上端基準**にする（中央だと最下段のコマンドバーが途中で切れて欠けた絵に見える）
 - 新規HTML作成時は必ずこの監査を通してからコミットする（/release-check からも参照される）
 - 一括是正するときは欠落テーブルの上から、公開価値の高いページ（index からリンクされているもの）を優先する

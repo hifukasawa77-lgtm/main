@@ -8,6 +8,8 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo 
 cd "$ROOT" || exit 2
 FAIL=0
 note_fail() { echo "  ✗ $1"; FAIL=1; }
+# 警告（△）は exit code に影響しない。実行の有無を機械では確かめられない項目に使う
+note_warn() { echo "  △ $1"; }
 ok() { echo "  ✓ $1"; }
 
 echo "== 1. ブラウザプロファイル/一時ディレクトリの混入 =="
@@ -32,19 +34,35 @@ if [ -z "$CHANGED_HTML" ]; then ok "変更HTMLなし"; else
   SRI_OK=1
   while IFS= read -r f; do
     [ -f "$f" ] || continue
-    NOSRI=$(grep -oE '<script[^>]*src="https://[^"]*"[^>]*>' "$f" | grep -cv 'integrity=' || true)
+    # SRI適用不可として除外するホスト: 配信側がファイルを無告知で更新するため integrity を付けると壊れる。
+    # 除外は「提供元がSRI非対応と明示しているもの」に限る（追加時は理由をここに書くこと）。
+    #   - accounts.google.com/gsi/client … Google Identity Services。Googleがハッシュを固定しない
+    SRI_EXEMPT='accounts\.google\.com/gsi/client'
+    NOSRI=$(grep -oE '<script[^>]*src="https://[^"]*"[^>]*>' "$f" | grep -v 'integrity=' | grep -cvE "$SRI_EXEMPT" || true)
     if [ "${NOSRI:-0}" -gt 0 ]; then note_fail "$f: SRIなしのCDNスクリプト ×${NOSRI}"; SRI_OK=0; fi
   done <<< "$CHANGED_HTML"
   [ "$SRI_OK" = 1 ] && ok "SRI欠落なし"
 fi
 
-echo "== 4. 1MB超の新規/変更ファイル =="
+echo "== 4. 1MB超の新規ファイル／既存ファイルの急増 =="
+# 意図は「重いものを新たに持ち込ませない」こと。既に1MB超の既存ファイル（sengoku.html は
+# 元から1.4MB）を**触っただけで毎回✗**にすると、release-check が sengoku 作業のたびに
+# 恒常的に赤くなり、他の指摘ごと無視されるようになる（＝検査が腐る）。
+# よって既存ファイルは「1MB超 かつ 今回の差分で+100KB以上increaseした」場合だけ指摘する。
 BIG_OK=1
 BIGLIST=$(git diff HEAD --name-only --diff-filter=ACM 2>/dev/null || true)
 while IFS= read -r f; do
   [ -n "$f" ] && [ -f "$f" ] || continue
   SZ=$(du -k "$f" | cut -f1)
-  if [ "$SZ" -gt 1024 ]; then note_fail "大容量: $f (${SZ}KB) — /asset-optimize で削減を検討"; BIG_OK=0; fi
+  [ "$SZ" -gt 1024 ] || continue
+  # HEAD 側のサイズ（新規ファイルは 0 扱い）
+  PREV=$(git cat-file -s "HEAD:$f" 2>/dev/null || echo 0)
+  PREV_KB=$(( PREV / 1024 ))
+  if [ "$PREV_KB" -eq 0 ]; then
+    note_fail "大容量の新規ファイル: $f (${SZ}KB) — /asset-optimize で削減を検討"; BIG_OK=0
+  elif [ $(( SZ - PREV_KB )) -ge 100 ]; then
+    note_fail "既存ファイルが急増: $f (${PREV_KB}KB → ${SZ}KB) — /asset-optimize で削減を検討"; BIG_OK=0
+  fi
 done <<< "$BIGLIST"
 [ "$BIG_OK" = 1 ] && ok "1MB超なし"
 
@@ -57,9 +75,66 @@ if [ -z "$SECRETS" ]; then ok "検出なし"; else
   while IFS= read -r l; do [ -n "$l" ] && note_fail "シークレット疑い: ${l:0:60}...（コミット禁止・即削除）"; done <<< "$SECRETS"
 fi
 
-echo "== 6. test-screenshots/ の混入（ステージ済み） =="
+echo "== 6. 文字化け（UTF-8をCP932として読んだ痕跡）の追加行 =="
+# 日本語UTF-8のバイト列をCP932として解釈すると、ひらがな/カタカナが「見慣れない漢字＋半角カナ」の
+# 並びに化ける。検出パターンはその先頭バイトに当たる文字を \x{} で書く（literalで書くと
+# このスクリプト自身が検出対象になるため）。
+# 編集ツールがファイルをUTF-8以外で書き戻すと**例外もエラーも出さずに**全日本語が壊れ、
+# sengoku.html では <title>・meta description まで化けたまま1コミット公開された
+# （2026-08-12 da0cda3→9c71184 で697行。さらに古い4行はコメント内のため2026-08-17まで生存）。
+# 注意: C locale では \x{} は (*UTF) 無しだとPCREがエラー終了し**常に0件**を返す（偽の✓）。
+MOJI=$(git diff HEAD --unified=0 2>/dev/null \
+  | grep -E '^\+[^+]' \
+  | grep -aP '(*UTF)[\x{7E3A}\x{7E67}\x{7E5D}][\x{3041}-\x{30FF}\x{FF61}-\x{FF9F}]|\x{8757}\x{FF7D}|\x{8B0C}\x{FF66}' \
+  | head -5 || true)
+if [ -z "$MOJI" ]; then ok "文字化けなし"; else
+  while IFS= read -r l; do [ -n "$l" ] && note_fail "文字化け疑い: ${l:0:60}...（UTF-8で保存し直す。git履歴から原文を回収できる場合がある）"; done <<< "$MOJI"
+fi
+
+echo "== 7. test-screenshots/ の混入（ステージ済み） =="
 SHOTS=$(git diff --cached --name-only 2>/dev/null | grep -c 'test-screenshots/' || true)
 if [ "${SHOTS:-0}" = 0 ]; then ok "混入なし"; else note_fail "test-screenshots/ が ${SHOTS} 件ステージされている（unstageする）"; fi
+
+echo "== 8. トップレベル宣言の二重定義（変更HTML） =="
+# 同一スコープで `const X` が2回宣言されると **SyntaxError でページが丸ごと起動不能**になる。
+# 単一HTMLのゲームはトップレベルconstが数百個あり、ブランチのマージで重複が生まれた実績がある
+# （2026-08-04「main が二重定義していた REQUESTED_KOKUJIN_TEMPLE_PORTRAIT_SLOTS を解消」）。
+# Playwright検査でも捕まるが、あちらは数分かかるうえ実行され忘れる。ここは grep で即座に落とす。
+# 桁位置0の宣言だけを見るため、関数内・ブロック内の同名変数は対象外。
+# **function は対象外**: 関数宣言の再定義はJS仕様上は合法（後勝ち）で SyntaxError にならない。
+# 初版で function を含めたところ shogi.html の findKing/inB が誤検知した（＝正常なコードを
+# 落とす検査は、そのうち丸ごと無視される）。落とすのは const / let だけに限定する。
+DUP_OK=1
+HTMLS=$(git diff HEAD --name-only --diff-filter=ACM 2>/dev/null | grep -E '\.html$' || true)
+while IFS= read -r f; do
+  [ -n "$f" ] && [ -f "$f" ] || continue
+  DUPS=$(grep -oP '(*UTF)^(const|let)\s+\K\w+' "$f" | sort | uniq -d | head -3 || true)
+  [ -z "$DUPS" ] && continue
+  while IFS= read -r d; do [ -n "$d" ] && note_fail "二重定義: $f の '$d'（SyntaxErrorで起動不能になる）"; done <<< "$DUPS"
+  DUP_OK=0
+done <<< "$HTMLS"
+[ "$DUP_OK" = 1 ] && ok "二重定義なし"
+
+echo "== 9. 変更ファイルに対応する必須チェック（CLAUDE.md 規定・実行の有無は見ない） =="
+# CLAUDE.md は「sengoku.html を触ったら必ず実行」等を規定しているが、**文書にあるだけでは
+# 実行されない**。実例: 2026-08-13 の 78ee5e6 が clan名を 足利→将軍足利 に改名して
+# verify-castle-csv を壊し、23件FAIL・force-list 20件✗ のまま4日間気づかれなかった
+# （同期間はDailyも無く、検査を回した形跡がない）。ここでは「今の差分に必要な検査コマンド」を
+# 提示するだけに留める（Playwright検査は数分かかるため release-check 内では実行しない）。
+CHANGED_ALL=$(git diff HEAD --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null)
+req_for(){ grep -qx "$1" <<< "$CHANGED_ALL" && printf '%s\n' "$2"; }
+REQ=$( {
+  req_for sengoku.html      "node scripts/verify-sengoku-boot.mjs / verify-castle-csv.mjs / verify-castle-layouts.mjs / verify-map-assets.mjs / verify-force-list.mjs / verify-sengoku-balance.mjs"
+  req_for sanguo.html       "node scripts/verify-sanguo-boot.mjs"
+  req_for synth-eq.html     "node scripts/verify-synth-eq.mjs（UI変更時は gen-synth-eq-og.mjs も）"
+  req_for genpei.html       "node scripts/verify-genpei-boot.mjs / verify-genpei-kyoten.mjs / verify-genpei-balance.mjs"
+  req_for siro_ichi.csv     "node scripts/verify-castle-csv.mjs"
+  req_for force_list.csv    "node scripts/verify-force-list.mjs"
+  req_for assets/js/agent-data.js "node scripts/agent-evolve-check.mjs / gen-agent-knowledge.mjs / agent-dynamic-test.cjs"
+} | sort -u )
+if [ -z "$REQ" ]; then ok "対象ファイルの変更なし"; else
+  while IFS= read -r r; do [ -n "$r" ] && note_warn "要実行: $r"; done <<< "$REQ"
+fi
 
 echo ""
 echo "-- git diff --stat（参考） --"

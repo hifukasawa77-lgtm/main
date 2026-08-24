@@ -1,6 +1,6 @@
 ---
 name: new-game
-description: 新しいCanvasゲームをGameKitエンジン＋エージェントパイプライン（Planner→Graphic-Designer/Music-Generator→Code-Generator→Legal-Checker→Dynamic-Tester→Evaluator）で1本制作する。「○○なゲームを作って」という依頼で使用。
+description: 新しいCanvasゲームをGameKitエンジン＋エージェントパイプライン（Planner→Graphic-Designer/Music-Generator→Code-Generator→[Legal-Checker｜Security｜i18n]→Dynamic-Tester→Evaluator）で1本制作する。「○○なゲームを作って」という依頼で使用。
 ---
 
 # /new-game — ゲーム制作パイプライン
@@ -36,8 +36,12 @@ GameKit（`gamekit/gamekit.js`）を土台に、CLAUDE.md のエージェント�
 - 大規模な場合は複数の code-generator に分割（シーン単位 / ファイル単位、担当範囲を明示）
 - 完了後 Dynamic-Tester へ
 
-### 4. 品質ゲート — legal-checker（素材を使った場合のみ）→ dynamic-tester → evaluator
+### 4. 品質ゲート — [legal-checker ｜ security ｜ i18n]（並列）→ dynamic-tester → evaluator
+まず3体を**並列で**走らせ、すべて通過してから dynamic-tester へ進む。
+
 - **legal-checker**: 外部素材・ライブラリ使用時のみ。RED/YELLOW は起因エージェントへ差し戻し
+- **security**: 毎回実行。XSS・eval系・安全でないDOM操作・SRI未設定を検査。**CRITICALが残る間は先へ進めない**（Evaluatorの即不合格まで持ち越すと手戻りが大きい）
+- **i18n**: 毎回実行。`bash .claude/skills/i18n-check/i18n-check.sh` を回してから訳語を当て、日英バイリンガルUIを担保する
 - **dynamic-tester**: Playwright でJSエラー・Canvas描画・404を検証。FAILは code-generator へ差し戻し（Evaluatorに渡さない）
 - **evaluator**: 仕様適合性を100点満点で採点。80点以上かつ仕様適合16点以上で合格。不合格は code-generator へ差し戻し（同一理由2回で深澤へエスカレーション）
 
@@ -45,6 +49,12 @@ GameKit（`gamekit/gamekit.js`）を土台に、CLAUDE.md のエージェント�
 - 合格後: 深澤へ結果報告 → 作業ブランチへコミット＆プッシュ
 - コミット対象: `<ゲーム名>.html` / `specs/` / `assets/art/`（使用時）/ `marketing/`（Marketer起用時）
 - `index.html` のゲーム一覧への追加は深澤の指示があった場合のみ
+
+### 6. 公開後（任意） — achievement-agent / game-balance
+公開まで進めた場合は「公開後の改善ループ」へ渡せる。深澤の指示があったとき、または初回チューニングとして起動する。
+
+- **achievement-agent**: ゲーム固有の実績称号20個をJSで生成 → code-generator が本体へ組み込み → dynamic-tester で解除条件の発火を確認
+- **game-balance**: 初回の遊び心地チューニング。パラメータ定数のみ変更し、深澤の承認を得てから適用する
 
 ## 完了報告フォーマット
 
