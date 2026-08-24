@@ -76,7 +76,9 @@ node scripts/verify-social-posts.mjs
 ```
 
 検査内容: OAuth 1.0a 署名がX公式のテストベクタと一致するか／X 280文字・Instagram 2200文字の上限／
-Instagram画像がJPEGで実在するか／投稿文のゲーム本数が実データ（`agent-data.js`）と一致するか。
+Instagram画像がJPEGで実在するか／投稿文のゲーム本数が実データ（`agent-data.js`）と一致するか／
+**正本（`marketing/social_*.md`）と実行用の写し（`post-social.js`）の文面が一致するか**／
+`marketing/` の旧資料にアーカイブ表示があるか。
 
 ローカルでも同じことができる:
 
@@ -90,8 +92,19 @@ node scripts/post-social.js instagram --dry-run
 ## 文面を変えるとき
 
 投稿文の**正本は `marketing/social_2026-08_x_instagram.md`**。
+コードブロックの中身が**そのまま投稿される文面**（改行も含む）。
 `scripts/post-social.js` の `X_POSTS` / `INSTAGRAM_POSTS` はその実行用の写しなので、**両方を直す**。
-変更後は必ず `--dry-run` で文字数（X: 280、Instagram: 2200）を確認すること。
+
+片方だけ直す事故は `verify-social-posts.mjs` の検査#6 が機械検出する（実際、英語パートと
+`#retrogaming` が写しから抜け落ちていたのをこの検査で発見した）。変更後は必ず:
+
+```bash
+node scripts/verify-social-posts.mjs                  # 正本と写しの一致・上限・画像の実在
+node scripts/post-social.js instagram --dry-run       # 実際に投稿される文面を目視
+```
+
+運用を終えたマーケ資料は**先頭にアーカイブ表示を入れる**（`marketing/portfolio_x_posts.md` 等）。
+入れ忘れると、古い数字のまま次のセッションが転記してしまう。
 
 ## 画像を作り直すとき
 
