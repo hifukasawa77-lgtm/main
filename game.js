@@ -1,18 +1,27 @@
 (() => {
   const $=s=>document.querySelector(s), saveKey='bakumatsu-fuunki-map-v1';
   const factions=[
-    {id:'bakufu',name:'徳川幕府',color:'#d26045',doctrine:'佐幕・開国',capital:'江戸城',hanron:5,kyoto:35,start:{gold:2120,troops:24000,modern:22,prestige:54,people:67}},
-    {id:'satsuma',name:'薩摩藩',color:'#e49d25',doctrine:'雄藩・現実派',capital:'鹿児島城',hanron:55,kyoto:20,start:{gold:1680,troops:11800,modern:35,prestige:44,people:65}},
-    {id:'choshu',name:'長州藩',color:'#61a77a',doctrine:'攘夷・改革派',capital:'萩城',hanron:85,kyoto:15,start:{gold:1260,troops:9200,modern:30,prestige:41,people:52}},
-    {id:'tosa',name:'土佐藩',color:'#9b6bcc',doctrine:'公議政体派',capital:'高知城',hanron:50,kyoto:20,start:{gold:970,troops:5900,modern:27,prestige:43,people:61}},
-    {id:'saga',name:'佐賀藩',color:'#39a5aa',doctrine:'技術・開明派',capital:'佐賀城',hanron:40,kyoto:10,start:{gold:1380,troops:6900,modern:43,prestige:37,people:66}},
-    {id:'mito',name:'水戸藩',color:'#699d56',doctrine:'尊王攘夷',capital:'水戸城',hanron:70,kyoto:25,start:{gold:920,troops:6700,modern:17,prestige:45,people:48}},
-    {id:'aizu',name:'会津藩',color:'#7397c8',doctrine:'佐幕・京都守護',capital:'若松城',hanron:5,kyoto:30,start:{gold:1040,troops:7600,modern:24,prestige:40,people:73}},
-    {id:'kuwana',name:'桑名藩',color:'#b36f9a',doctrine:'佐幕・精鋭',capital:'桑名城',hanron:10,kyoto:25,start:{gold:860,troops:5600,modern:25,prestige:35,people:68}},
-    {id:'shonai',name:'庄内藩',color:'#9b8253',doctrine:'佐幕・北国',capital:'鶴岡城',hanron:15,kyoto:5,start:{gold:740,troops:5200,modern:18,prestige:32,people:71}},
-    {id:'nagaoka',name:'長岡藩',color:'#c57145',doctrine:'中立・近代軍制',capital:'長岡城',hanron:35,kyoto:5,start:{gold:830,troops:4800,modern:36,prestige:34,people:64}},
-    {id:'fukui',name:'福井藩',color:'#829bd0',doctrine:'公議政体・改革',capital:'福井城',hanron:45,kyoto:25,start:{gold:1110,troops:6100,modern:34,prestige:47,people:69}}
+    {id:'bakufu',name:'徳川幕府',color:'#d26045',crest:'aoi',crestName:'三つ葉葵',doctrine:'佐幕・開国',capital:'江戸城',hanron:5,kyoto:35,start:{gold:2120,troops:24000,modern:22,prestige:54,people:67}},
+    {id:'satsuma',name:'薩摩藩',color:'#e49d25',crest:'shimazu',crestName:'丸に十の字',doctrine:'雄藩・現実派',capital:'鹿児島城',hanron:55,kyoto:20,start:{gold:1680,troops:11800,modern:35,prestige:44,people:65}},
+    {id:'choshu',name:'長州藩',color:'#61a77a',crest:'mori',crestName:'一文字三星',doctrine:'攘夷・改革派',capital:'萩城',hanron:85,kyoto:15,start:{gold:1260,troops:9200,modern:30,prestige:41,people:52}},
+    {id:'tosa',name:'土佐藩',color:'#9b6bcc',crest:'kashiwa',crestName:'丸に三つ柏',doctrine:'公議政体派',capital:'高知城',hanron:50,kyoto:20,start:{gold:970,troops:5900,modern:27,prestige:43,people:61}},
+    {id:'saga',name:'佐賀藩',color:'#39a5aa',crest:'nabeshima',crestName:'鍋島杏葉',doctrine:'技術・開明派',capital:'佐賀城',hanron:40,kyoto:10,start:{gold:1380,troops:6900,modern:43,prestige:37,people:66}},
+    {id:'mito',name:'水戸藩',color:'#699d56',crest:'aoi',crestName:'三つ葉葵',doctrine:'尊王攘夷',capital:'水戸城',hanron:70,kyoto:25,start:{gold:920,troops:6700,modern:17,prestige:45,people:48}},
+    {id:'aizu',name:'会津藩',color:'#7397c8',crest:'aoi',crestName:'三つ葉葵',doctrine:'佐幕・京都守護',capital:'若松城',hanron:5,kyoto:30,start:{gold:1040,troops:7600,modern:24,prestige:40,people:73}},
+    {id:'kuwana',name:'桑名藩',color:'#b36f9a',crest:'aoi',crestName:'三つ葉葵',doctrine:'佐幕・精鋭',capital:'桑名城',hanron:10,kyoto:25,start:{gold:860,troops:5600,modern:25,prestige:35,people:68}},
+    {id:'shonai',name:'庄内藩',color:'#9b8253',crest:'katabami',crestName:'丸に庄内片喰',doctrine:'佐幕・北国',capital:'鶴岡城',hanron:15,kyoto:5,start:{gold:740,troops:5200,modern:18,prestige:32,people:71}},
+    {id:'nagaoka',name:'長岡藩',color:'#c57145',crest:'kashiwa',crestName:'丸に三つ柏',doctrine:'中立・近代軍制',capital:'長岡城',hanron:35,kyoto:5,start:{gold:830,troops:4800,modern:36,prestige:34,people:64}},
+    {id:'fukui',name:'福井藩',color:'#829bd0',crest:'aoi',crestName:'三つ葉葵',doctrine:'公議政体・改革',capital:'福井城',hanron:45,kyoto:25,start:{gold:1110,troops:6100,modern:34,prestige:47,people:69}}
   ];
+  const KAMON={
+    aoi:'<circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor"><path d="M24 23C18 21 13 17 14 10c7-2 12 4 10 13Z"/><path d="M24 23C18 21 13 17 14 10c7-2 12 4 10 13Z" transform="rotate(120 24 24)"/><path d="M24 23C18 21 13 17 14 10c7-2 12 4 10 13Z" transform="rotate(240 24 24)"/><circle cx="24" cy="24" r="3"/></g>',
+    shimazu:'<circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 24h24M24 12v24" fill="none" stroke="currentColor" stroke-width="5"/>',
+    mori:'<circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor"><circle cx="14" cy="17" r="4.5"/><circle cx="24" cy="17" r="4.5"/><circle cx="34" cy="17" r="4.5"/><path d="M10 29h28v5H10z"/></g>',
+    kashiwa:'<circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor"><path d="M24 24C13 23 9 17 12 10c9-1 14 6 12 14Z"/><path d="M24 24C13 23 9 17 12 10c9-1 14 6 12 14Z" transform="rotate(120 24 24)"/><path d="M24 24C13 23 9 17 12 10c9-1 14 6 12 14Z" transform="rotate(240 24 24)"/><circle cx="24" cy="24" r="3"/></g>',
+    nabeshima:'<circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor"><path d="M24 8c-5 5-8 10-8 16s3 11 8 16c5-5 8-10 8-16S29 13 24 8Zm0 8c2 4 3 7 3 10s-1 6-3 9c-2-3-3-6-3-9s1-6 3-10Z" fill-rule="evenodd"/><path d="M9 24c5-5 10-8 15-8v7c-3 0-6 1-9 3 3 2 6 3 9 3v7c-5 0-10-3-15-8l4-2-4-2Zm30 0c-5-5-10-8-15-8v7c3 0 6 1 9 3-3 2-6 3-9 3v7c5 0 10-3 15-8l-4-2 4-2Z"/></g>',
+    katabami:'<circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor"><path d="M24 23C17 18 16 13 20 10c2-1 3 1 4 3 1-2 2-4 4-3 4 3 3 8-4 13Z"/><path d="M24 23C17 18 16 13 20 10c2-1 3 1 4 3 1-2 2-4 4-3 4 3 3 8-4 13Z" transform="rotate(120 24 24)"/><path d="M24 23C17 18 16 13 20 10c2-1 3 1 4 3 1-2 2-4 4-3 4 3 3 8-4 13Z" transform="rotate(240 24 24)"/><circle cx="24" cy="24" r="3"/></g>'
+  };
+  const kamonMarkup=type=>`<svg viewBox="0 0 48 48" aria-hidden="true">${KAMON[type]||KAMON.aoi}</svg>`;
   const HANRON_BANDS=[
     {max:25,name:'佐幕',en:'Pro-Shogunate'},
     {max:50,name:'公武合体',en:'Kobu Gattai'},
@@ -87,7 +96,7 @@
   function owner(r){return state.control[r.id]||r.owner} function isMine(r){return owner(r)===state.faction} function current(){return faction(state.faction)}
   const chosenScenario=()=>scenarios.find(s=>s.id===state.scenario)||scenarios[0];
   function setup(id,diffId){const f=faction(id),s=chosenScenario(),years=s.year-1853,d=DIFFICULTIES.find(x=>x.id===diffId)||DIFFICULTIES[1];Object.assign(state,{faction:id,difficulty:d.id,year:s.year,month:s.month,turn:1,selected:id==='aizu'?'tohoku':id==='bakufu'?'edo':id,control:{},gameOver:false,gold:Math.round((f.start.gold+years*90)*d.startMul),troops:Math.round((f.start.troops+years*240)*d.startMul),modern:clamp(f.start.modern+years*2),prestige:clamp(f.start.prestige+years),people:f.start.people,hanron:f.hanron,kyotoInfluence:f.kyoto,kyotoTriumph:false,foreignDependency:0,foreignBacklash:false,blackshipsChoice:null,recruitedRyoma:false,treatyChoice:null,resistedTaisei:false,log:[]});log(`${s.title}。${s.copy}`,'event');log(`難易度「${d.name}」で開始した。`,'');$('#start-dialog').close();render();if(s.id==='blackships')showBlackshipsChoice()}
-  function renderHud(){const f=current(),playing=Boolean(state.faction);document.documentElement.style.setProperty('--clan',f.color);$('#clan-mark').style.background=f.color;$('#faction-label').textContent=playing?f.name:'勢力を選択';$('#date-label').textContent=playing?date():'シナリオを選択してください';$('#treasury-label').textContent=playing?state.gold.toLocaleString():'—';$('#military-label').textContent=playing?(state.troops/10000).toFixed(1)+'千':'—';$('#modernization-label').textContent=playing?state.modern:'—';$('#influence-label').textContent=playing?state.prestige:'—';$('#stability-label').textContent=playing?state.people:'—';$('#hanron-label').textContent=playing?hanronBand(state.hanron).name:'—';$('#hanron-sub').textContent=playing?`(${state.hanron})`:''}
+  function renderHud(){const f=current(),playing=Boolean(state.faction),mark=$('#clan-mark');document.documentElement.style.setProperty('--clan',f.color);mark.innerHTML=kamonMarkup(f.crest);mark.setAttribute('aria-label',playing?`${f.name}の家紋・${f.crestName}`:'家紋');mark.title=playing?`${f.name}・${f.crestName}`:'家紋';$('#faction-label').textContent=playing?f.name:'勢力を選択';$('#date-label').textContent=playing?date():'シナリオを選択してください';$('#treasury-label').textContent=playing?state.gold.toLocaleString():'—';$('#military-label').textContent=playing?(state.troops/10000).toFixed(1)+'千':'—';$('#modernization-label').textContent=playing?state.modern:'—';$('#influence-label').textContent=playing?state.prestige:'—';$('#stability-label').textContent=playing?state.people:'—';$('#hanron-label').textContent=playing?hanronBand(state.hanron).name:'—';$('#hanron-sub').textContent=playing?`(${state.hanron})`:''}
   const MAP_IMAGE={width:1672,height:941};
   // 地図の敷き方。bakumatsu.css の .strategic-map の background-size / position と
   // 必ず同じ値にすること（片方だけ直すと拠点だけが無言で地図から浮く）。
