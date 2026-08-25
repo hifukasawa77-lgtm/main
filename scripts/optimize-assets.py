@@ -18,6 +18,14 @@ WebP へ変えるだけで解像度を落とさずに大幅に縮む（戦国風
     python3 scripts/optimize-assets.py --dir assets/black-fang --dry-run
     python3 scripts/optimize-assets.py --dir assets/black-fang
     python3 scripts/optimize-assets.py --dir assets/sanguo --quality 82
+    python3 scripts/optimize-assets.py --dir assets/sengoku/gpt --only png   # JPEGは触らない
+    python3 scripts/optimize-assets.py --dir assets --only png --no-recurse  # 直下だけ
+
+除外すべきもの:
+  * `assets/marketing/ig-*.jpg` — Instagram Graph API は JPEG しか受け付けない
+  * `assets/og/*` — OGP画像。SNS側のWebP対応が不安定
+  * `assets/maps/strategic-japan.png` — `scripts/verify-bakumatsu-map.mjs` がパスを直書きで参照
+  いずれも `--only png` や対象ディレクトリの選び方で避けること。
 """
 import argparse
 import os
@@ -76,16 +84,28 @@ def main():
     ap.add_argument("--quality", type=int, default=90)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--keep-original", action="store_true")
+    ap.add_argument("--only", default="png,jpg,jpeg",
+                    help="変換する拡張子（既定: png,jpg,jpeg）。"
+                         "OGP画像やInstagram用JPEGを触りたくないときは --only png を使う")
+    ap.add_argument("--no-recurse", action="store_true",
+                    help="直下のファイルだけを対象にする（サブディレクトリへ降りない）")
     args = ap.parse_args()
     os.chdir(ROOT)
     target = args.dir.rstrip("/")
     if not os.path.isdir(target):
         sys.exit(f"ディレクトリが無い: {target}")
 
+    wanted = {f".{e.strip().lstrip('.').lower()}" for e in args.only.split(",") if e.strip()}
+    unknown = wanted - CONVERTIBLE
+    if unknown:
+        sys.exit(f"--only に変換できない拡張子: {', '.join(sorted(unknown))}")
+
     targets = []
-    for base, _, files in os.walk(target):
+    for base, dirs, files in os.walk(target):
+        if args.no_recurse:
+            dirs[:] = []
         for f in files:
-            if os.path.splitext(f)[1].lower() in CONVERTIBLE:
+            if os.path.splitext(f)[1].lower() in wanted:
                 targets.append(os.path.join(base, f))
     targets.sort()
     print(f"対象: {target}  {len(targets)}枚")
