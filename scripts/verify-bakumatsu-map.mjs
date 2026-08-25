@@ -4,11 +4,13 @@
  *
  * ★ 拠点のずれは例外もエラーも出さない。「起動して例外0件」の検査は素通りするので、
  *   実際に描かれた拠点の画面座標を地図画像へ逆写像して陸/海を確かめるところまでやる。
- * ★ 地図の切り取り位置は CSS の background-position と game.js の MAP_FOCUS の
+ * ★ 地図の敷き方は CSS の background-size / position と game.js の MAP_FIT / MAP_FOCUS の
  *   二箇所にある。片方だけ直すと拠点だけが無言で地図から浮くので、一致を機械検査する。
+ * ★ map-stage は画面サイズで縦横比が 0.9〜1.5 まで動く。cover にすると横が最大48%
+ *   切り取られ、どんな background-position を選んでも九州が枠外へ出る（検査#5が落ちる）。
  *
  * 検査:
- *   1. game.js の MAP_FOCUS と bakumatsu.css の background-position が一致するか
+ *   1. game.js の MAP_FIT / MAP_FOCUS と bakumatsu.css の background-size / position が一致するか
  *   2. 全拠点が地図画像の陸に載っているか（絵地図の陸/海判定はブロック平均で行う）
  *   3. 港（kind:'港'）は海に接しているか
  *   4. 実際にページを開いて描かれた拠点の画面座標が、上と同じ陸判定を通るか
@@ -56,20 +58,29 @@ const regions = [...regionsSrc[1].matchAll(
   .map(m => ({ id: m[1], name: m[2], x: +m[3], y: +m[4], kind: m[5] }));
 if (regions.length === 0) { console.error('✗ 拠点を1件も読み取れない'); process.exit(1); }
 
-/* ---- 検査1: MAP_FOCUS と background-position の一致 ---- */
-const focusM = gameJs.match(/const MAP_FOCUS=\{x:([\d.]+),y:([\d.]+)\}/);
+/* ---- 検査1: MAP_FIT / MAP_FOCUS と background-size / position の一致 ---- */
+const fitM = gameJs.match(/const MAP_FIT='(contain|cover)'/);
+const focusM = gameJs.match(/MAP_FOCUS=\{x:([\d.]+),y:([\d.]+)\}/);
+if (!fitM) fail("game.js に MAP_FIT がない");
 if (!focusM) fail('game.js に MAP_FOCUS がない');
+const fitMode = fitM ? fitM[1] : 'cover';
 const focus = focusM ? { x: +focusM[1], y: +focusM[2] } : { x: 0.5, y: 0.5 };
-const bgM = css.match(/url\('assets\/maps\/strategic-japan\.png'\)\s*([^;]*?)\/cover/);
+// 例: background: #081b20 url("assets/maps/strategic-japan.png") center / contain no-repeat;
+const bgM = css.match(/url\(["']?assets\/maps\/strategic-japan\.png["']?\)([^;]*)/);
 if (!bgM) fail('bakumatsu.css の .strategic-map の背景指定を読み取れない');
 if (bgM) {
-  const pos = bgM[1].trim();                       // 例: "38% center"
-  const [px = 'center', py = 'center'] = pos.split(/\s+/);
+  const rest = bgM[1].replace(/no-repeat|fixed|scroll|local|border-box|padding-box|content-box/g, '').trim();
+  const [posPart, sizePart = ''] = rest.split('/');
+  const cssFit = sizePart.trim() || 'auto';
+  const [px = 'center', py = 'center'] = posPart.trim().split(/\s+/).filter(Boolean);
   const toRatio = v => v === 'center' ? 0.5 : v === 'left' || v === 'top' ? 0
     : v === 'right' || v === 'bottom' ? 1 : /%$/.test(v) ? parseFloat(v) / 100 : NaN;
   const cssFocus = { x: toRatio(px), y: toRatio(py) };
+  if (cssFit !== fitMode)
+    fail(`敷き方の不一致: CSS の background-size は ${cssFit} だが `
+       + `game.js の MAP_FIT は ${fitMode} — 拠点だけ地図から浮く`);
   if (!(Math.abs(cssFocus.x - focus.x) < 1e-6 && Math.abs(cssFocus.y - focus.y) < 1e-6))
-    fail(`切り取り位置の不一致: CSS は ${pos}（${cssFocus.x}, ${cssFocus.y}）だが `
+    fail(`切り取り位置の不一致: CSS は ${posPart.trim()}（${cssFocus.x}, ${cssFocus.y}）だが `
        + `game.js の MAP_FOCUS は (${focus.x}, ${focus.y}) — 拠点だけ地図から浮く`);
 }
 
@@ -162,12 +173,13 @@ const drawn = await page.evaluate(() => {
   const mr = map.getBoundingClientRect();
   return {
     map: { w: map.clientWidth, h: map.clientHeight },
+    // .node は transform:translate(-50%,-50%) で投影点に中心が乗る。矩形の中心＝投影点。
+    // マーカー i の位置ではなく矩形中心を使う（UI改修でラベル構成が変わっても壊れない）。
     nodes: [...map.querySelectorAll('.node')].map(n => {
       const r = n.getBoundingClientRect();
-      const mark = n.querySelector('i').getBoundingClientRect();
       return {
         name: n.querySelector('span').firstChild.textContent,
-        markX: mark.left + mark.width / 2 - mr.left, markY: mark.top + mark.height / 2 - mr.top,
+        anchorX: r.left + r.width / 2 - mr.left, anchorY: r.top + r.height / 2 - mr.top,
         left: r.left - mr.left, top: r.top - mr.top, right: r.right - mr.left, bottom: r.bottom - mr.top,
       };
     }),
@@ -180,11 +192,12 @@ if (pageErrors.length) fail(`ページ読み込みで異常: ${pageErrors.slice(
 if (drawn.nodes.length !== regions.length)
   fail(`描かれた拠点が ${drawn.nodes.length} 件（データは ${regions.length} 件）`);
 
-// 画面座標 → 地図画像座標へ逆写像（projectPoint の逆。CSS の cover と同じ）
-const scale = Math.max(drawn.map.w / MAP_W, drawn.map.h / MAP_H);
+// 画面座標 → 地図画像座標へ逆写像（projectPoint の逆。CSS の background-size と同じ敷き方）
+const fitFn = fitMode === 'contain' ? Math.min : Math.max;
+const scale = fitFn(drawn.map.w / MAP_W, drawn.map.h / MAP_H);
 const rw = MAP_W * scale, rh = MAP_H * scale;
 const ox = (drawn.map.w - rw) * focus.x, oy = (drawn.map.h - rh) * focus.y;
-const back = drawn.nodes.map(n => ({ x: (n.markX - ox) / scale, y: (n.markY - oy) / scale }));
+const back = drawn.nodes.map(n => ({ x: (n.anchorX - ox) / scale, y: (n.anchorY - oy) / scale }));
 
 const probe2 = await (await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH
@@ -213,9 +226,9 @@ for (let i = 0; i < drawn.nodes.length; i++)
   }
 
 /* ================= 報告 ================= */
-console.log(`拠点 ${regions.length}件 — 切り取り位置 MAP_FOCUS(${focus.x}, ${focus.y})`);
-console.log(`表示領域 ${drawn.map.w}×${drawn.map.h}px / 地図の可視範囲 `
-  + `x ${((-ox) / rw * 100).toFixed(1)}%〜${((drawn.map.w - ox) / rw * 100).toFixed(1)}%`);
+console.log(`拠点 ${regions.length}件 — 敷き方 ${fitMode} / MAP_FOCUS(${focus.x}, ${focus.y})`);
+console.log(`表示領域 ${drawn.map.w}×${drawn.map.h}px / 地図の描画域 ${rw.toFixed(0)}×${rh.toFixed(0)}px / `
+  + `可視範囲 x ${Math.max(0, -ox / rw * 100).toFixed(1)}%〜${Math.min(100, (drawn.map.w - ox) / rw * 100).toFixed(1)}%`);
 if (dataRes) console.log('陸率: ' + regions.map((r, i) => `${r.name}${dataRes[i].landRatio.toFixed(2)}`).join(' '));
 for (const w of warns) console.log(`⚠ ${w}`);
 if (fails.length) {
