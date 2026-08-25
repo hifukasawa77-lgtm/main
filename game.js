@@ -51,23 +51,24 @@
     {id:'hard',name:'難しい',en:'Hard',copy:'乏しい国力のまま、民心の荒れも増す。上級者向け。',startMul:0.8,badMul:1.35}
   ];
   const state={scenario:'blackships',faction:null,difficulty:'normal',year:1853,month:7,turn:1,selected:'edo',gold:0,troops:0,modern:0,prestige:0,people:0,hanron:50,kyotoInfluence:0,kyotoTriumph:false,foreignDependency:0,foreignBacklash:false,blackshipsChoice:null,recruitedRyoma:false,treatyChoice:null,resistedTaisei:false,log:[],control:{},gameOver:false};
-  // Coordinates are percentages of the source map image (1672 × 941), not the
-  // cropped viewport. projectPoint() applies the same cover transform as CSS.
+  // 座標は元画像（1672 × 941）に対する百分率。表示領域の切り取り後ではない。
+  // projectPoint() が CSS と同じ cover 変換（MAP_FOCUS の位置合わせ込み）を掛ける。
+  // 値の正しさは node scripts/verify-bakumatsu-map.mjs が地図画像の陸判定で機械検査する。
   const regions=[
-    {id:'ezo',name:'箱館',area:'蝦夷地',x:76.3,y:27.0,owner:'bakufu',asset:'箱館港',kind:'港',power:52,note:'北方の玄関口。海軍と外国船の影が交錯する。'},
-    {id:'shonai',name:'鶴岡',area:'庄内',x:60.7,y:38.5,owner:'shonai',asset:'鶴岡城',kind:'城',power:50,note:'日本海に面する北国の藩。結束の強い藩士団を抱える。'},
-    {id:'tohoku',name:'若松',area:'会津',x:64.0,y:45.5,owner:'aizu',asset:'鶴ヶ城',kind:'城',power:61,note:'奥羽の要衝。会津武士の忠節は京の秩序を支える。'},
-    {id:'nagaoka',name:'長岡',area:'越後',x:58.0,y:48.5,owner:'nagaoka',asset:'長岡城',kind:'城',power:54,note:'近代兵器と機動戦に活路を見いだす雪国の雄藩。'},
-    {id:'echigo',name:'新潟',area:'越後',x:60.0,y:44.5,owner:'bakufu',asset:'新潟港',kind:'港',power:48,note:'日本海交易の要。海路を制する者が情報を制する。'},
-    {id:'fukui',name:'福井',area:'越前',x:47.0,y:56.0,owner:'fukui',asset:'福井城',kind:'城',power:53,note:'松平春嶽のもと、改革と公議政体を模索する。'},
-    {id:'mito',name:'水戸',area:'常陸',x:67.5,y:49.0,owner:'mito',asset:'水戸城',kind:'城',power:50,note:'尊王攘夷の思想が、関東の政局を揺さぶる。'},
-    {id:'edo',name:'江戸',area:'武蔵',x:64.5,y:55.5,owner:'bakufu',asset:'江戸城',kind:'城',power:85,note:'将軍家の本拠。全国の政局がここから動く。'},
-    {id:'kyoto',name:'京都',area:'山城',x:45.5,y:61.0,owner:'neutral',asset:'京都御所',kind:'御所',power:72,note:'勅許と朝廷工作が、国家の正統性を左右する。'},
-    {id:'kuwana',name:'桑名',area:'伊勢',x:50.5,y:59.5,owner:'kuwana',asset:'桑名城',kind:'城',power:48,note:'京畿に近い佐幕の要。精強な藩兵が幕府を支える。'},
-    {id:'choshu',name:'萩',area:'長州',x:31.5,y:62.5,owner:'choshu',asset:'萩城下',kind:'城',power:59,note:'西国の雄藩。軍制改革の熱が藩内を走る。'},
-    {id:'tosa',name:'高知',area:'土佐',x:35.0,y:76.5,owner:'tosa',asset:'高知城',kind:'城',power:47,note:'海援隊と志士たちが新しい国家像を語る。'},
-    {id:'saga',name:'佐賀',area:'肥前',x:20.0,y:69.5,owner:'saga',asset:'佐賀城',kind:'城',power:56,note:'反射炉と精錬方を擁する、技術先進の雄藩。'},
-    {id:'satsuma',name:'鹿児島',area:'薩摩',x:18.0,y:83.0,owner:'satsuma',asset:'鹿児島城下',kind:'城',power:67,note:'豊かな財政と対外交易を持つ西南の大藩。'}
+    {id:'ezo',name:'箱館',area:'蝦夷地',x:70.0,y:26.5,owner:'bakufu',asset:'箱館港',kind:'港',power:52,note:'北方の玄関口。海軍と外国船の影が交錯する。'},
+    {id:'shonai',name:'鶴岡',area:'庄内',x:67.5,y:42.0,owner:'shonai',asset:'鶴岡城',kind:'城',power:50,note:'日本海に面する北国の藩。結束の強い藩士団を抱える。'},
+    {id:'tohoku',name:'若松',area:'会津',x:66.5,y:50.5,owner:'aizu',asset:'鶴ヶ城',kind:'城',power:61,note:'奥羽の要衝。会津武士の忠節は京の秩序を支える。'},
+    {id:'nagaoka',name:'長岡',area:'越後',x:57.5,y:51.5,owner:'nagaoka',asset:'長岡城',kind:'城',power:54,note:'近代兵器と機動戦に活路を見いだす雪国の雄藩。'},
+    {id:'echigo',name:'新潟',area:'越後',x:60.5,y:46.5,owner:'bakufu',asset:'新潟港',kind:'港',power:48,note:'日本海交易の要。海路を制する者が情報を制する。'},
+    {id:'fukui',name:'福井',area:'越前',x:46.5,y:57.5,owner:'fukui',asset:'福井城',kind:'城',power:53,note:'松平春嶽のもと、改革と公議政体を模索する。'},
+    {id:'mito',name:'水戸',area:'常陸',x:72.0,y:58.0,owner:'mito',asset:'水戸城',kind:'城',power:50,note:'尊王攘夷の思想が、関東の政局を揺さぶる。'},
+    {id:'edo',name:'江戸',area:'武蔵',x:64.0,y:63.0,owner:'bakufu',asset:'江戸城',kind:'城',power:85,note:'将軍家の本拠。全国の政局がここから動く。'},
+    {id:'kyoto',name:'京都',area:'山城',x:43.5,y:62.5,owner:'neutral',asset:'京都御所',kind:'御所',power:72,note:'勅許と朝廷工作が、国家の正統性を左右する。'},
+    {id:'kuwana',name:'桑名',area:'伊勢',x:50.5,y:66.0,owner:'kuwana',asset:'桑名城',kind:'城',power:48,note:'京畿に近い佐幕の要。精強な藩兵が幕府を支える。'},
+    {id:'choshu',name:'萩',area:'長州',x:22.5,y:63.0,owner:'choshu',asset:'萩城下',kind:'城',power:59,note:'西国の雄藩。軍制改革の熱が藩内を走る。'},
+    {id:'tosa',name:'高知',area:'土佐',x:28.5,y:75.5,owner:'tosa',asset:'高知城',kind:'城',power:47,note:'海援隊と志士たちが新しい国家像を語る。'},
+    {id:'saga',name:'佐賀',area:'肥前',x:13.0,y:69.0,owner:'saga',asset:'佐賀城',kind:'城',power:56,note:'反射炉と精錬方を擁する、技術先進の雄藩。'},
+    {id:'satsuma',name:'鹿児島',area:'薩摩',x:12.5,y:83.0,owner:'satsuma',asset:'鹿児島城下',kind:'城',power:67,note:'豊かな財政と対外交易を持つ西南の大藩。'}
   ];
   const events=[{y:1853,m:7,t:'黒船来航',d:'浦賀沖に異国船が現れた。幕末の嵐が始まる。',e:{people:-4,prestige:2}},{y:1854,m:3,t:'日米和親条約',d:'開国の扉が開かれ、国内の思想対立が強まる。',branch:()=>showTreatyChoice()},{y:1860,m:3,t:'桜田門外の変',d:'大老の横死により、幕府の権威は揺らいだ。',e:{prestige:-6,people:-9,hanron:6}},{y:1863,m:8,t:'八月十八日の政変',d:'京都の政局が大きく動く。',dynamic:()=>state.hanron>=50?{effect:{prestige:-8,people:-6,hanron:-4},text:'尊攘急進派として、御所からの締め出しを受けた。京の政局から遠ざけられる。'}:{effect:{prestige:10,people:2,hanron:-6},text:'会津・薩摩と結び、政変を主導した。京の実権を掌握する。'}},{y:1866,m:3,t:'薩長同盟',d:'西国の二藩が密約を結んだ。',e:{prestige:6,modern:4,hanron:10}},{y:1867,m:10,t:'大政奉還',d:'政権返上をめぐり、新時代への扉が開かれる。',branch:()=>showTaiseiChoice()},{y:1868,m:1,t:'鳥羽・伏見の戦い',d:'京で火蓋が切られ、内戦が始まった。',e:{troops:-1200,people:-12,hanron:8}}];
   const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,n)); const faction=id=>factions.find(x=>x.id===id)||{name:'朝廷・中立',color:'#a5a5a5',doctrine:'朝廷領'}; const region=id=>regions.find(x=>x.id===id); const date=()=>`${era[state.year]}年 ${state.month}月・第${state.turn}月`; const difficulty=()=>DIFFICULTIES.find(d=>d.id===state.difficulty)||DIFFICULTIES[1];
@@ -77,7 +78,12 @@
   function setup(id,diffId){const f=faction(id),s=chosenScenario(),years=s.year-1853,d=DIFFICULTIES.find(x=>x.id===diffId)||DIFFICULTIES[1];Object.assign(state,{faction:id,difficulty:d.id,year:s.year,month:s.month,turn:1,selected:id==='aizu'?'tohoku':id==='bakufu'?'edo':id,control:{},gameOver:false,gold:Math.round((f.start.gold+years*90)*d.startMul),troops:Math.round((f.start.troops+years*240)*d.startMul),modern:clamp(f.start.modern+years*2),prestige:clamp(f.start.prestige+years),people:f.start.people,hanron:f.hanron,kyotoInfluence:f.kyoto,kyotoTriumph:false,foreignDependency:0,foreignBacklash:false,blackshipsChoice:null,recruitedRyoma:false,treatyChoice:null,resistedTaisei:false,log:[]});log(`${s.title}。${s.copy}`,'event');log(`難易度「${d.name}」で開始した。`,'');$('#start-dialog').close();render();if(s.id==='blackships')showBlackshipsChoice()}
   function renderHud(){const f=current(),playing=Boolean(state.faction);document.documentElement.style.setProperty('--clan',f.color);$('#clan-mark').style.background=f.color;$('#faction-label').textContent=playing?f.name:'勢力を選択';$('#date-label').textContent=playing?date():'シナリオを選択してください';$('#treasury-label').textContent=playing?state.gold.toLocaleString():'—';$('#military-label').textContent=playing?(state.troops/10000).toFixed(1)+'千':'—';$('#modernization-label').textContent=playing?state.modern:'—';$('#influence-label').textContent=playing?state.prestige:'—';$('#stability-label').textContent=playing?state.people:'—';$('#hanron-label').textContent=playing?hanronBand(state.hanron).name:'—';$('#hanron-sub').textContent=playing?`(${state.hanron})`:''}
   const MAP_IMAGE={width:1672,height:941};
-  function projectPoint(point,map){const width=map.clientWidth,height=map.clientHeight,scale=Math.max(width/MAP_IMAGE.width,height/MAP_IMAGE.height),renderedWidth=MAP_IMAGE.width*scale,renderedHeight=MAP_IMAGE.height*scale;return{x:(width-renderedWidth)/2+(point.x/100)*renderedWidth,y:(height-renderedHeight)/2+(point.y/100)*renderedHeight}}
+  // 地図の敷き方。bakumatsu.css の .strategic-map の background-size / position と
+  // 必ず同じ値にすること（片方だけ直すと拠点だけが無言で地図から浮く）。
+  // contain 固定: map-stage の縦横比は画面サイズで 0.9〜1.5 まで動くので、cover だと
+  // 横が最大48%切り取られて九州（佐賀・鹿児島）が枠外へ出る。全拠点を必ず見せる方を採る。
+  const MAP_FIT='contain', MAP_FOCUS={x:0.5,y:0.5};
+  function projectPoint(point,map){const width=map.clientWidth,height=map.clientHeight,fit=MAP_FIT==='contain'?Math.min:Math.max,scale=fit(width/MAP_IMAGE.width,height/MAP_IMAGE.height),renderedWidth=MAP_IMAGE.width*scale,renderedHeight=MAP_IMAGE.height*scale;return{x:(width-renderedWidth)*MAP_FOCUS.x+(point.x/100)*renderedWidth,y:(height-renderedHeight)*MAP_FOCUS.y+(point.y/100)*renderedHeight}}
   function route(a,b,map){const start=projectPoint(a,map),end=projectPoint(b,map),dx=end.x-start.x,dy=end.y-start.y,len=Math.hypot(dx,dy);return `<i class="route" style="left:${start.x}px;top:${start.y}px;width:${len}px;transform:rotate(${Math.atan2(dy,dx)*180/Math.PI}deg)"></i>`}
   function renderMap(){const map=$('#map');map.innerHTML=route(regions[0],regions[1],map)+route(regions[1],regions[2],map)+route(regions[2],regions[3],map)+route(regions[3],regions[4],map)+route(regions[4],regions[5],map)+route(regions[4],regions[6],map)+route(regions[5],regions[7],map);regions.forEach(r=>{const f=faction(owner(r)),point=projectPoint(r,map);const b=document.createElement('button');b.className='node '+(state.selected===r.id?'active':'');b.style.cssText=`left:${point.x}px;top:${point.y}px;--owner:${f.color}`;b.innerHTML=`<i></i><span>${r.name}<small class="port"> ${r.kind}</small></span>`;b.onclick=()=>{state.selected=r.id;render();};map.append(b)})}
   function renderLocation(){if(!state.faction){$('#location-panel').innerHTML='<p class="empty">勢力を選んでください。</p>';return}const r=region(state.selected),f=faction(owner(r)),mine=isMine(r),isKyoto=r.id==='kyoto',img=r.kind==='港'?'assets/battles/naval-battle.png':r.id==='tohoku'?'assets/battles/siege-battle.png':'assets/battles/field-battle.png';const kyotoNote=isKyoto?`<p class="side-note">朝廷への影響力: <b style="color:var(--gold)">${state.kyotoInfluence}</b>/100（${kyotoTier(state.kyotoInfluence).name}）</p>`:'';$('#location-panel').innerHTML=`<img class="side-image" src="${img}" alt="${r.name}"><h1 class="side-title">${r.name}</h1><div class="side-owner"><i style="--owner:${f.color}"></i>${f.name}　${r.area}</div><p class="side-note">${r.note}</p>${kyotoNote}<div class="command-row">${isKyoto?'<button data-command="kyoto" class="wide">朝廷工作</button>':''}<button data-command="${mine?'domestic':'negotiate'}">${mine?'内政':'交渉'}</button><button data-command="${mine?'march':'invade'}">${mine?'出陣':'侵攻'}</button></div>`;document.querySelectorAll('[data-command]').forEach(b=>b.onclick=()=>openCommand(b.dataset.command))}
