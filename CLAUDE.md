@@ -44,7 +44,14 @@ python3 scripts/optimize-assets.py --dir assets --only png --no-recurse # 直下
 python3 scripts/optimize-assets.py --dir assets/<game>            # 変換＋参照書換＋元削除
 python3 scripts/fix-webp-refs.py                                  # 取りこぼした参照を修復
 node scripts/verify-game-assets.mjs                               # 全ページで404・例外を検査（必須）
+node scripts/verify-asset-format.mjs                              # WebP方針から外れた画像がないか
 ```
+
+**方針は検査で守る**。2026-08-02 にWebP化したのに3週間でPNGが235枚・384MB戻り、assets が
+587MBまで膨らんだ（2026-08-25 再変換）。CLAUDE.mdに書いてあっても、守れているかを確かめる
+手段が無ければ誰も気づかない。`verify-asset-format.mjs` が assets 全体と「今回持ち込む分」の
+両方を見る（release-check の検査#9 に組み込み済み）。**新規アセットは git add 前＝未追跡**
+なので、未追跡ファイルも対象にしている。
 
 - **解像度は変えない**。`drawImage` の source-rect を画素値で直書きしている描画があると、
   縮小した瞬間に矩形が画像外へ出て**無言で絵が消える**（404もエラーも出ない）
