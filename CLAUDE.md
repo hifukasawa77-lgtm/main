@@ -9,6 +9,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
+- `intl-call-blocker/` — 国際電話ブロック（Android / Kotlin）。着信は `CallScreeningService`、発信は `CallRedirectionService` で遮断。判定ロジックは Android 非依存の `core` モジュールに分離してあり `./verify-core.sh` で Android SDK 無しにテストできる（詳細: `intl-call-blocker/README.md`）
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。`obsidian-vault/`（第二の脳）とは別物。使い分けは「Obsidian メモリ層（Claudechord Vault）」節の早見表を参照。詳細: `claudechord-vault/README.md`）
 
 ## デザイン・スタイルのルール
