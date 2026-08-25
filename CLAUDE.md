@@ -473,6 +473,9 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 ```
 
 ## 注意事項
+- **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。
+  `--depth 1 --filter=blob:none --sparse` で18MBまで落ち、触るゲームのassetsだけ後から足せる。
+  手順とスクリプト: `docs/クローンを軽くする.md` / `scripts/slim-clone.ps1`
 - `.edge-test-profile/` はMicrosoft Edgeのブラウザデータ。gitignoreすること
 - `shogi_rpg_enhanced.jsx` はJSX形式だがビルド環境なし。取り扱い注意
 
