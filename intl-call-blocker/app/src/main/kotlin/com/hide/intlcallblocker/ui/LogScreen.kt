@@ -68,6 +68,14 @@ fun LogScreen(repository: ScreeningRepository) {
                     Text(
                         "まだ記録がありません。\nNothing recorded yet.",
                         style = MaterialTheme.typography.bodyMedium,
+                        color = AppColors.OnBackground,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "普段の国内通話はここには出ません（端末の通話履歴と重複するうえ、" +
+                            "遮断の記録を押し出してしまうため）。\n" +
+                            "Ordinary domestic calls are not listed here.",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = AppColors.Muted,
                     )
                 }
@@ -81,8 +89,10 @@ fun LogScreen(repository: ScreeningRepository) {
         item {
             Spacer(Modifier.height(8.dp))
             Text(
-                "記録は最新 ${ScreeningRepository.MAX_LOG_ENTRIES} 件まで保持します。\n" +
-                    "Only the most recent ${ScreeningRepository.MAX_LOG_ENTRIES} entries are kept.",
+                "記録するのは「遮断したもの」と「許可リストで通した国際通話」だけです。" +
+                    "最新 ${ScreeningRepository.MAX_LOG_ENTRIES} 件まで保持します。\n" +
+                    "Only blocked calls and allow-listed international calls are recorded " +
+                    "(most recent ${ScreeningRepository.MAX_LOG_ENTRIES}).",
                 style = MaterialTheme.typography.bodyMedium,
                 color = AppColors.Muted,
             )

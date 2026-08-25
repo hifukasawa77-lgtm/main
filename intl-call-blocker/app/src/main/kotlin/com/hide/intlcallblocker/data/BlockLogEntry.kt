@@ -4,6 +4,7 @@ import com.hide.intlcallblocker.core.CallDecision
 import com.hide.intlcallblocker.core.CallDirection
 import com.hide.intlcallblocker.core.CallOrigin
 import com.hide.intlcallblocker.core.DecisionReason
+import com.hide.intlcallblocker.core.isNoteworthy
 import org.json.JSONObject
 
 /**
@@ -22,6 +23,9 @@ data class BlockLogEntry(
     val countryCode: String?,
     val matchedRule: String?,
 ) {
+    /** 記録に残す価値がある行か。規則は core の [isNoteworthy] に一本化してある。 */
+    val noteworthy: Boolean get() = isNoteworthy(blocked, reason)
+
     fun toJson(): JSONObject = JSONObject().apply {
         put(KEY_TIME, timestampMillis)
         put(KEY_NUMBER, e164 ?: JSONObject.NULL)

@@ -125,9 +125,15 @@ class ScreeningRepository private constructor(context: Context) {
 
     // ------------------------------------------------------------------ ログ
 
-    /** ログを 1 行追加する。上限を超えた古い行は捨てる。 */
+    /**
+     * ログを 1 行追加する。上限を超えた古い行は捨てる。
+     *
+     * 記録に値しない結論（普段の国内通話）は捨てる。全件残すと上限が国内通話で
+     * 埋まり、肝心の遮断記録が押し出されて消えるため（判断は
+     * [com.hide.intlcallblocker.core.CallDecision.isNoteworthy]）。
+     */
     fun record(entry: BlockLogEntry) {
-        if (!_policy.value.recordLog) return
+        if (!_policy.value.recordLog || !entry.noteworthy) return
         val next = (listOf(entry) + _log.value).take(MAX_LOG_ENTRIES)
         _log.value = next
         val array = JSONArray()

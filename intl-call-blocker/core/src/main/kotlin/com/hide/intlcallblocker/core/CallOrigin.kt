@@ -79,4 +79,23 @@ data class CallDecision(
     val matchedRule: String? = null,
 ) {
     val isBlocked: Boolean get() = action == CallAction.BLOCK
+
+    /** 記録に残す価値がある結論か。規則は [isNoteworthy] を参照。 */
+    val isNoteworthy: Boolean get() = isNoteworthy(isBlocked, reason)
 }
+
+/**
+ * 記録に残す価値がある結論か / Whether a verdict is worth logging.
+ *
+ * 着信スクリーニングは**すべての着信**で呼ばれるため、素直に全件記録すると
+ * 普段の国内通話でログの上限が埋まり、肝心の遮断記録が押し出されて消える。
+ * 端末の通話履歴と重複するだけの国内通話は残さず、次の 2 つに絞る。
+ *
+ * - 遮断したもの（何を止めたのか分からないと誤遮断に気づけない）
+ * - 許可リストで通した国際通話（例外が意図どおり効いたかを確かめられる）
+ *
+ * 判定結果（[CallDecision]）と保存済みログ行の両方から参照するため、
+ * 規則そのものはここ 1 箇所に置く。2 箇所に書くと必ず片方だけ変わる。
+ */
+fun isNoteworthy(blocked: Boolean, reason: DecisionReason): Boolean =
+    blocked || reason == DecisionReason.ALLOW_LIST_MATCH

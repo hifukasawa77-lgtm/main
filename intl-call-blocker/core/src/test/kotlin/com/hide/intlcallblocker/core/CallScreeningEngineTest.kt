@@ -241,6 +241,35 @@ class CallScreeningEngineTest {
 
     // ------------------------------------------------------------- 設定
 
+    // ------------------------------------------------------ 記録の絞り込み
+
+    @Test
+    fun `遮断と許可リスト通過だけを記録対象にする`() {
+        val e = engine(allow = listOf(AllowRule("+12025550143")))
+
+        // 遮断したもの → 残す
+        assertTrue(incoming(e, "+8613800138000").isNoteworthy)
+        assertTrue(incoming(e, null, presented = false).isNoteworthy)
+        assertTrue(outgoing(e, "01098765432109").isNoteworthy)
+
+        // 許可リストで通した国際通話 → 残す（例外が効いたか確かめられるように）
+        assertTrue(incoming(e, "+12025550143").isNoteworthy)
+
+        // 普段の国内通話・緊急通報 → 残さない（残すと上限が埋まり遮断記録が消える）
+        assertFalse(incoming(e, "090-1234-5678").isNoteworthy)
+        assertFalse(incoming(e, "03-1234-5678").isNoteworthy)
+        assertFalse(outgoing(e, "119").isNoteworthy)
+        assertFalse(outgoing(e, "*#06#").isNoteworthy)
+    }
+
+    @Test
+    fun `遮断を切ってあるときの通過は記録しない`() {
+        val e = engine(ScreeningPolicy(blockInternationalIncoming = false))
+        val d = incoming(e, "+12025550143")
+        assertFalse(d.isBlocked)
+        assertFalse(d.isNoteworthy, "機能を切っているだけの通過でログを埋めない")
+    }
+
     @Test
     fun `全機能を切れば isFullyDisabled が立つ`() {
         assertTrue(
