@@ -61,15 +61,15 @@
   ];
   const state={scenario:'blackships',faction:null,difficulty:'normal',year:1853,month:7,turn:1,selected:'edo',gold:0,troops:0,modern:0,prestige:0,people:0,hanron:50,kyotoInfluence:0,kyotoTriumph:false,foreignDependency:0,foreignBacklash:false,blackshipsChoice:null,recruitedRyoma:false,treatyChoice:null,resistedTaisei:false,log:[],control:{},gameOver:false};
   const ACTION_SCENES={
-    reform:{title:'軍制改革',image:'assets/bakumatsu/actions/reform.png',copy:'洋式調練と装備の標準化を進め、藩兵を近代的な軍制へ改めた。'},
-    trade:{title:'港湾・交易',image:'assets/bakumatsu/actions/trade.png',copy:'港に商船と荷が集まり、交易の活気が藩の財政を潤した。'},
-    retain:{title:'人材登用',image:'assets/bakumatsu/actions/retain.png',copy:'家柄だけにとらわれず、時勢を動かす才を藩政へ迎え入れた。'},
-    radicalize:{title:'尊王攘夷を唱える',image:'assets/bakumatsu/actions/radicalize.png',copy:'尊王攘夷の大義を掲げ、若き藩士たちの熱を政局へ向けた。'},
-    moderate:{title:'公武合体を推進する',image:'assets/bakumatsu/actions/moderate.png',copy:'朝廷と幕府の協調を説き、対立の激化を抑える道を選んだ。'},
-    britishArms:{title:'英国から兵器を購入',image:'assets/bakumatsu/actions/british-arms.png',copy:'英国商人から洋式銃砲を買い入れ、藩兵の火力を大きく高めた。'},
-    frenchAdvisors:{title:'仏国から軍制顧問を招く',image:'assets/bakumatsu/actions/french-advisors.png',copy:'仏国軍事顧問の教練を受け、隊列と指揮の近代化を進めた。'},
-    march:{title:'示威行軍',image:'assets/bakumatsu/actions/march.png',copy:'街道へ軍勢を進め、近隣諸藩に当藩の兵威と覚悟を示した。'},
-    drill:{title:'実戦訓練',image:'assets/bakumatsu/actions/drill.png',copy:'実弾と砲煙の中で訓練を重ね、藩兵の実戦対応力を鍛えた。'}
+    reform:{title:'軍制改革',image:'assets/bakumatsu/actions/reform.webp',copy:'洋式調練と装備の標準化を進め、藩兵を近代的な軍制へ改めた。'},
+    trade:{title:'港湾・交易',image:'assets/bakumatsu/actions/trade.webp',copy:'港に商船と荷が集まり、交易の活気が藩の財政を潤した。'},
+    retain:{title:'人材登用',image:'assets/bakumatsu/actions/retain.webp',copy:'家柄だけにとらわれず、時勢を動かす才を藩政へ迎え入れた。'},
+    radicalize:{title:'尊王攘夷を唱える',image:'assets/bakumatsu/actions/radicalize.webp',copy:'尊王攘夷の大義を掲げ、若き藩士たちの熱を政局へ向けた。'},
+    moderate:{title:'公武合体を推進する',image:'assets/bakumatsu/actions/moderate.webp',copy:'朝廷と幕府の協調を説き、対立の激化を抑える道を選んだ。'},
+    britishArms:{title:'英国から兵器を購入',image:'assets/bakumatsu/actions/british-arms.webp',copy:'英国商人から洋式銃砲を買い入れ、藩兵の火力を大きく高めた。'},
+    frenchAdvisors:{title:'仏国から軍制顧問を招く',image:'assets/bakumatsu/actions/french-advisors.webp',copy:'仏国軍事顧問の教練を受け、隊列と指揮の近代化を進めた。'},
+    march:{title:'示威行軍',image:'assets/bakumatsu/actions/march.webp',copy:'街道へ軍勢を進め、近隣諸藩に当藩の兵威と覚悟を示した。'},
+    drill:{title:'実戦訓練',image:'assets/bakumatsu/actions/drill.webp',copy:'実弾と砲煙の中で訓練を重ね、藩兵の実戦対応力を鍛えた。'}
   };
   // 座標は元画像（1672 × 941）に対する百分率。表示領域の切り取り後ではない。
   // projectPoint() が CSS と同じ cover 変換（MAP_FOCUS の位置合わせ込み）を掛ける。
@@ -106,7 +106,7 @@
   function projectPoint(point,map){const width=map.clientWidth,height=map.clientHeight,fit=MAP_FIT==='contain'?Math.min:Math.max,scale=fit(width/MAP_IMAGE.width,height/MAP_IMAGE.height),renderedWidth=MAP_IMAGE.width*scale,renderedHeight=MAP_IMAGE.height*scale;return{x:(width-renderedWidth)*MAP_FOCUS.x+(point.x/100)*renderedWidth,y:(height-renderedHeight)*MAP_FOCUS.y+(point.y/100)*renderedHeight}}
   function route(a,b,map){const start=projectPoint(a,map),end=projectPoint(b,map),dx=end.x-start.x,dy=end.y-start.y,len=Math.hypot(dx,dy);return `<i class="route" style="left:${start.x}px;top:${start.y}px;width:${len}px;transform:rotate(${Math.atan2(dy,dx)*180/Math.PI}deg)"></i>`}
   function renderMap(){const map=$('#map');map.innerHTML=route(regions[0],regions[1],map)+route(regions[1],regions[2],map)+route(regions[2],regions[3],map)+route(regions[3],regions[4],map)+route(regions[4],regions[5],map)+route(regions[4],regions[6],map)+route(regions[5],regions[7],map);regions.forEach(r=>{const f=faction(owner(r)),point=projectPoint(r,map);const b=document.createElement('button');b.className='node '+(state.selected===r.id?'active':'');b.style.cssText=`left:${point.x}px;top:${point.y}px;--owner:${f.color}`;b.innerHTML=`<i></i><span>${r.name}<small class="port"> ${r.kind}</small></span>`;b.onclick=()=>{state.selected=r.id;render();};map.append(b)})}
-  function renderLocation(){if(!state.faction){$('#location-panel').innerHTML='<p class="empty">勢力を選んでください。</p>';return}const r=region(state.selected),f=faction(owner(r)),mine=isMine(r),isKyoto=r.id==='kyoto',img=r.kind==='港'?'assets/battles/naval-battle.png':r.id==='tohoku'?'assets/battles/siege-battle.png':'assets/battles/field-battle.png';const kyotoNote=isKyoto?`<p class="side-note">朝廷への影響力: <b style="color:var(--gold)">${state.kyotoInfluence}</b>/100（${kyotoTier(state.kyotoInfluence).name}）</p>`:'';$('#location-panel').innerHTML=`<img class="side-image" src="${img}" alt="${r.name}"><h1 class="side-title">${r.name}</h1><div class="side-owner"><i style="--owner:${f.color}"></i>${f.name}　${r.area}</div><p class="side-note">${r.note}</p>${kyotoNote}<div class="command-row">${isKyoto?'<button data-command="kyoto" class="wide">朝廷工作</button>':''}<button data-command="${mine?'domestic':'negotiate'}">${mine?'内政':'交渉'}</button><button data-command="${mine?'march':'invade'}">${mine?'出陣':'侵攻'}</button></div>`;document.querySelectorAll('[data-command]').forEach(b=>b.onclick=()=>openCommand(b.dataset.command))}
+  function renderLocation(){if(!state.faction){$('#location-panel').innerHTML='<p class="empty">勢力を選んでください。</p>';return}const r=region(state.selected),f=faction(owner(r)),mine=isMine(r),isKyoto=r.id==='kyoto',img=r.kind==='港'?'assets/battles/naval-battle.webp':r.id==='tohoku'?'assets/battles/siege-battle.webp':'assets/battles/field-battle.webp';const kyotoNote=isKyoto?`<p class="side-note">朝廷への影響力: <b style="color:var(--gold)">${state.kyotoInfluence}</b>/100（${kyotoTier(state.kyotoInfluence).name}）</p>`:'';$('#location-panel').innerHTML=`<img class="side-image" src="${img}" alt="${r.name}"><h1 class="side-title">${r.name}</h1><div class="side-owner"><i style="--owner:${f.color}"></i>${f.name}　${r.area}</div><p class="side-note">${r.note}</p>${kyotoNote}<div class="command-row">${isKyoto?'<button data-command="kyoto" class="wide">朝廷工作</button>':''}<button data-command="${mine?'domestic':'negotiate'}">${mine?'内政':'交渉'}</button><button data-command="${mine?'march':'invade'}">${mine?'出陣':'侵攻'}</button></div>`;document.querySelectorAll('[data-command]').forEach(b=>b.onclick=()=>openCommand(b.dataset.command))}
   function renderFactions(){$('#faction-list').innerHTML=factions.map(f=>{const holds=regions.filter(r=>owner(r)===f.id).length;return `<div class="faction-row" style="--color:${f.color}"><i></i><span>${f.name}</span><b>${holds}拠点</b></div>`}).join('')}
   function renderLog(){$('#chronicle-list').innerHTML=state.log.map(x=>`<li class="${x.type}"><time>${x.stamp}</time>${x.text}</li>`).join('')}
   function render(){renderHud();renderMap();renderLocation();renderFactions();renderLog()}

@@ -32,8 +32,15 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 Instagram Graph API は JPEG しか受け付けず、WebPへ変換すると投稿が通らなくなる。
 再生成は `node scripts/gen-instagram-images.mjs`（`optimize-assets.py` の対象にしないこと）。
 
+**変換してはいけないもの**（`--only png` や対象ディレクトリの選び方で避ける）:
+`assets/marketing/ig-*.jpg`（Instagram Graph API はJPEGのみ） /
+`assets/og/*`（OGP画像。SNS側のWebP対応が不安定） /
+`assets/maps/strategic-japan.png`（`scripts/verify-bakumatsu-map.mjs` がパスを直書きで参照）
+
 ```bash
 python3 scripts/optimize-assets.py --dir assets/<game> --dry-run  # 変換量の確認
+python3 scripts/optimize-assets.py --dir assets/<game> --only png # JPEGを触らない
+python3 scripts/optimize-assets.py --dir assets --only png --no-recurse # 直下だけ
 python3 scripts/optimize-assets.py --dir assets/<game>            # 変換＋参照書換＋元削除
 python3 scripts/fix-webp-refs.py                                  # 取りこぼした参照を修復
 node scripts/verify-game-assets.mjs                               # 全ページで404・例外を検査（必須）
@@ -473,6 +480,9 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 ```
 
 ## 注意事項
+- **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。
+  `--depth 1 --filter=blob:none --sparse` で18MBまで落ち、触るゲームのassetsだけ後から足せる。
+  手順とスクリプト: `docs/クローンを軽くする.md` / `scripts/slim-clone.ps1`
 - `.edge-test-profile/` はMicrosoft Edgeのブラウザデータ。gitignoreすること
 - `shogi_rpg_enhanced.jsx` はJSX形式だがビルド環境なし。取り扱い注意
 
