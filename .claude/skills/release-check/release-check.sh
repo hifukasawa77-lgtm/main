@@ -115,7 +115,24 @@ while IFS= read -r f; do
 done <<< "$HTMLS"
 [ "$DUP_OK" = 1 ] && ok "二重定義なし"
 
-echo "== 9. 変更ファイルに対応する必須チェック（CLAUDE.md 規定・実行の有無は見ない） =="
+echo "== 9. アセットの形式方針（原則WebP・今回持ち込む分） =="
+# 2026-08-02 に全アセットをWebP化したのに、3週間でPNGが235枚・384MB戻り assets が
+# 587MB まで膨らんだ（2026-08-25 再変換）。方針はCLAUDE.mdに書いてあったが、守れているかを
+# 確かめる手段が無かったため誰も気づかなかった。方針は文書ではなく検査で守る。
+if [ -f scripts/verify-asset-format.mjs ]; then
+  if ASSET_FMT=$(node scripts/verify-asset-format.mjs --diff 2>&1); then
+    ok "WebP方針に反する画像なし"
+  else
+    # 概要の1行だけを ✗ として立て、内訳と手順はそのまま見せる（✗ が並ぶと読みにくい）
+    SUMMARY=$(printf '%s\n' "$ASSET_FMT" | grep -m1 'WebP化されていない画像' | sed 's/^ *✗ *//')
+    note_fail "${SUMMARY:-WebP化されていない画像があります}"
+    printf '%s\n' "$ASSET_FMT" | sed -n '/WebP化されていない画像/,$p' | tail -n +2 | sed 's/^/  /' | head -20
+  fi
+else
+  note_warn "scripts/verify-asset-format.mjs が無い（アセット形式の検査を実行できない）"
+fi
+
+echo "== 10. 変更ファイルに対応する必須チェック（CLAUDE.md 規定・実行の有無は見ない） =="
 # CLAUDE.md は「sengoku.html を触ったら必ず実行」等を規定しているが、**文書にあるだけでは
 # 実行されない**。実例: 2026-08-13 の 78ee5e6 が clan名を 足利→将軍足利 に改名して
 # verify-castle-csv を壊し、23件FAIL・force-list 20件✗ のまま4日間気づかれなかった
