@@ -1801,7 +1801,57 @@ class Backdrop {
  * 読み込みに失敗しても（file://等）マップ無しで動作を続ける（genpei.html loadMap()踏襲）。 */
 const MAP_ASSET = 'assets/taihei/taihei-japan-map.webp';
 const MAP_NATIVE_W = 1672, MAP_NATIVE_H = 941;
-const ASSETS_RT = { map: null, mapReady: false, portraitsReady: 0 };
+const ACTION_ART_DEFS = {
+  sekisho: { image: 'assets/taihei/actions/sekisho.webp', jp: '関所を築く', en: 'Checkpoint Complete', copy: '街道の往来を掌握し、旅人と荷駄から通行税を徴収する関所を整えた。', copyEn: 'A new checkpoint controls the highway and collects tolls from travelers and pack trains.' },
+  shukuba: { image: 'assets/taihei/actions/shukuba.webp', jp: '宿場を開く', en: 'Post Town Established', copy: '旅人と早馬を迎える宿と厩を整え、国衆の移動を支える宿場を開いた。', copyEn: 'Inns and stables now receive travelers and couriers, speeding movement across the province.' },
+  shoen: { image: 'assets/taihei/actions/shoen.webp', jp: '荘園を拓く', en: 'Estate Developed', copy: '水路と田畑を整え、領内の実りを安定して支える荘園を拓いた。', copyEn: 'New fields and irrigation secure a steadier harvest for the domain.' },
+  jisha: { image: 'assets/taihei/actions/jisha.webp', jp: '寺社を興す', en: 'Temple and Shrine Restored', copy: '堂宇を修め、僧侶と民の祈りが集う寺社の境内を再び賑わせた。', copyEn: 'Restored halls once again draw monks, worshippers, and the loyalty of the people.' },
+  ichi: { image: 'assets/taihei/actions/ichi.webp', jp: '市を開く', en: 'Market Opened', copy: '米・塩・布・器が行き交う市を開き、領内の商いに新たな活気をもたらした。', copyEn: 'Rice, salt, cloth, and pottery change hands in a market that invigorates local trade.' },
+  minato: { image: 'assets/taihei/actions/minato.webp', jp: '港を整える', en: 'Port Developed', copy: '船着場と蔵を整え、沿岸を行き交う船と荷を迎える港を開いた。', copyEn: 'Wharves and warehouses now welcome coastal vessels and their cargo.' },
+  yamajiro: { image: 'assets/taihei/actions/yamajiro.webp', jp: '山城を築く', en: 'Mountain Castle Raised', copy: '尾根を削り、堀と柵を巡らせ、険阻な地形を生かす山城を築いた。', copyEn: 'Terraces, ditches, and palisades turn the rugged ridge into a mountain stronghold.' },
+  yakata: { image: 'assets/taihei/actions/yakata.webp', jp: '館を構える', en: 'Manor House Established', copy: '政務と兵の集結を担う館を構え、領国支配の新たな拠点とした。', copyEn: 'The new manor becomes a seat of government and a rallying point for local troops.' },
+  josai: { image: 'assets/taihei/actions/josai.webp', jp: '城塞を完成する', en: 'Fortress Completed', copy: '幾重もの土塁・堀・柵で要衝を固め、敵を阻む堅牢な城塞を完成させた。', copyEn: 'Layered ramparts, ditches, and palisades secure the strategic crossing.' },
+  'akutou-hire': { image: 'assets/taihei/actions/akutou-hire.webp', jp: '悪党を雇い入れる', en: 'Akutō Recruited', copy: '山野に通じた荒武者たちと密約を結び、表には出せぬ働きを託した。', copyEn: 'A secret pact binds hardened irregulars to deeds that cannot bear your name.' },
+  'akutou-yogeki': { image: 'assets/taihei/actions/akutou-yogeki.webp', jp: '夜襲', en: 'Night Raid', copy: '夜陰と霧に紛れ、敵陣へ忍び寄る悪党たちが一斉に襲いかかった。', copyEn: 'Under cover of darkness and mist, the irregulars descend upon the enemy camp.' },
+  'akutou-housen': { image: 'assets/taihei/actions/akutou-housen.webp', jp: '放火', en: 'Arson', copy: '闇に乗じて敵の蔵へ火を放ち、備蓄と領内の生産に打撃を与えた。', copyEn: 'Flames consume enemy stores, damaging both reserves and local production.' },
+  'akutou-ryakudatsu': { image: 'assets/taihei/actions/akutou-ryakudatsu.webp', jp: '略奪', en: 'Pillage', copy: '敵の蔵を破り、米俵と財貨を奪って自陣営へ持ち帰った。', copyEn: 'Rice bales and coin are carried from the enemy storehouse into your coffers.' },
+  'akutou-jomonhakai': { image: 'assets/taihei/actions/akutou-jomonhakai.webp', jp: '城門破壊', en: 'Gate Break', copy: '守兵の目をかいくぐり、敵城の門扉と蝶番を密かに破壊した。', copyEn: 'The raiders evade the watch and secretly cripple the enemy gate and hinges.' },
+};
+const SCENARIO_ART_DEFS = Object.fromEntries(SCENARIOS.map((s) => [s.id, `assets/taihei/scenarios/${s.id}.webp`]));
+const ASSETS_RT = {
+  map: null, mapReady: false, portraitsReady: 0,
+  actionArt: new Map(), scenarioArt: new Map(), sceneArtReady: 0,
+};
+function loadArtManifest(defs, cache, pathOf) {
+  return Promise.all(Object.entries(defs).map(([id, def]) => new Promise((resolve) => {
+    const entry = { image: new Image(), ready: false, missing: false };
+    cache.set(id, entry);
+    entry.image.decoding = 'async';
+    entry.image.onload = () => { entry.ready = true; resolve(true); };
+    entry.image.onerror = () => { entry.missing = true; resolve(false); };
+    entry.image.src = pathOf(def);
+  })));
+}
+function loadSceneArt() {
+  return Promise.all([
+    loadArtManifest(ACTION_ART_DEFS, ASSETS_RT.actionArt, (def) => def.image),
+    loadArtManifest(SCENARIO_ART_DEFS, ASSETS_RT.scenarioArt, (path) => path),
+  ]).then((groups) => {
+    ASSETS_RT.sceneArtReady = groups.flat().filter(Boolean).length;
+    return groups;
+  });
+}
+function drawImageCover(ctx, image, x, y, w, h) {
+  if (!image || !image.naturalWidth || !image.naturalHeight) return false;
+  const scale = Math.max(w / image.naturalWidth, h / image.naturalHeight);
+  const sw = w / scale, sh = h / scale;
+  const sx = (image.naturalWidth - sw) / 2, sy = (image.naturalHeight - sh) / 2;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  ctx.drawImage(image, sx, sy, sw, sh, x, y, w, h);
+  ctx.restore();
+  return true;
+}
 function loadMapImage() {
   return new Promise((resolve) => {
     const img = new Image();
@@ -1831,7 +1881,7 @@ class BootScene extends GameKit.Scene {
   enter(g) {
     this.status = { jp: '読み込み中…', en: 'Loading…' };
     loadGeneralPortraits().then((portraits) => { ASSETS_RT.portraitsReady = portraits.filter(Boolean).length; });
-    Promise.all([dataReady, loadMapImage(), fontReady]).then(() => {
+    Promise.all([dataReady, loadMapImage(), loadSceneArt(), fontReady]).then(() => {
       this.status = { jp: '読み込み完了', en: 'Loaded' };
       // 非同期読込の完了前にテスト用デバッグ遷移等で別シーンへ移った場合、
       // 遅れて戻ってきたBootSceneが現在のシーンを上書きしないようにする。
@@ -1930,12 +1980,20 @@ class ScenarioSelectScene extends GameKit.Scene {
         fill: on ? 'rgba(34,211,238,0.14)' : hit(r, p) ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.03)',
         stroke: on ? 'rgba(34,211,238,0.75)' : 'rgba(255,255,255,0.12)', radius: 10,
       });
-      txt(ctx, s.jp, r.x + 20, r.y + 10, { font: '600 17px "Hiragino Mincho ProN", serif', color: '#e2e8f0' });
-      txt(ctx, s.en, r.x + 20, r.y + 31, { font: '10px sans-serif', color: '#22d3ee' });
+      const art = ASSETS_RT.scenarioArt.get(s.id);
+      if (art && art.ready) {
+        drawImageCover(ctx, art.image, r.x + 4, r.y + 4, 120, r.h - 8);
+        const shade = ctx.createLinearGradient(r.x + 70, 0, r.x + 128, 0);
+        shade.addColorStop(0, 'rgba(5,7,13,0)'); shade.addColorStop(1, 'rgba(5,7,13,0.86)');
+        ctx.fillStyle = shade; ctx.fillRect(r.x + 70, r.y + 4, 58, r.h - 8);
+      }
+      const tx = r.x + 142;
+      txt(ctx, s.jp, tx, r.y + 10, { font: '600 17px "Hiragino Mincho ProN", serif', color: '#e2e8f0' });
+      txt(ctx, s.en, tx, r.y + 31, { font: '10px sans-serif', color: '#22d3ee' });
       txt(ctx, `${s.startYear}年${s.startMonth}月開始 ・ 全${s.maxTurns}か月 / ${s.startYear}/${s.startMonth}, ${s.maxTurns} months`,
         r.x + r.w - 20, r.y + 10, { font: '10px sans-serif', color: '#64748b', align: 'right' });
-      txt(ctx, s.desc.jp, r.x + 20, r.y + 52, { font: '11px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
-      txt(ctx, s.desc.en, r.x + 20, r.y + 69, { font: '9px sans-serif', color: '#8b98ab' });
+      txt(ctx, s.desc.jp, tx, r.y + 52, { font: '11px "Hiragino Mincho ProN", serif', color: '#dbe4ee' });
+      txt(ctx, s.desc.en, tx, r.y + 69, { font: '9px sans-serif', color: '#8b98ab' });
     });
     button(ctx, this.back, hit(this.back, p));
     button(ctx, this.go, hit(this.go, p));
@@ -2472,6 +2530,7 @@ class MapScene extends GameKit.Scene {
     this.sel = null; this.hoverProv = null;
     this.panel = null; this.courtTab = 'nancho';
     this.notice = null; this.noticeT = 0;
+    this.actionResult = null;
     this.buttons = [];
     this.t = 0;
     // 地図の拡大縮小（deep澤要望2026-08-19）。cx/cyはワールド座標（zoom=1のときの
@@ -2611,8 +2670,14 @@ class MapScene extends GameKit.Scene {
     this.t += dt;
     if (this.noticeT > 0) this.noticeT -= dt;
     const p = g.input.pointer;
-    this.hoverProv = (!this.panel && inRectXY(ML.map, p)) ? this._provAt(p.x, p.y) : null;
+    this.hoverProv = (!this.panel && !this.actionResult && inRectXY(ML.map, p)) ? this._provAt(p.x, p.y) : null;
     if (!p.justPressed) return;
+    if (this.actionResult) {
+      this.actionResult = null;
+      this.notice = null; this.noticeT = 0;
+      g.audio.jingle([{ f: 370, d: 0.05 }, { f: 440, d: 0.08 }]);
+      return;
+    }
     for (const b of this.buttons) {
       if (!hit(b, p) || b.disabled) continue;
       b.onClick(g);
@@ -2669,6 +2734,7 @@ class MapScene extends GameKit.Scene {
     this._notice(result.ok
       ? { jp: `${FACILITIES[facilityId].jp}を築いた`, en: `Built a ${FACILITIES[facilityId].en}.` }
       : { jp: '失敗: ' + result.reason, en: 'Failed: ' + result.reason });
+    if (result.ok) this._showActionResult(facilityId);
   }
   _courtAction(g, action) {
     const state = this.state, campId = this.player, courtId = this.courtTab;
@@ -2696,6 +2762,10 @@ class MapScene extends GameKit.Scene {
     this._notice(result.ok
       ? { jp: `悪党${result.hired}名を雇い入れた`, en: `Hired ${result.hired} akutō.` }
       : { jp: '失敗: ' + result.reason, en: 'Failed: ' + result.reason });
+    if (result.ok) this._showActionResult('akutou-hire', {
+      titleJp: `悪党${result.hired}名を雇い入れる`,
+      titleEn: `${result.hired} Akutō Recruited`,
+    });
   }
   _akutouCommand(g, kind) {
     const state = this.state, campId = this.player;
@@ -2704,9 +2774,66 @@ class MapScene extends GameKit.Scene {
     if (!prov.owner || prov.owner === campId) { this._notice({ jp: '他勢力の国を対象にしてください', en: 'Target must belong to another power.' }); return; }
     const result = Rule.akutouCommand(state, campId, kind, this.sel);
     save.set('autosave', state);
+    if (!result.ok) {
+      this._notice({ jp: '失敗: ' + result.reason, en: 'Failed: ' + result.reason });
+      return;
+    }
     this._notice(result.success
       ? { jp: `${AKUTOU_COMMANDS[kind].jp}に成功した`, en: `${AKUTOU_COMMANDS[kind].en} succeeded.` }
       : { jp: `${AKUTOU_COMMANDS[kind].jp}は失敗した（露見）`, en: `${AKUTOU_COMMANDS[kind].en} failed and was exposed.` });
+    const target = DATA.provById[this.sel];
+    this._showActionResult(`akutou-${kind}`, result.success ? {
+      statusJp: '作戦成功', statusEn: 'OPERATION SUCCESS',
+      copyJp: `${target ? target.jp : '敵国'}で${AKUTOU_COMMANDS[kind].jp}を敢行。${ACTION_ART_DEFS[`akutou-${kind}`].copy}`,
+    } : {
+      titleJp: `${AKUTOU_COMMANDS[kind].jp}、露見`, titleEn: `${AKUTOU_COMMANDS[kind].en} Exposed`,
+      statusJp: '作戦失敗', statusEn: 'OPERATION FAILED', failed: true,
+      copyJp: '企ては敵に察知され、悪党たちは追撃を逃れて散り散りとなった。朝廷との関係も悪化した。',
+      copyEn: 'The plot was exposed. The irregulars scattered under pursuit, and relations with the court suffered.',
+    });
+  }
+
+  _showActionResult(id, opts) {
+    const def = ACTION_ART_DEFS[id];
+    if (!def) return;
+    const extra = opts || {};
+    this.actionResult = {
+      id,
+      titleJp: extra.titleJp || def.jp,
+      titleEn: extra.titleEn || def.en,
+      statusJp: extra.statusJp || '実行完了',
+      statusEn: extra.statusEn || 'ACTION COMPLETE',
+      copyJp: extra.copyJp || def.copy,
+      copyEn: extra.copyEn || def.copyEn || '',
+      failed: !!extra.failed,
+    };
+    this.panel = null;
+  }
+
+  _drawActionResult(ctx) {
+    const result = this.actionResult;
+    if (!result) return;
+    const entry = ASSETS_RT.actionArt.get(result.id);
+    const card = { x: 210, y: 55, w: 1020, h: 700 };
+    ctx.fillStyle = 'rgba(3,4,8,0.88)'; ctx.fillRect(0, 0, W, H);
+    frame(ctx, card.x, card.y, card.w, card.h, { fill: '#17110c', stroke: 'rgba(179,138,69,0.9)', radius: 5 });
+    if (!(entry && entry.ready && drawImageCover(ctx, entry.image, card.x + 8, card.y + 8, card.w - 16, card.h - 16))) {
+      const fallback = ctx.createLinearGradient(card.x, card.y, card.x + card.w, card.y + card.h);
+      fallback.addColorStop(0, '#21170f'); fallback.addColorStop(1, '#07090d');
+      ctx.fillStyle = fallback; ctx.fillRect(card.x + 8, card.y + 8, card.w - 16, card.h - 16);
+    }
+    const veil = ctx.createLinearGradient(0, card.y + 320, 0, card.y + card.h - 8);
+    veil.addColorStop(0, 'rgba(7,8,10,0)');
+    veil.addColorStop(0.48, 'rgba(7,8,10,0.55)');
+    veil.addColorStop(1, 'rgba(7,8,10,0.96)');
+    ctx.fillStyle = veil; ctx.fillRect(card.x + 8, card.y + 260, card.w - 16, card.h - 268);
+    const accent = result.failed ? '#d97757' : '#d7b46a';
+    txt(ctx, `${result.statusJp} / ${result.statusEn}`, card.x + 44, card.y + 484, { font: '600 11px sans-serif', color: accent });
+    txt(ctx, result.titleJp, card.x + 44, card.y + 514, { font: '600 34px "Hiragino Mincho ProN", serif', color: '#f3e8cf' });
+    txt(ctx, result.titleEn, card.x + 44, card.y + 558, { font: '12px sans-serif', color: '#b9a98d' });
+    wrapText(ctx, result.copyJp, card.x + 44, card.y + 586, card.w - 88, 22, { font: '14px "Hiragino Mincho ProN", serif', color: '#e3d7c2' });
+    if (result.copyEn) txt(ctx, result.copyEn, card.x + 44, card.y + 635, { font: '10px sans-serif', color: '#938978' });
+    txt(ctx, 'クリックして地図へ戻る / Click to return to the map', card.x + card.w - 44, card.y + card.h - 34, { font: '10px sans-serif', color: '#a59070', align: 'right' });
   }
 
   draw(ctx, g) {
@@ -2722,6 +2849,7 @@ class MapScene extends GameKit.Scene {
       frame(ctx, W / 2 - 260, ML.map.y + 6, 520, 32, { fill: 'rgba(86,52,28,0.94)', stroke: 'rgba(179,138,69,0.72)', radius: 2 });
       txt(ctx, this.notice.jp + ' / ' + this.notice.en, W / 2, ML.map.y + 14, { font: '12px sans-serif', color: '#ead9b5', align: 'center' });
     }
+    if (this.actionResult) this._drawActionResult(ctx);
   }
   _drawTopBar(ctx) {
     const state = this.state, camp = state.camps[this.player];
@@ -3503,6 +3631,7 @@ window.TAIHEI_DEBUG = {
   // Phase B（シーン・合戦・地図アセット）で追加した関数・定数
   BootScene, TitleScene, FactionSelectScene, OpeningScene, MapScene, BattleScene,
   ASSETS_RT, MAP_ASSET, MAP_NATIVE_W, MAP_NATIVE_H, mapTransform, provScreenXY, loadMapImage,
+  ACTION_ART_DEFS, SCENARIO_ART_DEFS, loadSceneArt, drawImageCover,
   GENERAL_PORTRAIT_BASE, GENERAL_PORTRAIT_CACHE, loadGeneralPortraits,
   HEX, TERRAIN_T, TBattle, initBattle, pickUnitMix, hexToPixel, hexDistance, hexNeighbors,
   campColorOf, campLabelOf, campCourtOf, factionInfo, FACTION_CHOICES, SCENARIO_CAMP_LABELS, KAMON_STYLE, save,
