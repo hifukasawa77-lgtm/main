@@ -115,6 +115,17 @@ async function runFlow(port) {
     null, { timeout: 60000 });
   await page.waitForTimeout(500);
   step('1. タイトル画面へ到達', n, await total());
+  const battlefieldAsset = await page.evaluate(() => ({
+    path: window.TAIHEI_DEBUG.BATTLEFIELD_ASSET,
+    ready: window.TAIHEI_DEBUG.ASSETS_RT.battlefieldReady,
+    width: window.TAIHEI_DEBUG.ASSETS_RT.battlefield?.naturalWidth || 0,
+    height: window.TAIHEI_DEBUG.ASSETS_RT.battlefield?.naturalHeight || 0,
+  }));
+  check(
+    '1b. 合戦フィールド画像を読み込めた',
+    battlefieldAsset.ready && battlefieldAsset.width > 0 && battlefieldAsset.height > 0,
+    JSON.stringify(battlefieldAsset),
+  );
 
   n = await total();
   const entered = await page.evaluate(() => {
@@ -145,6 +156,26 @@ async function runFlow(port) {
   await page.waitForTimeout(3000); // 遅延アセット（地図画像等）が届く間もフレームを回す
   step(`4. MapScene で描画（scene=${mapEntered}）`, n, await total());
   check('4b. MapScene に到達できた', mapEntered === 'MapScene', `scene=${mapEntered}`);
+
+  // 拡大後の地図をマウスと1本指の双方でパンできること。
+  const panCheck = await page.evaluate(() => {
+    const D = window.TAIHEI_DEBUG, s = D.game.scene, c = document.getElementById('game');
+    const r = c.getBoundingClientRect();
+    const toClient = (x, y) => ({ clientX: r.left + x / c.width * r.width, clientY: r.top + y / c.height * r.height });
+    const fake = (x, y) => ({ touches: [toClient(x, y)], preventDefault() {} });
+    s.cam.zoom = 2; s.cam.cx = 600; s.cam.cy = 330; s._clampCam();
+    s._onTouchStart(fake(400, 300)); s._onTouchMove(fake(500, 300)); s._onTouchEnd({ touches: [] });
+    const touchMoved = s.cam.cx < 600;
+    s.cam.cx = 600; s.cam.cy = 330; s._clampCam();
+    return { touchMoved, beforeMouse: s.cam.cx, rect: { left: r.left, top: r.top, width: r.width, height: r.height } };
+  });
+  const mx1 = panCheck.rect.left + 400 / 1440 * panCheck.rect.width;
+  const my = panCheck.rect.top + 300 / 900 * panCheck.rect.height;
+  const mx2 = panCheck.rect.left + 500 / 1440 * panCheck.rect.width;
+  await page.mouse.move(mx1, my); await page.mouse.down(); await page.mouse.move(mx2, my, { steps: 4 }); await page.mouse.up();
+  const mouseAfter = await page.evaluate(() => window.TAIHEI_DEBUG.game.scene.cam.cx);
+  check('4c. 拡大地図を1本指ドラッグで移動できる', panCheck.touchMoved, JSON.stringify(panCheck));
+  check('4d. 拡大地図をマウスドラッグで移動できる', mouseAfter < panCheck.beforeMouse, `before=${panCheck.beforeMouse} after=${mouseAfter}`);
 
   n = await total();
   const endedOk = await page.evaluate(() => {
@@ -350,6 +381,10 @@ async function runScenarioChecks(port) {
       genkoHokuchoInactive: !genko.courts.hokucho.active,
       genkoNanchoOwnsYamashiro: genko.provinces.yamashiro.owner === 'nancho', // 'kanno'補正が'genko'に混入していないか
       genkoAshikagaCourtIsNancho: genko.camps.ashikaga.court === 'nancho', // 建武期の史実初期値（リグレッション）
+      rosterCount: D.GENERALS_DEF.length,
+      rosterUniqueIds: new Set(D.GENERALS_DEF.map((g) => g.id)).size,
+      genkoYoshimitsuUnborn: genko.generals.ashikaga_yoshimitsu.unborn === true,
+      finaleYoshimitsuActive: finale.generals.ashikaga_yoshimitsu.unborn === false && finale.generals.ashikaga_yoshimitsu.dead === false,
       sixScenarios,
       monthlyDate: [monthly.year, monthly.month],
       yearRolloverDate: [yearRollover.year, yearRollover.month],
@@ -371,6 +406,9 @@ async function runScenarioChecks(port) {
   check('buildState: genkoは後醍醐帝が開始時点で存命（リグレッション）', dataCheck.genkoGodaigoAlive, JSON.stringify(dataCheck));
   check('buildState: genkoは北朝が開始時点で未成立（リグレッション）', dataCheck.genkoHokuchoInactive, JSON.stringify(dataCheck));
   check('buildState: genkoの領有はkanno補正の影響を受けない（リグレッション）', dataCheck.genkoNanchoOwnsYamashiro, JSON.stringify(dataCheck));
+  check('武将データ: 太平風雲記の全200名を一意なIDで登録', dataCheck.rosterCount >= 200 && dataCheck.rosterUniqueIds === dataCheck.rosterCount, JSON.stringify(dataCheck));
+  check('武将データ: 1331年時点の足利義満は未登場', dataCheck.genkoYoshimitsuUnborn, JSON.stringify(dataCheck));
+  check('武将データ: 1392年時点の足利義満は登場済み', dataCheck.finaleYoshimitsuActive, JSON.stringify(dataCheck));
   check('シナリオ構成: 指定された6本を正しい開始年で登録',
     JSON.stringify(dataCheck.sixScenarios.map((s) => [s.id, s.year])) === JSON.stringify([['genko',1331],['kenmu',1334],['nanboku',1338],['kanno',1350],['yoshimitsu',1378],['genchu_itto',1392]]), JSON.stringify(dataCheck.sixScenarios));
   check('月ターン: 1331年5月→1331年6月（年が進まない）', JSON.stringify(dataCheck.monthlyDate) === '[1331,6]', JSON.stringify(dataCheck));
@@ -414,7 +452,7 @@ async function runScenarioChecks(port) {
   after = await frameErrCount();
   check('武将肖像: MapScene人事パネル描画で例外0件', after === before, `before=${before} after=${after}`);
 
-  // --- D. 武将名鑑パネル（'roster'）: 全武将が一覧され、選択クリックで詳細が切り替わること ---
+  // --- D. 武将名鑑パネル（'roster'）: 200名をページ表示でき、選択クリックで詳細が切り替わること ---
   before = after;
   await page.evaluate(() => { window.TAIHEI_DEBUG.game.scene.panel = 'roster'; });
   await page.waitForTimeout(200);
@@ -423,15 +461,22 @@ async function runScenarioChecks(port) {
 
   const rosterInfo = await page.evaluate(() => {
     const D = window.TAIHEI_DEBUG;
-    return { rowCount: D.game.scene.buttons.length, generalCount: D.GENERALS_DEF.length, selBefore: D.game.scene.rosterSel };
+    const rows = D.game.scene.buttons.filter((b) => !b.jp);
+    const pages = Math.ceil(Math.max(
+      D.GENERALS_DEF.filter((g) => g.camp === 'ashikaga').length,
+      D.GENERALS_DEF.filter((g) => g.camp === 'nancho').length,
+      D.GENERALS_DEF.filter((g) => g.camp !== 'ashikaga' && g.camp !== 'nancho').length,
+    ) / 18);
+    return { rowCount: rows.length, pages, generalCount: D.GENERALS_DEF.length, selBefore: D.game.scene.rosterSel };
   });
-  check('武将名鑑: 全武将分の行がクリック対象として存在する', rosterInfo.rowCount >= rosterInfo.generalCount, JSON.stringify(rosterInfo));
+  check('武将名鑑: 200名を複数ページで閲覧できる', rosterInfo.generalCount >= 200 && rosterInfo.pages > 1 && rosterInfo.rowCount > 0, JSON.stringify(rosterInfo));
 
-  // 一覧の最後の行（末尾の武将）をクリックして選択が切り替わることを確認する
+  // 現在ページの最後の武将行をクリックして選択が切り替わることを確認する
   before = after;
   const lastRowBox = await page.evaluate(() => {
     const b = window.TAIHEI_DEBUG.game.scene.buttons;
-    const row = b[b.length - 1];
+    const rows = b.filter((item) => !item.jp);
+    const row = rows[rows.length - 1];
     return { x: row.x, y: row.y, w: row.w, h: row.h };
   });
   await clickCanvas(lastRowBox.x + lastRowBox.w / 2, lastRowBox.y + lastRowBox.h / 2);
