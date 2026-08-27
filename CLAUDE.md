@@ -32,12 +32,26 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 Instagram Graph API は JPEG しか受け付けず、WebPへ変換すると投稿が通らなくなる。
 再生成は `node scripts/gen-instagram-images.mjs`（`optimize-assets.py` の対象にしないこと）。
 
+**変換してはいけないもの**（`--only png` や対象ディレクトリの選び方で避ける）:
+`assets/marketing/ig-*.jpg`（Instagram Graph API はJPEGのみ） /
+`assets/og/*`（OGP画像。SNS側のWebP対応が不安定） /
+`assets/maps/strategic-japan.png`（`scripts/verify-bakumatsu-map.mjs` がパスを直書きで参照）
+
 ```bash
 python3 scripts/optimize-assets.py --dir assets/<game> --dry-run  # 変換量の確認
+python3 scripts/optimize-assets.py --dir assets/<game> --only png # JPEGを触らない
+python3 scripts/optimize-assets.py --dir assets --only png --no-recurse # 直下だけ
 python3 scripts/optimize-assets.py --dir assets/<game>            # 変換＋参照書換＋元削除
 python3 scripts/fix-webp-refs.py                                  # 取りこぼした参照を修復
 node scripts/verify-game-assets.mjs                               # 全ページで404・例外を検査（必須）
+node scripts/verify-asset-format.mjs                              # WebP方針から外れた画像がないか
 ```
+
+**方針は検査で守る**。2026-08-02 にWebP化したのに3週間でPNGが235枚・384MB戻り、assets が
+587MBまで膨らんだ（2026-08-25 再変換）。CLAUDE.mdに書いてあっても、守れているかを確かめる
+手段が無ければ誰も気づかない。`verify-asset-format.mjs` が assets 全体と「今回持ち込む分」の
+両方を見る（release-check の検査#9 に組み込み済み）。**新規アセットは git add 前＝未追跡**
+なので、未追跡ファイルも対象にしている。
 
 - **解像度は変えない**。`drawImage` の source-rect を画素値で直書きしている描画があると、
   縮小した瞬間に矩形が画像外へ出て**無言で絵が消える**（404もエラーも出ない）
@@ -174,6 +188,27 @@ node scripts/verify-known-bug-patterns.mjs # generals.jsonの末尾追加チェ�
   代わりに `portraitKind`（`ninja`/`monk`/`shinto`/`naval`/`kokujin`）で `drawProceduralPortrait()` の手描き風肖像に落ちる
 - **マーカーと勢力の対応はID照合**。マーカーIDは `<勢力ID>_marker` / `_pirates` / `_ninja_marker` の規約。
   名前一致に頼ると勢力名の改称で対応が無言で切れる（軒猿→軒猿衆の改称で実際に切れていた）
+
+## 幕末風雲記の必須チェック（bakumatsu.html / game.js / bakumatsu.css を触ったら必ず実行）
+
+```bash
+node scripts/verify-bakumatsu-map.mjs   # 拠点14件が地図の陸に載っているか（切り取り位置の整合・見切れ・ラベル重なりも検査）
+```
+
+- **拠点のずれは例外もエラーも出さない**。「起動して例外0件」の検査では素通りするので、
+  実際に描かれた拠点の画面座標を地図画像へ逆写像して陸/海を確かめるところまでやる
+  （2026-08-25: 全14拠点のうち鶴岡・新潟・長岡・佐賀・鹿児島・高知が海の上に置かれていた）
+- **地図の敷き方は2箇所にある**。`bakumatsu.css` の `.strategic-map` の
+  `background-size` / `background-position` と `game.js` の `MAP_FIT` / `MAP_FOCUS` は
+  必ず同じ値にすること。片方だけ直すと拠点だけが無言で地図から浮く。検査#1がこの一致を機械検査する
+- 座標は元画像 `assets/maps/strategic-japan.png`（1672×941・縦横比1.78）に対する百分率
+- **`cover` は使わない（`contain` 固定）**。`.map-stage` は画面サイズで縦横比が 0.9〜1.5 まで動き、
+  `cover` だと横が最大48%切り取られる。拠点のx範囲は 13〜72 なので、**どんな `background-position`
+  を選んでも 1440×900 以下で萩・佐賀・鹿児島が枠外へ出る**（上下に余白が出ても全拠点を見せる方を採る）
+- **陸/海の判定は画素単位では効かない**。写実CGの絵地図なので谷影・街道・河川が海色に落ちる。
+  必ず 13×13 画素のブロック平均で判定する（`verify-bakumatsu-map.mjs` の `isLand`）
+- 地図北西の雲は陸と誤判定するが、拠点は一つもその領域に無いので実害はない。
+  閾値を触ったら「描画位置」の検査結果で校正すること
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
@@ -452,6 +487,9 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 ```
 
 ## 注意事項
+- **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。
+  `--depth 1 --filter=blob:none --sparse` で18MBまで落ち、触るゲームのassetsだけ後から足せる。
+  手順とスクリプト: `docs/クローンを軽くする.md` / `scripts/slim-clone.ps1`
 - `.edge-test-profile/` はMicrosoft Edgeのブラウザデータ。gitignoreすること
 - `shogi_rpg_enhanced.jsx` はJSX形式だがビルド環境なし。取り扱い注意
 

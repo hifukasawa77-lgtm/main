@@ -1,20 +1,20 @@
 const BATTLES = {
   field: {
-    title:'野戦', date:'慶応4年 5月18日', place:'越後・榎峠', weather:'晴 / 視界: 良好', image:'assets/battles/field-battle.png', objective:'榎峠の高地を確保せよ',
-    friendly:{ name:'長岡藩軍', commander:'河井 継之助', image:'assets/portraits/kido-takayoshi.png', stats:[['兵力','3,200'],['士気','76'],['弾薬','68'],['機動','73']], units:['伝習隊 900','長岡藩兵 1,400','砲兵隊 4門','奇兵隊 900'] },
-    enemy:{ name:'新政府軍', commander:'山県 有朋', image:'assets/portraits/saigo-takamori.png', stats:[['兵力','4,800'],['士気','71'],['練度','65'],['砲兵','6門']], units:['薩摩兵 1,500','長州兵 1,800','土佐兵 900','砲兵隊 6門'] },
+    title:'野戦', date:'慶応4年 5月18日', place:'越後・榎峠', weather:'晴 / 視界: 良好', image:'assets/battles/field-battle.webp', objective:'榎峠の高地を確保せよ',
+    friendly:{ name:'長岡藩軍', commander:'河井 継之助', image:'assets/portraits/kido-takayoshi.webp', stats:[['兵力','3,200'],['士気','76'],['弾薬','68'],['機動','73']], units:['伝習隊 900','長岡藩兵 1,400','砲兵隊 4門','奇兵隊 900'] },
+    enemy:{ name:'新政府軍', commander:'山県 有朋', image:'assets/portraits/saigo-takamori.webp', stats:[['兵力','4,800'],['士気','71'],['練度','65'],['砲兵','6門']], units:['薩摩兵 1,500','長州兵 1,800','土佐兵 900','砲兵隊 6門'] },
     terrain:['高地','街道','水田'], units:[['友軍 伝習隊',24,70,'friendly'],['友軍 砲兵',39,55,'friendly'],['友軍 藩兵',51,76,'friendly'],['敵 前衛',57,37,'enemy'],['敵 砲兵',75,43,'enemy'],['敵 主力',80,66,'enemy']], orders:['前進','斉射','砲撃','側面機動','撤退']
   },
   siege: {
-    title:'攻城戦', date:'慶応4年 9月22日', place:'会津・若松城', weather:'曇 / 煙: 濃い', image:'assets/battles/siege-battle.png', objective:'北出丸を制圧し、城門を破壊せよ',
-    friendly:{ name:'新政府軍', commander:'大村 益次郎', image:'assets/portraits/oomura-masujiro.png', stats:[['兵力','8,900'],['士気','83'],['砲弾','74'],['工兵','2隊']], units:['薩摩兵 2,100','長州兵 2,300','砲兵隊 12門','工兵隊 2隊'] },
-    enemy:{ name:'会津藩', commander:'松平 容保', image:'assets/portraits/matsudaira-katamori.png', stats:[['兵力','4,600'],['士気','80'],['城壁','64'],['砲兵','8門']], units:['会津藩兵 2,100','朱雀隊 800','砲兵隊 8門','城内守備 1,700'] },
+    title:'攻城戦', date:'慶応4年 9月22日', place:'会津・若松城', weather:'曇 / 煙: 濃い', image:'assets/battles/siege-battle.webp', objective:'北出丸を制圧し、城門を破壊せよ',
+    friendly:{ name:'新政府軍', commander:'大村 益次郎', image:'assets/portraits/oomura-masujiro.webp', stats:[['兵力','8,900'],['士気','83'],['砲弾','74'],['工兵','2隊']], units:['薩摩兵 2,100','長州兵 2,300','砲兵隊 12門','工兵隊 2隊'] },
+    enemy:{ name:'会津藩', commander:'松平 容保', image:'assets/portraits/matsudaira-katamori.webp', stats:[['兵力','4,600'],['士気','80'],['城壁','64'],['砲兵','8門']], units:['会津藩兵 2,100','朱雀隊 800','砲兵隊 8門','城内守備 1,700'] },
     terrain:['北出丸','二の丸','大手門'], units:[['友軍 砲兵',22,75,'friendly'],['友軍 工兵',39,64,'friendly'],['友軍 主力',51,78,'friendly'],['敵 城門守備',53,38,'enemy'],['敵 二の丸',67,32,'enemy'],['敵 本丸',77,21,'enemy']], orders:['総攻撃','砲撃','工兵前進','攪乱','撤退']
   },
   naval: {
-    title:'海戦', date:'明治2年 5月11日', place:'箱館湾沖', weather:'北西風 / 風力: 3', image:'assets/battles/naval-battle.png', objective:'敵旗艦を航行不能にせよ',
-    friendly:{ name:'蝦夷艦隊', commander:'榎本 武揚', image:'assets/portraits/enomoto-takeaki.png', stats:[['艦船','6隻'],['兵力','2,350'],['士気','85'],['石炭','62']], units:['開陽（蒸気）','回天（蒸気）','蟠龍（蒸気）','千歳（帆船）'] },
-    enemy:{ name:'新政府艦隊', commander:'木戸 孝允', image:'assets/portraits/saigo-takamori.png', stats:[['艦船','5隻'],['兵力','2,100'],['士気','76'],['砲弾','69']], units:['甲鉄（装甲艦）','春日（蒸気）','乾行（蒸気）','陽春（帆船）'] },
+    title:'海戦', date:'明治2年 5月11日', place:'箱館湾沖', weather:'北西風 / 風力: 3', image:'assets/battles/naval-battle.webp', objective:'敵旗艦を航行不能にせよ',
+    friendly:{ name:'蝦夷艦隊', commander:'榎本 武揚', image:'assets/portraits/enomoto-takeaki.webp', stats:[['艦船','6隻'],['兵力','2,350'],['士気','85'],['石炭','62']], units:['開陽（蒸気）','回天（蒸気）','蟠龍（蒸気）','千歳（帆船）'] },
+    enemy:{ name:'新政府艦隊', commander:'木戸 孝允', image:'assets/portraits/saigo-takamori.webp', stats:[['艦船','5隻'],['兵力','2,100'],['士気','76'],['砲弾','69']], units:['甲鉄（装甲艦）','春日（蒸気）','乾行（蒸気）','陽春（帆船）'] },
     terrain:['風向 北西','浅瀬','砲台射程'], units:[['回天',28,64,'friendly'],['開陽',43,77,'friendly'],['蟠龍',54,49,'friendly'],['甲鉄',74,35,'enemy'],['春日',69,61,'enemy'],['陽春',83,70,'enemy']], orders:['砲撃','集中砲火','接舷','回頭','離脱']
   }
 };

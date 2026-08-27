@@ -3,6 +3,10 @@
 サイト: https://hifukasawa77-lgtm.github.io/main/
 
 > 投稿の実行は深澤（PM）。自動投稿を有効にする場合は `docs/social-setup.md` の Secrets 登録手順を参照。
+>
+> **このファイルが投稿文の正本。** コードブロックの中身がそのまま投稿される文面（改行も含む）。
+> `scripts/post-social.js` の `X_POSTS` / `INSTAGRAM_POSTS` は実行用の写しなので**必ず両方直す**。
+> 一致は `node scripts/verify-social-posts.mjs` の検査#6が機械確認する。
 
 ## 現状サマリー（訴求の根拠）
 
@@ -131,11 +135,9 @@ https://hifukasawa77-lgtm.github.io/main/
 ▫️ボードゲーム20本（将棋・囲碁・麻雀・チェス・花札…）
 ▫️アクション・シューティング・パズル
 
-すべてインストール不要。ライブラリもフレームワークも使わず、
-素のJavaScriptとCanvas APIだけで作りました。
+すべてインストール不要。ライブラリもフレームワークも使わず、素のJavaScriptとCanvas APIだけで作りました。
 
-開発はAIエージェント19体のチーム制。
-企画から品質チェック、リリースまでの流れもサイトで公開しています。
+開発はAIエージェント19体のチーム制。企画から品質チェック、リリースまでの流れもサイトで公開しています。
 
 プロフィールのリンクから遊べます👆
 
@@ -144,9 +146,7 @@ https://hifukasawa77-lgtm.github.io/main/
 Built with vanilla JavaScript and the Canvas API — zero frameworks.
 Developed by a team of 19 AI agents.
 
-#個人開発 #ブラウザゲーム #無料ゲーム #ゲーム制作 #JavaScript
-#CanvasAPI #AI駆動開発 #indiedev #gamedev #browsergames
-#retrogaming #将棋 #麻雀 #シミュレーションゲーム #プログラミング
+#個人開発 #ブラウザゲーム #無料ゲーム #ゲーム制作 #JavaScript #CanvasAPI #AI駆動開発 #indiedev #gamedev #browsergames #retrogaming #将棋 #麻雀 #シミュレーションゲーム #プログラミング
 ```
 
 ## IG-2 — 歴史SLG単体（リール/単発投稿向け）
@@ -154,8 +154,7 @@ Developed by a team of 19 AI agents.
 ```
 「兵力ではなく"名分"を奪い合う」歴史シミュレーションを作りました⚔️
 
-源平争乱記 — 治承・寿永の乱（1180-1189）が舞台。
-院宣・官位・三種の神器といった正統性を巡って争います。
+源平争乱記 — 治承・寿永の乱（1180-1189）が舞台。院宣・官位・三種の神器といった正統性を巡って争います。
 
 戦は数だけでは決まらない。そこを遊びの中心に据えました。
 
@@ -165,8 +164,7 @@ Developed by a team of 19 AI agents.
 —
 A historical strategy game where you fight for legitimacy, not just troops.
 
-#歴史ゲーム #源平合戦 #シミュレーションゲーム #個人開発
-#ブラウザゲーム #ゲーム制作 #strategygame #indiedev #gamedev #history
+#歴史ゲーム #源平合戦 #シミュレーションゲーム #個人開発 #ブラウザゲーム #ゲーム制作 #strategygame #indiedev #gamedev #history
 ```
 
 ## IG-3 — AIチーム（ストーリーズ/リール向け）
@@ -174,16 +172,11 @@ A historical strategy game where you fight for legitimacy, not just troops.
 ```
 ゲームを作っているのは、19体のAIエージェントのチームです🤖
 
-プランナーが仕様を書き、デザイナーが絵を作り、
-コードジェネレーターが実装し、
-法務・セキュリティ・多言語の3体が並列でチェック。
-テスターが実際にブラウザで動かして、エバリュエーターが100点満点で採点。
-80点未満はやり直しです。
+プランナーが仕様を書き、デザイナーが絵を作り、コードジェネレーターが実装し、法務・セキュリティ・多言語の3体が並列でチェック。テスターが実際にブラウザで動かして、エバリュエーターが100点満点で採点。80点未満はやり直しです。
 
 このチーム表もサイトで公開しています。
 
-#AI駆動開発 #ClaudeCode #個人開発 #プログラミング
-#AIエージェント #buildinpublic #aitools #indiedev
+#AI駆動開発 #ClaudeCode #個人開発 #プログラミング #AIエージェント #buildinpublic #aitools #indiedev
 ```
 
 ---

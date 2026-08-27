@@ -29,11 +29,11 @@ const X_POSTS = [
 const INSTAGRAM_POSTS = [
   {
     images: ['ig-01-hero.jpg', 'ig-02-strategy.jpg', 'ig-03-board.jpg', 'ig-04-team.jpg'],
-    caption: `ブラウザだけで遊べるゲームを37本、無料公開しています🎮\n\n▫️歴史シミュレーション4本（三国志・戦国・源平・南北朝）\n▫️ボードゲーム20本（将棋・囲碁・麻雀・チェス・花札…）\n▫️アクション・シューティング・パズル\n\nすべてインストール不要。ライブラリもフレームワークも使わず、素のJavaScriptとCanvas APIだけで作りました。\n\n開発はAIエージェント19体のチーム制。企画から品質チェック、リリースまでの流れもサイトで公開しています。\n\nプロフィールのリンクから遊べます👆\n\n#個人開発 #ブラウザゲーム #無料ゲーム #ゲーム制作 #JavaScript #CanvasAPI #AI駆動開発 #indiedev #gamedev #browsergames #将棋 #麻雀 #シミュレーションゲーム #プログラミング`,
+    caption: `ブラウザだけで遊べるゲームを37本、無料公開しています🎮\n\n▫️歴史シミュレーション4本（三国志・戦国・源平・南北朝）\n▫️ボードゲーム20本（将棋・囲碁・麻雀・チェス・花札…）\n▫️アクション・シューティング・パズル\n\nすべてインストール不要。ライブラリもフレームワークも使わず、素のJavaScriptとCanvas APIだけで作りました。\n\n開発はAIエージェント19体のチーム制。企画から品質チェック、リリースまでの流れもサイトで公開しています。\n\nプロフィールのリンクから遊べます👆\n\n—\n37 free browser games, no install required.\nBuilt with vanilla JavaScript and the Canvas API — zero frameworks.\nDeveloped by a team of 19 AI agents.\n\n#個人開発 #ブラウザゲーム #無料ゲーム #ゲーム制作 #JavaScript #CanvasAPI #AI駆動開発 #indiedev #gamedev #browsergames #retrogaming #将棋 #麻雀 #シミュレーションゲーム #プログラミング`,
   },
   {
     images: ['ig-02-strategy.jpg'],
-    caption: `「兵力ではなく"名分"を奪い合う」歴史シミュレーションを作りました⚔️\n\n源平争乱記 — 治承・寿永の乱（1180-1189）が舞台。院宣・官位・三種の神器といった正統性を巡って争います。\n\n戦は数だけでは決まらない。そこを遊びの中心に据えました。\n\nブラウザで無料。インストール不要です。プロフィールのリンクから👆\n\n#歴史ゲーム #源平合戦 #シミュレーションゲーム #個人開発 #ブラウザゲーム #ゲーム制作 #strategygame #indiedev #gamedev #history`,
+    caption: `「兵力ではなく"名分"を奪い合う」歴史シミュレーションを作りました⚔️\n\n源平争乱記 — 治承・寿永の乱（1180-1189）が舞台。院宣・官位・三種の神器といった正統性を巡って争います。\n\n戦は数だけでは決まらない。そこを遊びの中心に据えました。\n\nブラウザで無料。インストール不要です。\nプロフィールのリンクから👆\n\n—\nA historical strategy game where you fight for legitimacy, not just troops.\n\n#歴史ゲーム #源平合戦 #シミュレーションゲーム #個人開発 #ブラウザゲーム #ゲーム制作 #strategygame #indiedev #gamedev #history`,
   },
   {
     images: ['ig-04-team.jpg'],
