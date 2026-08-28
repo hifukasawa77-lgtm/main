@@ -233,11 +233,15 @@ const RULE = {
   // 後続フェーズ(BattleScene)向けの下地。Phase Aでは未使用。
   combat: { breakBelow: 35, routBelow: 15 },
   // エンディング判定（spec 2.2節）。優先度③④⑥の制圧国数割合は spec 本文が明示する
-  // 「例:80%」「例:90%」をそのまま採用。①②は spec が数値を与えていない箇所のため、
-  // 「史実の中先代の乱トリガー最速ターン(4)を十分に超えて安定が続いた」目安としてここで決めた
+  // 「例:80%」「例:90%」をそのまま採用。①②は spec が数値を与えていない箇所のため、ここで決めた
   // 数値（完了報告で明記する仕様の補完）。
+  // ①の kenmuHoldTurns は、中先代の乱(nakasendai_no_ran)自体が年月固定(1335年7月)で
+  // それ以前は絶対に発火しないため、史実の建武の新政開始(1333年6月)からその年月までの
+  // 実際の間隔＝25ヶ月を採用する（15のままだと、中先代の乱が発火判定される前に
+  // ①建武の新政成功が必ず先着してしまい、足利尊氏が離反する分岐に絶対に到達できない
+  // 致命的な不具合だった。2026-08-28修正）。
   ending: {
-    kenmuHoldTurns: 15,             // ①建武の新政成功: 建武の新政開始からこのターン数、中先代の乱が不発のまま経過
+    kenmuHoldTurns: 25,             // ①建武の新政成功: 建武の新政開始からこのターン数、中先代の乱が不発のまま経過
     newBakufuAshikagaKokuRatio: 0.30, // ②新幕府樹立: 足利方が全国石高の30%以上を維持
     newBakufuNanchoKokuRatio: 0.08,   // ②新幕府樹立: 南朝方勢力の総石高が全国の8%未満に低下
     unificationProvinceRatio: 0.80,   // ③④南朝統一/北朝統一: 制圧国数の閾値（spec 2.2節の例示どおり80%）
@@ -935,12 +939,28 @@ function issueTobatsurei(state, courtId, issuingCampId, targetCampId) {
   });
   return { ok: true, action: 'tobatsurei', success: true, targetCampId, expiresTurn };
 }
+// 足利方が南朝(建武政権)に属したまま未離反の間は「恩賞不足への不満が募る期間」
+// （中先代の乱＝史実の離反イベント発火前）。aiTurn()の朝廷工作ステップ同様、
+// この期間かどうかの判定をここに一本化する。
+function ashikagaAwaitingBreak(state, campId, camp) {
+  return campId === 'ashikaga' && camp.court === 'nancho' && !state.flags.ashikagaBreak;
+}
 function regenCourtRel(state) {
   for (const rec of Object.values(state.courtRel)) {
     const court = state.courts[rec.courtId];
     if (!court || !court.active) continue;
     const camp = state.camps[rec.campId];
     if (!camp || camp.court !== rec.courtId) continue; // 未所属陣営は自然回復しない
+    if (ashikagaAwaitingBreak(state, rec.campId, camp)) {
+      // ここを他陣営と同じ自然回復のままにすると、プレイヤー/AIどちらが操作しても
+      // 誰も何もしないままcourtRelが際限なく積み上がり、中先代の乱(courtRel<25で発火)が
+      // 構造的に発火不能になる（「太平風雲記で足利尊氏が弓を引かないままゲームオーバー」の原因。
+      // 2026-08-28修正）。恩賞を求める武士たちの不満が募る期間として自然悪化させ、
+      // 史実通りの離反を既定の帰結にする。楽観的に持ち直したい場合は官位申請(courtKani)で
+      // 相殺できる。
+      rec.courtRel = clamp(rec.courtRel - RULE.court.courtRelRecoveryBase, 0, 100);
+      continue;
+    }
     const mul = court.heldBy ? RULE.court.courtRelRecoveryHolderMul : 1;
     rec.courtRel = clamp(rec.courtRel + RULE.court.courtRelRecoveryBase * mul, 0, 100);
   }
@@ -1637,8 +1657,7 @@ function aiTurn(state, campId) {
   // 機械的に封じてしまい、「①建武の新政成功がturn17でほぼ自動確定する」不具合があった
   // （2026-08-18 game-balanceエージェント診断。足利方をプレイヤーが選ぶと離反は史実通り発火するが、
     // 今度はAIに侵攻ロジックが無いため他のエンディングにも到達しにくい非対称も判明）。
-  const isAshikagaBeforeBreak = campId === 'ashikaga' && camp.court === 'nancho' && !state.flags.ashikagaBreak;
-  if (camp.court && actions < maxA && !isAshikagaBeforeBreak) {
+  if (camp.court && actions < maxA && !ashikagaAwaitingBreak(state, campId, camp)) {
     const rel = courtRelValue(state, campId, camp.court);
     if (rel < 95) { courtPropose(state, campId, camp.court, 'kani'); actions++; }
   }
