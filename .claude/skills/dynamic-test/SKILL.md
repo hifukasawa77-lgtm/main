@@ -46,6 +46,8 @@ bash .claude/skills/dynamic-test/run.sh --changed
 **検査を変えたら必ず故障を仕込んで✗が出ることを確かめる**（JSエラー・ローカル404・未描画canvasの3種）。
 検査が緑になったこと自体を成果にしない。
 
+**このサンドボックスのヘッドレスChromiumはブラウザ直の外部HTTPSへ張れず、`HTTPS_PROXY` も自動では読まない**（`context.proxy` を明示指定しても一部オリジンは到達前に弾かれる）。Webフォント等、実物を使ったレンダリングをどうしても確認したい場合は、`curl -x $HTTPS_PROXY --cacert /root/.ccr/ca-bundle.crt` でプロキシのCA経由の正規ルートから実バイトを取得し、Playwrightの `page.route()` でその実バイトを代理応答する。**コミットするHTMLは変更せずに**実物の見た目を検証できる。`--ignore-certificate-errors` でのTLS検証無効化は使わない。
+
 ## FAIL時の差し戻しフォーマット（→ code-generator）
 
 ```

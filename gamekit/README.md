@@ -39,7 +39,7 @@ A micro-engine + agent workflow for producing Canvas games inside Claude Code. N
 
 - `GameKit.Engine` — deltaTime ベースのゲームループ（0.1sキャップ）、`isPaused` フラグ、シーン遷移 `changeScene()`
 - `GameKit.Scene` — `enter / exit / update(dt, game) / draw(ctx, game)` を上書きする基底クラス
-- `GameKit.Input` — キーボード（`isDown` / `justPressed` / `axis()`）+ マウス・タッチ統合ポインタ
+- `GameKit.Input` — キーボード（`isDown` / `justPressed` / `axis()`）+ マウス・タッチ統合ポインタ。**同じ`canvas`にシーン側で独自の`touchstart`/`touchmove`等を追加登録すると、GameKit本体のリスナーと二重に発火する**（`preventDefault`は他のリスナーを止めない）。ピンチズーム・パン等をシーン側だけで足す場合、実害は軽微（パン開始フレームに一瞬別の要素が選択される等）だが、`update()`のクリック判定でピンチ/ドラッグ中・直後を明示的に抑制するフラグを設けること（taihei.htmlの地図ズーム機能で実証）。
 - `GameKit.Assets` — 画像・JSONのプリロード。404は例外になるので Dynamic-Tester で検知可能
 - `GameKit.Sprite` — スプライトシートのフレームアニメーション
 - `GameKit.Collision` — AABB / 円 / 矩形×円（`.claude/skills/game-dev` のガイドライン準拠）
