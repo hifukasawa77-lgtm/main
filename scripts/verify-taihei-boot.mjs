@@ -263,6 +263,18 @@ async function runLongPlay(port, camp) {
         await clickCanvas(720, 742); // 「次へ」ボタン中央（1クリック目は文字送りスキップも兼ねる）
         guard++;
       }
+    } else if (name === 'BattleScene') {
+      // 史実イベントの強制合戦。史実側を勝たせ、結果確認クリックで進行を再開する。
+      await page.evaluate(() => {
+        const D = window.TAIHEI_DEBUG;
+        const scene = D.game.scene;
+        const expected = scene.spec && scene.spec.expectedWinner;
+        if (!expected) return;
+        for (const u of scene.b.units) if (u.side !== expected) u.troops = 0;
+        scene._endRound(D.game);
+      });
+      await clickCanvas(720, 450);
+      await page.waitForTimeout(70);
     } else if (name === 'EndingScene') {
       endingReached = true;
       break;
