@@ -1132,7 +1132,7 @@ const TIMELINE_EVENTS = [
     ] },
 
   { id: 'kasagiyama', jp: '笠置山の戦い', en: 'Battle of Mount Kasagi', year: 1331, month: 9,
-    battle: { campId: 'hojo', defCampId: 'nancho', fromProvinceId: 'sagami', toProvinceId: 'yamashiro', generalId: 'hojo_nakatoki', expectedWinner: 'atk', playerSide: 'atk' },
+    battle: { campId: 'hojo', defCampId: 'nancho', fromProvinceId: 'sagami', toProvinceId: 'yamashiro', generalId: 'hojo_nakatoki', expectedWinner: 'atk', playerSide: 'atk', atkTroops: 3000, defTroops: 500, defenseMultiplier: 0.48 },
     condition: (st) => st.firedEvents.genko_incident != null && generalAlive(st, 'godaigo'),
     effect: (st) => { st.flags.godaigoExiled = true; adjustLegitimacy(st, 'nancho', -8); },
     lines: [
@@ -1141,7 +1141,7 @@ const TIMELINE_EVENTS = [
     ] },
 
   { id: 'akasaka_castle', jp: '赤坂城の戦い', en: 'Battle of Akasaka Castle', year: 1331, month: 10,
-    battle: { campId: 'hojo', defCampId: 'nancho', fromProvinceId: 'sagami', toProvinceId: 'kawachi', generalId: 'hojo_moritoki', defGeneralId: 'kusunoki_masashige', expectedWinner: 'def', playerSide: 'def' },
+    battle: { campId: 'hojo', defCampId: 'nancho', fromProvinceId: 'sagami', toProvinceId: 'kawachi', generalId: 'hojo_moritoki', defGeneralId: 'kusunoki_masashige', expectedWinner: 'def', forcedWinner: 'def', playerSide: 'def', atkTroops: 3000, defTroops: 400, defenseMultiplier: 0.12 },
     condition: (st) => generalAlive(st, 'kusunoki_masashige') && campAlive(st, 'nancho'),
     effect: (st) => { adjustLegitimacy(st, 'nancho', 6); const g = st.generals.kusunoki_masashige; if (g) g.loyalty = Math.min(100, g.loyalty + 5); },
     lines: [
@@ -1158,7 +1158,7 @@ const TIMELINE_EVENTS = [
     ] },
 
   { id: 'chihaya_castle', jp: '千早城の戦い', en: 'Battle of Chihaya Castle', year: 1333, month: 2,
-    battle: { campId: 'hojo', defCampId: 'nancho', fromProvinceId: 'sagami', toProvinceId: 'kawachi', generalId: 'hojo_moritoki', defGeneralId: 'kusunoki_masashige', expectedWinner: 'def', playerSide: 'def' },
+    battle: { campId: 'hojo', defCampId: 'nancho', fromProvinceId: 'sagami', toProvinceId: 'kawachi', generalId: 'hojo_moritoki', defGeneralId: 'kusunoki_masashige', expectedWinner: 'def', playerSide: 'def', atkTroops: 5000, defTroops: 600, defenseMultiplier: 0.1 },
     condition: (st) => generalAlive(st, 'kusunoki_masashige') && campAlive(st, 'nancho'),
     effect: (st) => { adjustLegitimacy(st, 'nancho', 10); bushiIdeologyPenalty(st, ['bakufu'], -4); },
     lines: [
@@ -3831,8 +3831,10 @@ function initBattle(state, spec) {
   }
   const atkCampId = spec.campId;
   const defCampId = spec.defCampId || state.provinces[spec.toProvinceId].owner; // null = 在地勢力（独立）
-  const atkTroops = state.provinces[spec.fromProvinceId].garrison;
-  const defTroops = state.provinces[spec.toProvinceId].garrison;
+  // 史実合戦は国の平時駐屯兵ではなくイベント固有の相対兵力を使う。
+  // 数字は史料上の誇張された絶対数を断定せず、「幕府大軍 対 少数籠城軍」の比率をゲーム尺度へ正規化したもの。
+  const atkTroops = spec.atkTroops || state.provinces[spec.fromProvinceId].garrison;
+  const defTroops = spec.defTroops || state.provinces[spec.toProvinceId].garrison;
   const mkUnits = (campId, troops, side, generalId) => {
     const mix = pickUnitMix(state, campId, generalId);
     const n = Math.min(5, Math.max(2, Math.round(troops / 250)));
@@ -3891,7 +3893,8 @@ const TBattle = {
     const tKey = TBattle.terrainKeyAt(b, def.hx, def.hy);
     let terrDef = (TERRAIN_T[tKey] || TERRAIN_T.plain).def;
     if (tKey === 'mountain' && (def.type === 'nobushi' || (def.generalId && def.generalId.indexOf('kusunoki') === 0))) terrDef *= 1.3;
-    const base = 24 * (atk.troops / 100) * A.atk / (D.def * terrDef);
+    let base = 24 * (atk.troops / 100) * A.atk / (D.def * terrDef);
+    if (b.spec.defenseMultiplier && atk.side === 'atk' && def.side === 'def') base *= b.spec.defenseMultiplier;
     const jitter = 0.85 + b.rng() * 0.3;
     return Math.max(1, Math.round(base * adv * jitter));
   },
@@ -3912,7 +3915,10 @@ const TBattle = {
   alive(b, side) { return b.units.filter((u) => u.side === side && u.troops > 0); },
   over(b) {
     if (!TBattle.alive(b, 'atk').length) return { done: true, winner: 'def', why: '寄手が崩れた', whyEn: 'The attacking force broke.' };
-    if (!TBattle.alive(b, 'def').length) return { done: true, winner: 'atk', why: '守備側が崩れた', whyEn: 'The defenders broke.' };
+    if (!TBattle.alive(b, 'def').length) {
+      if (b.spec.forcedWinner === 'def') return { done: true, winner: 'def', why: '楠木軍は奇策で幕府の大軍を退けた', whyEn: 'Kusunoki’s stratagems denied the vast shogunate army victory.' };
+      return { done: true, winner: 'atk', why: '守備側が崩れた', whyEn: 'The defenders broke.' };
+    }
     if (b.round > b.maxRounds) return { done: true, winner: 'def', why: '日が暮れ、寄手は退いた', whyEn: 'Night fell; the attackers withdrew.' };
     return { done: false };
   },
@@ -4109,12 +4115,16 @@ class BattleScene extends GameKit.Scene {
     const x = BL.side.x + 14, w = BL.side.w - 28;
     const atkLabel = campLabelOf(this.state, this.b.atkCampId);
     const defLabel = this.b.defCampId ? campLabelOf(this.state, this.b.defCampId) : { jp: '在地勢力', en: 'Local Forces' };
+    const atkTotal = this.b.units.filter((u) => u.side === 'atk').reduce((sum, u) => sum + u.troops, 0);
+    const defTotal = this.b.units.filter((u) => u.side === 'def').reduce((sum, u) => sum + u.troops, 0);
     frame(ctx, x, y, w, 72, { fill: 'rgba(0,0,0,0.24)', stroke: 'rgba(148,163,184,0.22)', radius: 4 });
     ctx.fillStyle = campColorOf(this.b.atkCampId); ctx.fillRect(x, y, 5, 32);
     txt(ctx, `攻撃側　${atkLabel.jp}`, x + 14, y + 5, { font: '600 12px "Hiragino Mincho ProN", serif', color: campColorOf(this.b.atkCampId) });
+    txt(ctx, `兵力 ${atkTotal}`, x + w - 8, y + 5, { font: '600 11px sans-serif', color: '#e2e8f0', align: 'right' });
     txt(ctx, `Attacker: ${atkLabel.en}`, x + 14, y + 21, { font: '9px sans-serif', color: '#94a3b8' });
     ctx.fillStyle = campColorOf(this.b.defCampId || 'independent'); ctx.fillRect(x, y + 38, 5, 32);
     txt(ctx, `守備側　${defLabel.jp}`, x + 14, y + 43, { font: '600 12px "Hiragino Mincho ProN", serif', color: campColorOf(this.b.defCampId || 'independent') });
+    txt(ctx, `兵力 ${defTotal}`, x + w - 8, y + 43, { font: '600 11px sans-serif', color: '#e2e8f0', align: 'right' });
     txt(ctx, `Defender: ${defLabel.en}`, x + 14, y + 59, { font: '9px sans-serif', color: '#94a3b8' });
     y += 88;
     txt(ctx, '兵科三すくみ / Unit Triangle', x, y, { font: '600 12px "Hiragino Mincho ProN", serif', color: '#22d3ee' }); y += 20;
