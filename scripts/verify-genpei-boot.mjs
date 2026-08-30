@@ -628,7 +628,20 @@ const brush2 = await page.evaluate(() => {
   G.gotoMap('s1183', 'kamakura', 'normal');
   const secondOpen = G.game.scene.help.open;
 
-  return { pagesCount: G.HELP_PAGES.length, afterNext, closedAfter, easyN, normalN, hardN, easyMul, hardMul, migratedDifficulty, firstOpen, secondOpen };
+  // 45. BGM: ensure/setMood/toggle が例外なく動く（AudioContextはユーザー操作前提のため音は検証しない）
+  let bgmError = null, bgmEnsured = false, moodBattle = null, moodCalm = null, toggledOff = null, toggledOn = null;
+  try {
+    bgmEnsured = G.BGM.ensure();
+    G.BGM.setMood('battle'); moodBattle = G.BGM.mood;
+    G.BGM.setMood('calm'); moodCalm = G.BGM.mood;
+    const before = G.BGM.enabled;
+    G.BGM.toggle(); toggledOff = G.BGM.enabled;
+    G.BGM.toggle(); toggledOn = G.BGM.enabled;
+    if (toggledOn !== before) bgmError = `toggle往復で元に戻らない: ${before}→${toggledOff}→${toggledOn}`;
+  } catch (e) { bgmError = String(e); }
+
+  return { pagesCount: G.HELP_PAGES.length, afterNext, closedAfter, easyN, normalN, hardN, easyMul, hardMul, migratedDifficulty, firstOpen, secondOpen,
+    bgmError, bgmEnsured, moodBattle, moodCalm };
 });
 check('40. ★遊び方ヘルプ: ページ送り・閉じるが機能する',
   brush2.pagesCount >= 3 && brush2.afterNext === 1 && brush2.closedAfter === false, JSON.stringify(brush2));
@@ -640,6 +653,9 @@ check('43. ★旧セーブ互換: difficulty欠落は migrateState が "normal" 
   brush2.migratedDifficulty === 'normal', JSON.stringify(brush2));
 check('44. ★遊び方ヘルプ: 新規ゲーム1ターン目のみ自動表示（localStorage一度きり）',
   brush2.firstOpen === true && brush2.secondOpen === false, JSON.stringify(brush2));
+check('45. ★BGM: ensure/setMood/toggleが例外なく動き、mood切替・toggle往復が正しい',
+  brush2.bgmError === null && brush2.bgmEnsured === true && brush2.moodBattle === 'battle' && brush2.moodCalm === 'calm',
+  JSON.stringify(brush2));
 
 /* 39. 実際の BattleScene で背景と可動駒の画像が読み込まれること */
 await page.evaluate(() => window.GENPEI_DEBUG.gotoBattle('s1180', 'kamakura', 'kokufu_izu', 'sekisho_usui'));

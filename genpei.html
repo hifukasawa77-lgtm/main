@@ -2047,15 +2047,18 @@ class TitleScene extends GameKit.Scene {
       { id: 'new', x: W / 2 - 190, y: 470, w: 380, h: 58, jp: '新規に始める', en: 'New Game' },
       { id: 'cont', x: W / 2 - 190, y: 540, w: 380, h: 58, jp: '続きから', en: 'Continue', disabled: !this.hasSave },
     ];
-    this.helpBtn = { id: 'help', x: W / 2 - 190, y: 610, w: 380, h: 44, jp: '遊び方 / How to Play', font: '600 15px "Hiragino Mincho ProN", serif', radius: 6 };
+    this.helpBtn = { id: 'help', x: W / 2 - 190, y: 610, w: 320, h: 44, jp: '遊び方 / How to Play', font: '600 15px "Hiragino Mincho ProN", serif', radius: 6 };
+    this.bgmBtn = { id: 'bgm', x: W / 2 + 140, y: 610, w: 50, h: 44, jp: BGM.enabled ? '♪' : '🔇', font: '600 18px sans-serif', radius: 6 };
     this.help = { open: false, page: 0 };
   }
   update(dt, g) {
     this.t += dt; this.bd.update(dt);
     const p = g.input.pointer;
     if (!p.justPressed) return;
+    if (!BGM.ac) { BGM.ensure(); if (BGM.enabled) BGM.start(); }
     if (this.help.open) { handleHelpClick(this.help, p); return; }
     if (hit(this.helpBtn, p)) { g.audio.jingle([{ f: 440, d: 0.07 }]); this.help.open = true; this.help.page = 0; return; }
+    if (hit(this.bgmBtn, p)) { BGM.toggle(); this.bgmBtn.jp = BGM.enabled ? '♪' : '🔇'; return; }
     for (const b of this.buttons) {
       if (!hit(b, p) || b.disabled) continue;
       g.audio.jingle([{ f: 392, d: 0.09 }, { f: 523, d: 0.14 }]);
@@ -2085,6 +2088,7 @@ class TitleScene extends GameKit.Scene {
     const p = g.input.pointer;
     for (const b of this.buttons) button(ctx, b, hit(b, p) && !b.disabled);
     button(ctx, this.helpBtn, hit(this.helpBtn, p));
+    button(ctx, this.bgmBtn, hit(this.bgmBtn, p));
     if (this.staleSave) txt(ctx, '保存データの形式が古いため読み込めません（新規に始めてください）', W / 2, 666, { font: '12px sans-serif', color: '#fca5a5', align: 'center' });
     txt(ctx, DATA.source === 'embed' ? 'データ: 埋め込みシード（オフライン）' : `データ: assets/genpei/ ＋ kyoten_ichi.csv（拠点 ${DATA.kyoten.length}）`,
       W / 2, H - 32, { font: '11px sans-serif', color: '#4b5563', align: 'center' });
@@ -2279,6 +2283,7 @@ const HELP_PAGES = [
     '◆ 全国図で国をクリック → 拡大図で拠点をクリックして選択。ホイールで拡大、右ドラッグで地図移動',
     '◆ 下部コマンドバーから内政・軍事・人事・外交・計略・列伝・情報を開く。「ターン終了」で月が進む',
     '◆ 保存は自動（オートセーブ）。タイトル画面の「続きから」で再開できる',
+    '◆ 右上の ♪ でBGM切替、？ でこの案内を再表示',
   ] },
   { title: '名分と勝利条件', en: 'Legitimacy & Victory', lines: [
     '◆ 名分＝院宣・宣旨・官位・三種の神器などの権威の総称。城を落とすより名分を得ることが最終的な決め手になる',
@@ -2325,6 +2330,76 @@ function handleHelpClick(help, p) {
   else if (!r.next.disabled && hit(r.next, p)) help.page = pg + 1;
   return true;
 }
+
+/* ============================================================================
+ * 6.6 BGM — Web Audio API プロシージャル生成（音声ファイル不要・sengoku.html踏襲）
+ *     ★ game.audio._ac() で GameKit.Sfx と同じ AudioContext を共有する
+ *       （AudioContext を2つ持つとブラウザによっては合計出力が絞られる）
+ * ========================================================================== */
+const BGM = {
+  enabled: (() => { try { return localStorage.getItem('genpeiBgm') !== '0'; } catch (_) { return true; } })(),
+  ac: null, master: null, drone: [], mood: 'calm', _timer: null, _step: 0,
+  themes: {
+    calm:   { root: 220,   interval: 900, steps: [0, 3, 5, 7, 5, 3], type: 'sine',     density: 0.5, drone: 0.040 },
+    battle: { root: 174.6, interval: 430, steps: [0, 3, 7, 5, 8, 7, 3, 0], type: 'triangle', density: 0.8, drone: 0.058 },
+  },
+  scale: [0, 2, 3, 7, 9, 12, 14, 15, 19, 21], // 呂旋法寄りの音階（sengoku.htmlとは別音階で聞き分けられるように）
+  theme() { return this.themes[this.mood] || this.themes.calm; },
+  ensure() {
+    if (this.ac) return true;
+    try {
+      this.ac = game.audio._ac(); this.master = this.ac.createGain(); this.master.gain.value = this.enabled ? 0.20 : 0; this.master.connect(this.ac.destination);
+      [0, 7].forEach((semi, i) => {
+        const o = this.ac.createOscillator(), g = this.ac.createGain();
+        o.type = i ? 'triangle' : 'sine'; o.frequency.value = 110 * Math.pow(2, semi / 12); g.gain.value = 0.0001;
+        o.connect(g).connect(this.master); o.start(); this.drone.push({ o, g, semi });
+      });
+      this.applyTheme(true);
+    } catch (_) { this.ac = null; return false; }
+    return true;
+  },
+  applyTheme(immediate) {
+    if (!this.ac) return;
+    const t = this.theme(), now = this.ac.currentTime, glide = immediate ? 0.01 : 0.6;
+    this.drone.forEach((v, i) => {
+      v.o.frequency.cancelScheduledValues(now);
+      v.o.frequency.linearRampToValueAtTime(t.root / 2 * Math.pow(2, (i ? 7 : 0) / 12), now + glide);
+      v.g.gain.setTargetAtTime(t.drone * (i ? 0.55 : 1), now, glide / 2);
+    });
+  },
+  freq(step, octave) { return this.theme().root * Math.pow(2, this.scale[(step + this.scale.length) % this.scale.length] / 12 + (octave || 0)); },
+  tone(freq, dur, vol, type, attack) {
+    const ac = this.ac, now = ac.currentTime, o = ac.createOscillator(), g = ac.createGain(), f = ac.createBiquadFilter();
+    o.type = type || 'sine'; o.frequency.value = freq; f.type = 'lowpass'; f.frequency.value = type === 'sawtooth' ? 1000 : 2200;
+    const a = attack || 0.02;
+    g.gain.setValueAtTime(0.0001, now); g.gain.linearRampToValueAtTime(vol, now + a); g.gain.exponentialRampToValueAtTime(0.0005, now + dur);
+    o.connect(f).connect(g).connect(this.master); o.start(now); o.stop(now + dur + 0.08);
+  },
+  taiko(strength, long) {
+    const ac = this.ac, now = ac.currentTime, o = ac.createOscillator(), g = ac.createGain(), d = long ? 0.4 : 0.22;
+    o.type = 'sine'; o.frequency.setValueAtTime(long ? 90 : 130, now); o.frequency.exponentialRampToValueAtTime(long ? 34 : 48, now + d);
+    g.gain.setValueAtTime(strength, now); g.gain.exponentialRampToValueAtTime(0.001, now + d);
+    o.connect(g).connect(this.master); o.start(now); o.stop(now + d + 0.03);
+  },
+  play() {
+    const t = this.theme(), i = this._step++, d = t.steps[i % t.steps.length];
+    if (this.mood === 'battle') {
+      this.taiko(i % 4 === 0 ? 0.26 : 0.15, i % 4 === 0);
+      if (Math.random() < t.density) this.tone(this.freq(d, i % 4 === 2 ? 1 : 0), 0.28, 0.085, 'triangle', 0.012);
+    } else {
+      if (i % 4 === 0 || Math.random() < t.density) this.tone(this.freq(d, i % 8 === 0 ? 1 : 0), 0.8, 0.065, 'sine', 0.06);
+      if (i % 8 === 3) this.tone(this.freq(d + 2, -1), 0.44, 0.03, 'triangle', 0.012);
+    }
+  },
+  start() { if (this._timer || !this.ensure()) return; const next = () => { if (!this.ac) return; this.play(); this._timer = setTimeout(next, this.theme().interval); }; next(); },
+  setMood(m) { if (!this.themes[m]) m = 'calm'; if (this.mood === m) return; this.mood = m; this._step = 0; this.applyTheme(); },
+  setEnabled(on) {
+    this.enabled = on;
+    try { localStorage.setItem('genpeiBgm', on ? '1' : '0'); } catch (_) { /* ignore */ }
+    if (this.master && this.ac) this.master.gain.setTargetAtTime(on ? 0.20 : 0, this.ac.currentTime, 0.12);
+  },
+  toggle() { this.ensure(); this.setEnabled(!this.enabled); if (this.enabled) this.start(); },
+};
 
 /* ============================================================================
  * 7. MapScene — 参照UIの三段構え（全国図 → 国の拡大図 → 拠点の周辺図）
@@ -2376,7 +2451,10 @@ class MapScene extends GameKit.Scene {
     this.panel = null; this.panelScroll = 0; this.panelButtons = [];
     this.cmdButtons = this._layoutCommands();
     this.helpBtn = { id: 'help', x: L.bar.x + L.bar.w - 26, y: L.bar.y + 1, w: 24, h: 24, jp: '？', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4 };
+    this.bgmBtn = { id: 'bgm', x: L.bar.x + L.bar.w - 54, y: L.bar.y + 1, w: 24, h: 24, jp: BGM.enabled ? '♪' : '🔇', font: '600 13px sans-serif', radius: 4 };
     this.help = { open: false, page: 0 };
+    BGM.setMood('calm');
+    if (!BGM.ac) { BGM.ensure(); if (BGM.enabled) BGM.start(); }
     // 初回のみ遊び方を自動表示（新規ゲームの1ターン目・他オーバーレイが無い時。sengoku.html踏襲）
     if (this.state.turn === 1) {
       try {
@@ -2578,6 +2656,7 @@ class MapScene extends GameKit.Scene {
 
     if (p.justPressed && this.help.open) { handleHelpClick(this.help, p); return; }
     if (p.justPressed && this.helpBtn && hit(this.helpBtn, p)) { g.audio.jingle([{ f: 440, d: 0.07 }]); this.help.open = true; this.help.page = 0; return; }
+    if (p.justPressed && this.bgmBtn && hit(this.bgmBtn, p)) { BGM.toggle(); this.bgmBtn.jp = BGM.enabled ? '♪' : '🔇'; return; }
     if (p.justPressed && this.panel) {
       // 開いているパネルの操作を最優先で拾う（背後の地図に吸われないように）
       for (const b of this.panelButtons) {
@@ -2750,7 +2829,8 @@ class MapScene extends GameKit.Scene {
       const held = st.kyotoHoldMonths || 0;
       put(`京 ${held}/${RULE.capital.holdMonths}ヶ月`, held >= RULE.capital.holdMonths ? '#5eead4' : held > 0 ? '#f9d423' : '#8b98ab');
     }
-    if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 40, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
+    if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 68, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
+    button(ctx, this.bgmBtn, false);
     button(ctx, this.helpBtn, false);
   }
 
@@ -3902,6 +3982,7 @@ class BattleScene extends GameKit.Scene {
   enter() {
     this.sel = null; this.hover = null; this.notice = null; this.noticeT = 0;
     this.reach = null; this.result = null;
+    BGM.setMood('battle');
     const s = Math.min((BL.board.w - 40) / (Math.sqrt(3) * (HEX.cols + 0.5)), (BL.board.h - 40) / (1.5 * HEX.rows + 0.5));
     this.hs = s;
     this.ox = BL.board.x + 20 + s * Math.sqrt(3) / 2;
@@ -4377,7 +4458,7 @@ window.GENPEI_DEBUG = {
   gotoMap: (scnId, fid, difficulty) => { game.changeScene(new MapScene(buildState(scnId, fid, difficulty))); return true; },
   gotoTitle: () => { game.changeScene(new TitleScene()); return true; },
   state: () => (game.scene && game.scene.state) || null,
-  DIFFICULTIES, difficultyOf, HELP_PAGES, drawHelpOverlay, handleHelpClick, helpButtonRects,
+  DIFFICULTIES, difficultyOf, HELP_PAGES, drawHelpOverlay, handleHelpClick, helpButtonRects, BGM,
 };
 </script>
 </body>
