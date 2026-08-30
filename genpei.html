@@ -112,6 +112,7 @@
 </div>
 
 <script src="gamekit/gamekit.js"></script>
+<script src="achievements/genpei.js"></script>
 <script>
 'use strict';
 
@@ -941,6 +942,7 @@ function buildState(scenarioId, factionId, difficulty) {
     year: scn.start[0], month: scn.start[1], turn: 1,
     endYear: scn.end[0], endMonth: scn.end[1],
     factions: {}, kyoten: {}, bands: {}, suigun: {}, log: [], result: null, chotekiCount: 0,
+    achieveStats: { bloodlessOpenCount: 0, armyMarchedCount: 0, foodNegativeDuringFamine: false },
   };
   for (const fid of Object.keys(FACTIONS)) {
     state.factions[fid] = {
@@ -996,6 +998,7 @@ function migrateState(state) {
   }
   if (state.kyotoHoldMonths == null) state.kyotoHoldMonths = 0;
   if (!DIFFICULTIES[state.difficulty]) state.difficulty = 'normal';
+  if (!state.achieveStats) state.achieveStats = { bloodlessOpenCount: 0, armyMarchedCount: 0, foodNegativeDuringFamine: false };
   // 一騎討ちの戦績（列伝表示用・Could C-01）。武将id → {wins, losses}
   if (!state.duelRecord) state.duelRecord = {};
   return state;
@@ -1093,6 +1096,10 @@ function tryBloodlessOpen(state, fid, kyotenId) {
     state.factions[fid].alive = true;
     addRep(state, fid, RULE.rep.bloodlessOpen);
     pushLog(state, `${k.jp}の在庁官人が門を開いた——${FACTIONS[fid].jp}、戦わずして国を得る`);
+    if (fid === state.faction) {
+      state.achieveStats.bloodlessOpenCount++;
+      if (typeof checkAchievementsEvent === 'function') checkAchievementsEvent('bloodless_open', { isPlayer: true });
+    }
     return { ok: true, opened: true };
   }
   st.openRetryUntil = state.turn + RULE.open.retryTurns;
@@ -1112,6 +1119,7 @@ function declareChoteki(state, fid, targetId) {
     const t = state.factions[targetId];
     t.choteki = true; t.chotekiUntil = state.turn + RULE.choteki.duration;
     pushLog(state, `院宣くだる——${FACTIONS[targetId].jp}、朝敵となる`);
+    if (typeof checkAchievementsEvent === 'function') checkAchievementsEvent('choteki_declared', { targetFid: targetId, myFid: state.faction });
     return { ok: true, done: true };
   }
   if (fid === state.faction) pushLog(state, '奏請は容れられなかった');
@@ -1136,6 +1144,7 @@ function pillage(state, fid, kyotenId) {
   addRep(state, fid, RULE.rep.pillage + (jisha ? RULE.rep.seizeJisha : 0),
     fid === state.faction ? `${k.jp}で乱妨取りをした——兵糧 ${gain}、そして京に悪評が立つ` : null);
   f.courtInfluence = clamp(f.courtInfluence + RULE.court.pillage, 0, RULE.court.max);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('pillaged', {});
   return { ok: true, gain };
 }
 function donateJisha(state, fid, kyotenId) {
@@ -1146,6 +1155,7 @@ function donateJisha(state, fid, kyotenId) {
   if (f.gold < RULE.econ.jishaDonateCost) return { ok: false, why: '金が足りない' };
   f.gold -= RULE.econ.jishaDonateCost;
   addRep(state, fid, RULE.rep.donateJisha, fid === state.faction ? `${k.jp}へ寄進した` : null);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('donation_made', {});
   return { ok: true };
 }
 
@@ -1156,6 +1166,7 @@ function donateCourt(state, fid) {
   f.gold -= RULE.court.donateCost;
   f.courtInfluence = clamp(f.courtInfluence + RULE.court.donate, 0, RULE.court.max);
   addRep(state, fid, RULE.rep.donateCourt);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('donation_made', {});
   return { ok: true };
 }
 
@@ -1169,6 +1180,7 @@ function grantAndo(state, fid, bandId) {
   f.reputation -= RULE.hoko.andoCost;
   b.ando = true; b.hoko = clamp(b.hoko + RULE.hoko.andoGain, 0, 100);
   pushLog(state, `${b.nameJP}の本領を安堵した`);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('reward_granted', {});
   return { ok: true };
 }
 function grantShinon(state, fid, bandId, kyotenId) {
@@ -1179,6 +1191,7 @@ function grantShinon(state, fid, bandId, kyotenId) {
   b.shinon = kyotenId; b.debt = 0;
   b.hoko = clamp(b.hoko + RULE.hoko.shinonGain, 0, 100);
   pushLog(state, `${b.nameJP}に${DATA.kyotenById[kyotenId].jp}を宛て行った`);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('reward_granted', {});
   return { ok: true };
 }
 function purgeBand(state, fid, bandId) {
@@ -1188,6 +1201,7 @@ function purgeBand(state, fid, bandId) {
   addRep(state, fid, RULE.rep.purge);
   for (const o of Rule.bandsOf(state, fid)) o.hoko = clamp(o.hoko - 5, 0, 100);
   pushLog(state, `${b.nameJP}を誅した——味方の胸に疑いが残る`);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('band_purged', {});
   return { ok: true };
 }
 function tryRecruit(state, fid, bandId, gift) {
@@ -1206,6 +1220,7 @@ function tryRecruit(state, fid, bandId, gift) {
     pushLog(state, from
       ? `${b.nameJP}が${FACTIONS[from].jp}を離れ${FACTIONS[fid].jp}に与した——不義と京では言う`
       : `${b.nameJP}が${FACTIONS[fid].jp}に与した`);
+    if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('band_recruited', { poached: !!from });
     return { ok: true, joined: true, poached: !!from };
   }
   if (fid === state.faction) pushLog(state, `${b.nameJP}は動かなかった`);
@@ -1332,7 +1347,10 @@ function endTurn(state, audio) {
         const st = state.kyoten[k.id];
         st.garrison = Math.max(0, Math.round(st.garrison * (1 - RULE.econ.starveTroop)));
       }
-      if (fid === state.faction) pushLog(state, '兵糧が尽き、兵が逃散した');
+      if (fid === state.faction) {
+        pushLog(state, '兵糧が尽き、兵が逃散した');
+        if (Rule.famineActive(state)) state.achieveStats.foodNegativeDuringFamine = true;
+      }
     }
   }
   // 5. 院影響力（献納・畿内の国府・院の身柄・自然減衰）
@@ -1427,6 +1445,25 @@ function endTurn(state, audio) {
     // 一度でも終幕まで見届けたら「もし清盛が死なざれば」を解禁する。
     // ★ここで書かないと unlockable のシナリオは誰にも開かれないまま残る
     save.set('unlocked_sif', true);
+    if (typeof checkAchievementsEvent === 'function') {
+      checkAchievementsEvent('scenario_ended', {
+        win: v.win, victory: FACTIONS[state.faction].victory, faction: state.faction,
+        scenario: state.scenario, jingiLost: !!state.jingiLost,
+      });
+    }
+  }
+  if (typeof checkAchievementsPoll === 'function') {
+    checkAchievementsPoll({
+      faction: state.faction, scenario: state.scenario,
+      meibun: Rule.calcMeibun(state, state.faction),
+      seats: Rule.ownedKyoten(state, state.faction).filter((k) => k.type === 'kokufu').length,
+      kyotoHoldMonths: state.kyotoHoldMonths,
+      jingiLost: !!state.jingiLost,
+      famineJustEnded: wasFamineActive && !Rule.famineActive(state),
+      foodNegativeDuringFamine: state.achieveStats.foodNegativeDuringFamine,
+      armyMarchedCount: state.achieveStats.armyMarchedCount,
+      bloodlessOpenCount: state.achieveStats.bloodlessOpenCount,
+    });
   }
   // 飢饉(kikin) の開始検出。false→true になった最初のターンだけ、沈んだ不吉な低音を1回鳴らす
   if (audio && !wasFamineActive && Rule.famineActive(state)) {
@@ -3127,6 +3164,8 @@ class MapScene extends GameKit.Scene {
       return;
     }
     // ★プレイヤーの出兵はヘックス合戦へ。AI 同士は applyActions の自動解決のまま
+    st.achieveStats.armyMarchedCount++;
+    if (typeof checkAchievementsEvent === 'function') checkAchievementsEvent('army_marched', { fid: me });
     g.changeScene(new BattleScene(st, { fid: me, from: src.id, to: k.id, troops }, (res) => {
       st.kyoten[src.id].garrison = Math.max(0, st.kyoten[src.id].garrison - troops);
       if (res.winner === 'atk') {
@@ -3910,6 +3949,9 @@ const Battle = {
         if (p <= 0 || b.rng() >= p) continue;
         state.suigun[sid].faction = other;
         b.defected.push(sid);
+        if (typeof checkAchievementsEvent === 'function') {
+          checkAchievementsEvent('suigun_defected', { suigunId: sid, fromFid: mine, toFid: other, myFid: state.faction });
+        }
         // 離反した水軍の船に乗る隊が寝返る
         const flip = alive[alive.length - 1];
         if (flip) {
@@ -4083,6 +4125,10 @@ class BattleScene extends GameKit.Scene {
       // 名乗り(nanori)受諾: 法螺貝を模した低音beep → triangleの武張ったファンファーレ
       g.audio.beep(110, 0.24, 'sawtooth', 0.22);
       g.audio.jingle([{ f: 220, d: 0.09 }, { f: 330, d: 0.09 }, { f: 440, d: 0.1 }, { f: 587, d: 0.24 }], 'triangle', 0.2);
+      if (typeof checkAchievementsEvent === 'function') {
+        // ★BattleSceneはプレイヤーの出兵にしか開かれないため、atk側=常に自分
+        checkAchievementsEvent('duel_resolved', { accepted: true, death: r.death, winGenId: r.winGenId, loseGenId: r.loseGenId, winIsMine: r.win === 'atk', bandDuels: b.duels });
+      }
     } else {
       g.audio.jingle([{ f: 262, d: 0.14 }]);
     }
@@ -4482,6 +4528,10 @@ window.GENPEI_DEBUG = {
   state: () => (game.scene && game.scene.state) || null,
   DIFFICULTIES, difficultyOf, HELP_PAGES, drawHelpOverlay, handleHelpClick, helpButtonRects, BGM,
   fitButtonFont, shrinkFont,
+  ACHIEVEMENTS: (typeof ACHIEVEMENTS !== 'undefined' ? ACHIEVEMENTS : null),
+  checkAchievementsPoll: (typeof checkAchievementsPoll !== 'undefined' ? checkAchievementsPoll : null),
+  checkAchievementsEvent: (typeof checkAchievementsEvent !== 'undefined' ? checkAchievementsEvent : null),
+  getEarnedAchievements: () => { try { return JSON.parse(localStorage.getItem('genpei_achievements') || '[]'); } catch (_) { return []; } },
 };
 </script>
 </body>

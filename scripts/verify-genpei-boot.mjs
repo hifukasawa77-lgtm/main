@@ -676,6 +676,59 @@ check('46. ★モバイル可読性: 収まる範囲のラベルは幅に収ま�
   brush2.midWidth <= 100 && brush2.midShrunkSize < 16 && brush2.longFittedSize === 10 && brush2.notShrunk === brush2.baseFont,
   JSON.stringify(brush2));
 
+/* 47-49. 実績システムの組み込み（achievements/genpei.js フック呼び出し） */
+const achieve = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG, R = D.Rule;
+  localStorage.removeItem('genpei_achievements');
+
+  // 47. 無血開城の成功で first_bloodless_open が実際に解除される
+  const st0 = D.buildState('s1180', 'kamakura');
+  for (let t = 0; t < 40; t++) {
+    let opened = false;
+    for (const k of D.DATA.kyoten) {
+      if (k.type !== 'kokufu') continue;
+      if (!R.canOpenBloodless(st0, 'kamakura', k.id).ok) continue;
+      if (D.tryBloodlessOpen(st0, 'kamakura', k.id).opened) { opened = true; break; }
+    }
+    if (opened) break;
+    D.endTurn(st0);
+  }
+  const afterBloodless = D.getEarnedAchievements();
+
+  // 48. 毎ターンのポーリングで meibun_500 が解除される（endTurn経由・直呼びの両方を確認）
+  D.checkAchievementsEvent && localStorage.removeItem('genpei_achievements');
+  D.checkAchievementsPoll({ faction: 'kamakura', meibun: 520, seats: 0, kyotoHoldMonths: 0 });
+  const afterPoll = D.getEarnedAchievements();
+
+  // 49. シナリオ終幕（勝利）で first_victory が解除される
+  localStorage.removeItem('genpei_achievements');
+  D.checkAchievementsEvent('scenario_ended', { win: true, victory: 'bakufu', faction: 'kamakura', scenario: 's1180', jingiLost: false });
+  const afterVictory = D.getEarnedAchievements();
+
+  // 負のテスト: 条件未達では解除されないこと（閾値404 < 500）
+  localStorage.removeItem('genpei_achievements');
+  D.checkAchievementsPoll({ faction: 'kamakura', meibun: 404, seats: 0, kyotoHoldMonths: 0 });
+  const belowThreshold = D.getEarnedAchievements();
+
+  // 負のテスト: 他勢力(AI)の無血開城・勧誘・朝敵化・乱妨取りは自勢力(プレイヤー)の実績を解除しない
+  localStorage.removeItem('genpei_achievements');
+  const st1 = D.buildState('s1180', 'kamakura'); // プレイヤーはkamakura。taira/kiso/kai/oshuはAI
+  for (let t = 0; t < 24; t++) D.endTurn(st1);
+  const afterAiOnly = D.getEarnedAchievements();
+
+  return { afterBloodless, afterPoll, afterVictory, belowThreshold, afterAiOnly };
+});
+check('47. ★実績: 無血開城の成功で first_bloodless_open が実際に解除される',
+  achieve.afterBloodless.includes('first_bloodless_open'), JSON.stringify(achieve.afterBloodless));
+check('48. ★実績: ポーリングで meibun_500 が解除される',
+  achieve.afterPoll.includes('meibun_500'), JSON.stringify(achieve.afterPoll));
+check('49. ★実績: シナリオ勝利で first_victory が解除される',
+  achieve.afterVictory.includes('first_victory'), JSON.stringify(achieve.afterVictory));
+check('49b. ★実績（負のテスト）: 閾値未達（名分404）では meibun_500 が解除されない',
+  achieve.belowThreshold.length === 0, JSON.stringify(achieve.belowThreshold));
+check('49c. ★実績（負のテスト）: 他勢力(AI)の行動だけでは自勢力の実績が解除されない（24ターン放置）',
+  achieve.afterAiOnly.length === 0, JSON.stringify(achieve.afterAiOnly));
+
 /* 39. 実際の BattleScene で背景と可動駒の画像が読み込まれること */
 await page.evaluate(() => window.GENPEI_DEBUG.gotoBattle('s1180', 'kamakura', 'kokufu_izu', 'sekisho_usui'));
 await page.waitForFunction(() => {
