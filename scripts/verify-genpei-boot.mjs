@@ -640,8 +640,24 @@ const brush2 = await page.evaluate(() => {
     if (toggledOn !== before) bgmError = `toggle往復で元に戻らない: ${before}→${toggledOff}→${toggledOn}`;
   } catch (e) { bgmError = String(e); }
 
+  // 46. モバイル可読性: ボタンラベルが幅を超える場合はフォントが自動で縮む（測定は実キャンバスで行う）
+  const canvas2 = document.createElement('canvas');
+  const ctx2 = canvas2.getContext('2d');
+  const baseFont = '600 16px "Hiragino Mincho ProN", serif';
+  const sizeOf = (font) => parseFloat(font.match(/(\d+(?:\.\d+)?)px/)[1]);
+  // 中程度: 8文字ラベルが幅100pxのボタンに収まるまで縮む
+  const midLabel = 'この勢力で始める';
+  const midFitted = G.fitButtonFont(ctx2, midLabel, baseFont, 100);
+  ctx2.font = midFitted; const midWidth = ctx2.measureText(midLabel).width;
+  // 極端: 24文字ラベルは幅80pxには収まりきらないが、縮小は可読性下限（base-6px）で止まる（無限に縮めて潰さない）
+  const longLabel = '長い翻訳ラベルでボタン幅をはみ出す想定のテキスト';
+  const longFitted = G.fitButtonFont(ctx2, longLabel, baseFont, 80);
+  // 十分広ければ縮めない
+  const notShrunk = G.fitButtonFont(ctx2, 'OK', baseFont, 300);
+
   return { pagesCount: G.HELP_PAGES.length, afterNext, closedAfter, easyN, normalN, hardN, easyMul, hardMul, migratedDifficulty, firstOpen, secondOpen,
-    bgmError, bgmEnsured, moodBattle, moodCalm };
+    bgmError, bgmEnsured, moodBattle, moodCalm, baseFont,
+    midFitted, midWidth, midShrunkSize: sizeOf(midFitted), longFittedSize: sizeOf(longFitted), notShrunk };
 });
 check('40. ★遊び方ヘルプ: ページ送り・閉じるが機能する',
   brush2.pagesCount >= 3 && brush2.afterNext === 1 && brush2.closedAfter === false, JSON.stringify(brush2));
@@ -655,6 +671,9 @@ check('44. ★遊び方ヘルプ: 新規ゲーム1ターン目のみ自動表示
   brush2.firstOpen === true && brush2.secondOpen === false, JSON.stringify(brush2));
 check('45. ★BGM: ensure/setMood/toggleが例外なく動き、mood切替・toggle往復が正しい',
   brush2.bgmError === null && brush2.bgmEnsured === true && brush2.moodBattle === 'battle' && brush2.moodCalm === 'calm',
+  JSON.stringify(brush2));
+check('46. ★モバイル可読性: 収まる範囲のラベルは幅に収まるまで縮み、十分広ければ縮めず、下限(base-6px)より小さくはしない',
+  brush2.midWidth <= 100 && brush2.midShrunkSize < 16 && brush2.longFittedSize === 10 && brush2.notShrunk === brush2.baseFont,
   JSON.stringify(brush2));
 
 /* 39. 実際の BattleScene で背景と可動駒の画像が読み込まれること */
