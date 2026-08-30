@@ -422,7 +422,7 @@ const regress = await page.evaluate(() => {
     const mk = (fid, tweak) => { const s = G.buildState('s1180', fid); s.year = s.endYear; s.month = s.endMonth; tweak(s); return G.Rule.checkVictory(s).win; };
     out.victory = {
       木曽_京なし: mk('kiso', () => {}),
-      木曽_京12ヶ月: mk('kiso', (s) => { s.kyoten[G.KYOTO_KOKUFU].owner = 'kiso'; s.factions.kiso.authority.push('senji'); s.kyotoHoldMonths = 12; }),
+      木曽_京12ヶ月: mk('kiso', (s) => { s.kyoten[G.KYOTO_KOKUFU].owner = 'kiso'; s.factions.kiso.authority.push('senji'); s.kyotoHoldMonths = { kiso: 12 }; }),
       鎌倉_平氏健在: mk('kamakura', (s) => {
         s.factions.kamakura.authority.push('senji');
         let n = 0; for (const k of G.DATA.kyoten) if (k.type === 'kokufu' && n < 40) { s.kyoten[k.id].owner = 'kamakura'; n++; }
@@ -728,6 +728,68 @@ check('49b. ★実績（負のテスト）: 閾値未達（名分404）では me
   achieve.belowThreshold.length === 0, JSON.stringify(achieve.belowThreshold));
 check('49c. ★実績（負のテスト）: 他勢力(AI)の行動だけでは自勢力の実績が解除されない（24ターン放置）',
   achieve.afterAiOnly.length === 0, JSON.stringify(achieve.afterAiOnly));
+
+/* 50-54. 2人対戦（同一端末ホットシート） */
+const hotseat = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG, R = D.Rule;
+
+  // 50. buildStateにP2を渡すとhumanFactionsが2件になる（同じ勢力は不可の前提はUI側で担保）
+  const st = D.buildState('s1180', 'kamakura', 'normal', 'taira');
+  const humanFactionsOk = JSON.stringify(st.humanFactions) === JSON.stringify(['kamakura', 'taira']);
+
+  // 51. ★AIループはhumanFactions全員（P1・P2両方）を除外する。
+  //     人間側に一切コマンドを出さないまま30ターン回し、P2(taira)の拠点数が
+  //     一度も自力で増えないこと（＝AIが代打ちしていないこと）を確認する。
+  //     旧実装は if(fid===state.faction) continue; だったため、2人対戦ではP2側が
+  //     無人のままAIとして勝手に無血開城・出兵してしまうバグになりうる。
+  const seatsOverTime = [];
+  for (let i = 0; i < 30; i++) {
+    D.endTurn(st);
+    seatsOverTime.push(R.ownedKyoten(st, 'taira').length);
+  }
+  let tairaNeverGrew = true;
+  for (let i = 1; i < seatsOverTime.length; i++) {
+    if (seatsOverTime[i] > seatsOverTime[i - 1]) { tairaNeverGrew = false; break; }
+  }
+
+  // 52. 手番制の実際のフロー: P1がターン終了→暦は進まずP2に手番交代→P2がターン終了→暦が進む
+  const st2 = D.buildState('s1180', 'kamakura', 'normal', 'taira');
+  const monthBefore = st2.month, turnBefore = st2.turn;
+  // P1(kamakura)の手番終了 相当の処理を直接呼ぶ（HandoffScene遷移はUIなのでstateの遷移だけ見る）
+  st2.actedThisRound.push(st2.faction);
+  const nextFid = st2.humanFactions.find((fid) => !st2.actedThisRound.includes(fid));
+  const handedOffToP2 = nextFid === 'taira' && monthBefore === st2.month && turnBefore === st2.turn;
+  st2.faction = nextFid;
+  // P2(taira)の手番終了 → 全員が終えたので実際にendTurnが走る
+  st2.actedThisRound.push(st2.faction);
+  const allActed = st2.humanFactions.every((fid) => st2.actedThisRound.includes(fid));
+  D.endTurn(st2);
+  const monthAdvanced = st2.turn === turnBefore + 1;
+
+  // 53. 京の保持月数は勢力ごとに独立して数える（片方だけ京を保持していても他方に漏れない）
+  //     ★AIに奪還されないよう京の駐留兵を厚くしておく（薄いと近隣の平氏が即座に奪い返し、
+  //       検証したいのが「独立カウント」なのに「奪還されるか」のテストになってしまう）
+  const st3 = D.buildState('s1180', 'kamakura', 'normal', 'kiso');
+  st3.kyoten[D.KYOTO_KOKUFU].owner = 'kiso';
+  st3.kyoten[D.KYOTO_KOKUFU].garrison = 999999;
+  for (let i = 0; i < 3; i++) D.endTurn(st3);
+  const kisoHeld = (st3.kyotoHoldMonths && st3.kyotoHoldMonths.kiso) || 0;
+  const kamakuraHeld = (st3.kyotoHoldMonths && st3.kyotoHoldMonths.kamakura) || 0;
+
+  // 54. 旧セーブ互換: kyotoHoldMonthsが数値のままの旧形式でもmigrateStateがobject化する
+  const st4 = D.buildState('s1180', 'kamakura');
+  st4.kyotoHoldMonths = 7; // 旧形式を模す
+  D.migrateState(st4);
+  const migratedOk = st4.kyotoHoldMonths && st4.kyotoHoldMonths.kamakura === 7;
+
+  return { humanFactionsOk, seatsOverTime, tairaNeverGrew, handedOffToP2, allActed, monthAdvanced, kisoHeld, kamakuraHeld, migratedOk };
+});
+check('50. ★2人対戦: buildStateにP2を渡すとhumanFactionsが両方入る', hotseat.humanFactionsOk, JSON.stringify(hotseat));
+check('51. ★2人対戦: AIループはP1・P2両方を除外する（30ターン、P2の拠点が一度も自力で増えない）',
+  hotseat.tairaNeverGrew, JSON.stringify(hotseat.seatsOverTime));
+check('52. ★2人対戦: P1終了で暦は進まずP2へ手番交代、P2終了で暦が進む', hotseat.handedOffToP2 && hotseat.allActed && hotseat.monthAdvanced, JSON.stringify(hotseat));
+check('53. ★2人対戦: 京の保持月数は勢力ごとに独立して数える（片方の保持が他方に漏れない）', hotseat.kisoHeld === 3 && hotseat.kamakuraHeld === 0, JSON.stringify(hotseat));
+check('54. ★旧セーブ互換: kyotoHoldMonthsが数値のままでもmigrateStateがobject化する', hotseat.migratedOk, JSON.stringify(hotseat));
 
 /* 39. 実際の BattleScene で背景と可動駒の画像が読み込まれること */
 await page.evaluate(() => window.GENPEI_DEBUG.gotoBattle('s1180', 'kamakura', 'kokufu_izu', 'sekisho_usui'));

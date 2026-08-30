@@ -924,7 +924,7 @@ const Rule = {
     else if (v === 'bakufu') win = !state.factions.taira.alive && f.authority.includes('senji') && seats >= 35;
     else if (v === 'seitai_shogun') {
       win = Rule.holdsCapital(state, state.faction) && f.authority.includes('senji')
-        && (state.kyotoHoldMonths || 0) >= RULE.capital.holdMonths;
+        && ((state.kyotoHoldMonths && state.kyotoHoldMonths[state.faction]) || 0) >= RULE.capital.holdMonths;
     } else if (v === 'hiraizumi') win = !!state.kyoten['tachi_hiraizumi'] && state.kyoten['tachi_hiraizumi'].owner === state.faction;
     else win = owned.length > 0;
     return { done: true, win, reason: win ? '勝利条件を満たした / Victory conditions met' : '終幕 / The age has ended' };
@@ -934,10 +934,15 @@ const Rule = {
 /* ============================================================================
  * 4. ゲーム状態
  * ========================================================================== */
-function buildState(scenarioId, factionId, difficulty) {
+function buildState(scenarioId, factionId, difficulty, factionId2) {
   const scn = SCENARIOS.find((s) => s.id === scenarioId);
+  // ★2人対戦（同一端末の手番制パス＆プレイ）。state.faction は「今まさに操作中の人間」を指す
+  //   単一の値のまま据え置き、humanFactions が「人間が握っている全勢力」を持つ。
+  //   これでAIループ（fid===state.factionだけ除外）以外の大半のロジックは無改修で通る。
+  const humanFactions = factionId2 && factionId2 !== factionId ? [factionId, factionId2] : [factionId];
   const state = {
     version: SAVE_VERSION, scenario: scenarioId, faction: factionId,
+    humanFactions, actedThisRound: [],
     difficulty: DIFFICULTIES[difficulty] ? difficulty : 'normal',
     year: scn.start[0], month: scn.start[1], turn: 1,
     endYear: scn.end[0], endMonth: scn.end[1],
@@ -996,9 +1001,14 @@ function migrateState(state) {
       state.regalia[key] = Object.values(state.factions).some((f) => f.authority.includes(key));
     }
   }
-  if (state.kyotoHoldMonths == null) state.kyotoHoldMonths = 0;
+  // ★2人対戦では京の保持月数を勢力ごとに数える必要があるため object 化。
+  //   旧セーブ（数値のまま）は「その時のstate.faction」の値として引き継ぐ
+  if (state.kyotoHoldMonths == null) state.kyotoHoldMonths = {};
+  else if (typeof state.kyotoHoldMonths === 'number') state.kyotoHoldMonths = { [state.faction]: state.kyotoHoldMonths };
   if (!DIFFICULTIES[state.difficulty]) state.difficulty = 'normal';
   if (!state.achieveStats) state.achieveStats = { bloodlessOpenCount: 0, armyMarchedCount: 0, foodNegativeDuringFamine: false };
+  if (!Array.isArray(state.humanFactions) || !state.humanFactions.length) state.humanFactions = [state.faction];
+  if (!Array.isArray(state.actedThisRound)) state.actedThisRound = [];
   // 一騎討ちの戦績（列伝表示用・Could C-01）。武将id → {wins, losses}
   if (!state.duelRecord) state.duelRecord = {};
   return state;
@@ -1401,9 +1411,9 @@ function endTurn(state, audio) {
       if (fid === state.faction) pushLog(state, '朝敵の宣を解かれた');
     }
   }
-  // 9. AI の行動
+  // 9. AI の行動（★2人対戦では humanFactions 全員がAIの対象外。state.faction は「今の手番」1人だけを指すため単独では足りない）
   for (const fid of Object.keys(FACTIONS)) {
-    if (fid === state.faction) continue;
+    if (state.humanFactions.includes(fid)) continue;
     const f = state.factions[fid];
     if (!f.alive || !FACTIONS[fid].playable) continue;
     applyActions(state, fid, Rule.aiActions(state, fid));
@@ -1433,37 +1443,63 @@ function endTurn(state, audio) {
       : `帝は${FACTIONS[next].jp}に奉じられた`);
   }
   // 11. 京の保持を数える（木曽の勝利条件。落とすか朝敵になれば振り出しに戻る）
-  state.kyotoHoldMonths = Rule.holdsCapital(state, state.faction) ? (state.kyotoHoldMonths || 0) + 1 : 0;
+  // ★勢力ごとに数える（2人対戦で「最後に手番を終えた側」だけが計測される事故を防ぐ）
+  for (const fid of Object.keys(FACTIONS)) {
+    state.kyotoHoldMonths[fid] = Rule.holdsCapital(state, fid) ? (state.kyotoHoldMonths[fid] || 0) + 1 : 0;
+  }
   // 12. 月を進める
   state.month++;
   if (state.month > 12) { state.month = 1; state.year++; }
   state.turn++;
-  // 13. 勝敗
-  const v = Rule.checkVictory(state);
+  // 13. 勝敗（★2人対戦ではhumanFactions全員について判定する。checkVictoryはstate.factionを見る
+  //     実装のため、一時的に切り替えて呼ぶ——checkVictory自体は改修しない）
+  let v;
+  if (state.humanFactions.length > 1) {
+    const savedFaction = state.faction;
+    let anyContinuing = false, winResult = null, lastLoss = null;
+    for (const fid of state.humanFactions) {
+      state.faction = fid;
+      const vf = Rule.checkVictory(state);
+      if (vf.done && vf.win) { winResult = { ...vf, winner: fid }; break; }
+      if (!vf.done) anyContinuing = true;
+      else lastLoss = vf;
+    }
+    state.faction = savedFaction;
+    v = winResult || (anyContinuing ? { done: false } : (lastLoss || { done: false }));
+  } else {
+    v = Rule.checkVictory(state);
+  }
   if (v.done) {
     state.result = v;
     // 一度でも終幕まで見届けたら「もし清盛が死なざれば」を解禁する。
     // ★ここで書かないと unlockable のシナリオは誰にも開かれないまま残る
     save.set('unlocked_sif', true);
     if (typeof checkAchievementsEvent === 'function') {
+      // ★2人対戦では勝者(v.winner)が state.faction と異なることがある（最後に手番を終えた側と
+      //   勝者は別人でもよい）ため、実績の帰属先は必ず v.winner を優先する
+      const attributedFid = v.winner || state.faction;
       checkAchievementsEvent('scenario_ended', {
-        win: v.win, victory: FACTIONS[state.faction].victory, faction: state.faction,
+        win: v.win, victory: FACTIONS[attributedFid].victory, faction: attributedFid,
         scenario: state.scenario, jingiLost: !!state.jingiLost,
       });
     }
   }
   if (typeof checkAchievementsPoll === 'function') {
-    checkAchievementsPoll({
-      faction: state.faction, scenario: state.scenario,
-      meibun: Rule.calcMeibun(state, state.faction),
-      seats: Rule.ownedKyoten(state, state.faction).filter((k) => k.type === 'kokufu').length,
-      kyotoHoldMonths: state.kyotoHoldMonths,
-      jingiLost: !!state.jingiLost,
-      famineJustEnded: wasFamineActive && !Rule.famineActive(state),
-      foodNegativeDuringFamine: state.achieveStats.foodNegativeDuringFamine,
-      armyMarchedCount: state.achieveStats.armyMarchedCount,
-      bloodlessOpenCount: state.achieveStats.bloodlessOpenCount,
-    });
+    // ★2人対戦ではhumanFactions全員ぶん判定する（名分・拠点・京保持は各自算出。
+    //   achieveStatsのみ共有カウンタ）
+    for (const fid of state.humanFactions) {
+      checkAchievementsPoll({
+        faction: fid, scenario: state.scenario,
+        meibun: Rule.calcMeibun(state, fid),
+        seats: Rule.ownedKyoten(state, fid).filter((k) => k.type === 'kokufu').length,
+        kyotoHoldMonths: (state.kyotoHoldMonths && state.kyotoHoldMonths[fid]) || 0,
+        jingiLost: !!state.jingiLost,
+        famineJustEnded: wasFamineActive && !Rule.famineActive(state),
+        foodNegativeDuringFamine: state.achieveStats.foodNegativeDuringFamine,
+        armyMarchedCount: state.achieveStats.armyMarchedCount,
+        bloodlessOpenCount: state.achieveStats.bloodlessOpenCount,
+      });
+    }
   }
   // 飢饉(kikin) の開始検出。false→true になった最初のターンだけ、沈んだ不吉な低音を1回鳴らす
   if (audio && !wasFamineActive && Rule.famineActive(state)) {
@@ -2269,17 +2305,48 @@ class FactionSelectScene extends GameKit.Scene {
       id, x: 70 + i * 150, y: H - 168, w: 140, h: 44,
       jp: DIFFICULTIES[id].jp, en: DIFFICULTIES[id].en, font: '600 14px "Hiragino Mincho ProN", serif', radius: 4,
     }));
+    // 2人対戦（同一端末での手番制パス＆プレイ）。P1/P2は同じ勢力を選べない
+    this.twoPlayer = false;
+    this.pickTarget = 'p1';
+    this.sel2 = null;
+    const px2 = 540;
+    this.twoPlayerBtn = { id: 'two', x: px2 + 24, y: 470, w: 160, h: 40, jp: '1人プレイ', en: '1P', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4 };
+    this.targetP1Btn = { id: 'p1', x: px2 + 200, y: 470, w: 100, h: 40, jp: '先手を選ぶ', font: '600 12px "Hiragino Mincho ProN", serif', radius: 4 };
+    this.targetP2Btn = { id: 'p2', x: px2 + 310, y: 470, w: 100, h: 40, jp: '後手を選ぶ', font: '600 12px "Hiragino Mincho ProN", serif', radius: 4 };
   }
   update(dt, g) {
     this.bd.update(dt);
     const p = g.input.pointer;
     if (!p.justPressed) return;
-    for (const r of this.rows) if (hit(r, p)) { this.sel = r.i; g.audio.jingle([{ f: 440, d: 0.07 }]); }
+    if (hit(this.twoPlayerBtn, p)) {
+      this.twoPlayer = !this.twoPlayer;
+      this.pickTarget = 'p1';
+      if (!this.twoPlayer) this.sel2 = null;
+      else if (this.sel2 == null) this.sel2 = (this.sel + 1) % this.list.length;
+      g.audio.jingle([{ f: 440, d: 0.07 }]);
+      return;
+    }
+    if (this.twoPlayer && hit(this.targetP1Btn, p)) { this.pickTarget = 'p1'; return; }
+    if (this.twoPlayer && hit(this.targetP2Btn, p)) { this.pickTarget = 'p2'; return; }
+    for (const r of this.rows) {
+      if (!hit(r, p)) continue;
+      if (this.twoPlayer && this.pickTarget === 'p2') {
+        if (r.i === this.sel) { this._notice2 = '先手と同じ勢力は選べません'; break; }
+        this.sel2 = r.i;
+      } else {
+        if (this.twoPlayer && r.i === this.sel2) { this._notice2 = '後手と同じ勢力は選べません'; break; }
+        this.sel = r.i;
+      }
+      g.audio.jingle([{ f: 440, d: 0.07 }]);
+      break;
+    }
     for (const b of this.diffButtons) if (hit(b, p)) { this.difficulty = b.id; g.audio.jingle([{ f: 440, d: 0.07 }]); }
     if (hit(this.back, p)) g.changeScene(new OpeningScene(this.scn));
     if (hit(this.go, p)) {
+      if (this.twoPlayer && this.sel2 == null) { this._notice2 = '後手の勢力も選んでください'; return; }
       g.audio.jingle([{ f: 392, d: 0.1 }, { f: 523, d: 0.1 }, { f: 659, d: 0.2 }]);
-      g.changeScene(new MapScene(buildState(this.scn.id, this.list[this.sel], this.difficulty)));
+      const fid2 = this.twoPlayer ? this.list[this.sel2] : null;
+      g.changeScene(new MapScene(buildState(this.scn.id, this.list[this.sel], this.difficulty, fid2)));
     }
   }
   draw(ctx, g) {
@@ -2288,16 +2355,18 @@ class FactionSelectScene extends GameKit.Scene {
     txt(ctx, 'Choose a Power', 70, 96, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
     const p = g.input.pointer;
     this.rows.forEach((r, i) => {
-      const fid = this.list[i], f = FACTIONS[fid], on = i === this.sel;
+      const fid = this.list[i], f = FACTIONS[fid], on = i === this.sel, on2 = this.twoPlayer && i === this.sel2;
       frame(ctx, r.x, r.y, r.w, r.h, {
-        fill: on ? 'rgba(216,178,106,0.17)' : hit(r, p) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
-        stroke: on ? 'rgba(216,178,106,0.8)' : 'rgba(255,255,255,0.13)',
+        fill: on ? 'rgba(216,178,106,0.17)' : on2 ? 'rgba(94,234,212,0.15)' : hit(r, p) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
+        stroke: on ? 'rgba(216,178,106,0.8)' : on2 ? 'rgba(94,234,212,0.75)' : 'rgba(255,255,255,0.13)',
       });
       drawKamon(ctx, fid, r.x + 32, r.y + 33, 14);
       txt(ctx, f.jp, r.x + 58, r.y + 13, { font: '600 20px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
       txt(ctx, `${f.en} ・ ${this.scn.lords[fid] || ''}`, r.x + 58, r.y + 42, { font: '11px "Segoe UI", sans-serif', color: '#7c8ba1' });
-      txt(ctx, `${this.counts[fid] || 0} 拠点`, r.x + r.w - 20, r.y + 24, { font: '14px "Segoe UI", sans-serif', color: '#8b98ab', align: 'right' });
-      if ((this.scn.recommended || []).includes(fid)) txt(ctx, '推奨', r.x + r.w - 20, r.y + 45, { font: '11px "Hiragino Mincho ProN", serif', color: '#d8b26a', align: 'right' });
+      txt(ctx, `${this.counts[fid] || 0} 拠点`, r.x + r.w - 66, r.y + 24, { font: '14px "Segoe UI", sans-serif', color: '#8b98ab', align: 'right' });
+      if (on) txt(ctx, '先手', r.x + r.w - 12, r.y + 20, { font: '600 12px "Hiragino Mincho ProN", serif', color: '#d8b26a', align: 'right' });
+      else if (on2) txt(ctx, '後手', r.x + r.w - 12, r.y + 20, { font: '600 12px "Hiragino Mincho ProN", serif', color: '#5eead4', align: 'right' });
+      else if ((this.scn.recommended || []).includes(fid)) txt(ctx, '推奨', r.x + r.w - 12, r.y + 45, { font: '11px "Hiragino Mincho ProN", serif', color: '#d8b26a', align: 'right' });
     });
     const fid = this.list[this.sel], f = FACTIONS[fid], px = 540, pw = W - 540 - 70;
     frame(ctx, px, 150, pw, H - 150 - 116);
@@ -2310,6 +2379,18 @@ class FactionSelectScene extends GameKit.Scene {
     txt(ctx, '勝利条件 / Victory', px + 24, 316, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
     wrapText(ctx, v.jp, px + 24, 340, pw - 48, 26, { font: '15px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
     wrapText(ctx, v.en, px + 24, 402, pw - 48, 20, { font: '11px "Segoe UI", sans-serif', color: '#7c8ba1' });
+    txt(ctx, '対戦人数 / Players（同一端末で交代するホットシート）', px + 24, 450, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    this.twoPlayerBtn.jp = this.twoPlayer ? '2人プレイ' : '1人プレイ';
+    this.twoPlayerBtn.en = this.twoPlayer ? '2P' : '1P';
+    button(ctx, this.twoPlayerBtn, hit(this.twoPlayerBtn, p));
+    if (this.twoPlayer) {
+      button(ctx, this.targetP1Btn, this.pickTarget === 'p1');
+      button(ctx, this.targetP2Btn, this.pickTarget === 'p2');
+      const p2fid = this.sel2 != null ? this.list[this.sel2] : null;
+      txt(ctx, `後手: ${p2fid ? FACTIONS[p2fid].jp : '未選択'}（${this.pickTarget === 'p2' ? '選択中…下の一覧から勢力をタップ' : '「後手を選ぶ」を押してから選択'}）`,
+        px + 24, 522, { font: '12px "Hiragino Mincho ProN", serif', color: p2fid ? '#5eead4' : '#f9d423' });
+    }
+    if (this._notice2) txt(ctx, this._notice2, px + 24, 545, { font: '12px "Hiragino Mincho ProN", serif', color: '#fca5a5' });
     txt(ctx, '難易度 / Difficulty', 70, H - 196, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
     this.diffButtons.forEach((b) => {
       const on = b.id === this.difficulty;
@@ -2318,6 +2399,36 @@ class FactionSelectScene extends GameKit.Scene {
     });
     button(ctx, this.back, hit(this.back, p));
     button(ctx, this.go, hit(this.go, p));
+  }
+}
+
+/* 2人対戦（同一端末の手番制パス＆プレイ）の手番交代画面。
+ * ★次の対戦者の盤面を見せる前に一度ここで止め、誤タップで前の人の情報が
+ *   一瞬でも次の人に見えてしまわないようにする。 */
+class HandoffScene extends GameKit.Scene {
+  constructor(state, nextSceneFactory) { super(); this.state = state; this.nextSceneFactory = nextSceneFactory; }
+  enter() {
+    this.bd = new Backdrop();
+    this.btn = { x: W / 2 - 190, y: 470, w: 380, h: 58, jp: '始める', en: 'Start' };
+  }
+  update(dt, g) {
+    this.bd.update(dt);
+    const p = g.input.pointer;
+    if (p.justPressed && hit(this.btn, p)) {
+      g.audio.jingle([{ f: 392, d: 0.09 }, { f: 523, d: 0.14 }]);
+      g.changeScene(this.nextSceneFactory());
+    }
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    const f = FACTIONS[this.state.faction];
+    txt(ctx, '手番交代', W / 2, 260, { font: '600 44px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+    txt(ctx, 'Pass the device', W / 2, 300, { font: '13px "Segoe UI", sans-serif', color: '#8a7a58', align: 'center' });
+    drawKamon(ctx, this.state.faction, W / 2, 360, 22);
+    txt(ctx, `${f.jp} の番です`, W / 2, 404, { font: '600 26px "Hiragino Mincho ProN", serif', color: '#e8eef5', align: 'center' });
+    txt(ctx, '端末を次の対戦者にお渡しください / Hand the device to the next player', W / 2, 438, { font: '12px "Hiragino Mincho ProN", serif', color: '#8b98ab', align: 'center' });
+    const p = g.input.pointer;
+    button(ctx, this.btn, hit(this.btn, p));
   }
 }
 
@@ -2343,6 +2454,7 @@ const HELP_PAGES = [
     '◆ 下部コマンドバーから内政・軍事・人事・外交・計略・列伝・情報を開く。「ターン終了」で月が進む',
     '◆ 保存は自動（オートセーブ）。タイトル画面の「続きから」で再開できる',
     '◆ 右上の ♪ でBGM切替、？ でこの案内を再表示',
+    '◆ 「勢力を選ぶ」画面で2人プレイを選ぶと、同じ端末で手番ごとに交代して対戦できる',
   ] },
   { title: '名分と勝利条件', en: 'Legitimacy & Victory', lines: [
     '◆ 名分＝院宣・宣旨・官位・三種の神器などの権威の総称。城を落とすより名分を得ることが最終的な決め手になる',
@@ -2543,6 +2655,31 @@ class MapScene extends GameKit.Scene {
       jp: c.jp, font: '600 15px "Hiragino Mincho ProN", serif', radius: 4,
     }));
   }
+  /* 「ターン終了」の実処理。2人対戦（同一端末ホットシート）ではまだ手番を終えていない
+   * 人間がいる限り、実際の月送り(endTurn)はせず手番だけを交代する。
+   * ★全員が終えて初めて実際の endTurn を呼ぶ（AI行動・暦・オートセーブはここでのみ動く）。 */
+  _endPlayerTurn(g) {
+    const st = this.state;
+    if (st.result) return;
+    if (st.humanFactions.length > 1) {
+      if (!st.actedThisRound.includes(st.faction)) st.actedThisRound.push(st.faction);
+      const next = st.humanFactions.find((fid) => !st.actedThisRound.includes(fid));
+      if (next) {
+        st.faction = next;
+        save.set('autosave', st);
+        g.changeScene(new HandoffScene(st, () => new MapScene(st)));
+        return;
+      }
+      st.actedThisRound = [];
+    }
+    this._fireEventArt();
+    endTurn(st, g.audio);
+    g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]);
+    if (st.humanFactions.length > 1 && !st.result) {
+      st.faction = st.humanFactions[0];
+      g.changeScene(new HandoffScene(st, () => new MapScene(st)));
+    }
+  }
   _bindWheel(g) {
     this._wheel = (e) => {
       const p = g.input.pointer;
@@ -2731,7 +2868,7 @@ class MapScene extends GameKit.Scene {
       for (const b of this.cmdButtons) {
         if (!hit(b, p)) continue;
         if (b.id === 'endTurn') {
-          if (!this.state.result) { this._fireEventArt(); endTurn(this.state, g.audio); g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]); }
+          this._endPlayerTurn(g);
         } else if (b.id === 'kino') { g.changeScene(new TitleScene()); return; }
         else if (b.id === 'jinji2') { g.changeScene(new RetsudenScene(this.state, () => new MapScene(this.state))); return; }
         else if (OPEN_COMMANDS.has(b.id)) { this.panel = this.panel === b.id ? null : b.id; this.panelScroll = 0; }
@@ -2885,7 +3022,7 @@ class MapScene extends GameKit.Scene {
     if (me.choteki) put('朝敵', '#fca5a5', '600 13px "Hiragino Mincho ProN", serif');
     // 京の保持は木曽の勝利条件そのものなので、数えている月数を出す（見えないと詰められない）
     if (f.victory === 'seitai_shogun') {
-      const held = st.kyotoHoldMonths || 0;
+      const held = (st.kyotoHoldMonths && st.kyotoHoldMonths[st.faction]) || 0;
       put(`京 ${held}/${RULE.capital.holdMonths}ヶ月`, held >= RULE.capital.holdMonths ? '#5eead4' : held > 0 ? '#f9d423' : '#8b98ab');
     }
     if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 68, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
@@ -3500,6 +3637,9 @@ class MapScene extends GameKit.Scene {
     ctx.fillStyle = 'rgba(5,7,11,0.86)'; ctx.fillRect(0, 0, W, H);
     const r = this.state.result;
     txt(ctx, r.win ? '勝 利' : '終 幕', W / 2, H / 2 - 80, { font: '600 58px "Hiragino Mincho ProN", serif', color: r.win ? '#d8b26a' : '#cbd5e1', align: 'center' });
+    if (r.winner && FACTIONS[r.winner]) {
+      txt(ctx, `${FACTIONS[r.winner].jp} の勝利`, W / 2, H / 2 - 26, { font: '600 20px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+    }
     txt(ctx, r.reason, W / 2, H / 2 + 6, { font: '16px "Hiragino Mincho ProN", serif', color: '#94a3b8', align: 'center' });
     txt(ctx, '「機能」からタイトルへ戻れます / Use 機能 to return to the title', W / 2, H / 2 + 46, { font: '12px "Segoe UI", sans-serif', color: '#6b7787', align: 'center' });
   }
@@ -4523,8 +4663,10 @@ window.GENPEI_DEBUG = {
     game.changeScene(new BattleScene(st, { fid, from, to, troops: 3000 }, () => {})); return true; },
   scene: () => (game.scene ? game.scene.constructor.name : null),
   errors: () => game.errors || [],
-  gotoMap: (scnId, fid, difficulty) => { game.changeScene(new MapScene(buildState(scnId, fid, difficulty))); return true; },
+  gotoMap: (scnId, fid, difficulty, fid2) => { game.changeScene(new MapScene(buildState(scnId, fid, difficulty, fid2))); return true; },
+  HandoffScene,
   gotoTitle: () => { game.changeScene(new TitleScene()); return true; },
+  gotoFactionSelect: (scnId) => { const scn = SCENARIOS.find((s) => s.id === scnId) || SCENARIOS[0]; game.changeScene(new FactionSelectScene(scn)); return true; },
   state: () => (game.scene && game.scene.state) || null,
   DIFFICULTIES, difficultyOf, HELP_PAGES, drawHelpOverlay, handleHelpClick, helpButtonRects, BGM,
   fitButtonFont, shrinkFont,
