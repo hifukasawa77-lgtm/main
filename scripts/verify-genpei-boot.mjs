@@ -597,6 +597,50 @@ check('38. ★地形は拠点ごとに変わる／自勢力は一覧に残る／
   && brush.duel.death && brush.duel.討死ログ && brush.duel.敗者側士気.every((m) => m < 100 - 18),
   JSON.stringify({ seed: brush.seed, side: brush.side, duel: brush.duel }));
 
+/* 40-44. 遊び方ヘルプ・AI難易度（2026-08 ブラッシュアップで追加） */
+const brush2 = await page.evaluate(() => {
+  const G = window.GENPEI_DEBUG;
+  // 40. ヘルプ: ページ送り・閉じるボタンの当たり判定が機能する
+  const help = { open: true, page: 0 };
+  const r1 = G.helpButtonRects(0, G.HELP_PAGES.length);
+  G.handleHelpClick(help, { x: r1.next.x + 10, y: r1.next.y + 10 });
+  const afterNext = help.page;
+  const r2 = G.helpButtonRects(afterNext, G.HELP_PAGES.length);
+  G.handleHelpClick(help, { x: r2.close.x + 10, y: r2.close.y + 10 });
+  const closedAfter = help.open;
+
+  // 41-42. AI難易度: 攻勢係数と出兵候補数が易しい<標準<難しいの順になる
+  const mkAi = (difficulty) => G.Rule.aiActions(G.buildState('s1180', 'kamakura', difficulty), 'taira');
+  const easyN = mkAi('easy').length, normalN = mkAi('normal').length, hardN = mkAi('hard').length;
+  const easyMul = G.difficultyOf({ difficulty: 'easy' }).attackRatioMul;
+  const hardMul = G.difficultyOf({ difficulty: 'hard' }).attackRatioMul;
+
+  // 43. 旧セーブ互換: difficulty欠落は migrateState が 'normal' へ補う
+  const st = G.buildState('s1180', 'kamakura', 'hard');
+  delete st.difficulty;
+  G.migrateState(st);
+  const migratedDifficulty = st.difficulty;
+
+  // 44. 新規ゲーム1ターン目のみ遊び方を自動表示（localStorageで一度きり）
+  localStorage.removeItem('genpeiHelpSeen');
+  G.gotoMap('s1180', 'kamakura', 'normal');
+  const firstOpen = G.game.scene.help.open;
+  G.gotoMap('s1183', 'kamakura', 'normal');
+  const secondOpen = G.game.scene.help.open;
+
+  return { pagesCount: G.HELP_PAGES.length, afterNext, closedAfter, easyN, normalN, hardN, easyMul, hardMul, migratedDifficulty, firstOpen, secondOpen };
+});
+check('40. ★遊び方ヘルプ: ページ送り・閉じるが機能する',
+  brush2.pagesCount >= 3 && brush2.afterNext === 1 && brush2.closedAfter === false, JSON.stringify(brush2));
+check('41. ★AI難易度: 出兵候補数が易しい≦標準≦難しいの順になる',
+  brush2.easyN <= brush2.normalN && brush2.normalN <= brush2.hardN, JSON.stringify(brush2));
+check('42. ★AI難易度: attackRatio係数は易しい>標準>難しいの順で厳しくなる',
+  brush2.easyMul > brush2.hardMul, JSON.stringify(brush2));
+check('43. ★旧セーブ互換: difficulty欠落は migrateState が "normal" へ補う',
+  brush2.migratedDifficulty === 'normal', JSON.stringify(brush2));
+check('44. ★遊び方ヘルプ: 新規ゲーム1ターン目のみ自動表示（localStorage一度きり）',
+  brush2.firstOpen === true && brush2.secondOpen === false, JSON.stringify(brush2));
+
 /* 39. 実際の BattleScene で背景と可動駒の画像が読み込まれること */
 await page.evaluate(() => window.GENPEI_DEBUG.gotoBattle('s1180', 'kamakura', 'kokufu_izu', 'sekisho_usui'));
 await page.waitForFunction(() => {

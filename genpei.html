@@ -158,6 +158,16 @@ const clamp = GameKit.MathX.clamp;
 })();
 
 /* ============================================================================
+ * 0. 難易度（新規開始時に選択。RULE.ai を基準に AI の攻勢・収入を係数で伸縮する）
+ * ========================================================================== */
+const DIFFICULTIES = {
+  easy:   { jp: '易しい',  en: 'Easy',   attackRatioMul: 1.35, maxActionsAdd: -1, aiGoldMul: 0.85 },
+  normal: { jp: '標準',    en: 'Normal', attackRatioMul: 1.00, maxActionsAdd: 0,  aiGoldMul: 1.00 },
+  hard:   { jp: '難しい',  en: 'Hard',   attackRatioMul: 0.75, maxActionsAdd: 1,  aiGoldMul: 1.15 },
+};
+function difficultyOf(state) { return DIFFICULTIES[state.difficulty] || DIFFICULTIES.normal; }
+
+/* ============================================================================
  * 1. 定数テーブル（基本設計 第3節 RULE）
  *    ★ 式にマジックナンバーを直書きしない。調整は必ずここで行う。
  * ========================================================================== */
@@ -742,6 +752,9 @@ const Rule = {
 
   aiActions(state, fid) {
     if (RULE.ai.famineBlock && Rule.famineActive(state)) return [];
+    const diff = difficultyOf(state);
+    const attackRatio = RULE.ai.attackRatio * diff.attackRatioMul;
+    const maxActions = Math.max(1, RULE.ai.maxActions + diff.maxActionsAdd);
     const cand = [];
     for (const src of Rule.ownedKyoten(state, fid)) {
       const sg = state.kyoten[src.id].garrison;
@@ -749,7 +762,7 @@ const Rule = {
       for (const k of DATA.kyoten) {
         const st = state.kyoten[k.id];
         if (st.owner === fid || !Rule.adjacent(src, k)) continue;
-        const need = Rule.defenseStrength(state, k) * RULE.ai.attackRatio;
+        const need = Rule.defenseStrength(state, k) * attackRatio;
         if (sg <= need) continue;
         cand.push({ kind: 'capture', from: src.id, to: k.id, troops: Math.floor(sg * 0.6),
                     score: k.scale + (sg - need) * 0.1 });
@@ -759,7 +772,7 @@ const Rule = {
     cand.sort((a, b) => b.score - a.score);
     const acts = [], usedFrom = new Set(), usedTo = new Set();
     for (const c of cand) {
-      if (acts.length >= RULE.ai.maxActions) break;
+      if (acts.length >= maxActions) break;
       if (usedFrom.has(c.from) || usedTo.has(c.to)) continue;
       usedFrom.add(c.from); usedTo.add(c.to); acts.push(c);
     }
@@ -920,10 +933,11 @@ const Rule = {
 /* ============================================================================
  * 4. ゲーム状態
  * ========================================================================== */
-function buildState(scenarioId, factionId) {
+function buildState(scenarioId, factionId, difficulty) {
   const scn = SCENARIOS.find((s) => s.id === scenarioId);
   const state = {
     version: SAVE_VERSION, scenario: scenarioId, faction: factionId,
+    difficulty: DIFFICULTIES[difficulty] ? difficulty : 'normal',
     year: scn.start[0], month: scn.start[1], turn: 1,
     endYear: scn.end[0], endMonth: scn.end[1],
     factions: {}, kyoten: {}, bands: {}, suigun: {}, log: [], result: null, chotekiCount: 0,
@@ -981,6 +995,7 @@ function migrateState(state) {
     }
   }
   if (state.kyotoHoldMonths == null) state.kyotoHoldMonths = 0;
+  if (!DIFFICULTIES[state.difficulty]) state.difficulty = 'normal';
   // 一騎討ちの戦績（列伝表示用・Could C-01）。武将id → {wins, losses}
   if (!state.duelRecord) state.duelRecord = {};
   return state;
@@ -1309,8 +1324,9 @@ function endTurn(state, audio) {
     const f = state.factions[fid];
     if (!f.alive) continue;
     const inc = Rule.income(state, fid);
+    const goldMul = fid === state.faction ? 1 : difficultyOf(state).aiGoldMul;
     f.food = Math.max(0, f.food + inc.net);
-    f.gold += inc.gold;
+    f.gold += Math.round(inc.gold * goldMul);
     if (f.food <= 0 && inc.troops > 0) {
       for (const k of Rule.ownedKyoten(state, fid)) {
         const st = state.kyoten[k.id];
@@ -2031,11 +2047,15 @@ class TitleScene extends GameKit.Scene {
       { id: 'new', x: W / 2 - 190, y: 470, w: 380, h: 58, jp: '新規に始める', en: 'New Game' },
       { id: 'cont', x: W / 2 - 190, y: 540, w: 380, h: 58, jp: '続きから', en: 'Continue', disabled: !this.hasSave },
     ];
+    this.helpBtn = { id: 'help', x: W / 2 - 190, y: 610, w: 380, h: 44, jp: '遊び方 / How to Play', font: '600 15px "Hiragino Mincho ProN", serif', radius: 6 };
+    this.help = { open: false, page: 0 };
   }
   update(dt, g) {
     this.t += dt; this.bd.update(dt);
     const p = g.input.pointer;
     if (!p.justPressed) return;
+    if (this.help.open) { handleHelpClick(this.help, p); return; }
+    if (hit(this.helpBtn, p)) { g.audio.jingle([{ f: 440, d: 0.07 }]); this.help.open = true; this.help.page = 0; return; }
     for (const b of this.buttons) {
       if (!hit(b, p) || b.disabled) continue;
       g.audio.jingle([{ f: 392, d: 0.09 }, { f: 523, d: 0.14 }]);
@@ -2064,9 +2084,11 @@ class TitleScene extends GameKit.Scene {
     txt(ctx, '城ではなく、名分を獲る。 / Win legitimacy, not castles.', W / 2, 374, { font: '13px "Hiragino Mincho ProN", serif', color: '#a78bfa', align: 'center' });
     const p = g.input.pointer;
     for (const b of this.buttons) button(ctx, b, hit(b, p) && !b.disabled);
-    if (this.staleSave) txt(ctx, '保存データの形式が古いため読み込めません（新規に始めてください）', W / 2, 614, { font: '12px sans-serif', color: '#fca5a5', align: 'center' });
+    button(ctx, this.helpBtn, hit(this.helpBtn, p));
+    if (this.staleSave) txt(ctx, '保存データの形式が古いため読み込めません（新規に始めてください）', W / 2, 666, { font: '12px sans-serif', color: '#fca5a5', align: 'center' });
     txt(ctx, DATA.source === 'embed' ? 'データ: 埋め込みシード（オフライン）' : `データ: assets/genpei/ ＋ kyoten_ichi.csv（拠点 ${DATA.kyoten.length}）`,
       W / 2, H - 32, { font: '11px sans-serif', color: '#4b5563', align: 'center' });
+    if (this.help.open) drawHelpOverlay(ctx, this.help);
   }
 }
 
@@ -2179,16 +2201,22 @@ class FactionSelectScene extends GameKit.Scene {
     this.go = { x: W - 370, y: H - 92, w: 300, h: 54, jp: 'この勢力で始める', en: 'Begin' };
     this.counts = {};
     for (const k of DATA.kyoten) { const o = k.own[this.scn.col]; if (o) this.counts[o] = (this.counts[o] || 0) + 1; }
+    this.difficulty = 'normal';
+    this.diffButtons = Object.keys(DIFFICULTIES).map((id, i) => ({
+      id, x: 70 + i * 150, y: H - 168, w: 140, h: 44,
+      jp: DIFFICULTIES[id].jp, en: DIFFICULTIES[id].en, font: '600 14px "Hiragino Mincho ProN", serif', radius: 4,
+    }));
   }
   update(dt, g) {
     this.bd.update(dt);
     const p = g.input.pointer;
     if (!p.justPressed) return;
     for (const r of this.rows) if (hit(r, p)) { this.sel = r.i; g.audio.jingle([{ f: 440, d: 0.07 }]); }
+    for (const b of this.diffButtons) if (hit(b, p)) { this.difficulty = b.id; g.audio.jingle([{ f: 440, d: 0.07 }]); }
     if (hit(this.back, p)) g.changeScene(new OpeningScene(this.scn));
     if (hit(this.go, p)) {
       g.audio.jingle([{ f: 392, d: 0.1 }, { f: 523, d: 0.1 }, { f: 659, d: 0.2 }]);
-      g.changeScene(new MapScene(buildState(this.scn.id, this.list[this.sel])));
+      g.changeScene(new MapScene(buildState(this.scn.id, this.list[this.sel], this.difficulty)));
     }
   }
   draw(ctx, g) {
@@ -2219,6 +2247,12 @@ class FactionSelectScene extends GameKit.Scene {
     txt(ctx, '勝利条件 / Victory', px + 24, 316, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
     wrapText(ctx, v.jp, px + 24, 340, pw - 48, 26, { font: '15px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
     wrapText(ctx, v.en, px + 24, 402, pw - 48, 20, { font: '11px "Segoe UI", sans-serif', color: '#7c8ba1' });
+    txt(ctx, '難易度 / Difficulty', 70, H - 196, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    this.diffButtons.forEach((b) => {
+      const on = b.id === this.difficulty;
+      button(ctx, b, on || (hit(b, p) && !on));
+      if (on) frame(ctx, b.x - 2, b.y - 2, b.w + 4, b.h + 4, { stroke: 'rgba(216,178,106,0.9)', radius: 6 });
+    });
     button(ctx, this.back, hit(this.back, p));
     button(ctx, this.go, hit(this.go, p));
   }
@@ -2234,6 +2268,62 @@ function wrapText(ctx, str, x, y, maxW, lh, opts) {
   if (line) txt(ctx, line, x, yy, opts);
   ctx.restore();
   return yy + lh;
+}
+
+/* ============================================================================
+ * 6.5 遊び方ヘルプ（TitleScene / MapScene 共通のオーバーレイ）
+ * ========================================================================== */
+const HELP_PAGES = [
+  { title: '目的と操作', en: 'Goal & Controls', lines: [
+    '◆ 目的: 兵力ではなく「名分」（院宣・宣旨・官位・三種の神器）を集め、勢力ごとの勝利条件を満たす',
+    '◆ 全国図で国をクリック → 拡大図で拠点をクリックして選択。ホイールで拡大、右ドラッグで地図移動',
+    '◆ 下部コマンドバーから内政・軍事・人事・外交・計略・列伝・情報を開く。「ターン終了」で月が進む',
+    '◆ 保存は自動（オートセーブ）。タイトル画面の「続きから」で再開できる',
+  ] },
+  { title: '名分と勝利条件', en: 'Legitimacy & Victory', lines: [
+    '◆ 名分＝院宣・宣旨・官位・三種の神器などの権威の総称。城を落とすより名分を得ることが最終的な決め手になる',
+    '◆ 勝利条件は勢力ごとに異なる。「勢力を選ぶ」画面で自勢力の条件を確認できる',
+    '◆ 朝敵に認定されると評判が下がる。逆に他勢力を朝敵に落とせば孤立させられる',
+  ] },
+  { title: '軍事と外交', en: 'Military & Diplomacy', lines: [
+    '◆ 出兵は「軍事」コマンドから。無血開城が成立すれば戦わずに接収できる',
+    '◆ 海を跨ぐ移動には水軍が必要（水軍が無い勢力は上陸できない海路がある）',
+    '◆ 「計略」で他家の武士団を勧誘・引き抜きできる（成否は名分・家格・地縁で決まる）',
+    '◆ 「外交」で朝廷への献納や奏請ができる。「人事」で本領安堵・新恩・誅を行う',
+  ] },
+  { title: '難易度', en: 'Difficulty', lines: [
+    '◆ 新規開始時にAIの難易度を選べる（易しい・標準・難しい）',
+    '◆ 難しいほどAIは名分・兵力を早く伸ばし、より積極的に出兵してくる',
+  ] },
+];
+function helpButtonRects(pg, total) {
+  const pw = 900, ph = 560, px = W / 2 - pw / 2, py = H / 2 - ph / 2;
+  return {
+    px, py, pw, ph,
+    close: { id: 'close', x: px + pw - 96, y: py + 20, w: 72, h: 28, jp: '閉じる', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4 },
+    prev: { id: 'prev', x: px + 40, y: py + ph - 50, w: 100, h: 34, jp: '← 前へ', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4, disabled: pg === 0 },
+    next: { id: 'next', x: px + pw - 140, y: py + ph - 50, w: 100, h: 34, jp: '次へ →', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4, disabled: pg === total - 1 },
+  };
+}
+function drawHelpOverlay(ctx, help) {
+  const pages = HELP_PAGES, pg = clamp(help.page || 0, 0, pages.length - 1), p = pages[pg];
+  const r = helpButtonRects(pg, pages.length);
+  ctx.fillStyle = 'rgba(5,7,11,0.72)'; ctx.fillRect(0, 0, W, H);
+  frame(ctx, r.px, r.py, r.pw, r.ph, { fill: 'rgba(10,15,22,0.98)', stroke: 'rgba(216,178,106,0.5)', radius: 10 });
+  txt(ctx, '遊び方 / How to Play', r.px + r.pw / 2, r.py + 30, { font: '600 26px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+  txt(ctx, `${p.title} / ${p.en}`, r.px + r.pw / 2, r.py + 68, { font: '600 17px "Hiragino Mincho ProN", serif', color: '#a78bfa', align: 'center' });
+  p.lines.forEach((ln, i) => wrapText(ctx, ln, r.px + 40, r.py + 112 + i * 60, r.pw - 80, 22, { font: '14px "Hiragino Mincho ProN", serif', color: '#dbe4ee' }));
+  txt(ctx, `${pg + 1} / ${pages.length}`, r.px + r.pw / 2, r.py + r.ph - 74, { font: '13px "Segoe UI", sans-serif', color: '#7d93ab', align: 'center' });
+  [r.close, r.prev, r.next].forEach((b) => button(ctx, b, false));
+}
+// help オーバーレイ内のクリックはここで全て吸収する（背後のシーンへ伝えない）。戻り値は常に true。
+function handleHelpClick(help, p) {
+  const pages = HELP_PAGES, pg = clamp(help.page || 0, 0, pages.length - 1);
+  const r = helpButtonRects(pg, pages.length);
+  if (hit(r.close, p)) help.open = false;
+  else if (!r.prev.disabled && hit(r.prev, p)) help.page = pg - 1;
+  else if (!r.next.disabled && hit(r.next, p)) help.page = pg + 1;
+  return true;
 }
 
 /* ============================================================================
@@ -2285,6 +2375,14 @@ class MapScene extends GameKit.Scene {
     this.eventArtId = null; this.eventArtT = 0;
     this.panel = null; this.panelScroll = 0; this.panelButtons = [];
     this.cmdButtons = this._layoutCommands();
+    this.helpBtn = { id: 'help', x: L.bar.x + L.bar.w - 26, y: L.bar.y + 1, w: 24, h: 24, jp: '？', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4 };
+    this.help = { open: false, page: 0 };
+    // 初回のみ遊び方を自動表示（新規ゲームの1ターン目・他オーバーレイが無い時。sengoku.html踏襲）
+    if (this.state.turn === 1) {
+      try {
+        if (!localStorage.getItem('genpeiHelpSeen')) { localStorage.setItem('genpeiHelpSeen', '1'); this.help.open = true; }
+      } catch (_) { /* ignore */ }
+    }
     this._bindWheel(g);
     this._bindPan(g);
     this._bindTouch(g);
@@ -2478,6 +2576,8 @@ class MapScene extends GameKit.Scene {
     if (this._suppressClick) { this._suppressClick = false; return; }
     if (this._touchPinch || performance.now() < (this._touchSuppressUntil || 0)) return;
 
+    if (p.justPressed && this.help.open) { handleHelpClick(this.help, p); return; }
+    if (p.justPressed && this.helpBtn && hit(this.helpBtn, p)) { g.audio.jingle([{ f: 440, d: 0.07 }]); this.help.open = true; this.help.page = 0; return; }
     if (p.justPressed && this.panel) {
       // 開いているパネルの操作を最優先で拾う（背後の地図に吸われないように）
       for (const b of this.panelButtons) {
@@ -2619,6 +2719,7 @@ class MapScene extends GameKit.Scene {
     if (this.eventArtT > 0) this._drawEventArt(ctx);
     if (this.panel) this._drawPanel(ctx, g);
     if (this.state.result) this._drawResult(ctx);
+    if (this.help.open) drawHelpOverlay(ctx, this.help);
   }
 
   /* -------- 上部ステータスバー -------- */
@@ -2649,7 +2750,8 @@ class MapScene extends GameKit.Scene {
       const held = st.kyotoHoldMonths || 0;
       put(`京 ${held}/${RULE.capital.holdMonths}ヶ月`, held >= RULE.capital.holdMonths ? '#5eead4' : held > 0 ? '#f9d423' : '#8b98ab');
     }
-    if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 12, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
+    if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 40, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
+    button(ctx, this.helpBtn, false);
   }
 
   /* -------- 全国図 -------- */
@@ -3176,7 +3278,8 @@ class MapScene extends GameKit.Scene {
       }
     } else if (this.panel === 'joho') {
       note = `拠点 ${DATA.kyoten.length}／国 ${DATA.provinces.length}／武士団 ${Object.keys(st.bands).length}／`
-           + `${DATA.source === 'embed' ? '埋め込みデータ' : '外部データ'}　${st.year}年${st.month}月（${st.turn}ターン目）`;
+           + `${DATA.source === 'embed' ? '埋め込みデータ' : '外部データ'}　${st.year}年${st.month}月（${st.turn}ターン目）　`
+           + `難易度: ${difficultyOf(st).jp}`;
       head = ['年月', '出来事', '', '', ''];
       for (const l of st.log) rows.push({ cells: [`${l.y}年${l.m}月`, l.text], buttons: [] });
     }
@@ -4271,8 +4374,10 @@ window.GENPEI_DEBUG = {
     game.changeScene(new BattleScene(st, { fid, from, to, troops: 3000 }, () => {})); return true; },
   scene: () => (game.scene ? game.scene.constructor.name : null),
   errors: () => game.errors || [],
-  gotoMap: (scnId, fid) => { game.changeScene(new MapScene(buildState(scnId, fid))); return true; },
+  gotoMap: (scnId, fid, difficulty) => { game.changeScene(new MapScene(buildState(scnId, fid, difficulty))); return true; },
+  gotoTitle: () => { game.changeScene(new TitleScene()); return true; },
   state: () => (game.scene && game.scene.state) || null,
+  DIFFICULTIES, difficultyOf, HELP_PAGES, drawHelpOverlay, handleHelpClick, helpButtonRects,
 };
 </script>
 </body>
