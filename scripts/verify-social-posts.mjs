@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const social = require(path.join(ROOT, 'scripts', 'post-social.js'));
+const { buildSpotlights } = await import(path.join(ROOT, 'scripts', 'gen-game-spotlight-posts.mjs'));
 
 let fail = 0;
 const ok   = (m) => console.log(`  ✓ ${m}`);
@@ -65,11 +66,11 @@ console.log('== 1. OAuth 1.0a 署名アルゴリズム ==');
 }
 
 // ── 2. X の文字数 ────────────────────────────────────────
-console.log('== 2. X投稿の文字数（280・URLは23文字換算）==');
-for (const [i, text] of social.X_POSTS.entries()) {
-  const weighted = text.replace(/https?:\/\/\S+/g, 'x'.repeat(23)).length;
-  if (weighted <= 280) ok(`X-${i + 1}: ${weighted}/280`);
-  else bad(`X-${i + 1}: ${weighted}/280 超過`);
+console.log('== 2. X投稿の文字数（280・URLは23文字換算、コア＋ゲームスポットライト全件）==');
+for (const post of social.X_POSTS) {
+  const weighted = post.text.replace(/https?:\/\/\S+/g, 'x'.repeat(23)).length;
+  if (weighted <= 280) ok(`${post.id}: ${weighted}/280`);
+  else bad(`${post.id}: ${weighted}/280 超過`);
 }
 
 // ── 3〜4. Instagram ──────────────────────────────────────
@@ -97,7 +98,7 @@ console.log('== 5. 投稿文のゲーム本数が実データと一致するか 
 {
   const { GAMES } = require(path.join(ROOT, 'assets', 'js', 'agent-data.js'));
   const actual = GAMES.length;
-  const all = [...social.X_POSTS, ...social.BLUESKY_POSTS,
+  const all = [...social.X_POSTS.map(p => p.text), ...social.BLUESKY_POSTS.map(p => p.text),
                ...social.INSTAGRAM_POSTS.map(p => p.caption),
                ...social.REDDIT_POSTS.map(p => p.title)].join('\n');
   // 「総数」を名乗っている書き方だけを対象にする。
@@ -139,8 +140,39 @@ console.log('== 6. 正本 marketing/social_*.md と post-social.js の一致 =='
       if (normalized.includes(norm(text))) ok(`${label}: 正本と一致`);
       else bad(`${label}: 正本 marketing/social_*.md に同じ文面が無い（どちらか片方だけ直している）`);
     };
-    social.X_POSTS.forEach((t, i) => check(`X-${i + 1}`, t));
-    social.INSTAGRAM_POSTS.forEach((p, i) => check(`IG-${i + 1}`, p.caption));
+    // ゲームスポットライトの正本は marketing/social_game_spotlight.md（自動生成・検査#8で鮮度確認）
+    // なのでここでは手書きのコア文面（X_POSTS_CORE）だけを対象にする
+    social.X_POSTS_CORE.forEach(p => check(p.id, p.text));
+    social.INSTAGRAM_POSTS.forEach(p => check(p.id, p.caption));
+  }
+}
+
+// ── 8. ゲームスポットライト投稿の鮮度（GAMESカタログとの同期）──────────
+// marketing/game-spotlight-posts.generated.js は scripts/gen-game-spotlight-posts.mjs の
+// 生成物。GAMESにゲームを追加/変更したのに再生成し忘れると、投稿ローテーションが
+// 古いカタログのまま固定される（新作が無言で告知対象から漏れる）。
+console.log('== 8. ゲーム別スポットライト投稿の鮮度（GAMESカタログと生成物が一致するか）==');
+{
+  const { GAMES } = require(path.join(ROOT, 'assets', 'js', 'agent-data.js'));
+  const expected = buildSpotlights(GAMES);
+  const norm = (arr) => JSON.stringify(arr);
+  if (norm(expected.GAME_SPOTLIGHT_X) === norm(social.GAME_SPOTLIGHT_X)
+    && norm(expected.GAME_SPOTLIGHT_BLUESKY) === norm(social.GAME_SPOTLIGHT_BLUESKY)) {
+    ok(`GAMES ${GAMES.length}件と生成物が一致`);
+  } else {
+    bad('marketing/game-spotlight-posts.generated.js がGAMESカタログとズレている。'
+      + '`node scripts/gen-game-spotlight-posts.mjs` を再実行してコミットすること');
+  }
+}
+
+// ── 9. 投稿IDの一意性（反応ログとの突き合わせに使うキーが重複していないか）──
+console.log('== 9. 投稿IDの一意性 ==');
+{
+  for (const [label, list] of [['X_POSTS', social.X_POSTS], ['BLUESKY_POSTS', social.BLUESKY_POSTS]]) {
+    const ids = list.map(p => p.id);
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+    if (dupes.length === 0) ok(`${label}: ${ids.length}件、重複なし`);
+    else bad(`${label}: id重複 — ${[...new Set(dupes)].join(', ')}`);
   }
 }
 

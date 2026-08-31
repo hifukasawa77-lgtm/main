@@ -55,6 +55,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0029-dynamic-test-false-failures]] — 動的テストの偽のFAILを一掃（HTTP配信/外部エラー分離/全canvas走査）＋無効なX-Frame-Options metaをJSフレームバスターへ
 - [[0030-marketer-social-automation]] — マーケターの成果をSNS投稿まで到達させる（X/Instagram自動投稿＋認証情報なしで走る検査）
 - [[0031-verification-cost-and-fast-path-guards]] — 検査の反復コストを実測して速い経路を分離（44秒→1秒）＋抜け道が広がらない検査4件
+- [[0032-marketer-data-driven-evolve-loop]] — マーケターを反応駆動の週次学習ループへ（個別ゲーム自動告知＋反応計測＋/marketer-evolve）
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約

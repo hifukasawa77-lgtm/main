@@ -46,22 +46,51 @@ PM（深澤）へ納品（戦略レポート + コンテンツ一式）
 
 - **ターゲット**: ペルソナ（年齢・趣味・プラットフォーム使用習慣）
 - **ポジショニング**: 競合との差別化ポイント（USP）
-- **チャネル優先順位**: X / GitHub / Qiita / YouTube / Reddit 等
+- **チャネル優先順位**: X / Bluesky / Reddit / GitHub / Qiita・Zenn / note / Threads 等
 - **KPI**: 目標値（例: X インプレッション 1万 / GitHub Star 50 / リリース1週間以内）
 - **プロモーションスケジュール**: リリース前後のアクション計画
+- **過去の反応データがあれば必ず先に見る**: `marketing/post-log.json` に投稿履歴と反応
+  （`node scripts/fetch-social-engagement.mjs` で取得）が溜まっている場合、スコア上位の
+  パターン（フック・訴求軸）を新しい戦略の出発点にする。ゼロから勘で作らない
+
+### Step 2.5: コピーの型（品質の土台）
+新規に文面を書くときは、以下の型を意識する（既存の `marketing/social_*.md` もこの型に沿っている）:
+
+- **フック→根拠→CTA**: 最初の1行で具体的な数字か強い断定（例: 「フレームワークを1つも使わず」
+  「37本」）を出し、次に根拠（実装の裏付け）、最後に行動喚起（URL・「プロフィールから」等）
+- **抽象的な誉め言葉を避ける**: 「すごい」「革新的」ではなく、検証可能な事実（本数・技術・
+  作り方）で語る。誇大広告禁止の方針とも一致する
+- **1投稿1メッセージ**: 複数の訴求軸を1文に詰め込まない。軸ごとに投稿を分ける
+  （例: 技術訴求／AIチーム訴求／カジュアル訴求を別々のパターンとして用意する）
+- **バリエーションは最低4〜5パターン**: 同じ訴求を毎週使い回すと反応が鈍る。訴求軸を変えて
+  複数パターンを用意し、`marketer-evolve` が反応を見て次に伸ばす軸を選べるようにする
 
 ### Step 3: コンテンツ生成
 
 #### 必須成果物
-1. **Xポスト（日本語）**: リリース告知用 3パターン（A/Bテスト想定）
-2. **Xポスト（英語）**: 英語圏向け 2パターン
+1. **Xポスト（日本語）**: リリース告知用 4〜5パターン（訴求軸を変えたA/Bテスト想定）
+2. **Xポスト（英語）**: 英語圏向け 2〜3パターン
 3. **GitHub README 紹介文**: 「このリポジトリは何か」「どんな人に向けているか」の簡潔な文章
 4. **短尺キャッチコピー集**: 5〜10個（SNSプロフィール・OGP等に使い回せる）
 
+#### 個別ゲームの継続告知（自動化・手作業不要）
+サイト全体の紹介だけでは新作以外のゲームがほぼ告知されない。これを解消するため
+`scripts/gen-game-spotlight-posts.mjs` が `assets/js/agent-data.js` の GAMES（キュレーション
+済みの日英タイトル・説明文）から**ゲーム1本につきX日英2本＋Bluesky日本語1本**のスポットライト
+投稿を自動生成し、`post-social.js` の週次ローテーションへコア文面と一緒に合流させる。
+- 新しいゲームが公開されたら Marketer が手で投稿文を書く必要はない。
+  `node scripts/gen-game-spotlight-posts.mjs` を実行するだけで対象に加わる
+- 生成物（`marketing/game-spotlight-posts.generated.js` / `marketing/social_game_spotlight.md`）は
+  自動生成物。**手編集しない**。ズレは `verify-social-posts.mjs` 検査#8が機械検出する
+- この同期を毎週欠かさず行うのが `/marketer-evolve`（後述）の役目
+
 #### 任意成果物（指示があれば追加）
 5. **ランディングページコピー**: ヒーローセクション + 特徴説明 + CTA（Code-Generatorへ引き渡し）
-6. **Qiita / Zenn 記事アウトライン**: 開発ログ・技術解説記事の構成案
+6. **Qiita / Zenn 記事アウトライン**: 開発ログ・技術解説記事の構成案（`qiita-draft` スキル参照）
 7. **プレスリリース文**: メディア向け（200〜400字）
+8. **note記事アウトライン**: 開発ストーリー・裏話向け（Qiita/Zennより技術色を薄めた構成）
+9. **Threads投稿文**: X日本語文をベースに500字以内へ調整。**投稿の自動化はしない**
+   （Meta側のアプリ審査が必要で今の自動化基盤の範囲外。深澤が手動投稿する前提の文面のみ用意する）
 
 ### Step 4: 納品
 
@@ -142,10 +171,13 @@ Code-Generatorへ該当セクションを引き渡す。
 
 | 段階 | 実体 |
 |---|---|
-| 投稿文の正本 | `marketing/social_*.md`（X日英・Instagramキャプション・スケジュール・KPI） |
+| 投稿文の正本（コア） | `marketing/social_*.md`（X日英・Instagramキャプション・スケジュール・KPI） |
+| 投稿文の正本（個別ゲーム） | `marketing/social_game_spotlight.md`（自動生成・手編集禁止。再生成は `node scripts/gen-game-spotlight-posts.mjs`） |
 | 投稿画像 | `assets/marketing/ig-*.jpg`（1080×1080）。生成は `node scripts/gen-instagram-images.mjs` |
-| 実行 | `scripts/post-social.js <bluesky|reddit|x|instagram> [--dry-run]` |
+| 実行 | `scripts/post-social.js <bluesky|reddit|x|instagram> [--dry-run]`（コア文面＋ゲームスポットライトを合流してローテーション） |
 | 自動化 | GitHub Actions `Auto Social Post`（毎週水曜 21:00 JST） |
+| 投稿ログ・反応計測 | `marketing/post-log.json`（投稿の度に自動記録）→ `node scripts/fetch-social-engagement.mjs` で反応取得 |
+| データ駆動の学習ループ | `/marketer-evolve`（週次Routine・火曜20:00 JST）が反応を見てコア文面を改善しローリングPRへ積む |
 | 認証情報の手順 | `docs/social-setup.md`（登録は深澤の作業） |
 
 ### 守ること
@@ -158,4 +190,9 @@ Code-Generatorへ該当セクションを引き渡す。
 - **Instagram画像はJPEG固定**（Graph APIがJPEGしか受け付けない）。WebPへ変換しない
 - 認証情報が無いプラットフォームは**スキップして正常終了**させる。失敗にしない
 - 代理投稿はしない。**投稿の実行と認証情報の登録は深澤（PM）**。マーケターは「すぐ投稿できる状態」までを担う
+- **ゲームスポットライトの生成物（`marketing/game-spotlight-posts.generated.js` /
+  `marketing/social_game_spotlight.md`）は手編集しない**。中身を変えたいときは
+  `assets/js/agent-data.js` の GAMES（`desc`/`title`）を直してから再生成する
+- 継続的な改善は `/marketer-evolve`（週次）が担う。Marketerを単発起動したときも、
+  改善前に `marketing/post-log.json` の反応データを確認する習慣を持つ（Step 2参照）
 

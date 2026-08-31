@@ -254,6 +254,7 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 | `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve` | 禁止（深澤承認制） |
 | `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
+| `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
 
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
@@ -397,11 +398,22 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - **SNS自動投稿**: GitHub Actions `Auto Social Post`（毎週水曜 21:00 JST）が X / Instagram / Bluesky / Reddit へ投稿する。
   実装は `scripts/post-social.js`、Secretsの登録手順は `docs/social-setup.md`。
   **認証情報が未設定のプラットフォームはスキップして正常終了する**（未設定のまま毎週赤くなると本物の失敗に気づけないため）
-- **投稿文の正本は `marketing/social_*.md`**。`scripts/post-social.js` の配列はその実行用の写しなので**両方直す**。
+- **投稿文の正本は `marketing/social_*.md`**。`scripts/post-social.js` の配列はその実行用の写しなので**両方直す**
+  （対象は手書きのコア文面 `X_POSTS_CORE`/`BLUESKY_POSTS_CORE`。ゲーム別スポットライトは下記の通り自動生成なので対象外）。
   変更後は `node scripts/post-social.js <platform> --dry-run` で文字数（X:280 / Instagram:2200）を確認する
 - Instagram用の1080×1080画像は `node scripts/gen-instagram-images.mjs` で生成（JPEG固定・上記アセット方針の例外）
 - **投稿文・画像を変えたら `node scripts/verify-social-posts.mjs` を実行する**（署名アルゴリズム・文字数上限・
-  画像の実在・ゲーム本数の焼き付きを機械検査。認証情報が無くても走る）
+  画像の実在・ゲーム本数の焼き付き・ゲームスポットライトの鮮度・投稿ID一意性を機械検査。認証情報が無くても走る）
+- **個別ゲームの継続告知**: `scripts/gen-game-spotlight-posts.mjs` が `assets/js/agent-data.js` の GAMES から
+  ゲーム1本ごとのX日英・Bluesky日本語スポットライト投稿を自動生成し（`marketing/game-spotlight-posts.generated.js` /
+  `marketing/social_game_spotlight.md`、**どちらも自動生成物・手編集禁止**）、`post-social.js` のローテーションへ
+  コア文面と合流させる。新作ゲームが増えたら再生成するだけで告知対象に入る（鮮度は検査#8が機械確認）
+- **投稿ログと反応計測**: 実際に投稿すると `marketing/post-log.json` に自動記録される。
+  `node scripts/fetch-social-engagement.mjs` が各SNSの公開反応（いいね/リポスト/返信等、無料の読み取りAPIのみ）を
+  取得して書き戻す。認証情報が無いプラットフォームは黙ってスキップする
+- **データ駆動の週次改善（`/marketer-evolve`）**: Routine（毎週火曜 20:00 JST）が反応データを見てコア文面の
+  弱いパターンを改善し、ゲームカタログとの同期も毎回行う。ローリングPR `claude/marketer-evolve` に積み
+  深澤が承認（mainへ直接pushしない）。詳細は `.claude/skills/marketer-evolve/SKILL.md`
 
 ### 公開後の改善ループ（Post-Release Loop）
 リリース済み成果物を継続的に改善するフェーズ。4体は独立に起動でき、**変更を入れたら必ずDynamic-Testerで回帰確認する**。
