@@ -791,6 +791,61 @@ check('52. ★2人対戦: P1終了で暦は進まずP2へ手番交代、P2終了
 check('53. ★2人対戦: 京の保持月数は勢力ごとに独立して数える（片方の保持が他方に漏れない）', hotseat.kisoHeld === 3 && hotseat.kamakuraHeld === 0, JSON.stringify(hotseat));
 check('54. ★旧セーブ互換: kyotoHoldMonthsが数値のままでもmigrateStateがobject化する', hotseat.migratedOk, JSON.stringify(hotseat));
 
+/* 55. 拡大図（国の拡大表示）のズーム/パン（モバイル可読性の続きで追加。全国図と同じ
+ * カメラ方式だが、自動フィットの上限をそのままズームイン下限に使うと畿内等の小さい国で
+ * ホイール操作が完全な無効操作になるため provZoom という別上限を持つ＝その回帰を機械検査する） */
+const provZoom = await page.evaluate(() => {
+  const G = window.GENPEI_DEBUG;
+  G.gotoMap('s1180', 'kamakura');
+  const sc = G.game.scene;
+  sc.province = 'mutsu'; sc.provCam = null;
+  const initialNull = sc.provCam === null;
+  const dflt = sc._provDefaultHalfW();
+
+  // ズームイン: provCamを実体化してhalfWを縮める（_bindProvWheelと同じ計算・自動フィットより寄る）
+  sc._ensureProvCam();
+  sc.provCam.halfW /= 1.12;
+  sc._clampProvCam();
+  const zoomedIn = sc.provCam.halfW < dflt;
+
+  // ズームアウト: 自動フィットより広く見える（自動フィットが解像度下限で頭打ちの国でも常に可能）
+  sc.provCam.halfW = dflt;
+  for (let i = 0; i < 30; i++) { sc.provCam.halfW *= 1.12; sc._clampProvCam(); }
+  const zoomedOutBeyondDefault = sc.provCam.halfW > dflt;
+
+  // パン: cx/cyが動く
+  const beforePan = { cx: sc.provCam.cx, cy: sc.provCam.cy };
+  sc.provCam.cx += 0.02; sc.provCam.cy += 0.02;
+  sc._clampProvCam();
+  const panned = sc.provCam.cx !== beforePan.cx || sc.provCam.cy !== beforePan.cy;
+
+  // 国を選び直すと自動フィットへ戻る（全国図クリックハンドラと同じ代入を模す）
+  sc.province = 'izumi';
+  sc.provCam = null;
+  const resetOnProvinceChange = sc.provCam === null;
+
+  // 全66国でズームインに実効性がある（provZoom上限が効いているか。旧prov上限のままだと
+  // 66国中65国でズームインが完全な無効操作になっていた＝2026-08-31に実測して修正）
+  let zoomableCount = 0;
+  const provIds = Object.keys(G.DATA.provBox);
+  for (const pid of provIds) {
+    sc.province = pid; sc.provCam = null;
+    const d = sc._provDefaultHalfW();
+    sc._ensureProvCam();
+    sc.provCam.halfW = d / (1.12 ** 20);
+    sc._clampProvCam();
+    if (sc.provCam.halfW < d - 1e-9) zoomableCount++;
+    sc.provCam = null;
+  }
+
+  return { initialNull, zoomedIn, zoomedOutBeyondDefault, panned, resetOnProvinceChange, zoomableCount, totalProv: provIds.length };
+});
+check('55. ★拡大図（国の拡大表示）: ホイールでズームイン/アウト・ドラッグでパンでき、国を選び直すと自動フィットへ戻る',
+  provZoom.initialNull && provZoom.zoomedIn && provZoom.zoomedOutBeyondDefault && provZoom.panned && provZoom.resetOnProvinceChange,
+  JSON.stringify(provZoom));
+check('55b. ★拡大図: 全66国でズームインに実効性がある（自動フィット止まりの国が残らない）',
+  provZoom.zoomableCount === provZoom.totalProv, JSON.stringify(provZoom));
+
 /* 39. 実際の BattleScene で背景と可動駒の画像が読み込まれること */
 await page.evaluate(() => window.GENPEI_DEBUG.gotoBattle('s1180', 'kamakura', 'kokufu_izu', 'sekisho_usui'));
 await page.waitForFunction(() => {

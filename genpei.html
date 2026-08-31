@@ -1629,8 +1629,13 @@ const MAP_ASPECT = 941 / MAP_NATIVE_W;
 
 /* 拡大率の上限（地図素材の原寸の何倍まで引き伸ばすか）。
  * 素材は 1672×941 しかなく、これを超えて拡大するとぼやけが目に見えて増える。
- * 各段の寄りはこの上限に合わせて自動的に浅くなる。数値を上げれば寄れるがぼやける。 */
-const ZOOM_CAP = { nation: 2.0, prov: 3.0, local: 4.5 };
+ * 各段の寄りはこの上限に合わせて自動的に浅くなる。数値を上げれば寄れるがぼやける。
+ * provZoom は拡大図のユーザー操作（ホイール/ピンチ）専用のズームイン上限。prov（自動フィットの
+ * 保守的な上限）より緩くしないと、畿内等の小さい国では自動フィットが既に解像度下限に達していて
+ * ユーザーがズームインしてもほぼ動かない（実測: 66国中65国で無効）。ユーザーが能動的に寄る操作は
+ * ある程度のぼやけを許容してでも効かせる方を優先する。自動フィット自体（provDefaultHalfW）は
+ * 変えない＝何も操作しない状態の見た目は今までどおり。 */
+const ZOOM_CAP = { nation: 2.0, prov: 3.0, local: 4.5, provZoom: 6.0 };
 function maxMapScale(cap) {
   return (ASSETS.map && ASSETS.map.naturalWidth ? ASSETS.map.naturalWidth : MAP_NATIVE_W) * cap;
 }
@@ -2646,6 +2651,9 @@ class MapScene extends GameKit.Scene {
     this.maxZoom = Math.max(this.minZoom, maxMapScale(ZOOM_CAP.nation) / L.nation.w);
     this.cam = { cx: 0.5, cy: 0.5, zoom: this.minZoom };
     this.drag = null;
+    // 拡大図（国の拡大表示）のカメラ。null=自動フィット（国を選び直すとリセットされる）
+    this.provCam = null;
+    this.provPan = null;
     // 選択: 自勢力の本拠がある国を初期選択にする
     const mine = Rule.ownedKyoten(this.state, this.state.faction);
     this.province = mine.length ? mine[0].province : 'sagami';
@@ -2668,6 +2676,8 @@ class MapScene extends GameKit.Scene {
     }
     this._bindWheel(g);
     this._bindPan(g);
+    this._bindProvWheel(g);
+    this._bindProvPan(g);
     this._bindTouch(g);
   }
   exit() {
@@ -2675,6 +2685,9 @@ class MapScene extends GameKit.Scene {
     if (this._panDown) canvas.removeEventListener('mousedown', this._panDown);
     if (this._panUp) window.removeEventListener('mouseup', this._panUp);
     if (this._panMenu) canvas.removeEventListener('contextmenu', this._panMenu);
+    if (this._provWheel) canvas.removeEventListener('wheel', this._provWheel);
+    if (this._provPanDown) canvas.removeEventListener('mousedown', this._provPanDown);
+    if (this._provPanUp) window.removeEventListener('mouseup', this._provPanUp);
     if (this._onTouchStart) canvas.removeEventListener('touchstart', this._onTouchStart);
     if (this._onTouchMove) canvas.removeEventListener('touchmove', this._onTouchMove);
     if (this._onTouchEnd) canvas.removeEventListener('touchend', this._onTouchEnd);
@@ -2743,10 +2756,71 @@ class MapScene extends GameKit.Scene {
       this.pan = { x: p.x, y: p.y, cx: this.cam.cx, cy: this.cam.cy };
     };
     this._panUp = () => { this.pan = null; };
-    this._panMenu = (e) => { if (inRect(L.nation, g.input.pointer)) e.preventDefault(); };
+    this._panMenu = (e) => { const p = g.input.pointer; if (inRect(L.nation, p) || inRect(L.prov, p)) e.preventDefault(); };
     canvas.addEventListener('mousedown', this._panDown);
     window.addEventListener('mouseup', this._panUp);
     canvas.addEventListener('contextmenu', this._panMenu);
+  }
+  /* 拡大図（国の拡大表示）が「国の形に合わせて寄せたい」半幅（=素の希望値。解像度上限は考慮しない） */
+  _provFitHalfW() {
+    const b = DATA.provBox[this.province];
+    return Math.max(0.035, (b.x1 - b.x0) / 2 + 0.022);
+  }
+  // 自動フィット時に実際に使う半幅＝「国の形」と「素材原寸のZOOM_CAP.prov倍（解像度の下限）」の広い方。
+  // 畿内のように国が小さいと解像度下限が勝つ（=そこが最大ズームインで、ユーザー操作でもそれ以上は寄れない）。
+  _provDefaultHalfW() { return Math.max(this._provFitHalfW(), this._minHalfW(L.prov, ZOOM_CAP.prov)); }
+  _ensureProvCam() {
+    if (!this.provCam) {
+      const b = DATA.provBox[this.province];
+      this.provCam = { cx: (b.x0 + b.x1) / 2, cy: (b.y0 + b.y1) / 2, halfW: this._provDefaultHalfW() };
+    }
+    return this.provCam;
+  }
+  // 半幅は「素材原寸のZOOM_CAP.provZoom倍（＝これ以上寄らない・ユーザー操作用の緩い上限）」〜
+  // 「自動フィットの4倍（＝周辺国まで見渡せる）」に収める。
+  // ズームインの下限にZOOM_CAP.prov（自動フィット用の保守的な値）をそのまま使うと、自動フィットが
+  // 既にその下限で頭打ちの国（66国中65国）でズームインが完全な無効操作になるためprovZoomを使う。
+  // 上限を自動フィットそのもの止まりにすると、自動フィットが下限で頭打ちの国（畿内等）で
+  // ズームアウトも一切できなくなるため、ズームインの下限とズームアウトの上限は別々に持つ。
+  _clampProvCam() {
+    if (!this.provCam) return;
+    const minHalfW = this._minHalfW(L.prov, ZOOM_CAP.provZoom);
+    const maxHalfW = Math.max(minHalfW, Math.min(0.5, this._provDefaultHalfW() * 4));
+    this.provCam.halfW = clamp(this.provCam.halfW, minHalfW, maxHalfW);
+    const r = L.prov, hw = this.provCam.halfW, hh = hw * (r.h / r.w) / mapAspect();
+    this.provCam.cx = clamp(this.provCam.cx, Math.min(0.5, hw), Math.max(0.5, 1 - hw));
+    this.provCam.cy = clamp(this.provCam.cy, Math.min(0.5, hh), Math.max(0.5, 1 - hh));
+  }
+  /* 拡大図: ホイールでカーソル位置を中心にズーム（全国図の_bindWheelと同じ考え方） */
+  _bindProvWheel(g) {
+    this._provWheel = (e) => {
+      const p = g.input.pointer;
+      if (this.panel || !inRect(L.prov, p)) return;
+      e.preventDefault();
+      this._ensureProvCam();
+      const before = this._provView().toMap(p.x, p.y);
+      this.provCam.halfW *= (e.deltaY < 0 ? 1 / 1.12 : 1.12);
+      this._clampProvCam();
+      const after = this._provView().toMap(p.x, p.y);
+      this.provCam.cx += before.x - after.x; this.provCam.cy += before.y - after.y;
+      this._clampProvCam();
+    };
+    canvas.addEventListener('wheel', this._provWheel, { passive: false });
+  }
+  /* 拡大図: 右／中ドラッグで平行移動（全国図の_bindPanと同じ考え方。左クリックは拠点選択に使う） */
+  _bindProvPan(g) {
+    this._provPanDown = (e) => {
+      if (e.button !== 1 && e.button !== 2) return;
+      this._suppressClick = true;
+      const p = g.input.pointer;
+      if (this.panel || !inRect(L.prov, p)) return;
+      e.preventDefault();
+      this._ensureProvCam();
+      this.provPan = { x: p.x, y: p.y, cx: this.provCam.cx, cy: this.provCam.cy };
+    };
+    this._provPanUp = () => { this.provPan = null; };
+    canvas.addEventListener('mousedown', this._provPanDown);
+    window.addEventListener('mouseup', this._provPanUp);
   }
   /* タッチ: 2本指ピンチで全国図を拡大縮小・1本指ドラッグで平行移動（taihei.html踏襲）。
    * ★GameKit.Input も同じ canvas に touchstart/touchmove/touchend を張っているため
@@ -2757,25 +2831,39 @@ class MapScene extends GameKit.Scene {
     const r = canvas.getBoundingClientRect();
     return { x: (clientX - r.left) / r.width * canvas.width, y: (clientY - r.top) / r.height * canvas.height };
   }
+  // 拡大図: 画面 → 地図正規化（全国図の_n2m相当。provCamのhalfWから実効スケールを出す）
+  _prov2m(p) { return this._provView().toMap(p.x, p.y); }
   _bindTouch(g) {
     this._touchPinch = null;
     this._touchPan = null;
+    this._provTouchPinch = null;
+    this._provTouchPan = null;
     this._touchSuppressUntil = 0;
     this._onTouchStart = (e) => {
       if (this.panel) return;
       if (e.touches.length === 2) {
         const p1 = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
         const p2 = this._clientToCanvasXY(e.touches[1].clientX, e.touches[1].clientY);
-        if (!inRect(L.nation, p1) && !inRect(L.nation, p2)) return;
         const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
         const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-        this._touchPinch = { dist, zoom: this.cam.zoom, m: this._n2m(mid) };
-        this._touchPan = null;
-        e.preventDefault();
+        if (inRect(L.nation, p1) || inRect(L.nation, p2)) {
+          this._touchPinch = { dist, zoom: this.cam.zoom, m: this._n2m(mid) };
+          this._touchPan = null;
+          e.preventDefault();
+        } else if (inRect(L.prov, p1) || inRect(L.prov, p2)) {
+          this._ensureProvCam();
+          this._provTouchPinch = { dist, halfW: this.provCam.halfW, m: this._prov2m(mid) };
+          this._provTouchPan = null;
+          e.preventDefault();
+        }
       } else if (e.touches.length === 1) {
         const p = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
-        if (!inRect(L.nation, p)) return;
-        this._touchPan = { x: p.x, y: p.y, cx: this.cam.cx, cy: this.cam.cy, dragging: false };
+        if (inRect(L.nation, p)) {
+          this._touchPan = { x: p.x, y: p.y, cx: this.cam.cx, cy: this.cam.cy, dragging: false };
+        } else if (inRect(L.prov, p)) {
+          this._ensureProvCam();
+          this._provTouchPan = { x: p.x, y: p.y, cx: this.provCam.cx, cy: this.provCam.cy, dragging: false };
+        }
       }
     };
     this._onTouchMove = (e) => {
@@ -2790,6 +2878,18 @@ class MapScene extends GameKit.Scene {
         this.cam.cy += this._touchPinch.m.y - after.y;
         this._clampCam();
         e.preventDefault();
+      } else if (e.touches.length === 2 && this._provTouchPinch) {
+        const p1 = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
+        const p2 = this._clientToCanvasXY(e.touches[1].clientX, e.touches[1].clientY);
+        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        this.provCam.halfW = this._provTouchPinch.halfW / (dist / Math.max(1, this._provTouchPinch.dist));
+        this._clampProvCam();
+        const after = this._prov2m(mid);
+        this.provCam.cx += this._provTouchPinch.m.x - after.x;
+        this.provCam.cy += this._provTouchPinch.m.y - after.y;
+        this._clampProvCam();
+        e.preventDefault();
       } else if (e.touches.length === 1 && this._touchPan) {
         const p = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
         const dx = p.x - this._touchPan.x, dy = p.y - this._touchPan.y;
@@ -2801,13 +2901,29 @@ class MapScene extends GameKit.Scene {
           this._clampCam();
           e.preventDefault();
         }
+      } else if (e.touches.length === 1 && this._provTouchPan) {
+        const p = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
+        const dx = p.x - this._provTouchPan.x, dy = p.y - this._provTouchPan.y;
+        if (Math.abs(dx) + Math.abs(dy) > 6) this._provTouchPan.dragging = true;
+        if (this._provTouchPan.dragging) {
+          const s = L.prov.w / (2 * this.provCam.halfW);
+          this.provCam.cx = this._provTouchPan.cx - dx / s;
+          this.provCam.cy = this._provTouchPan.cy - dy / (s * mapAspect());
+          this._clampProvCam();
+          e.preventDefault();
+        }
       }
     };
     this._onTouchEnd = (e) => {
       if (e.touches.length < 2 && this._touchPinch) { this._touchPinch = null; this._touchSuppressUntil = performance.now() + 300; }
+      if (e.touches.length < 2 && this._provTouchPinch) { this._provTouchPinch = null; this._touchSuppressUntil = performance.now() + 300; }
       if (e.touches.length === 0 && this._touchPan) {
         if (this._touchPan.dragging) this._touchSuppressUntil = performance.now() + 150;
         this._touchPan = null;
+      }
+      if (e.touches.length === 0 && this._provTouchPan) {
+        if (this._provTouchPan.dragging) this._touchSuppressUntil = performance.now() + 150;
+        this._provTouchPan = null;
       }
     };
     canvas.addEventListener('touchstart', this._onTouchStart, { passive: false });
@@ -2855,11 +2971,12 @@ class MapScene extends GameKit.Scene {
   /* 表示半幅の下限＝拡大率の上限。これより寄せると素材の原寸を超えて引き伸ばすことになる */
   _minHalfW(rect, cap) { return rect.w / (2 * maxMapScale(cap)); }
 
+  // provCamが未実体化（=ホイール/ドラッグで一度も操作していない）間は国の自動フィットを返す。
+  // 操作後はprovCamに従う（国を選び直すとenter()と同じ理由でnullへ戻り、自動フィットに復帰する）
   _provView() {
+    if (this.provCam) return this._viewFor(L.prov, this.provCam.cx, this.provCam.cy, this.provCam.halfW);
     const b = DATA.provBox[this.province];
-    const want = Math.max(0.035, (b.x1 - b.x0) / 2 + 0.022);
-    const halfW = Math.max(want, this._minHalfW(L.prov, ZOOM_CAP.prov));
-    return this._viewFor(L.prov, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, halfW);
+    return this._viewFor(L.prov, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, this._provDefaultHalfW());
   }
   _localView() {
     const k = this.sel ? DATA.kyotenById[this.sel] : null;
@@ -2881,8 +2998,15 @@ class MapScene extends GameKit.Scene {
       this.cam.cy = this.pan.cy - (p.y - this.pan.y) / (s * mapAspect());
       this._clampCam();
     }
+    // 拡大図（国の拡大表示）の右／中ドラッグ平行移動
+    if (this.provPan) {
+      const s = L.prov.w / (2 * this.provCam.halfW);
+      this.provCam.cx = this.provPan.cx - (p.x - this.provPan.x) / s;
+      this.provCam.cy = this.provPan.cy - (p.y - this.provPan.y) / (s * mapAspect());
+      this._clampProvCam();
+    }
     if (this._suppressClick) { this._suppressClick = false; return; }
-    if (this._touchPinch || performance.now() < (this._touchSuppressUntil || 0)) return;
+    if (this._touchPinch || this._provTouchPinch || performance.now() < (this._touchSuppressUntil || 0)) return;
 
     if (p.justPressed && this.help.open) { handleHelpClick(this.help, p); return; }
     if (p.justPressed && this.helpBtn && hit(this.helpBtn, p)) { g.audio.jingle([{ f: 440, d: 0.07 }]); this.help.open = true; this.help.page = 0; return; }
@@ -2931,6 +3055,7 @@ class MapScene extends GameKit.Scene {
         const pid = this._pickProvince(p);
         if (pid) {
           this.province = pid; this.listScroll = 0;
+          this.provCam = null; // 国を選び直したら拡大図は自動フィットへ戻す
           const list = DATA.byProvince[pid];
           this.sel = list && list.length ? list[0].id : null;
           g.audio.jingle([{ f: 523, d: 0.06 }]);
