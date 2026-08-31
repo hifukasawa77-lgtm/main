@@ -134,12 +134,17 @@ const game = new GameKit.Engine(canvas, { width: W, height: H });
 const save = new GameKit.Save('genpei');
 const clamp = GameKit.MathX.clamp;
 
+// sengoku.html の IS_TOUCH を踏襲。固定Canvasをタッチ端末の小さい画面へ引き伸ばすと
+// 文字が縮んで読めなくなるため（game-devスキル「固定Canvas UIのモバイル可読性対策」）、
+// txt()/button() 等の共通描画経路（下記 mobileFont）でフォントサイズだけ底上げする。
+// レイアウト（L, パネル座標）自体は変えない＝密なダッシュボードの配置崩れは起きない。
+const IS_TOUCH = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || navigator.maxTouchPoints > 0;
+
 /* モバイル横画面ゲート（sengoku.html/sanguo.html と同じ方式）。
  * タッチ端末の縦画面でのみ表示し、ボタンで全画面化＋横向き固定を試みる。
  * screen.orientation.lock は非対応環境もあるため、失敗しても案内文自体で足りる。 */
 (function () {
-  const touchCapable = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 0;
-  document.body.classList.toggle('genpei-touch', touchCapable);
+  document.body.classList.toggle('genpei-touch', IS_TOUCH);
   const gate = document.getElementById('landscapeGate');
   gate.querySelector('button').onclick = () => {
     const el = document.documentElement;
@@ -1732,7 +1737,16 @@ function frameTitle(ctx, x, y, w, title, en) {
   txt(ctx, title, x + 10, y + 4, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#e8d3a0', align: 'left' });
   if (en) txt(ctx, en, x + w - 10, y + 6, { font: '10px "Segoe UI", sans-serif', color: '#8a7a58', align: 'right' });
 }
-function txt(ctx, str, x, y, o) {
+// タッチ端末向けフォント底上げ（+15%）。行間・列幅は _drawList/_drawSide/_drawEvents 等の
+// 実測ヘッドルーム（最小約30%）に収まる値として選んだ。上げるときは必ず実機/エミュレータで
+// はみ出し・重なりが無いかスクリーンショット確認すること（数値だけで判断しない）。
+const MOBILE_FONT_SCALE = 1.15;
+function mobileFont(font) {
+  if (!IS_TOUCH || !font) return font;
+  return font.replace(/(\d+(?:\.\d+)?)px/, (_, n) => `${+(parseFloat(n) * MOBILE_FONT_SCALE).toFixed(1)}px`);
+}
+// 生の描画本体（フォントは呼び出し側で確定済みの前提＝mobileFont適用済みか、意図的に適用しない場合に使う）
+function drawFillText(ctx, str, x, y, o) {
   ctx.save();
   ctx.font = (o && o.font) || '13px "Hiragino Mincho ProN", serif';
   ctx.fillStyle = (o && o.color) || '#dbe4ee';
@@ -1741,8 +1755,14 @@ function txt(ctx, str, x, y, o) {
   ctx.fillText(str, x, y);
   ctx.restore();
 }
+// 通常のテキスト描画はここを経由する。フォント指定は毎回 mobileFont() で自動底上げするため、
+// 呼び出し側は既存の固定px指定のままでよい（=既存コードへの変更を最小化する）。
+function txt(ctx, str, x, y, o) {
+  drawFillText(ctx, str, x, y, { ...o, font: mobileFont((o && o.font) || '13px "Hiragino Mincho ProN", serif') });
+}
 function fitText(ctx, str, max, font) {
-  ctx.save(); ctx.font = font;
+  // 実際に描画される幅（mobileFont適用後）で切り詰めないと、拡大後の文字がmaxをはみ出す
+  ctx.save(); ctx.font = mobileFont(font);
   let s = str;
   while (s.length > 1 && ctx.measureText(s).width > max) s = s.slice(0, -1);
   ctx.restore();
@@ -1752,19 +1772,23 @@ function fitText(ctx, str, max, font) {
 function shrinkFont(font, size) { return font.replace(/(\d+(?:\.\d+)?)px/, `${size}px`); }
 // ラベル横幅フィット（モバイル可読性対策の最終防衛線）: measureText でボタン幅を超えるなら
 // フォントサイズを自動で縮める。翻訳文・可変数値・端末ごとのスケール差を1箇所で吸収する。
+// ★ mobileFont適用後のサイズを起点にする（タッチ時は大きく始めて収まる範囲まで縮める）。
+// 戻り値は最終確定フォントなので、呼び出し側は txt() を介さず drawFillText() で描くこと
+// （txt() を通すと mobileFont が二重適用され、フィット済みのはずの幅をまた超えてしまう）。
 function fitButtonFont(ctx, label, font, maxW) {
-  const m = font.match(/(\d+(?:\.\d+)?)px/);
-  if (!m || !label) return font;
+  const scaled = mobileFont(font);
+  const m = scaled.match(/(\d+(?:\.\d+)?)px/);
+  if (!m || !label) return scaled;
   let size = parseFloat(m[1]);
   const minSize = Math.max(9, size - 6);
   ctx.save();
   while (size > minSize) {
-    ctx.font = shrinkFont(font, size);
+    ctx.font = shrinkFont(scaled, size);
     if (ctx.measureText(label).width <= maxW) break;
     size -= 1;
   }
   ctx.restore();
-  return shrinkFont(font, size);
+  return shrinkFont(scaled, size);
 }
 function button(ctx, b, hover) {
   frame(ctx, b.x, b.y, b.w, b.h, {
@@ -1774,14 +1798,14 @@ function button(ctx, b, hover) {
   });
   const cx = b.x + b.w / 2, maxW = b.w - 10;
   const jpFont = fitButtonFont(ctx, b.jp, b.font || '600 16px "Hiragino Mincho ProN", serif', maxW);
-  txt(ctx, b.jp, cx, b.y + (b.en ? b.h / 2 - 15 : b.h / 2 - 8), {
+  drawFillText(ctx, b.jp, cx, b.y + (b.en ? b.h / 2 - 15 : b.h / 2 - 8), {
     font: jpFont,
     // 不活性でも「何のボタンか」は読めること。暗すぎると押せない理由すら伝わらない
     color: b.disabled ? '#8b95a3' : '#f0e2c0', align: 'center',
   });
   if (b.en) {
     const enFont = fitButtonFont(ctx, b.en, '10px "Segoe UI", sans-serif', maxW);
-    txt(ctx, b.en, cx, b.y + b.h / 2 + 5, { font: enFont, color: '#8a7a58', align: 'center' });
+    drawFillText(ctx, b.en, cx, b.y + b.h / 2 + 5, { font: enFont, color: '#8a7a58', align: 'center' });
   }
 }
 function hit(b, p) { return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h; }
@@ -2441,7 +2465,9 @@ class HandoffScene extends GameKit.Scene {
 }
 
 function wrapText(ctx, str, x, y, maxW, lh, opts) {
-  ctx.save(); ctx.font = opts.font;
+  // 折り返し判定は txt() が実際に描く幅（mobileFont適用後）と一致させる。
+  // 未適用の幅で判定すると、拡大後の行がmaxWをはみ出したまま描かれる。
+  ctx.save(); ctx.font = mobileFont(opts.font);
   let line = '', yy = y;
   for (const ch of str) {
     if (ctx.measureText(line + ch).width > maxW) { txt(ctx, line, x, yy, opts); line = ch; yy += lh; }
@@ -3013,7 +3039,9 @@ class MapScene extends GameKit.Scene {
     let x = L.bar.x + 12;
     const put = (s, color, font) => {
       txt(ctx, s, x, L.bar.y + 6, { font: font || '13px "Hiragino Mincho ProN", serif', color: color || '#e8eef5' });
-      ctx.save(); ctx.font = font || '13px "Hiragino Mincho ProN", serif';
+      // 幅計測は txt() の実描画幅（mobileFont適用後）と一致させる。ここがズレると
+      // タッチ端末の拡大フォントで次の項目に文字が重なる。
+      ctx.save(); ctx.font = mobileFont(font || '13px "Hiragino Mincho ProN", serif');
       x += ctx.measureText(s).width + 18; ctx.restore();
     };
     put(`${st.year}年（${waReki(st.year)}）${st.month}月`, '#f0e2c0');
@@ -3626,7 +3654,8 @@ class MapScene extends GameKit.Scene {
     if (bd.choteki || bd.reputation < 0) { ctx.fillStyle = 'rgba(248,113,113,0.85)'; ctx.fillRect(x + w - 4, y, 4, h); }
     // 凡例（保持している項目だけ列挙。折り返しは2行まで見込む）
     const legendFont = '11px "Hiragino Mincho ProN", serif';
-    ctx.save(); ctx.font = legendFont;
+    // 幅計測は txt() の実描画幅（mobileFont適用後）と一致させる（top barの put() と同じ理由）
+    ctx.save(); ctx.font = mobileFont(legendFont);
     let lx = x, ly = y + h + 16;
     for (const s of segs) {
       if (s.value <= 0) continue;
