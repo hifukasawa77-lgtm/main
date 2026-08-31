@@ -4,6 +4,8 @@
 // 認証情報が未設定のプラットフォームは「スキップ」して正常終了する（毎週赤くならないため）。
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const SITE_URL = 'https://hifukasawa77-lgtm.github.io/main/';
 const AGENTS_URL = 'https://hifukasawa77-lgtm.github.io/main/agents.html';
@@ -12,41 +14,73 @@ const MEDIA_BASE = 'https://hifukasawa77-lgtm.github.io/main/assets/marketing/';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
-const BLUESKY_POSTS = [
-  `将棋・麻雀・バックギャモン・ベルトスクロールアクション・シューティング…\nブラウザだけで遊べる本格ゲームを37本無料公開中。インストール不要で今すぐプレイ！\n${SITE_URL}\n#ブラウザゲーム #無料ゲーム #個人開発`,
-  `Claude AIとのペアプログラミングだけでブラウザゲームを37本作りました。素のHTML/CSS/JavaScript（Canvas API）のみ。フレームワーク・ビルドツール一切なし。\n${SITE_URL}\n#Claude #AI駆動開発 #JavaScript #CanvasAPI`,
-  `アプリのインストール不要！ブラウザを開くだけで将棋・麻雀・ポーカー・アクションゲームが全部タダで遊べます。37本収録、随時追加中。\n${SITE_URL}\n#暇つぶし #無料ゲーム #ブラウザゲーム #将棋`,
+// 手書きのコア投稿（サイト全体紹介）。文面の正本は marketing/social_2026-08_x_instagram.md。
+// ここは実行用の写し（変更時は両方直す。verify-social-posts.mjs の検査#6が一致を機械確認する）
+const BLUESKY_POSTS_CORE = [
+  { id: 'core-overview-ja', text: `将棋・麻雀・バックギャモン・ベルトスクロールアクション・シューティング…\nブラウザだけで遊べる本格ゲームを37本無料公開中。インストール不要で今すぐプレイ！\n${SITE_URL}\n#ブラウザゲーム #無料ゲーム #個人開発` },
+  { id: 'core-claude-ja',   text: `Claude AIとのペアプログラミングだけでブラウザゲームを37本作りました。素のHTML/CSS/JavaScript（Canvas API）のみ。フレームワーク・ビルドツール一切なし。\n${SITE_URL}\n#Claude #AI駆動開発 #JavaScript #CanvasAPI` },
+  { id: 'core-free-ja',     text: `アプリのインストール不要！ブラウザを開くだけで将棋・麻雀・ポーカー・アクションゲームが全部タダで遊べます。37本収録、随時追加中。\n${SITE_URL}\n#暇つぶし #無料ゲーム #ブラウザゲーム #将棋` },
 ];
 
-// 文面の正本は marketing/social_2026-08_x_instagram.md。ここは実行用の写し（変更時は両方直す）
-const X_POSTS = [
-  `歴史シミュレーションを4本、ブラウザで無料公開しています。\n\n・三国志・天下三分（8シナリオ／10勢力）\n・戦国風雲記（街道・攻城ヘックス戦）\n・源平争乱記（兵力でなく"名分"を獲る）\n・太平風雲記（南北朝の正統性争い）\n\n全部インストール不要。フレームワークも不使用です。\n${SITE_URL}\n\n#個人開発 #ブラウザゲーム #シミュレーションゲーム`,
-  `ゲーム開発をAIエージェント19体のチームでやっています。\n\n企画→アセット制作→実装→品質ゲート（法務／脆弱性／日英表記）→動的テスト→採点→リリース。\nこのパイプラインごとサイトで公開しました。\n${AGENTS_URL}\n\n#AI駆動開発 #ClaudeCode #個人開発`,
-  `I built 37 browser games with zero frameworks — just vanilla JS and the Canvas API.\n\nHex-grid battles, AI opponents, Web Audio synths: all hand-rolled.\nNo bundler, no npm install. Open the HTML and it runs.\n${SITE_URL}\n\n#JavaScript #CanvasAPI #gamedev #indiedev`,
-  `将棋・囲碁・麻雀・チェス・花札・百人一首・バックギャモン…\nボードゲームだけで20本、ブラウザで無料で遊べます。\n\nアプリ入れなくていいので、通勤中の暇つぶしにどうぞ。\n${SITE_URL}\n\n#無料ゲーム #暇つぶし #将棋 #麻雀`,
+const X_POSTS_CORE = [
+  { id: 'core-history-slg-ja', text: `歴史シミュレーションを4本、ブラウザで無料公開しています。\n\n・三国志・天下三分（8シナリオ／10勢力）\n・戦国風雲記（街道・攻城ヘックス戦）\n・源平争乱記（兵力でなく"名分"を獲る）\n・太平風雲記（南北朝の正統性争い）\n\n全部インストール不要。フレームワークも不使用です。\n${SITE_URL}\n\n#個人開発 #ブラウザゲーム #シミュレーションゲーム` },
+  { id: 'core-ai-team-ja',     text: `ゲーム開発をAIエージェント19体のチームでやっています。\n\n企画→アセット制作→実装→品質ゲート（法務／脆弱性／日英表記）→動的テスト→採点→リリース。\nこのパイプラインごとサイトで公開しました。\n${AGENTS_URL}\n\n#AI駆動開発 #ClaudeCode #個人開発` },
+  { id: 'core-tech-en',        text: `I built 37 browser games with zero frameworks — just vanilla JS and the Canvas API.\n\nHex-grid battles, AI opponents, Web Audio synths: all hand-rolled.\nNo bundler, no npm install. Open the HTML and it runs.\n${SITE_URL}\n\n#JavaScript #CanvasAPI #gamedev #indiedev` },
+  { id: 'core-casual-ja',      text: `将棋・囲碁・麻雀・チェス・花札・百人一首・バックギャモン…\nボードゲームだけで20本、ブラウザで無料で遊べます。\n\nアプリ入れなくていいので、通勤中の暇つぶしにどうぞ。\n${SITE_URL}\n\n#無料ゲーム #暇つぶし #将棋 #麻雀` },
 ];
 
 const INSTAGRAM_POSTS = [
   {
+    id: 'ig-hero',
     images: ['ig-01-hero.jpg', 'ig-02-strategy.jpg', 'ig-03-board.jpg', 'ig-04-team.jpg'],
     caption: `ブラウザだけで遊べるゲームを37本、無料公開しています🎮\n\n▫️歴史シミュレーション4本（三国志・戦国・源平・南北朝）\n▫️ボードゲーム20本（将棋・囲碁・麻雀・チェス・花札…）\n▫️アクション・シューティング・パズル\n\nすべてインストール不要。ライブラリもフレームワークも使わず、素のJavaScriptとCanvas APIだけで作りました。\n\n開発はAIエージェント19体のチーム制。企画から品質チェック、リリースまでの流れもサイトで公開しています。\n\nプロフィールのリンクから遊べます👆\n\n—\n37 free browser games, no install required.\nBuilt with vanilla JavaScript and the Canvas API — zero frameworks.\nDeveloped by a team of 19 AI agents.\n\n#個人開発 #ブラウザゲーム #無料ゲーム #ゲーム制作 #JavaScript #CanvasAPI #AI駆動開発 #indiedev #gamedev #browsergames #retrogaming #将棋 #麻雀 #シミュレーションゲーム #プログラミング`,
   },
   {
+    id: 'ig-genpei',
     images: ['ig-02-strategy.jpg'],
     caption: `「兵力ではなく"名分"を奪い合う」歴史シミュレーションを作りました⚔️\n\n源平争乱記 — 治承・寿永の乱（1180-1189）が舞台。院宣・官位・三種の神器といった正統性を巡って争います。\n\n戦は数だけでは決まらない。そこを遊びの中心に据えました。\n\nブラウザで無料。インストール不要です。\nプロフィールのリンクから👆\n\n—\nA historical strategy game where you fight for legitimacy, not just troops.\n\n#歴史ゲーム #源平合戦 #シミュレーションゲーム #個人開発 #ブラウザゲーム #ゲーム制作 #strategygame #indiedev #gamedev #history`,
   },
   {
+    id: 'ig-team',
     images: ['ig-04-team.jpg'],
     caption: `ゲームを作っているのは、19体のAIエージェントのチームです🤖\n\nプランナーが仕様を書き、デザイナーが絵を作り、コードジェネレーターが実装し、法務・セキュリティ・多言語の3体が並列でチェック。テスターが実際にブラウザで動かして、エバリュエーターが100点満点で採点。80点未満はやり直しです。\n\nこのチーム表もサイトで公開しています。\n\n#AI駆動開発 #ClaudeCode #個人開発 #プログラミング #AIエージェント #buildinpublic #aitools #indiedev`,
   },
 ];
 
 const REDDIT_POSTS = [
-  { subreddit: 'webgames',   title: '37 free browser games (shogi, mahjong, backgammon, beat-em-up, shooting) – built with Claude AI + vanilla JS, no install needed' },
-  { subreddit: 'javascript', title: 'I built 37 browser games using only vanilla JS and Canvas API with Claude AI pair programming – no frameworks, no bundlers' },
-  { subreddit: 'gamedev',    title: 'Made 37 browser games with Claude AI as my pair programmer – zero frameworks, pure Canvas API' },
-  { subreddit: 'ClaudeAI',  title: 'Built 37 browser games through Claude AI pair programming – a year of vanilla JS + Canvas API projects' },
+  { id: 'reddit-webgames',   subreddit: 'webgames',   title: '37 free browser games (shogi, mahjong, backgammon, beat-em-up, shooting) – built with Claude AI + vanilla JS, no install needed' },
+  { id: 'reddit-javascript', subreddit: 'javascript', title: 'I built 37 browser games using only vanilla JS and Canvas API with Claude AI pair programming – no frameworks, no bundlers' },
+  { id: 'reddit-gamedev',    subreddit: 'gamedev',    title: 'Made 37 browser games with Claude AI as my pair programmer – zero frameworks, pure Canvas API' },
+  { id: 'reddit-claudeai',   subreddit: 'ClaudeAI',   title: 'Built 37 browser games through Claude AI pair programming – a year of vanilla JS + Canvas API projects' },
 ];
+
+// ゲーム別スポットライト投稿（scripts/gen-game-spotlight-posts.mjs の生成物）。
+// 未生成でもコア文面だけで動くようフォールバックする
+let GAME_SPOTLIGHT_X = [];
+let GAME_SPOTLIGHT_BLUESKY = [];
+try {
+  ({ GAME_SPOTLIGHT_X, GAME_SPOTLIGHT_BLUESKY } = require('../marketing/game-spotlight-posts.generated.js'));
+} catch (e) {
+  console.log('⚠️  marketing/game-spotlight-posts.generated.js が無い（node scripts/gen-game-spotlight-posts.mjs で生成可能）。コア文面のみでローテーションします');
+}
+
+// コア文面 + ゲーム別スポットライトを合流させたローテーション対象（実際に投稿に使う配列）
+const X_POSTS = [...X_POSTS_CORE, ...GAME_SPOTLIGHT_X];
+const BLUESKY_POSTS = [...BLUESKY_POSTS_CORE, ...GAME_SPOTLIGHT_BLUESKY];
+
+// ── 投稿ログ（反応計測の起点）──────────────────────────────
+// 何を・いつ・どのIDで投稿したかを記録する。scripts/fetch-social-engagement.mjs が
+// このログを頼りに各SNSの公開反応（いいね数等）を後から取りに行き、marketer-evolve
+// （週次の学習ループ）が「何が効いたか」を判断する材料にする。
+const POST_LOG_PATH = path.join(__dirname, '..', 'marketing', 'post-log.json');
+
+function logPost(entry) {
+  let log = [];
+  try { log = JSON.parse(fs.readFileSync(POST_LOG_PATH, 'utf8')); } catch (e) { log = []; }
+  log.push({ postedAt: new Date().toISOString(), ...entry });
+  if (log.length > 500) log = log.slice(-500); // 無限増殖を防ぐ（直近500件のみ保持）
+  fs.writeFileSync(POST_LOG_PATH, JSON.stringify(log, null, 2) + '\n');
+}
 
 // Compute UTF-8 byte range for Bluesky richtext facets
 function byteRange(text, substr) {
@@ -103,7 +137,9 @@ async function postToBluesky(text) {
     }),
   });
   if (!postRes.ok) throw new Error(`Bluesky post failed: ${await postRes.text()}`);
-  console.log(`✅ Bluesky posted: ${(await postRes.json()).uri}`);
+  const data = await postRes.json();
+  console.log(`✅ Bluesky posted: ${data.uri}`);
+  return data;
 }
 
 async function postToReddit({ subreddit, title }) {
@@ -137,6 +173,7 @@ async function postToReddit({ subreddit, title }) {
   const data = await submitRes.json();
   if (data.json?.errors?.length) throw new Error(`Reddit error: ${JSON.stringify(data.json.errors)}`);
   console.log(`✅ Reddit r/${subreddit}: posted`);
+  return data.json?.data; // { id, name, url, ... }
 }
 
 
@@ -252,41 +289,45 @@ async function main() {
   const monthIndex = new Date().getMonth() % REDDIT_POSTS.length;
 
   if (platform === 'bluesky') {
-    const text = rotate(BLUESKY_POSTS);
-    if (DRY_RUN) return console.log(`--- [dry-run] Bluesky ---\n${text}`);
+    const post = rotate(BLUESKY_POSTS);
+    if (DRY_RUN) return console.log(`--- [dry-run] Bluesky (${post.id}) ---\n${post.text}`);
     if (!process.env.BLUESKY_HANDLE || !process.env.BLUESKY_APP_PASSWORD) {
       return console.log('⏭️  Bluesky: 認証情報が未設定のためスキップ（docs/social-setup.md 参照）');
     }
-    console.log('Posting to Bluesky...');
-    await postToBluesky(text);
+    console.log(`Posting to Bluesky (${post.id})...`);
+    const result = await postToBluesky(post.text);
+    logPost({ platform: 'bluesky', contentId: post.id, gameSlug: post.gameSlug, uri: result?.uri });
 
   } else if (platform === 'reddit') {
     const target = REDDIT_POSTS[monthIndex];
-    if (DRY_RUN) return console.log(`--- [dry-run] Reddit r/${target.subreddit} ---\n${target.title}\n${SITE_URL}`);
+    if (DRY_RUN) return console.log(`--- [dry-run] Reddit r/${target.subreddit} (${target.id}) ---\n${target.title}\n${SITE_URL}`);
     if (!process.env.REDDIT_CLIENT_ID || !process.env.REDDIT_CLIENT_SECRET) {
       return console.log('⏭️  Reddit: 認証情報が未設定のためスキップ（docs/social-setup.md 参照）');
     }
-    console.log(`Posting to Reddit r/${target.subreddit}...`);
-    await postToReddit(target);
+    console.log(`Posting to Reddit r/${target.subreddit} (${target.id})...`);
+    const result = await postToReddit(target);
+    logPost({ platform: 'reddit', contentId: target.id, subreddit: target.subreddit, redditId: result?.id, redditName: result?.name });
 
   } else if (platform === 'x') {
-    const text = rotate(X_POSTS);
+    const post = rotate(X_POSTS);
     // Xの上限は280「文字」。日本語は1文字=1カウント、URLは一律23文字として扱われる
-    const weighted = text.replace(/https?:\/\/\S+/g, 'x'.repeat(23)).length;
-    if (weighted > 280) throw new Error(`X post too long: ${weighted}/280 文字`);
-    if (DRY_RUN) return console.log(`--- [dry-run] X (${weighted}/280) ---\n${text}`);
-    console.log(`Posting to X (${weighted}/280 文字)...`);
-    await postToX(text);
+    const weighted = post.text.replace(/https?:\/\/\S+/g, 'x'.repeat(23)).length;
+    if (weighted > 280) throw new Error(`X post too long (${post.id}): ${weighted}/280 文字`);
+    if (DRY_RUN) return console.log(`--- [dry-run] X (${post.id}, ${weighted}/280) ---\n${post.text}`);
+    console.log(`Posting to X (${post.id}, ${weighted}/280 文字)...`);
+    const result = await postToX(post.text);
+    if (!result?.skipped) logPost({ platform: 'x', contentId: post.id, gameSlug: post.gameSlug, tweetId: result?.data?.id });
 
   } else if (platform === 'instagram') {
     const post = rotate(INSTAGRAM_POSTS);
-    if (post.caption.length > 2200) throw new Error(`Instagram caption too long: ${post.caption.length}/2200`);
+    if (post.caption.length > 2200) throw new Error(`Instagram caption too long (${post.id}): ${post.caption.length}/2200`);
     if (DRY_RUN) {
-      return console.log(`--- [dry-run] Instagram (${post.caption.length}/2200, 画像${post.images.length}枚) ---\n`
+      return console.log(`--- [dry-run] Instagram (${post.id}, ${post.caption.length}/2200, 画像${post.images.length}枚) ---\n`
         + post.images.map(i => MEDIA_BASE + i).join('\n') + `\n\n${post.caption}`);
     }
-    console.log(`Posting to Instagram（画像${post.images.length}枚）...`);
-    await postToInstagram(post);
+    console.log(`Posting to Instagram (${post.id}, 画像${post.images.length}枚)...`);
+    const result = await postToInstagram(post);
+    if (!result?.skipped) logPost({ platform: 'instagram', contentId: post.id, mediaId: result?.id });
 
   } else {
     console.error('Usage: node scripts/post-social.js <bluesky|reddit|x|instagram> [--dry-run]');
@@ -299,4 +340,9 @@ if (require.main === module) {
   main().catch(err => { console.error('❌', err.message); process.exit(1); });
 }
 
-module.exports = { oauth1Header, percentEncode, X_POSTS, INSTAGRAM_POSTS, BLUESKY_POSTS, REDDIT_POSTS, MEDIA_BASE };
+module.exports = {
+  oauth1Header, percentEncode, MEDIA_BASE,
+  X_POSTS, BLUESKY_POSTS, INSTAGRAM_POSTS, REDDIT_POSTS,
+  X_POSTS_CORE, BLUESKY_POSTS_CORE,
+  GAME_SPOTLIGHT_X, GAME_SPOTLIGHT_BLUESKY,
+};
