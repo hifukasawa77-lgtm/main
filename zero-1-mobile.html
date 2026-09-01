@@ -214,6 +214,13 @@
       <div class="progress" id="progress" hidden><span id="progress-bar"></span></div>
       <p class="progress-note" id="progress-note"></p>
       <button class="primary" id="btn-start">この端末で起動する / Start on this phone</button>
+      <!-- 失敗したときの手掛かり。スマホには開発者ツールが無いので、画面に出して
+           そのまま渡せるようにする（「起動できませんでした」だけでは打つ手が無い） -->
+      <div id="failure" hidden>
+        <p class="progress-note" style="margin-top:12px">うまくいかないときは、下の内容をそのままお知らせください。</p>
+        <pre id="failure-detail" style="white-space:pre-wrap;word-break:break-all;font-size:.74rem;color:var(--muted);background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:12px;padding:10px;margin:6px 0"></pre>
+        <button class="ghost" id="btn-copy" style="width:100%">この内容をコピー / Copy</button>
+      </div>
     </div>
 
     <p class="foot">ZERO-1のPC版はOllamaを使いますが、こちらはブラウザのWebGPUだけで動きます。<br>
@@ -283,15 +290,37 @@ const MODELS = [
 ];
 
 /**
- * 端末のメモリから既定のモデルを決める。
+ * そのモデルが端末の空き容量に収まるか。
+ *
+ * **メモリだけ見て空き容量を見ないと、載るのに保存できないモデルを勧めてしまう。**
+ * 8GBメモリでも空きが1GBしかない端末は珍しくない。2.4GB落としてから失敗するのは、
+ * 携帯回線なら通信量まで無駄になる一番痛い外し方。
+ * 空きが分からないとき（取得できない端末）は止めない——推測で妨げない。
+ */
+function storageFit(model, storageGB) {
+  if (!Number.isFinite(storageGB) || storageGB <= 0) return 'unknown';
+  const needGB = model.sizeMB / 1024;
+  if (storageGB < needGB) return 'no';        // 明らかに入らない
+  if (storageGB < needGB * 1.3) return 'tight'; // 入るが余裕がない
+  return 'yes';
+}
+
+/**
+ * 端末のメモリと空き容量から既定のモデルを決める。
  *
  * `navigator.deviceMemory` は Android Chrome で 0.25〜8 を返す（8で頭打ち・非対応なら undefined）。
  * **分からないときは真ん中を選ぶ**。大きい方を既定にすると、載らない端末で
  * 1.6GB落としてから失敗する——一番やってはいけない外し方になる。
  */
-function recommendModel(memoryGB, available = MODELS.map((m) => m.id)) {
-  const usable = MODELS.filter((m) => available.includes(m.id));
+function recommendModel(memoryGB, available = MODELS.map((m) => m.id), storageGB = NaN) {
+  let usable = MODELS.filter((m) => available.includes(m.id));
   if (!usable.length) return null;
+  // 保存できないものは最初から候補から外す
+  const storable = usable.filter((m) => storageFit(m, storageGB) !== 'no');
+  // どれも入らないなら、メモリ基準へ戻さずに一番軽いものを返す。
+  // ここで戻すと「空き0.2GBの端末に2.4GBを勧める」ことになる（検査で見つけた）
+  if (!storable.length) return usable[0];
+  usable = storable;
   const fallback = usable.find((m) => m.id.includes('1.5B')) ?? usable[0];
   if (!Number.isFinite(memoryGB) || memoryGB <= 0) return fallback;
   // 収まるものの中でいちばん大きいもの。1つも無ければいちばん軽いもの
@@ -366,7 +395,7 @@ function progressText(report) {
 
 // 検査から触るための橋渡し。新しい関数を足したらここへも足すこと
 // （足し忘れると検査側が "is not a function" で落ちる）
-window.ZERO1_MOBILE = { MODELS, recommendModel, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT };
+window.ZERO1_MOBILE = { MODELS, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -376,7 +405,14 @@ const HISTORY_KEY = 'zero1-mobile-history';
 const MODEL_KEY = 'zero1-mobile-model';
 const SPEAK_KEY = 'zero1-mobile-speak';
 
-const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false };
+const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false,
+  stage:'—', violations:[], lastError:'', storageGB:NaN };
+
+// CSPが何かを止めたときは、例外のメッセージには出ないことがある。
+// ここで拾わないと「起動できませんでした」だけが残り、原因に辿り着けない。
+document.addEventListener('securitypolicyviolation', (event) => {
+  state.violations.push(`${event.violatedDirective} が ${event.blockedURI || '(inline)'} を止めました`);
+});
 
 function readStore(key, fallback) {
   try { const raw = localStorage.getItem(key); return raw === null ? fallback : JSON.parse(raw); }
@@ -409,9 +445,10 @@ function renderChecks(env) {
   }
 }
 
-function renderModels(selectedId) {
+function renderModels(selectedId, storageGB = state.storageGB) {
   $('models').innerHTML = '';
   for (const model of MODELS) {
+    const fit = storageFit(model, storageGB);
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'model';
@@ -419,12 +456,25 @@ function renderModels(selectedId) {
     button.dataset.model = model.id;
     button.innerHTML = '<span><b></b><small></small></span><span class="size"></span>';
     button.querySelector('b').textContent = model.name;
-    button.querySelector('small').textContent = model.note;
+    // 落とす前に「入るのか」を出す。落としてから失敗させない
+    button.querySelector('small').textContent = fit === 'no'
+      ? `空き容量が足りません（${model.note}）`
+      : fit === 'tight' ? `空きがぎりぎりです（${model.note}）` : model.note;
     button.querySelector('.size').textContent = `${(model.sizeMB / 1024).toFixed(1)}GB`;
+    if (fit === 'no') button.style.opacity = '.5';
     button.addEventListener('click', () => { state.model = model.id; writeStore(MODEL_KEY, model.id); renderModels(model.id); });
     $('models').appendChild(button);
   }
   $('current-model').textContent = MODELS.find((m) => m.id === selectedId)?.name ?? '—';
+  const chosen = MODELS.find((m) => m.id === selectedId);
+  const chosenFit = chosen ? storageFit(chosen, storageGB) : 'unknown';
+  if (chosenFit === 'no') {
+    $('btn-start').disabled = true;
+    $('progress-note').textContent = `空き容量が足りません（必要 約${(chosen.sizeMB / 1024).toFixed(1)}GB / 空き 約${storageGB}GB）。軽いモデルを選ぶか、端末の空きを増やしてください。`;
+  } else if (!$('failure') || $('failure').hidden) {
+    $('progress-note').textContent = chosenFit === 'tight' ? '空きがぎりぎりです。途中で失敗したら軽いモデルをお試しください。' : '';
+    $('btn-start').disabled = false;
+  }
 }
 
 function addMessage(role, text, pending = false) {
@@ -447,13 +497,58 @@ function setProgress(percent, label) {
   $('progress-note').textContent = label;
 }
 
+/**
+ * ライブラリを読み込む。
+ *
+ * importmap の integrity は改ざん検知に効くが、**ハッシュが合わないと読み込みごと失敗**し、
+ * 画面には理由の分からないメッセージだけが残る。そこで一度だけ直接URLで読み直し、
+ * どちらで通ったのかを必ず利用者へ知らせる（黙って検証を飛ばさない）。
+ */
+async function loadLibrary() {
+  try {
+    return { module: await import('web-llm'), verified: true };
+  } catch (cause) {
+    state.lastError = `${cause?.name ?? 'Error'}: ${cause?.message ?? cause}`;
+    const direct = document.querySelector('script[type="importmap"]');
+    const url = JSON.parse(direct.textContent).imports['web-llm'];
+    const module = await import(/* @vite-ignore */ url);
+    return { module, verified: false };
+  }
+}
+
+/** 失敗の手掛かりを1か所に集める。これをそのまま渡せば原因が分かる形にする */
+function showFailure(env, message) {
+  const model = MODELS.find((m) => m.id === state.model);
+  const lines = [
+    `失敗した段階: ${state.stage}`,
+    `理由: ${message}`,
+    state.lastError && state.lastError !== message ? `直前の失敗: ${state.lastError}` : '',
+    state.violations.length ? `CSP: ${state.violations.join(' / ')}` : '',
+    `モデル: ${model ? `${model.name} (${state.model}) ${(model.sizeMB / 1024).toFixed(1)}GB` : state.model}`,
+    `WebGPU: ${env.webgpu ? 'あり' : 'なし'} / 安全な接続: ${env.secure ? 'はい' : 'いいえ'}`,
+    `メモリ: ${Number.isFinite(env.memoryGB) ? env.memoryGB + 'GB' : '不明'} / 空き: ${env.storageGB || '不明'}GB`,
+    `端末: ${navigator.userAgent}`,
+  ].filter(Boolean);
+  $('failure-detail').textContent = lines.join('\n');
+  $('failure').hidden = false;
+}
+
 async function startEngine() {
   const env = await readEnvironment();
   if (!canRun(env)) { $('progress-note').textContent = 'この端末では動かせません。上の確認結果をご覧ください。'; return; }
   $('btn-start').disabled = true;
+  $('failure').hidden = true;
+  state.violations = [];
+  state.lastError = '';
+  state.stage = 'ライブラリの読み込み';
   setProgress(0, 'ライブラリを読み込んでいます… / Loading library…');
   try {
-    const webllm = await import('web-llm');
+    const { module: webllm, verified } = await loadLibrary();
+    if (!verified) {
+      // 動きはするが、検証を飛ばした事実は隠さない
+      $('progress-note').textContent = '注意: ライブラリの整合性検証を飛ばして読み込みました。';
+    }
+    state.stage = 'モデル一覧の確認';
     // 実在するIDだけを候補に残す。版が変わってIDが消えていても、黙って失敗させない
     const available = webllm.prebuiltAppConfig.model_list.map((m) => m.model_id);
     if (!available.includes(state.model)) {
@@ -462,6 +557,7 @@ async function startEngine() {
       state.model = fallback.id;
       renderModels(state.model);
     }
+    state.stage = 'モデルの取得と準備（初回は数分かかります）';
     setProgress(0, 'モデルを準備しています… / Preparing model…');
     state.engine = await webllm.CreateMLCEngine(state.model, {
       initProgressCallback: (report) => {
@@ -477,7 +573,9 @@ async function startEngine() {
     if (!state.history.length) addMessage('assistant', 'おかえりなさい、ゼロさん。ここはスマホの中だけで動きます。何から始めますか？');
   } catch (cause) {
     // 失敗の理由をそのまま出す。「使えません」だけだと打つ手が無くなる
-    $('progress-note').textContent = `起動できませんでした: ${cause?.message ?? cause}`;
+    const message = `${cause?.name ?? 'Error'}: ${cause?.message ?? cause}`;
+    $('progress-note').textContent = `起動できませんでした（${state.stage}）: ${cause?.message ?? cause}`;
+    showFailure(env, message);
     $('btn-start').disabled = false;
   }
 }
@@ -558,6 +656,11 @@ function openSheet(open) {
 
 // --- 配線 -------------------------------------------------------------------
 $('btn-start').addEventListener('click', () => void startEngine());
+$('btn-copy').addEventListener('click', async () => {
+  const text = $('failure-detail').textContent;
+  try { await navigator.clipboard.writeText(text); $('btn-copy').textContent = 'コピーしました'; }
+  catch { $('btn-copy').textContent = '長押しで選択してコピーしてください'; }
+});
 $('btn-send').addEventListener('click', () => void send($('input').value));
 $('input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send($('input').value); }
@@ -599,8 +702,12 @@ $('btn-change').addEventListener('click', () => {
   renderHistory();
   const env = await readEnvironment();
   renderChecks(env);
+  state.storageGB = env.storageGB > 0 ? env.storageGB : NaN;
   const saved = readStore(MODEL_KEY, null);
-  state.model = (MODELS.some((m) => m.id === saved) ? saved : recommendModel(env.memoryGB)?.id) ?? MODELS[1].id;
+  const recommended = recommendModel(env.memoryGB, MODELS.map((m) => m.id), state.storageGB);
+  // 前に選んだものでも、空きが減って入らなくなっていたら勧め直す
+  const savedModel = MODELS.find((m) => m.id === saved);
+  state.model = (savedModel && storageFit(savedModel, state.storageGB) !== 'no' ? saved : recommended?.id) ?? MODELS[1].id;
   renderModels(state.model);
   if (!canRun(env)) {
     $('btn-start').disabled = true;

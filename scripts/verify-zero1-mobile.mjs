@@ -143,6 +143,40 @@ check('14. メモリが分からないときは真ん中（落としてから失
 check('15. 使えるIDだけから選ぶ', pick.narrowed === models[0].id, pick.narrowed);
 check('16. 候補が空なら黙って壊れずnullを返す', pick.empty === null);
 
+// ★メモリだけ見て空き容量を見ないと、載るのに保存できないモデルを勧めてしまう。
+//   8GBメモリでも空きが1GBしかない端末は珍しくない。2.4GB落としてから失敗するのは、
+//   携帯回線なら通信量まで無駄になる一番痛い外し方（実際にこの実装をしていた）
+const storage = await page.evaluate(() => {
+  const { recommendModel, storageFit, MODELS } = window.ZERO1_MOBILE;
+  const all = MODELS.map((m) => m.id);
+  return {
+    tight: recommendModel(8, all, 1.0)?.id,     // メモリは潤沢だが空きが1GB
+    roomy: recommendModel(8, all, 20)?.id,      // 空きも潤沢
+    unknown: recommendModel(8, all, NaN)?.id,   // 空きが分からない端末は妨げない
+    none: recommendModel(8, all, 0.2)?.id,      // どれも入らない → 一番軽いもの
+    fitNo: storageFit(MODELS[3], 1.0),
+    fitTight: storageFit(MODELS[0], 1.0),
+    fitYes: storageFit(MODELS[0], 20),
+    fitUnknown: storageFit(MODELS[3], NaN),
+  };
+});
+check('16b. 空きが少ない端末には、保存できるモデルを勧める',
+  storage.tight === models[0].id, storage.tight);
+check('16c. 空きが十分ならメモリ基準で選ぶ', storage.roomy === models[3].id, storage.roomy);
+check('16d. 空きが分からない端末を妨げない', storage.unknown === models[3].id, storage.unknown);
+check('16e. どれも入らなくても、一番軽いものを返す（nullで詰まらせない）',
+  storage.none === models[0].id, storage.none);
+check('16f. 入る／ぎりぎり／入らない を区別する',
+  storage.fitNo === 'no' && storage.fitTight === 'tight' && storage.fitYes === 'yes' && storage.fitUnknown === 'unknown',
+  `${storage.fitNo}/${storage.fitTight}/${storage.fitYes}/${storage.fitUnknown}`);
+
+// 失敗したとき、スマホには開発者ツールが無い。そのまま渡せる手掛かりを画面へ出すこと
+const failureFields = await page.evaluate(() => {
+  const box = document.getElementById('failure-detail');
+  return { exists: Boolean(box), copy: Boolean(document.getElementById('btn-copy')) };
+});
+check('16g. 失敗の手掛かりを画面に出す仕掛けがある', failureFields.exists && failureFields.copy);
+
 // --- 会話の組み立て -----------------------------------------------------------
 const built = await page.evaluate(() => {
   const history = Array.from({ length: 14 }, (unused, i) => ({
