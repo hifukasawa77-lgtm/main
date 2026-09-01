@@ -40,6 +40,34 @@
 | `antoku-suibotsu.webp` | 安徳天皇入水（1185年3月） | 荒天の海。遠景に小舟と淡い光（三種の神器を象徴、人物の写実描写なし）、波間に漂う赤旗の断片、同心円の波紋。灰緑の沈鬱な色調で遠景・象徴表現に徹し、直接的な描写を避けた |
 | `koromogawa.webp` | 衣川（1189年4月） | 夕・雪残る山峡。木造の館（板葺き・柵、天守閣ではない）、煙、垣上に立つ孤影の武者（薙刀）、降雪パーティクル220粒。紫〜灰の静謐な色調 |
 
+## 歴史イベント絵15枚（`assets/genpei/events-gpt-image-2/`）
+
+- **ツール**: OpenAI GPT Image 2（Codex built-in image generation）
+- **生成日**: 2026-08-30
+- **対象**: `TIMELINE` の全15イベント。年月をキーに1対1で割り当て
+- **形式**: WebP、1672×941の横長ゲームイベント画
+- **プロンプトと対応表**: `events-gpt-image-2/README.md`
+- 旧 `events/` はシナリオ冒頭画と履歴保持のため残し、年代記イベント表示は新アセット群を使用する。
+
+## 駿河国府 詳細画（`assets/genpei/site-details/suruga-kokufu.webp`）
+
+- **ツール**: OpenAI GPT Image 2（Codex built-in image generation）
+- **生成日**: 2026-08-31
+- **用途**: 右下の拠点詳細パネルで `kokufu_suruga` 選択時に表示する専用画
+- **構図**: 平安末期の国衙政庁を正面斜め俯瞰で描いた透明背景の建築カット。中央政庁、脇殿、築地代わりの木柵、南門、前庭を含む
+- **表示**: 112×112px。従来の約55px汎用アイコンから二回り拡大
+- **除外**: 天守閣、近世城郭、火縄銃、現代物、画像内文字、透かし
+
+## 拠点種別 詳細画（`assets/genpei/site-details/*.webp`）
+
+- **ツール**: OpenAI GPT Image 2（Codex built-in image generation）
+- **生成日**: 2026-08-31
+- **対象**: 館、木柵、砦、荘園、寺、神社、関所、湊、町、村
+- **ファイル**: `tachi.webp`, `kisaku.webp`, `toride.webp`, `shoen.webp`, `tera.webp`, `jinja.webp`, `sekisho.webp`, `minato.webp`, `machi.webp`, `mura.webp`
+- **形式**: 透過 WebP、正方形
+- **用途**: 右下の拠点詳細パネル。拠点固有画像がない場合に種別画像を表示
+- **共通方針**: 平安末期の日本を題材にした俯瞰ミニチュア調。文字・人物・近世城郭・現代物を含めず、90〜120pxでも施設種別を判別できる構図
+
 ## 可動ヘックス戦アセット（`assets/genpei/hex-battles/`）
 
 - **ツール**: OpenAI GPT Image 2

@@ -16,6 +16,7 @@ description: 素のHTML/CSS/JavaScript（フレームワーク不使用）環境
   - Canvas / アニメーション系のバグは `requestAnimationFrame` を一時停止（フラグ制御）して静止状態で検証すること。
   - イベントリスナーのデバッグは `getEventListeners(element)` (DevTools コンソール) で登録済みリスナーを確認すること。
   - エラーは必ず `try/catch` で捕捉し、ユーザーに見えないサイレントエラーを作らないこと。
+  - **キーワード/トピック判定の正規表現で、語幹（stem）の直後に `\b` を付けない**。`\b(medicat|contract|invest)\b` のような「語幹＋末尾`\b`」は `medication` `contractual` `investing` のように語幹の後ろに文字が続く実在の単語にマッチしない（`\b` はその位置の直後が非単語文字境界であることを要求するため）。先頭の `\b` だけ残し、末尾は付けないか `\w*\b` にする。手で `node -e "console.log(/.../.test('...'))"` を複数の実例語で試すまでは「動く」と判断しないこと。
 
 ## Skill: リファクタリングパターン (Refactoring Patterns)
 - **概要**: 読みやすく保守しやすいコードへ改善するための指針。

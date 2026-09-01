@@ -422,7 +422,7 @@ const regress = await page.evaluate(() => {
     const mk = (fid, tweak) => { const s = G.buildState('s1180', fid); s.year = s.endYear; s.month = s.endMonth; tweak(s); return G.Rule.checkVictory(s).win; };
     out.victory = {
       木曽_京なし: mk('kiso', () => {}),
-      木曽_京12ヶ月: mk('kiso', (s) => { s.kyoten[G.KYOTO_KOKUFU].owner = 'kiso'; s.factions.kiso.authority.push('senji'); s.kyotoHoldMonths = 12; }),
+      木曽_京12ヶ月: mk('kiso', (s) => { s.kyoten[G.KYOTO_KOKUFU].owner = 'kiso'; s.factions.kiso.authority.push('senji'); s.kyotoHoldMonths = { kiso: 12 }; }),
       鎌倉_平氏健在: mk('kamakura', (s) => {
         s.factions.kamakura.authority.push('senji');
         let n = 0; for (const k of G.DATA.kyoten) if (k.type === 'kokufu' && n < 40) { s.kyoten[k.id].owner = 'kamakura'; n++; }
@@ -596,6 +596,255 @@ check('38. ★地形は拠点ごとに変わる／自勢力は一覧に残る／
   && brush.side.表示.includes('kai')
   && brush.duel.death && brush.duel.討死ログ && brush.duel.敗者側士気.every((m) => m < 100 - 18),
   JSON.stringify({ seed: brush.seed, side: brush.side, duel: brush.duel }));
+
+/* 40-44. 遊び方ヘルプ・AI難易度（2026-08 ブラッシュアップで追加） */
+const brush2 = await page.evaluate(() => {
+  const G = window.GENPEI_DEBUG;
+  // 40. ヘルプ: ページ送り・閉じるボタンの当たり判定が機能する
+  const help = { open: true, page: 0 };
+  const r1 = G.helpButtonRects(0, G.HELP_PAGES.length);
+  G.handleHelpClick(help, { x: r1.next.x + 10, y: r1.next.y + 10 });
+  const afterNext = help.page;
+  const r2 = G.helpButtonRects(afterNext, G.HELP_PAGES.length);
+  G.handleHelpClick(help, { x: r2.close.x + 10, y: r2.close.y + 10 });
+  const closedAfter = help.open;
+
+  // 41-42. AI難易度: 攻勢係数と出兵候補数が易しい<標準<難しいの順になる
+  const mkAi = (difficulty) => G.Rule.aiActions(G.buildState('s1180', 'kamakura', difficulty), 'taira');
+  const easyN = mkAi('easy').length, normalN = mkAi('normal').length, hardN = mkAi('hard').length;
+  const easyMul = G.difficultyOf({ difficulty: 'easy' }).attackRatioMul;
+  const hardMul = G.difficultyOf({ difficulty: 'hard' }).attackRatioMul;
+
+  // 43. 旧セーブ互換: difficulty欠落は migrateState が 'normal' へ補う
+  const st = G.buildState('s1180', 'kamakura', 'hard');
+  delete st.difficulty;
+  G.migrateState(st);
+  const migratedDifficulty = st.difficulty;
+
+  // 44. 新規ゲーム1ターン目のみ遊び方を自動表示（localStorageで一度きり）
+  localStorage.removeItem('genpeiHelpSeen');
+  G.gotoMap('s1180', 'kamakura', 'normal');
+  const firstOpen = G.game.scene.help.open;
+  G.gotoMap('s1183', 'kamakura', 'normal');
+  const secondOpen = G.game.scene.help.open;
+
+  // 45. BGM: ensure/setMood/toggle が例外なく動く（AudioContextはユーザー操作前提のため音は検証しない）
+  let bgmError = null, bgmEnsured = false, moodBattle = null, moodCalm = null, toggledOff = null, toggledOn = null;
+  try {
+    bgmEnsured = G.BGM.ensure();
+    G.BGM.setMood('battle'); moodBattle = G.BGM.mood;
+    G.BGM.setMood('calm'); moodCalm = G.BGM.mood;
+    const before = G.BGM.enabled;
+    G.BGM.toggle(); toggledOff = G.BGM.enabled;
+    G.BGM.toggle(); toggledOn = G.BGM.enabled;
+    if (toggledOn !== before) bgmError = `toggle往復で元に戻らない: ${before}→${toggledOff}→${toggledOn}`;
+  } catch (e) { bgmError = String(e); }
+
+  // 46. モバイル可読性: ボタンラベルが幅を超える場合はフォントが自動で縮む（測定は実キャンバスで行う）
+  const canvas2 = document.createElement('canvas');
+  const ctx2 = canvas2.getContext('2d');
+  const baseFont = '600 16px "Hiragino Mincho ProN", serif';
+  const sizeOf = (font) => parseFloat(font.match(/(\d+(?:\.\d+)?)px/)[1]);
+  // 中程度: 8文字ラベルが幅100pxのボタンに収まるまで縮む
+  const midLabel = 'この勢力で始める';
+  const midFitted = G.fitButtonFont(ctx2, midLabel, baseFont, 100);
+  ctx2.font = midFitted; const midWidth = ctx2.measureText(midLabel).width;
+  // 極端: 24文字ラベルは幅80pxには収まりきらないが、縮小は可読性下限（base-6px）で止まる（無限に縮めて潰さない）
+  const longLabel = '長い翻訳ラベルでボタン幅をはみ出す想定のテキスト';
+  const longFitted = G.fitButtonFont(ctx2, longLabel, baseFont, 80);
+  // 十分広ければ縮めない
+  const notShrunk = G.fitButtonFont(ctx2, 'OK', baseFont, 300);
+
+  return { pagesCount: G.HELP_PAGES.length, afterNext, closedAfter, easyN, normalN, hardN, easyMul, hardMul, migratedDifficulty, firstOpen, secondOpen,
+    bgmError, bgmEnsured, moodBattle, moodCalm, baseFont,
+    midFitted, midWidth, midShrunkSize: sizeOf(midFitted), longFittedSize: sizeOf(longFitted), notShrunk };
+});
+check('40. ★遊び方ヘルプ: ページ送り・閉じるが機能する',
+  brush2.pagesCount >= 3 && brush2.afterNext === 1 && brush2.closedAfter === false, JSON.stringify(brush2));
+check('41. ★AI難易度: 出兵候補数が易しい≦標準≦難しいの順になる',
+  brush2.easyN <= brush2.normalN && brush2.normalN <= brush2.hardN, JSON.stringify(brush2));
+check('42. ★AI難易度: attackRatio係数は易しい>標準>難しいの順で厳しくなる',
+  brush2.easyMul > brush2.hardMul, JSON.stringify(brush2));
+check('43. ★旧セーブ互換: difficulty欠落は migrateState が "normal" へ補う',
+  brush2.migratedDifficulty === 'normal', JSON.stringify(brush2));
+check('44. ★遊び方ヘルプ: 新規ゲーム1ターン目のみ自動表示（localStorage一度きり）',
+  brush2.firstOpen === true && brush2.secondOpen === false, JSON.stringify(brush2));
+check('45. ★BGM: ensure/setMood/toggleが例外なく動き、mood切替・toggle往復が正しい',
+  brush2.bgmError === null && brush2.bgmEnsured === true && brush2.moodBattle === 'battle' && brush2.moodCalm === 'calm',
+  JSON.stringify(brush2));
+check('46. ★モバイル可読性: 収まる範囲のラベルは幅に収まるまで縮み、十分広ければ縮めず、下限(base-6px)より小さくはしない',
+  brush2.midWidth <= 100 && brush2.midShrunkSize < 16 && brush2.longFittedSize === 10 && brush2.notShrunk === brush2.baseFont,
+  JSON.stringify(brush2));
+
+/* 47-49. 実績システムの組み込み（achievements/genpei.js フック呼び出し） */
+const achieve = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG, R = D.Rule;
+  localStorage.removeItem('genpei_achievements');
+
+  // 47. 無血開城の成功で first_bloodless_open が実際に解除される
+  const st0 = D.buildState('s1180', 'kamakura');
+  for (let t = 0; t < 40; t++) {
+    let opened = false;
+    for (const k of D.DATA.kyoten) {
+      if (k.type !== 'kokufu') continue;
+      if (!R.canOpenBloodless(st0, 'kamakura', k.id).ok) continue;
+      if (D.tryBloodlessOpen(st0, 'kamakura', k.id).opened) { opened = true; break; }
+    }
+    if (opened) break;
+    D.endTurn(st0);
+  }
+  const afterBloodless = D.getEarnedAchievements();
+
+  // 48. 毎ターンのポーリングで meibun_500 が解除される（endTurn経由・直呼びの両方を確認）
+  D.checkAchievementsEvent && localStorage.removeItem('genpei_achievements');
+  D.checkAchievementsPoll({ faction: 'kamakura', meibun: 520, seats: 0, kyotoHoldMonths: 0 });
+  const afterPoll = D.getEarnedAchievements();
+
+  // 49. シナリオ終幕（勝利）で first_victory が解除される
+  localStorage.removeItem('genpei_achievements');
+  D.checkAchievementsEvent('scenario_ended', { win: true, victory: 'bakufu', faction: 'kamakura', scenario: 's1180', jingiLost: false });
+  const afterVictory = D.getEarnedAchievements();
+
+  // 負のテスト: 条件未達では解除されないこと（閾値404 < 500）
+  localStorage.removeItem('genpei_achievements');
+  D.checkAchievementsPoll({ faction: 'kamakura', meibun: 404, seats: 0, kyotoHoldMonths: 0 });
+  const belowThreshold = D.getEarnedAchievements();
+
+  // 負のテスト: 他勢力(AI)の無血開城・勧誘・朝敵化・乱妨取りは自勢力(プレイヤー)の実績を解除しない
+  localStorage.removeItem('genpei_achievements');
+  const st1 = D.buildState('s1180', 'kamakura'); // プレイヤーはkamakura。taira/kiso/kai/oshuはAI
+  for (let t = 0; t < 24; t++) D.endTurn(st1);
+  const afterAiOnly = D.getEarnedAchievements();
+
+  return { afterBloodless, afterPoll, afterVictory, belowThreshold, afterAiOnly };
+});
+check('47. ★実績: 無血開城の成功で first_bloodless_open が実際に解除される',
+  achieve.afterBloodless.includes('first_bloodless_open'), JSON.stringify(achieve.afterBloodless));
+check('48. ★実績: ポーリングで meibun_500 が解除される',
+  achieve.afterPoll.includes('meibun_500'), JSON.stringify(achieve.afterPoll));
+check('49. ★実績: シナリオ勝利で first_victory が解除される',
+  achieve.afterVictory.includes('first_victory'), JSON.stringify(achieve.afterVictory));
+check('49b. ★実績（負のテスト）: 閾値未達（名分404）では meibun_500 が解除されない',
+  achieve.belowThreshold.length === 0, JSON.stringify(achieve.belowThreshold));
+check('49c. ★実績（負のテスト）: 他勢力(AI)の行動だけでは自勢力の実績が解除されない（24ターン放置）',
+  achieve.afterAiOnly.length === 0, JSON.stringify(achieve.afterAiOnly));
+
+/* 50-54. 2人対戦（同一端末ホットシート） */
+const hotseat = await page.evaluate(() => {
+  const D = window.GENPEI_DEBUG, R = D.Rule;
+
+  // 50. buildStateにP2を渡すとhumanFactionsが2件になる（同じ勢力は不可の前提はUI側で担保）
+  const st = D.buildState('s1180', 'kamakura', 'normal', 'taira');
+  const humanFactionsOk = JSON.stringify(st.humanFactions) === JSON.stringify(['kamakura', 'taira']);
+
+  // 51. ★AIループはhumanFactions全員（P1・P2両方）を除外する。
+  //     人間側に一切コマンドを出さないまま30ターン回し、P2(taira)の拠点数が
+  //     一度も自力で増えないこと（＝AIが代打ちしていないこと）を確認する。
+  //     旧実装は if(fid===state.faction) continue; だったため、2人対戦ではP2側が
+  //     無人のままAIとして勝手に無血開城・出兵してしまうバグになりうる。
+  const seatsOverTime = [];
+  for (let i = 0; i < 30; i++) {
+    D.endTurn(st);
+    seatsOverTime.push(R.ownedKyoten(st, 'taira').length);
+  }
+  let tairaNeverGrew = true;
+  for (let i = 1; i < seatsOverTime.length; i++) {
+    if (seatsOverTime[i] > seatsOverTime[i - 1]) { tairaNeverGrew = false; break; }
+  }
+
+  // 52. 手番制の実際のフロー: P1がターン終了→暦は進まずP2に手番交代→P2がターン終了→暦が進む
+  const st2 = D.buildState('s1180', 'kamakura', 'normal', 'taira');
+  const monthBefore = st2.month, turnBefore = st2.turn;
+  // P1(kamakura)の手番終了 相当の処理を直接呼ぶ（HandoffScene遷移はUIなのでstateの遷移だけ見る）
+  st2.actedThisRound.push(st2.faction);
+  const nextFid = st2.humanFactions.find((fid) => !st2.actedThisRound.includes(fid));
+  const handedOffToP2 = nextFid === 'taira' && monthBefore === st2.month && turnBefore === st2.turn;
+  st2.faction = nextFid;
+  // P2(taira)の手番終了 → 全員が終えたので実際にendTurnが走る
+  st2.actedThisRound.push(st2.faction);
+  const allActed = st2.humanFactions.every((fid) => st2.actedThisRound.includes(fid));
+  D.endTurn(st2);
+  const monthAdvanced = st2.turn === turnBefore + 1;
+
+  // 53. 京の保持月数は勢力ごとに独立して数える（片方だけ京を保持していても他方に漏れない）
+  //     ★AIに奪還されないよう京の駐留兵を厚くしておく（薄いと近隣の平氏が即座に奪い返し、
+  //       検証したいのが「独立カウント」なのに「奪還されるか」のテストになってしまう）
+  const st3 = D.buildState('s1180', 'kamakura', 'normal', 'kiso');
+  st3.kyoten[D.KYOTO_KOKUFU].owner = 'kiso';
+  st3.kyoten[D.KYOTO_KOKUFU].garrison = 999999;
+  for (let i = 0; i < 3; i++) D.endTurn(st3);
+  const kisoHeld = (st3.kyotoHoldMonths && st3.kyotoHoldMonths.kiso) || 0;
+  const kamakuraHeld = (st3.kyotoHoldMonths && st3.kyotoHoldMonths.kamakura) || 0;
+
+  // 54. 旧セーブ互換: kyotoHoldMonthsが数値のままの旧形式でもmigrateStateがobject化する
+  const st4 = D.buildState('s1180', 'kamakura');
+  st4.kyotoHoldMonths = 7; // 旧形式を模す
+  D.migrateState(st4);
+  const migratedOk = st4.kyotoHoldMonths && st4.kyotoHoldMonths.kamakura === 7;
+
+  return { humanFactionsOk, seatsOverTime, tairaNeverGrew, handedOffToP2, allActed, monthAdvanced, kisoHeld, kamakuraHeld, migratedOk };
+});
+check('50. ★2人対戦: buildStateにP2を渡すとhumanFactionsが両方入る', hotseat.humanFactionsOk, JSON.stringify(hotseat));
+check('51. ★2人対戦: AIループはP1・P2両方を除外する（30ターン、P2の拠点が一度も自力で増えない）',
+  hotseat.tairaNeverGrew, JSON.stringify(hotseat.seatsOverTime));
+check('52. ★2人対戦: P1終了で暦は進まずP2へ手番交代、P2終了で暦が進む', hotseat.handedOffToP2 && hotseat.allActed && hotseat.monthAdvanced, JSON.stringify(hotseat));
+check('53. ★2人対戦: 京の保持月数は勢力ごとに独立して数える（片方の保持が他方に漏れない）', hotseat.kisoHeld === 3 && hotseat.kamakuraHeld === 0, JSON.stringify(hotseat));
+check('54. ★旧セーブ互換: kyotoHoldMonthsが数値のままでもmigrateStateがobject化する', hotseat.migratedOk, JSON.stringify(hotseat));
+
+/* 55. 拡大図（国の拡大表示）のズーム/パン（モバイル可読性の続きで追加。全国図と同じ
+ * カメラ方式だが、自動フィットの上限をそのままズームイン下限に使うと畿内等の小さい国で
+ * ホイール操作が完全な無効操作になるため provZoom という別上限を持つ＝その回帰を機械検査する） */
+const provZoom = await page.evaluate(() => {
+  const G = window.GENPEI_DEBUG;
+  G.gotoMap('s1180', 'kamakura');
+  const sc = G.game.scene;
+  sc.province = 'mutsu'; sc.provCam = null;
+  const initialNull = sc.provCam === null;
+  const dflt = sc._provDefaultHalfW();
+
+  // ズームイン: provCamを実体化してhalfWを縮める（_bindProvWheelと同じ計算・自動フィットより寄る）
+  sc._ensureProvCam();
+  sc.provCam.halfW /= 1.12;
+  sc._clampProvCam();
+  const zoomedIn = sc.provCam.halfW < dflt;
+
+  // ズームアウト: 自動フィットより広く見える（自動フィットが解像度下限で頭打ちの国でも常に可能）
+  sc.provCam.halfW = dflt;
+  for (let i = 0; i < 30; i++) { sc.provCam.halfW *= 1.12; sc._clampProvCam(); }
+  const zoomedOutBeyondDefault = sc.provCam.halfW > dflt;
+
+  // パン: cx/cyが動く
+  const beforePan = { cx: sc.provCam.cx, cy: sc.provCam.cy };
+  sc.provCam.cx += 0.02; sc.provCam.cy += 0.02;
+  sc._clampProvCam();
+  const panned = sc.provCam.cx !== beforePan.cx || sc.provCam.cy !== beforePan.cy;
+
+  // 国を選び直すと自動フィットへ戻る（全国図クリックハンドラと同じ代入を模す）
+  sc.province = 'izumi';
+  sc.provCam = null;
+  const resetOnProvinceChange = sc.provCam === null;
+
+  // 全66国でズームインに実効性がある（provZoom上限が効いているか。旧prov上限のままだと
+  // 66国中65国でズームインが完全な無効操作になっていた＝2026-08-31に実測して修正）
+  let zoomableCount = 0;
+  const provIds = Object.keys(G.DATA.provBox);
+  for (const pid of provIds) {
+    sc.province = pid; sc.provCam = null;
+    const d = sc._provDefaultHalfW();
+    sc._ensureProvCam();
+    sc.provCam.halfW = d / (1.12 ** 20);
+    sc._clampProvCam();
+    if (sc.provCam.halfW < d - 1e-9) zoomableCount++;
+    sc.provCam = null;
+  }
+
+  return { initialNull, zoomedIn, zoomedOutBeyondDefault, panned, resetOnProvinceChange, zoomableCount, totalProv: provIds.length };
+});
+check('55. ★拡大図（国の拡大表示）: ホイールでズームイン/アウト・ドラッグでパンでき、国を選び直すと自動フィットへ戻る',
+  provZoom.initialNull && provZoom.zoomedIn && provZoom.zoomedOutBeyondDefault && provZoom.panned && provZoom.resetOnProvinceChange,
+  JSON.stringify(provZoom));
+check('55b. ★拡大図: 全66国でズームインに実効性がある（自動フィット止まりの国が残らない）',
+  provZoom.zoomableCount === provZoom.totalProv, JSON.stringify(provZoom));
 
 /* 39. 実際の BattleScene で背景と可動駒の画像が読み込まれること */
 await page.evaluate(() => window.GENPEI_DEBUG.gotoBattle('s1180', 'kamakura', 'kokufu_izu', 'sekisho_usui'));

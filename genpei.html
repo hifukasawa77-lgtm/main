@@ -112,6 +112,7 @@
 </div>
 
 <script src="gamekit/gamekit.js"></script>
+<script src="achievements/genpei.js"></script>
 <script>
 'use strict';
 
@@ -133,12 +134,17 @@ const game = new GameKit.Engine(canvas, { width: W, height: H });
 const save = new GameKit.Save('genpei');
 const clamp = GameKit.MathX.clamp;
 
+// sengoku.html の IS_TOUCH を踏襲。固定Canvasをタッチ端末の小さい画面へ引き伸ばすと
+// 文字が縮んで読めなくなるため（game-devスキル「固定Canvas UIのモバイル可読性対策」）、
+// txt()/button() 等の共通描画経路（下記 mobileFont）でフォントサイズだけ底上げする。
+// レイアウト（L, パネル座標）自体は変えない＝密なダッシュボードの配置崩れは起きない。
+const IS_TOUCH = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || navigator.maxTouchPoints > 0;
+
 /* モバイル横画面ゲート（sengoku.html/sanguo.html と同じ方式）。
  * タッチ端末の縦画面でのみ表示し、ボタンで全画面化＋横向き固定を試みる。
  * screen.orientation.lock は非対応環境もあるため、失敗しても案内文自体で足りる。 */
 (function () {
-  const touchCapable = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 0;
-  document.body.classList.toggle('genpei-touch', touchCapable);
+  document.body.classList.toggle('genpei-touch', IS_TOUCH);
   const gate = document.getElementById('landscapeGate');
   gate.querySelector('button').onclick = () => {
     const el = document.documentElement;
@@ -156,6 +162,16 @@ const clamp = GameKit.MathX.clamp;
   document.addEventListener('fullscreenchange', onFSChange);
   document.addEventListener('webkitfullscreenchange', onFSChange);
 })();
+
+/* ============================================================================
+ * 0. 難易度（新規開始時に選択。RULE.ai を基準に AI の攻勢・収入を係数で伸縮する）
+ * ========================================================================== */
+const DIFFICULTIES = {
+  easy:   { jp: '易しい',  en: 'Easy',   attackRatioMul: 1.35, maxActionsAdd: -1, aiGoldMul: 0.85 },
+  normal: { jp: '標準',    en: 'Normal', attackRatioMul: 1.00, maxActionsAdd: 0,  aiGoldMul: 1.00 },
+  hard:   { jp: '難しい',  en: 'Hard',   attackRatioMul: 0.75, maxActionsAdd: 1,  aiGoldMul: 1.15 },
+};
+function difficultyOf(state) { return DIFFICULTIES[state.difficulty] || DIFFICULTIES.normal; }
 
 /* ============================================================================
  * 1. 定数テーブル（基本設計 第3節 RULE）
@@ -742,6 +758,9 @@ const Rule = {
 
   aiActions(state, fid) {
     if (RULE.ai.famineBlock && Rule.famineActive(state)) return [];
+    const diff = difficultyOf(state);
+    const attackRatio = RULE.ai.attackRatio * diff.attackRatioMul;
+    const maxActions = Math.max(1, RULE.ai.maxActions + diff.maxActionsAdd);
     const cand = [];
     for (const src of Rule.ownedKyoten(state, fid)) {
       const sg = state.kyoten[src.id].garrison;
@@ -749,7 +768,7 @@ const Rule = {
       for (const k of DATA.kyoten) {
         const st = state.kyoten[k.id];
         if (st.owner === fid || !Rule.adjacent(src, k)) continue;
-        const need = Rule.defenseStrength(state, k) * RULE.ai.attackRatio;
+        const need = Rule.defenseStrength(state, k) * attackRatio;
         if (sg <= need) continue;
         cand.push({ kind: 'capture', from: src.id, to: k.id, troops: Math.floor(sg * 0.6),
                     score: k.scale + (sg - need) * 0.1 });
@@ -759,7 +778,7 @@ const Rule = {
     cand.sort((a, b) => b.score - a.score);
     const acts = [], usedFrom = new Set(), usedTo = new Set();
     for (const c of cand) {
-      if (acts.length >= RULE.ai.maxActions) break;
+      if (acts.length >= maxActions) break;
       if (usedFrom.has(c.from) || usedTo.has(c.to)) continue;
       usedFrom.add(c.from); usedTo.add(c.to); acts.push(c);
     }
@@ -910,7 +929,7 @@ const Rule = {
     else if (v === 'bakufu') win = !state.factions.taira.alive && f.authority.includes('senji') && seats >= 35;
     else if (v === 'seitai_shogun') {
       win = Rule.holdsCapital(state, state.faction) && f.authority.includes('senji')
-        && (state.kyotoHoldMonths || 0) >= RULE.capital.holdMonths;
+        && ((state.kyotoHoldMonths && state.kyotoHoldMonths[state.faction]) || 0) >= RULE.capital.holdMonths;
     } else if (v === 'hiraizumi') win = !!state.kyoten['tachi_hiraizumi'] && state.kyoten['tachi_hiraizumi'].owner === state.faction;
     else win = owned.length > 0;
     return { done: true, win, reason: win ? '勝利条件を満たした / Victory conditions met' : '終幕 / The age has ended' };
@@ -920,13 +939,20 @@ const Rule = {
 /* ============================================================================
  * 4. ゲーム状態
  * ========================================================================== */
-function buildState(scenarioId, factionId) {
+function buildState(scenarioId, factionId, difficulty, factionId2) {
   const scn = SCENARIOS.find((s) => s.id === scenarioId);
+  // ★2人対戦（同一端末の手番制パス＆プレイ）。state.faction は「今まさに操作中の人間」を指す
+  //   単一の値のまま据え置き、humanFactions が「人間が握っている全勢力」を持つ。
+  //   これでAIループ（fid===state.factionだけ除外）以外の大半のロジックは無改修で通る。
+  const humanFactions = factionId2 && factionId2 !== factionId ? [factionId, factionId2] : [factionId];
   const state = {
     version: SAVE_VERSION, scenario: scenarioId, faction: factionId,
+    humanFactions, actedThisRound: [],
+    difficulty: DIFFICULTIES[difficulty] ? difficulty : 'normal',
     year: scn.start[0], month: scn.start[1], turn: 1,
     endYear: scn.end[0], endMonth: scn.end[1],
     factions: {}, kyoten: {}, bands: {}, suigun: {}, log: [], result: null, chotekiCount: 0,
+    achieveStats: { bloodlessOpenCount: 0, armyMarchedCount: 0, foodNegativeDuringFamine: false },
   };
   for (const fid of Object.keys(FACTIONS)) {
     state.factions[fid] = {
@@ -980,7 +1006,14 @@ function migrateState(state) {
       state.regalia[key] = Object.values(state.factions).some((f) => f.authority.includes(key));
     }
   }
-  if (state.kyotoHoldMonths == null) state.kyotoHoldMonths = 0;
+  // ★2人対戦では京の保持月数を勢力ごとに数える必要があるため object 化。
+  //   旧セーブ（数値のまま）は「その時のstate.faction」の値として引き継ぐ
+  if (state.kyotoHoldMonths == null) state.kyotoHoldMonths = {};
+  else if (typeof state.kyotoHoldMonths === 'number') state.kyotoHoldMonths = { [state.faction]: state.kyotoHoldMonths };
+  if (!DIFFICULTIES[state.difficulty]) state.difficulty = 'normal';
+  if (!state.achieveStats) state.achieveStats = { bloodlessOpenCount: 0, armyMarchedCount: 0, foodNegativeDuringFamine: false };
+  if (!Array.isArray(state.humanFactions) || !state.humanFactions.length) state.humanFactions = [state.faction];
+  if (!Array.isArray(state.actedThisRound)) state.actedThisRound = [];
   // 一騎討ちの戦績（列伝表示用・Could C-01）。武将id → {wins, losses}
   if (!state.duelRecord) state.duelRecord = {};
   return state;
@@ -1078,6 +1111,10 @@ function tryBloodlessOpen(state, fid, kyotenId) {
     state.factions[fid].alive = true;
     addRep(state, fid, RULE.rep.bloodlessOpen);
     pushLog(state, `${k.jp}の在庁官人が門を開いた——${FACTIONS[fid].jp}、戦わずして国を得る`);
+    if (fid === state.faction) {
+      state.achieveStats.bloodlessOpenCount++;
+      if (typeof checkAchievementsEvent === 'function') checkAchievementsEvent('bloodless_open', { isPlayer: true });
+    }
     return { ok: true, opened: true };
   }
   st.openRetryUntil = state.turn + RULE.open.retryTurns;
@@ -1097,6 +1134,7 @@ function declareChoteki(state, fid, targetId) {
     const t = state.factions[targetId];
     t.choteki = true; t.chotekiUntil = state.turn + RULE.choteki.duration;
     pushLog(state, `院宣くだる——${FACTIONS[targetId].jp}、朝敵となる`);
+    if (typeof checkAchievementsEvent === 'function') checkAchievementsEvent('choteki_declared', { targetFid: targetId, myFid: state.faction });
     return { ok: true, done: true };
   }
   if (fid === state.faction) pushLog(state, '奏請は容れられなかった');
@@ -1121,6 +1159,7 @@ function pillage(state, fid, kyotenId) {
   addRep(state, fid, RULE.rep.pillage + (jisha ? RULE.rep.seizeJisha : 0),
     fid === state.faction ? `${k.jp}で乱妨取りをした——兵糧 ${gain}、そして京に悪評が立つ` : null);
   f.courtInfluence = clamp(f.courtInfluence + RULE.court.pillage, 0, RULE.court.max);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('pillaged', {});
   return { ok: true, gain };
 }
 function donateJisha(state, fid, kyotenId) {
@@ -1131,6 +1170,7 @@ function donateJisha(state, fid, kyotenId) {
   if (f.gold < RULE.econ.jishaDonateCost) return { ok: false, why: '金が足りない' };
   f.gold -= RULE.econ.jishaDonateCost;
   addRep(state, fid, RULE.rep.donateJisha, fid === state.faction ? `${k.jp}へ寄進した` : null);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('donation_made', {});
   return { ok: true };
 }
 
@@ -1141,6 +1181,7 @@ function donateCourt(state, fid) {
   f.gold -= RULE.court.donateCost;
   f.courtInfluence = clamp(f.courtInfluence + RULE.court.donate, 0, RULE.court.max);
   addRep(state, fid, RULE.rep.donateCourt);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('donation_made', {});
   return { ok: true };
 }
 
@@ -1154,6 +1195,7 @@ function grantAndo(state, fid, bandId) {
   f.reputation -= RULE.hoko.andoCost;
   b.ando = true; b.hoko = clamp(b.hoko + RULE.hoko.andoGain, 0, 100);
   pushLog(state, `${b.nameJP}の本領を安堵した`);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('reward_granted', {});
   return { ok: true };
 }
 function grantShinon(state, fid, bandId, kyotenId) {
@@ -1164,6 +1206,7 @@ function grantShinon(state, fid, bandId, kyotenId) {
   b.shinon = kyotenId; b.debt = 0;
   b.hoko = clamp(b.hoko + RULE.hoko.shinonGain, 0, 100);
   pushLog(state, `${b.nameJP}に${DATA.kyotenById[kyotenId].jp}を宛て行った`);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('reward_granted', {});
   return { ok: true };
 }
 function purgeBand(state, fid, bandId) {
@@ -1173,6 +1216,7 @@ function purgeBand(state, fid, bandId) {
   addRep(state, fid, RULE.rep.purge);
   for (const o of Rule.bandsOf(state, fid)) o.hoko = clamp(o.hoko - 5, 0, 100);
   pushLog(state, `${b.nameJP}を誅した——味方の胸に疑いが残る`);
+  if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('band_purged', {});
   return { ok: true };
 }
 function tryRecruit(state, fid, bandId, gift) {
@@ -1191,6 +1235,7 @@ function tryRecruit(state, fid, bandId, gift) {
     pushLog(state, from
       ? `${b.nameJP}が${FACTIONS[from].jp}を離れ${FACTIONS[fid].jp}に与した——不義と京では言う`
       : `${b.nameJP}が${FACTIONS[fid].jp}に与した`);
+    if (fid === state.faction && typeof checkAchievementsEvent === 'function') checkAchievementsEvent('band_recruited', { poached: !!from });
     return { ok: true, joined: true, poached: !!from };
   }
   if (fid === state.faction) pushLog(state, `${b.nameJP}は動かなかった`);
@@ -1309,14 +1354,18 @@ function endTurn(state, audio) {
     const f = state.factions[fid];
     if (!f.alive) continue;
     const inc = Rule.income(state, fid);
+    const goldMul = fid === state.faction ? 1 : difficultyOf(state).aiGoldMul;
     f.food = Math.max(0, f.food + inc.net);
-    f.gold += inc.gold;
+    f.gold += Math.round(inc.gold * goldMul);
     if (f.food <= 0 && inc.troops > 0) {
       for (const k of Rule.ownedKyoten(state, fid)) {
         const st = state.kyoten[k.id];
         st.garrison = Math.max(0, Math.round(st.garrison * (1 - RULE.econ.starveTroop)));
       }
-      if (fid === state.faction) pushLog(state, '兵糧が尽き、兵が逃散した');
+      if (fid === state.faction) {
+        pushLog(state, '兵糧が尽き、兵が逃散した');
+        if (Rule.famineActive(state)) state.achieveStats.foodNegativeDuringFamine = true;
+      }
     }
   }
   // 5. 院影響力（献納・畿内の国府・院の身柄・自然減衰）
@@ -1367,9 +1416,9 @@ function endTurn(state, audio) {
       if (fid === state.faction) pushLog(state, '朝敵の宣を解かれた');
     }
   }
-  // 9. AI の行動
+  // 9. AI の行動（★2人対戦では humanFactions 全員がAIの対象外。state.faction は「今の手番」1人だけを指すため単独では足りない）
   for (const fid of Object.keys(FACTIONS)) {
-    if (fid === state.faction) continue;
+    if (state.humanFactions.includes(fid)) continue;
     const f = state.factions[fid];
     if (!f.alive || !FACTIONS[fid].playable) continue;
     applyActions(state, fid, Rule.aiActions(state, fid));
@@ -1399,18 +1448,63 @@ function endTurn(state, audio) {
       : `帝は${FACTIONS[next].jp}に奉じられた`);
   }
   // 11. 京の保持を数える（木曽の勝利条件。落とすか朝敵になれば振り出しに戻る）
-  state.kyotoHoldMonths = Rule.holdsCapital(state, state.faction) ? (state.kyotoHoldMonths || 0) + 1 : 0;
+  // ★勢力ごとに数える（2人対戦で「最後に手番を終えた側」だけが計測される事故を防ぐ）
+  for (const fid of Object.keys(FACTIONS)) {
+    state.kyotoHoldMonths[fid] = Rule.holdsCapital(state, fid) ? (state.kyotoHoldMonths[fid] || 0) + 1 : 0;
+  }
   // 12. 月を進める
   state.month++;
   if (state.month > 12) { state.month = 1; state.year++; }
   state.turn++;
-  // 13. 勝敗
-  const v = Rule.checkVictory(state);
+  // 13. 勝敗（★2人対戦ではhumanFactions全員について判定する。checkVictoryはstate.factionを見る
+  //     実装のため、一時的に切り替えて呼ぶ——checkVictory自体は改修しない）
+  let v;
+  if (state.humanFactions.length > 1) {
+    const savedFaction = state.faction;
+    let anyContinuing = false, winResult = null, lastLoss = null;
+    for (const fid of state.humanFactions) {
+      state.faction = fid;
+      const vf = Rule.checkVictory(state);
+      if (vf.done && vf.win) { winResult = { ...vf, winner: fid }; break; }
+      if (!vf.done) anyContinuing = true;
+      else lastLoss = vf;
+    }
+    state.faction = savedFaction;
+    v = winResult || (anyContinuing ? { done: false } : (lastLoss || { done: false }));
+  } else {
+    v = Rule.checkVictory(state);
+  }
   if (v.done) {
     state.result = v;
     // 一度でも終幕まで見届けたら「もし清盛が死なざれば」を解禁する。
     // ★ここで書かないと unlockable のシナリオは誰にも開かれないまま残る
     save.set('unlocked_sif', true);
+    if (typeof checkAchievementsEvent === 'function') {
+      // ★2人対戦では勝者(v.winner)が state.faction と異なることがある（最後に手番を終えた側と
+      //   勝者は別人でもよい）ため、実績の帰属先は必ず v.winner を優先する
+      const attributedFid = v.winner || state.faction;
+      checkAchievementsEvent('scenario_ended', {
+        win: v.win, victory: FACTIONS[attributedFid].victory, faction: attributedFid,
+        scenario: state.scenario, jingiLost: !!state.jingiLost,
+      });
+    }
+  }
+  if (typeof checkAchievementsPoll === 'function') {
+    // ★2人対戦ではhumanFactions全員ぶん判定する（名分・拠点・京保持は各自算出。
+    //   achieveStatsのみ共有カウンタ）
+    for (const fid of state.humanFactions) {
+      checkAchievementsPoll({
+        faction: fid, scenario: state.scenario,
+        meibun: Rule.calcMeibun(state, fid),
+        seats: Rule.ownedKyoten(state, fid).filter((k) => k.type === 'kokufu').length,
+        kyotoHoldMonths: (state.kyotoHoldMonths && state.kyotoHoldMonths[fid]) || 0,
+        jingiLost: !!state.jingiLost,
+        famineJustEnded: wasFamineActive && !Rule.famineActive(state),
+        foodNegativeDuringFamine: state.achieveStats.foodNegativeDuringFamine,
+        armyMarchedCount: state.achieveStats.armyMarchedCount,
+        bloodlessOpenCount: state.achieveStats.bloodlessOpenCount,
+      });
+    }
   }
   // 飢饉(kikin) の開始検出。false→true になった最初のターンだけ、沈んだ不吉な低音を1回鳴らす
   if (audio && !wasFamineActive && Rule.famineActive(state)) {
@@ -1429,6 +1523,19 @@ function endTurn(state, audio) {
 const PORTRAIT_ROOT = 'assets/genpei/ai-portraits/';
 const SITE_ICON_ROOT = 'assets/genpei/site-icons/';
 const SITE_ICON_VARIANTS = ['province', 'local', 'detail'];
+const SITE_DETAIL_ART_FILES = {
+  kokufu_suruga: 'assets/genpei/site-details/suruga-kokufu.webp',
+  tachi: 'assets/genpei/site-details/tachi.webp',
+  kisaku: 'assets/genpei/site-details/kisaku.webp',
+  toride: 'assets/genpei/site-details/toride.webp',
+  shoen: 'assets/genpei/site-details/shoen.webp',
+  tera: 'assets/genpei/site-details/tera.webp',
+  jinja: 'assets/genpei/site-details/jinja.webp',
+  sekisho: 'assets/genpei/site-details/sekisho.webp',
+  minato: 'assets/genpei/site-details/minato.webp',
+  machi: 'assets/genpei/site-details/machi.webp',
+  mura: 'assets/genpei/site-details/mura.webp'
+};
 const BATTLE_BG_ROOT = 'assets/genpei/battles/';
 const BATTLE_BG_IDS = ['ishibashiyama', 'fujikawa', 'kurikara', 'ujigawa', 'ichinotani', 'yashima', 'dannoura'];
 const BATTLE_BG_MATCH = [
@@ -1498,14 +1605,22 @@ function hexTokenKind(b, u) {
   return terrainUnitKind(u);
 }
 function hexTokenKey(b, u) { return `${hexTokenSide(u.faction)}_${hexTokenKind(b, u)}`; }
-const EVENT_ART_ROOT = 'assets/genpei/events/';
-const EVENT_ART_IDS = ['mochihito-decree', 'kiyomori-death', 'nanto-shoutou', 'miyako-ochi', 'atsumori', 'nasu-no-yoichi', 'antoku-suibotsu', 'koromogawa'];
-const EVENT_ART_BY_FX = { nanto: 'nanto-shoutou', kiyomori_death: 'kiyomori-death', miyako_ochi: 'miyako-ochi', dannoura: 'antoku-suibotsu' };
-const EVENT_ART_BY_TEXT = [[/扇の的/, 'nasu-no-yoichi'], [/一ノ谷/, 'atsumori'], [/衣川/, 'koromogawa']];
+const EVENT_ART_ROOT = 'assets/genpei/events-gpt-image-2/';
+const EVENT_ART_BY_DATE = {
+  '1180-8': 'ishibashiyama', '1180-10': 'fujikawa', '1180-12': 'nanto-shoutou',
+  '1181-2': 'kiyomori-death', '1181-6': 'yowa-famine', '1183-5': 'kurikara',
+  '1183-7': 'miyako-ochi', '1183-10': 'juei-senji', '1184-1': 'ujigawa-awazu',
+  '1184-2': 'ichinotani', '1185-2': 'yashima-yoichi', '1185-3': 'dannoura',
+  '1185-11': 'shugo-jito', '1189-4': 'koromogawa', '1189-9': 'oshu-war',
+};
+const EVENT_ART_FILES = Object.fromEntries(
+  Object.values(EVENT_ART_BY_DATE).map((id) => [id, `${EVENT_ART_ROOT}${id}.webp`])
+);
+// The 1180 scenario opening is not a TIMELINE event and keeps its original illustration.
+EVENT_ART_FILES['mochihito-decree'] = 'assets/genpei/events/mochihito-decree.webp';
+const EVENT_ART_IDS = Object.keys(EVENT_ART_FILES);
 function eventArtFor(ev) {
-  if (ev.fx && EVENT_ART_BY_FX[ev.fx]) return EVENT_ART_BY_FX[ev.fx];
-  const m = EVENT_ART_BY_TEXT.find(([re]) => re.test(ev.jp));
-  return m ? m[1] : null;
+  return EVENT_ART_BY_DATE[`${ev.y}-${ev.m}`] || null;
 }
 const OPENING_ART = { s1180: 'mochihito-decree' };
 const PREHISTORY_PORTRAIT_IDS = {
@@ -1518,6 +1633,7 @@ const ASSETS = {
   map: null, mapReady: false,
   portraits: {}, portraitsReady: false,
   siteIcons: { province: {}, local: {}, detail: {} }, siteIconsReady: false,
+  siteDetailArt: {},
   battleBg: {}, battleBgReady: false,
   hexBattleBg: {}, hexBattleTokens: {}, hexBattlePending: {},
   eventArt: {}, eventArtReady: false,
@@ -1527,8 +1643,13 @@ const MAP_ASPECT = 941 / MAP_NATIVE_W;
 
 /* 拡大率の上限（地図素材の原寸の何倍まで引き伸ばすか）。
  * 素材は 1672×941 しかなく、これを超えて拡大するとぼやけが目に見えて増える。
- * 各段の寄りはこの上限に合わせて自動的に浅くなる。数値を上げれば寄れるがぼやける。 */
-const ZOOM_CAP = { nation: 2.0, prov: 3.0, local: 4.5 };
+ * 各段の寄りはこの上限に合わせて自動的に浅くなる。数値を上げれば寄れるがぼやける。
+ * provZoom は拡大図のユーザー操作（ホイール/ピンチ）専用のズームイン上限。prov（自動フィットの
+ * 保守的な上限）より緩くしないと、畿内等の小さい国では自動フィットが既に解像度下限に達していて
+ * ユーザーがズームインしてもほぼ動かない（実測: 66国中65国で無効）。ユーザーが能動的に寄る操作は
+ * ある程度のぼやけを許容してでも効かせる方を優先する。自動フィット自体（provDefaultHalfW）は
+ * 変えない＝何も操作しない状態の見た目は今までどおり。 */
+const ZOOM_CAP = { nation: 2.0, prov: 3.0, local: 4.5, provZoom: 6.0 };
 function maxMapScale(cap) {
   return (ASSETS.map && ASSETS.map.naturalWidth ? ASSETS.map.naturalWidth : MAP_NATIVE_W) * cap;
 }
@@ -1565,6 +1686,15 @@ function loadSiteIcons() {
     ASSETS.siteIconsReady = true;
     return loaded.filter(Boolean).length;
   });
+}
+function loadSiteDetailArt() {
+  const jobs = Object.entries(SITE_DETAIL_ART_FILES).map(([id, file]) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { ASSETS.siteDetailArt[id] = img; resolve(true); };
+    img.onerror = () => resolve(false);
+    img.src = file;
+  }));
+  return Promise.all(jobs);
 }
 function loadBattleBg() {
   const jobs = BATTLE_BG_IDS.map((id) => new Promise((resolve) => {
@@ -1606,7 +1736,7 @@ function loadEventArt() {
     const img = new Image();
     img.onload = () => { ASSETS.eventArt[id] = img; resolve(true); };
     img.onerror = () => resolve(false);
-    img.src = EVENT_ART_ROOT + id + '.webp';
+    img.src = EVENT_ART_FILES[id];
   }));
   return Promise.all(jobs).then((loaded) => {
     ASSETS.eventArtReady = true;
@@ -1635,7 +1765,16 @@ function frameTitle(ctx, x, y, w, title, en) {
   txt(ctx, title, x + 10, y + 4, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#e8d3a0', align: 'left' });
   if (en) txt(ctx, en, x + w - 10, y + 6, { font: '10px "Segoe UI", sans-serif', color: '#8a7a58', align: 'right' });
 }
-function txt(ctx, str, x, y, o) {
+// タッチ端末向けフォント底上げ（+15%）。行間・列幅は _drawList/_drawSide/_drawEvents 等の
+// 実測ヘッドルーム（最小約30%）に収まる値として選んだ。上げるときは必ず実機/エミュレータで
+// はみ出し・重なりが無いかスクリーンショット確認すること（数値だけで判断しない）。
+const MOBILE_FONT_SCALE = 1.15;
+function mobileFont(font) {
+  if (!IS_TOUCH || !font) return font;
+  return font.replace(/(\d+(?:\.\d+)?)px/, (_, n) => `${+(parseFloat(n) * MOBILE_FONT_SCALE).toFixed(1)}px`);
+}
+// 生の描画本体（フォントは呼び出し側で確定済みの前提＝mobileFont適用済みか、意図的に適用しない場合に使う）
+function drawFillText(ctx, str, x, y, o) {
   ctx.save();
   ctx.font = (o && o.font) || '13px "Hiragino Mincho ProN", serif';
   ctx.fillStyle = (o && o.color) || '#dbe4ee';
@@ -1644,12 +1783,40 @@ function txt(ctx, str, x, y, o) {
   ctx.fillText(str, x, y);
   ctx.restore();
 }
+// 通常のテキスト描画はここを経由する。フォント指定は毎回 mobileFont() で自動底上げするため、
+// 呼び出し側は既存の固定px指定のままでよい（=既存コードへの変更を最小化する）。
+function txt(ctx, str, x, y, o) {
+  drawFillText(ctx, str, x, y, { ...o, font: mobileFont((o && o.font) || '13px "Hiragino Mincho ProN", serif') });
+}
 function fitText(ctx, str, max, font) {
-  ctx.save(); ctx.font = font;
+  // 実際に描画される幅（mobileFont適用後）で切り詰めないと、拡大後の文字がmaxをはみ出す
+  ctx.save(); ctx.font = mobileFont(font);
   let s = str;
   while (s.length > 1 && ctx.measureText(s).width > max) s = s.slice(0, -1);
   ctx.restore();
   return s === str ? s : s.slice(0, -1) + '…';
+}
+// フォント指定から数値サイズだけを縮小した文字列を作る（例: '600 16px "..."' → '600 12px "..."'）
+function shrinkFont(font, size) { return font.replace(/(\d+(?:\.\d+)?)px/, `${size}px`); }
+// ラベル横幅フィット（モバイル可読性対策の最終防衛線）: measureText でボタン幅を超えるなら
+// フォントサイズを自動で縮める。翻訳文・可変数値・端末ごとのスケール差を1箇所で吸収する。
+// ★ mobileFont適用後のサイズを起点にする（タッチ時は大きく始めて収まる範囲まで縮める）。
+// 戻り値は最終確定フォントなので、呼び出し側は txt() を介さず drawFillText() で描くこと
+// （txt() を通すと mobileFont が二重適用され、フィット済みのはずの幅をまた超えてしまう）。
+function fitButtonFont(ctx, label, font, maxW) {
+  const scaled = mobileFont(font);
+  const m = scaled.match(/(\d+(?:\.\d+)?)px/);
+  if (!m || !label) return scaled;
+  let size = parseFloat(m[1]);
+  const minSize = Math.max(9, size - 6);
+  ctx.save();
+  while (size > minSize) {
+    ctx.font = shrinkFont(scaled, size);
+    if (ctx.measureText(label).width <= maxW) break;
+    size -= 1;
+  }
+  ctx.restore();
+  return shrinkFont(scaled, size);
 }
 function button(ctx, b, hover) {
   frame(ctx, b.x, b.y, b.w, b.h, {
@@ -1657,13 +1824,17 @@ function button(ctx, b, hover) {
     stroke: b.disabled ? 'rgba(255,255,255,0.10)' : hover ? 'rgba(216,178,106,0.75)' : 'rgba(216,178,106,0.38)',
     radius: b.radius != null ? b.radius : 5,
   });
-  const cx = b.x + b.w / 2;
-  txt(ctx, b.jp, cx, b.y + (b.en ? b.h / 2 - 15 : b.h / 2 - 8), {
-    font: b.font || '600 16px "Hiragino Mincho ProN", serif',
+  const cx = b.x + b.w / 2, maxW = b.w - 10;
+  const jpFont = fitButtonFont(ctx, b.jp, b.font || '600 16px "Hiragino Mincho ProN", serif', maxW);
+  drawFillText(ctx, b.jp, cx, b.y + (b.en ? b.h / 2 - 15 : b.h / 2 - 8), {
+    font: jpFont,
     // 不活性でも「何のボタンか」は読めること。暗すぎると押せない理由すら伝わらない
     color: b.disabled ? '#8b95a3' : '#f0e2c0', align: 'center',
   });
-  if (b.en) txt(ctx, b.en, cx, b.y + b.h / 2 + 5, { font: '10px "Segoe UI", sans-serif', color: '#8a7a58', align: 'center' });
+  if (b.en) {
+    const enFont = fitButtonFont(ctx, b.en, '10px "Segoe UI", sans-serif', maxW);
+    drawFillText(ctx, b.en, cx, b.y + b.h / 2 + 5, { font: enFont, color: '#8a7a58', align: 'center' });
+  }
 }
 function hit(b, p) { return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h; }
 
@@ -2002,7 +2173,7 @@ class BootScene extends GameKit.Scene {
   enter(g) {
     this.msg = 'データを読み込んでいます / Loading';
     this.t = 0;
-    Promise.all([loadData(), loadMap(), loadPortraits(), loadSiteIcons(), loadBattleBg(), loadEventArt()])
+    Promise.all([loadData(), loadMap(), loadPortraits(), loadSiteIcons(), loadSiteDetailArt(), loadBattleBg(), loadEventArt()])
       .then(() => { g.changeScene(new TitleScene()); })
       .catch((e) => {
         console.error(e);
@@ -2031,11 +2202,18 @@ class TitleScene extends GameKit.Scene {
       { id: 'new', x: W / 2 - 190, y: 470, w: 380, h: 58, jp: '新規に始める', en: 'New Game' },
       { id: 'cont', x: W / 2 - 190, y: 540, w: 380, h: 58, jp: '続きから', en: 'Continue', disabled: !this.hasSave },
     ];
+    this.helpBtn = { id: 'help', x: W / 2 - 190, y: 610, w: 320, h: 44, jp: '遊び方 / How to Play', font: '600 15px "Hiragino Mincho ProN", serif', radius: 6 };
+    this.bgmBtn = { id: 'bgm', x: W / 2 + 140, y: 610, w: 50, h: 44, jp: BGM.enabled ? '♪' : '🔇', font: '600 18px sans-serif', radius: 6 };
+    this.help = { open: false, page: 0 };
   }
   update(dt, g) {
     this.t += dt; this.bd.update(dt);
     const p = g.input.pointer;
     if (!p.justPressed) return;
+    if (!BGM.ac) { BGM.ensure(); if (BGM.enabled) BGM.start(); }
+    if (this.help.open) { handleHelpClick(this.help, p); return; }
+    if (hit(this.helpBtn, p)) { g.audio.jingle([{ f: 440, d: 0.07 }]); this.help.open = true; this.help.page = 0; return; }
+    if (hit(this.bgmBtn, p)) { BGM.toggle(); this.bgmBtn.jp = BGM.enabled ? '♪' : '🔇'; return; }
     for (const b of this.buttons) {
       if (!hit(b, p) || b.disabled) continue;
       g.audio.jingle([{ f: 392, d: 0.09 }, { f: 523, d: 0.14 }]);
@@ -2064,9 +2242,12 @@ class TitleScene extends GameKit.Scene {
     txt(ctx, '城ではなく、名分を獲る。 / Win legitimacy, not castles.', W / 2, 374, { font: '13px "Hiragino Mincho ProN", serif', color: '#a78bfa', align: 'center' });
     const p = g.input.pointer;
     for (const b of this.buttons) button(ctx, b, hit(b, p) && !b.disabled);
-    if (this.staleSave) txt(ctx, '保存データの形式が古いため読み込めません（新規に始めてください）', W / 2, 614, { font: '12px sans-serif', color: '#fca5a5', align: 'center' });
+    button(ctx, this.helpBtn, hit(this.helpBtn, p));
+    button(ctx, this.bgmBtn, hit(this.bgmBtn, p));
+    if (this.staleSave) txt(ctx, '保存データの形式が古いため読み込めません（新規に始めてください）', W / 2, 666, { font: '12px sans-serif', color: '#fca5a5', align: 'center' });
     txt(ctx, DATA.source === 'embed' ? 'データ: 埋め込みシード（オフライン）' : `データ: assets/genpei/ ＋ kyoten_ichi.csv（拠点 ${DATA.kyoten.length}）`,
       W / 2, H - 32, { font: '11px sans-serif', color: '#4b5563', align: 'center' });
+    if (this.help.open) drawHelpOverlay(ctx, this.help);
   }
 }
 
@@ -2179,16 +2360,53 @@ class FactionSelectScene extends GameKit.Scene {
     this.go = { x: W - 370, y: H - 92, w: 300, h: 54, jp: 'この勢力で始める', en: 'Begin' };
     this.counts = {};
     for (const k of DATA.kyoten) { const o = k.own[this.scn.col]; if (o) this.counts[o] = (this.counts[o] || 0) + 1; }
+    this.difficulty = 'normal';
+    this.diffButtons = Object.keys(DIFFICULTIES).map((id, i) => ({
+      id, x: 70 + i * 150, y: H - 168, w: 140, h: 44,
+      jp: DIFFICULTIES[id].jp, en: DIFFICULTIES[id].en, font: '600 14px "Hiragino Mincho ProN", serif', radius: 4,
+    }));
+    // 2人対戦（同一端末での手番制パス＆プレイ）。P1/P2は同じ勢力を選べない
+    this.twoPlayer = false;
+    this.pickTarget = 'p1';
+    this.sel2 = null;
+    const px2 = 540;
+    this.twoPlayerBtn = { id: 'two', x: px2 + 24, y: 470, w: 160, h: 40, jp: '1人プレイ', en: '1P', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4 };
+    this.targetP1Btn = { id: 'p1', x: px2 + 200, y: 470, w: 100, h: 40, jp: '先手を選ぶ', font: '600 12px "Hiragino Mincho ProN", serif', radius: 4 };
+    this.targetP2Btn = { id: 'p2', x: px2 + 310, y: 470, w: 100, h: 40, jp: '後手を選ぶ', font: '600 12px "Hiragino Mincho ProN", serif', radius: 4 };
   }
   update(dt, g) {
     this.bd.update(dt);
     const p = g.input.pointer;
     if (!p.justPressed) return;
-    for (const r of this.rows) if (hit(r, p)) { this.sel = r.i; g.audio.jingle([{ f: 440, d: 0.07 }]); }
+    if (hit(this.twoPlayerBtn, p)) {
+      this.twoPlayer = !this.twoPlayer;
+      this.pickTarget = 'p1';
+      if (!this.twoPlayer) this.sel2 = null;
+      else if (this.sel2 == null) this.sel2 = (this.sel + 1) % this.list.length;
+      g.audio.jingle([{ f: 440, d: 0.07 }]);
+      return;
+    }
+    if (this.twoPlayer && hit(this.targetP1Btn, p)) { this.pickTarget = 'p1'; return; }
+    if (this.twoPlayer && hit(this.targetP2Btn, p)) { this.pickTarget = 'p2'; return; }
+    for (const r of this.rows) {
+      if (!hit(r, p)) continue;
+      if (this.twoPlayer && this.pickTarget === 'p2') {
+        if (r.i === this.sel) { this._notice2 = '先手と同じ勢力は選べません'; break; }
+        this.sel2 = r.i;
+      } else {
+        if (this.twoPlayer && r.i === this.sel2) { this._notice2 = '後手と同じ勢力は選べません'; break; }
+        this.sel = r.i;
+      }
+      g.audio.jingle([{ f: 440, d: 0.07 }]);
+      break;
+    }
+    for (const b of this.diffButtons) if (hit(b, p)) { this.difficulty = b.id; g.audio.jingle([{ f: 440, d: 0.07 }]); }
     if (hit(this.back, p)) g.changeScene(new OpeningScene(this.scn));
     if (hit(this.go, p)) {
+      if (this.twoPlayer && this.sel2 == null) { this._notice2 = '後手の勢力も選んでください'; return; }
       g.audio.jingle([{ f: 392, d: 0.1 }, { f: 523, d: 0.1 }, { f: 659, d: 0.2 }]);
-      g.changeScene(new MapScene(buildState(this.scn.id, this.list[this.sel])));
+      const fid2 = this.twoPlayer ? this.list[this.sel2] : null;
+      g.changeScene(new MapScene(buildState(this.scn.id, this.list[this.sel], this.difficulty, fid2)));
     }
   }
   draw(ctx, g) {
@@ -2197,16 +2415,18 @@ class FactionSelectScene extends GameKit.Scene {
     txt(ctx, 'Choose a Power', 70, 96, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
     const p = g.input.pointer;
     this.rows.forEach((r, i) => {
-      const fid = this.list[i], f = FACTIONS[fid], on = i === this.sel;
+      const fid = this.list[i], f = FACTIONS[fid], on = i === this.sel, on2 = this.twoPlayer && i === this.sel2;
       frame(ctx, r.x, r.y, r.w, r.h, {
-        fill: on ? 'rgba(216,178,106,0.17)' : hit(r, p) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
-        stroke: on ? 'rgba(216,178,106,0.8)' : 'rgba(255,255,255,0.13)',
+        fill: on ? 'rgba(216,178,106,0.17)' : on2 ? 'rgba(94,234,212,0.15)' : hit(r, p) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)',
+        stroke: on ? 'rgba(216,178,106,0.8)' : on2 ? 'rgba(94,234,212,0.75)' : 'rgba(255,255,255,0.13)',
       });
       drawKamon(ctx, fid, r.x + 32, r.y + 33, 14);
       txt(ctx, f.jp, r.x + 58, r.y + 13, { font: '600 20px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
       txt(ctx, `${f.en} ・ ${this.scn.lords[fid] || ''}`, r.x + 58, r.y + 42, { font: '11px "Segoe UI", sans-serif', color: '#7c8ba1' });
-      txt(ctx, `${this.counts[fid] || 0} 拠点`, r.x + r.w - 20, r.y + 24, { font: '14px "Segoe UI", sans-serif', color: '#8b98ab', align: 'right' });
-      if ((this.scn.recommended || []).includes(fid)) txt(ctx, '推奨', r.x + r.w - 20, r.y + 45, { font: '11px "Hiragino Mincho ProN", serif', color: '#d8b26a', align: 'right' });
+      txt(ctx, `${this.counts[fid] || 0} 拠点`, r.x + r.w - 66, r.y + 24, { font: '14px "Segoe UI", sans-serif', color: '#8b98ab', align: 'right' });
+      if (on) txt(ctx, '先手', r.x + r.w - 12, r.y + 20, { font: '600 12px "Hiragino Mincho ProN", serif', color: '#d8b26a', align: 'right' });
+      else if (on2) txt(ctx, '後手', r.x + r.w - 12, r.y + 20, { font: '600 12px "Hiragino Mincho ProN", serif', color: '#5eead4', align: 'right' });
+      else if ((this.scn.recommended || []).includes(fid)) txt(ctx, '推奨', r.x + r.w - 12, r.y + 45, { font: '11px "Hiragino Mincho ProN", serif', color: '#d8b26a', align: 'right' });
     });
     const fid = this.list[this.sel], f = FACTIONS[fid], px = 540, pw = W - 540 - 70;
     frame(ctx, px, 150, pw, H - 150 - 116);
@@ -2219,13 +2439,63 @@ class FactionSelectScene extends GameKit.Scene {
     txt(ctx, '勝利条件 / Victory', px + 24, 316, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
     wrapText(ctx, v.jp, px + 24, 340, pw - 48, 26, { font: '15px "Hiragino Mincho ProN", serif', color: '#e8eef5' });
     wrapText(ctx, v.en, px + 24, 402, pw - 48, 20, { font: '11px "Segoe UI", sans-serif', color: '#7c8ba1' });
+    txt(ctx, '対戦人数 / Players（同一端末で交代するホットシート）', px + 24, 450, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    this.twoPlayerBtn.jp = this.twoPlayer ? '2人プレイ' : '1人プレイ';
+    this.twoPlayerBtn.en = this.twoPlayer ? '2P' : '1P';
+    button(ctx, this.twoPlayerBtn, hit(this.twoPlayerBtn, p));
+    if (this.twoPlayer) {
+      button(ctx, this.targetP1Btn, this.pickTarget === 'p1');
+      button(ctx, this.targetP2Btn, this.pickTarget === 'p2');
+      const p2fid = this.sel2 != null ? this.list[this.sel2] : null;
+      txt(ctx, `後手: ${p2fid ? FACTIONS[p2fid].jp : '未選択'}（${this.pickTarget === 'p2' ? '選択中…下の一覧から勢力をタップ' : '「後手を選ぶ」を押してから選択'}）`,
+        px + 24, 522, { font: '12px "Hiragino Mincho ProN", serif', color: p2fid ? '#5eead4' : '#f9d423' });
+    }
+    if (this._notice2) txt(ctx, this._notice2, px + 24, 545, { font: '12px "Hiragino Mincho ProN", serif', color: '#fca5a5' });
+    txt(ctx, '難易度 / Difficulty', 70, H - 196, { font: '11px "Segoe UI", sans-serif', color: '#8a7a58' });
+    this.diffButtons.forEach((b) => {
+      const on = b.id === this.difficulty;
+      button(ctx, b, on || (hit(b, p) && !on));
+      if (on) frame(ctx, b.x - 2, b.y - 2, b.w + 4, b.h + 4, { stroke: 'rgba(216,178,106,0.9)', radius: 6 });
+    });
     button(ctx, this.back, hit(this.back, p));
     button(ctx, this.go, hit(this.go, p));
   }
 }
 
+/* 2人対戦（同一端末の手番制パス＆プレイ）の手番交代画面。
+ * ★次の対戦者の盤面を見せる前に一度ここで止め、誤タップで前の人の情報が
+ *   一瞬でも次の人に見えてしまわないようにする。 */
+class HandoffScene extends GameKit.Scene {
+  constructor(state, nextSceneFactory) { super(); this.state = state; this.nextSceneFactory = nextSceneFactory; }
+  enter() {
+    this.bd = new Backdrop();
+    this.btn = { x: W / 2 - 190, y: 470, w: 380, h: 58, jp: '始める', en: 'Start' };
+  }
+  update(dt, g) {
+    this.bd.update(dt);
+    const p = g.input.pointer;
+    if (p.justPressed && hit(this.btn, p)) {
+      g.audio.jingle([{ f: 392, d: 0.09 }, { f: 523, d: 0.14 }]);
+      g.changeScene(this.nextSceneFactory());
+    }
+  }
+  draw(ctx, g) {
+    this.bd.draw(ctx);
+    const f = FACTIONS[this.state.faction];
+    txt(ctx, '手番交代', W / 2, 260, { font: '600 44px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+    txt(ctx, 'Pass the device', W / 2, 300, { font: '13px "Segoe UI", sans-serif', color: '#8a7a58', align: 'center' });
+    drawKamon(ctx, this.state.faction, W / 2, 360, 22);
+    txt(ctx, `${f.jp} の番です`, W / 2, 404, { font: '600 26px "Hiragino Mincho ProN", serif', color: '#e8eef5', align: 'center' });
+    txt(ctx, '端末を次の対戦者にお渡しください / Hand the device to the next player', W / 2, 438, { font: '12px "Hiragino Mincho ProN", serif', color: '#8b98ab', align: 'center' });
+    const p = g.input.pointer;
+    button(ctx, this.btn, hit(this.btn, p));
+  }
+}
+
 function wrapText(ctx, str, x, y, maxW, lh, opts) {
-  ctx.save(); ctx.font = opts.font;
+  // 折り返し判定は txt() が実際に描く幅（mobileFont適用後）と一致させる。
+  // 未適用の幅で判定すると、拡大後の行がmaxWをはみ出したまま描かれる。
+  ctx.save(); ctx.font = mobileFont(opts.font);
   let line = '', yy = y;
   for (const ch of str) {
     if (ctx.measureText(line + ch).width > maxW) { txt(ctx, line, x, yy, opts); line = ch; yy += lh; }
@@ -2235,6 +2505,134 @@ function wrapText(ctx, str, x, y, maxW, lh, opts) {
   ctx.restore();
   return yy + lh;
 }
+
+/* ============================================================================
+ * 6.5 遊び方ヘルプ（TitleScene / MapScene 共通のオーバーレイ）
+ * ========================================================================== */
+const HELP_PAGES = [
+  { title: '目的と操作', en: 'Goal & Controls', lines: [
+    '◆ 目的: 兵力ではなく「名分」（院宣・宣旨・官位・三種の神器）を集め、勢力ごとの勝利条件を満たす',
+    '◆ 全国図で国をクリック → 拡大図で拠点をクリックして選択。ホイールで拡大、右ドラッグで地図移動',
+    '◆ 下部コマンドバーから内政・軍事・人事・外交・計略・列伝・情報を開く。「ターン終了」で月が進む',
+    '◆ 保存は自動（オートセーブ）。タイトル画面の「続きから」で再開できる',
+    '◆ 右上の ♪ でBGM切替、？ でこの案内を再表示',
+    '◆ 「勢力を選ぶ」画面で2人プレイを選ぶと、同じ端末で手番ごとに交代して対戦できる',
+  ] },
+  { title: '名分と勝利条件', en: 'Legitimacy & Victory', lines: [
+    '◆ 名分＝院宣・宣旨・官位・三種の神器などの権威の総称。城を落とすより名分を得ることが最終的な決め手になる',
+    '◆ 勝利条件は勢力ごとに異なる。「勢力を選ぶ」画面で自勢力の条件を確認できる',
+    '◆ 朝敵に認定されると評判が下がる。逆に他勢力を朝敵に落とせば孤立させられる',
+  ] },
+  { title: '軍事と外交', en: 'Military & Diplomacy', lines: [
+    '◆ 出兵は「軍事」コマンドから。無血開城が成立すれば戦わずに接収できる',
+    '◆ 海を跨ぐ移動には水軍が必要（水軍が無い勢力は上陸できない海路がある）',
+    '◆ 「計略」で他家の武士団を勧誘・引き抜きできる（成否は名分・家格・地縁で決まる）',
+    '◆ 「外交」で朝廷への献納や奏請ができる。「人事」で本領安堵・新恩・誅を行う',
+  ] },
+  { title: '難易度', en: 'Difficulty', lines: [
+    '◆ 新規開始時にAIの難易度を選べる（易しい・標準・難しい）',
+    '◆ 難しいほどAIは名分・兵力を早く伸ばし、より積極的に出兵してくる',
+  ] },
+];
+function helpButtonRects(pg, total) {
+  const pw = 900, ph = 560, px = W / 2 - pw / 2, py = H / 2 - ph / 2;
+  return {
+    px, py, pw, ph,
+    close: { id: 'close', x: px + pw - 96, y: py + 20, w: 72, h: 28, jp: '閉じる', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4 },
+    prev: { id: 'prev', x: px + 40, y: py + ph - 50, w: 100, h: 34, jp: '← 前へ', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4, disabled: pg === 0 },
+    next: { id: 'next', x: px + pw - 140, y: py + ph - 50, w: 100, h: 34, jp: '次へ →', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4, disabled: pg === total - 1 },
+  };
+}
+function drawHelpOverlay(ctx, help) {
+  const pages = HELP_PAGES, pg = clamp(help.page || 0, 0, pages.length - 1), p = pages[pg];
+  const r = helpButtonRects(pg, pages.length);
+  ctx.fillStyle = 'rgba(5,7,11,0.72)'; ctx.fillRect(0, 0, W, H);
+  frame(ctx, r.px, r.py, r.pw, r.ph, { fill: 'rgba(10,15,22,0.98)', stroke: 'rgba(216,178,106,0.5)', radius: 10 });
+  txt(ctx, '遊び方 / How to Play', r.px + r.pw / 2, r.py + 30, { font: '600 26px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+  txt(ctx, `${p.title} / ${p.en}`, r.px + r.pw / 2, r.py + 68, { font: '600 17px "Hiragino Mincho ProN", serif', color: '#a78bfa', align: 'center' });
+  p.lines.forEach((ln, i) => wrapText(ctx, ln, r.px + 40, r.py + 112 + i * 60, r.pw - 80, 22, { font: '14px "Hiragino Mincho ProN", serif', color: '#dbe4ee' }));
+  txt(ctx, `${pg + 1} / ${pages.length}`, r.px + r.pw / 2, r.py + r.ph - 74, { font: '13px "Segoe UI", sans-serif', color: '#7d93ab', align: 'center' });
+  [r.close, r.prev, r.next].forEach((b) => button(ctx, b, false));
+}
+// help オーバーレイ内のクリックはここで全て吸収する（背後のシーンへ伝えない）。戻り値は常に true。
+function handleHelpClick(help, p) {
+  const pages = HELP_PAGES, pg = clamp(help.page || 0, 0, pages.length - 1);
+  const r = helpButtonRects(pg, pages.length);
+  if (hit(r.close, p)) help.open = false;
+  else if (!r.prev.disabled && hit(r.prev, p)) help.page = pg - 1;
+  else if (!r.next.disabled && hit(r.next, p)) help.page = pg + 1;
+  return true;
+}
+
+/* ============================================================================
+ * 6.6 BGM — Web Audio API プロシージャル生成（音声ファイル不要・sengoku.html踏襲）
+ *     ★ game.audio._ac() で GameKit.Sfx と同じ AudioContext を共有する
+ *       （AudioContext を2つ持つとブラウザによっては合計出力が絞られる）
+ * ========================================================================== */
+const BGM = {
+  enabled: (() => { try { return localStorage.getItem('genpeiBgm') !== '0'; } catch (_) { return true; } })(),
+  ac: null, master: null, drone: [], mood: 'calm', _timer: null, _step: 0,
+  themes: {
+    calm:   { root: 220,   interval: 900, steps: [0, 3, 5, 7, 5, 3], type: 'sine',     density: 0.5, drone: 0.040 },
+    battle: { root: 174.6, interval: 430, steps: [0, 3, 7, 5, 8, 7, 3, 0], type: 'triangle', density: 0.8, drone: 0.058 },
+  },
+  scale: [0, 2, 3, 7, 9, 12, 14, 15, 19, 21], // 呂旋法寄りの音階（sengoku.htmlとは別音階で聞き分けられるように）
+  theme() { return this.themes[this.mood] || this.themes.calm; },
+  ensure() {
+    if (this.ac) return true;
+    try {
+      this.ac = game.audio._ac(); this.master = this.ac.createGain(); this.master.gain.value = this.enabled ? 0.20 : 0; this.master.connect(this.ac.destination);
+      [0, 7].forEach((semi, i) => {
+        const o = this.ac.createOscillator(), g = this.ac.createGain();
+        o.type = i ? 'triangle' : 'sine'; o.frequency.value = 110 * Math.pow(2, semi / 12); g.gain.value = 0.0001;
+        o.connect(g).connect(this.master); o.start(); this.drone.push({ o, g, semi });
+      });
+      this.applyTheme(true);
+    } catch (_) { this.ac = null; return false; }
+    return true;
+  },
+  applyTheme(immediate) {
+    if (!this.ac) return;
+    const t = this.theme(), now = this.ac.currentTime, glide = immediate ? 0.01 : 0.6;
+    this.drone.forEach((v, i) => {
+      v.o.frequency.cancelScheduledValues(now);
+      v.o.frequency.linearRampToValueAtTime(t.root / 2 * Math.pow(2, (i ? 7 : 0) / 12), now + glide);
+      v.g.gain.setTargetAtTime(t.drone * (i ? 0.55 : 1), now, glide / 2);
+    });
+  },
+  freq(step, octave) { return this.theme().root * Math.pow(2, this.scale[(step + this.scale.length) % this.scale.length] / 12 + (octave || 0)); },
+  tone(freq, dur, vol, type, attack) {
+    const ac = this.ac, now = ac.currentTime, o = ac.createOscillator(), g = ac.createGain(), f = ac.createBiquadFilter();
+    o.type = type || 'sine'; o.frequency.value = freq; f.type = 'lowpass'; f.frequency.value = type === 'sawtooth' ? 1000 : 2200;
+    const a = attack || 0.02;
+    g.gain.setValueAtTime(0.0001, now); g.gain.linearRampToValueAtTime(vol, now + a); g.gain.exponentialRampToValueAtTime(0.0005, now + dur);
+    o.connect(f).connect(g).connect(this.master); o.start(now); o.stop(now + dur + 0.08);
+  },
+  taiko(strength, long) {
+    const ac = this.ac, now = ac.currentTime, o = ac.createOscillator(), g = ac.createGain(), d = long ? 0.4 : 0.22;
+    o.type = 'sine'; o.frequency.setValueAtTime(long ? 90 : 130, now); o.frequency.exponentialRampToValueAtTime(long ? 34 : 48, now + d);
+    g.gain.setValueAtTime(strength, now); g.gain.exponentialRampToValueAtTime(0.001, now + d);
+    o.connect(g).connect(this.master); o.start(now); o.stop(now + d + 0.03);
+  },
+  play() {
+    const t = this.theme(), i = this._step++, d = t.steps[i % t.steps.length];
+    if (this.mood === 'battle') {
+      this.taiko(i % 4 === 0 ? 0.26 : 0.15, i % 4 === 0);
+      if (Math.random() < t.density) this.tone(this.freq(d, i % 4 === 2 ? 1 : 0), 0.28, 0.085, 'triangle', 0.012);
+    } else {
+      if (i % 4 === 0 || Math.random() < t.density) this.tone(this.freq(d, i % 8 === 0 ? 1 : 0), 0.8, 0.065, 'sine', 0.06);
+      if (i % 8 === 3) this.tone(this.freq(d + 2, -1), 0.44, 0.03, 'triangle', 0.012);
+    }
+  },
+  start() { if (this._timer || !this.ensure()) return; const next = () => { if (!this.ac) return; this.play(); this._timer = setTimeout(next, this.theme().interval); }; next(); },
+  setMood(m) { if (!this.themes[m]) m = 'calm'; if (this.mood === m) return; this.mood = m; this._step = 0; this.applyTheme(); },
+  setEnabled(on) {
+    this.enabled = on;
+    try { localStorage.setItem('genpeiBgm', on ? '1' : '0'); } catch (_) { /* ignore */ }
+    if (this.master && this.ac) this.master.gain.setTargetAtTime(on ? 0.20 : 0, this.ac.currentTime, 0.12);
+  },
+  toggle() { this.ensure(); this.setEnabled(!this.enabled); if (this.enabled) this.start(); },
+};
 
 /* ============================================================================
  * 7. MapScene — 参照UIの三段構え（全国図 → 国の拡大図 → 拠点の周辺図）
@@ -2276,6 +2674,9 @@ class MapScene extends GameKit.Scene {
     this.maxZoom = Math.max(this.minZoom, maxMapScale(ZOOM_CAP.nation) / L.nation.w);
     this.cam = { cx: 0.5, cy: 0.5, zoom: this.minZoom };
     this.drag = null;
+    // 拡大図（国の拡大表示）のカメラ。null=自動フィット（国を選び直すとリセットされる）
+    this.provCam = null;
+    this.provPan = null;
     // 選択: 自勢力の本拠がある国を初期選択にする
     const mine = Rule.ownedKyoten(this.state, this.state.faction);
     this.province = mine.length ? mine[0].province : 'sagami';
@@ -2285,8 +2686,21 @@ class MapScene extends GameKit.Scene {
     this.eventArtId = null; this.eventArtT = 0;
     this.panel = null; this.panelScroll = 0; this.panelButtons = [];
     this.cmdButtons = this._layoutCommands();
+    this.helpBtn = { id: 'help', x: L.bar.x + L.bar.w - 26, y: L.bar.y + 1, w: 24, h: 24, jp: '？', font: '600 13px "Hiragino Mincho ProN", serif', radius: 4 };
+    this.bgmBtn = { id: 'bgm', x: L.bar.x + L.bar.w - 54, y: L.bar.y + 1, w: 24, h: 24, jp: BGM.enabled ? '♪' : '🔇', font: '600 13px sans-serif', radius: 4 };
+    this.help = { open: false, page: 0 };
+    BGM.setMood('calm');
+    if (!BGM.ac) { BGM.ensure(); if (BGM.enabled) BGM.start(); }
+    // 初回のみ遊び方を自動表示（新規ゲームの1ターン目・他オーバーレイが無い時。sengoku.html踏襲）
+    if (this.state.turn === 1) {
+      try {
+        if (!localStorage.getItem('genpeiHelpSeen')) { localStorage.setItem('genpeiHelpSeen', '1'); this.help.open = true; }
+      } catch (_) { /* ignore */ }
+    }
     this._bindWheel(g);
     this._bindPan(g);
+    this._bindProvWheel(g);
+    this._bindProvPan(g);
     this._bindTouch(g);
   }
   exit() {
@@ -2294,6 +2708,9 @@ class MapScene extends GameKit.Scene {
     if (this._panDown) canvas.removeEventListener('mousedown', this._panDown);
     if (this._panUp) window.removeEventListener('mouseup', this._panUp);
     if (this._panMenu) canvas.removeEventListener('contextmenu', this._panMenu);
+    if (this._provWheel) canvas.removeEventListener('wheel', this._provWheel);
+    if (this._provPanDown) canvas.removeEventListener('mousedown', this._provPanDown);
+    if (this._provPanUp) window.removeEventListener('mouseup', this._provPanUp);
     if (this._onTouchStart) canvas.removeEventListener('touchstart', this._onTouchStart);
     if (this._onTouchMove) canvas.removeEventListener('touchmove', this._onTouchMove);
     if (this._onTouchEnd) canvas.removeEventListener('touchend', this._onTouchEnd);
@@ -2307,6 +2724,31 @@ class MapScene extends GameKit.Scene {
       id: c.id, phase: c.phase, x: L.cmd.x + i * (w + gap), y: L.cmd.y, w, h: L.cmd.h,
       jp: c.jp, font: '600 15px "Hiragino Mincho ProN", serif', radius: 4,
     }));
+  }
+  /* 「ターン終了」の実処理。2人対戦（同一端末ホットシート）ではまだ手番を終えていない
+   * 人間がいる限り、実際の月送り(endTurn)はせず手番だけを交代する。
+   * ★全員が終えて初めて実際の endTurn を呼ぶ（AI行動・暦・オートセーブはここでのみ動く）。 */
+  _endPlayerTurn(g) {
+    const st = this.state;
+    if (st.result) return;
+    if (st.humanFactions.length > 1) {
+      if (!st.actedThisRound.includes(st.faction)) st.actedThisRound.push(st.faction);
+      const next = st.humanFactions.find((fid) => !st.actedThisRound.includes(fid));
+      if (next) {
+        st.faction = next;
+        save.set('autosave', st);
+        g.changeScene(new HandoffScene(st, () => new MapScene(st)));
+        return;
+      }
+      st.actedThisRound = [];
+    }
+    this._fireEventArt();
+    endTurn(st, g.audio);
+    g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]);
+    if (st.humanFactions.length > 1 && !st.result) {
+      st.faction = st.humanFactions[0];
+      g.changeScene(new HandoffScene(st, () => new MapScene(st)));
+    }
   }
   _bindWheel(g) {
     this._wheel = (e) => {
@@ -2337,10 +2779,71 @@ class MapScene extends GameKit.Scene {
       this.pan = { x: p.x, y: p.y, cx: this.cam.cx, cy: this.cam.cy };
     };
     this._panUp = () => { this.pan = null; };
-    this._panMenu = (e) => { if (inRect(L.nation, g.input.pointer)) e.preventDefault(); };
+    this._panMenu = (e) => { const p = g.input.pointer; if (inRect(L.nation, p) || inRect(L.prov, p)) e.preventDefault(); };
     canvas.addEventListener('mousedown', this._panDown);
     window.addEventListener('mouseup', this._panUp);
     canvas.addEventListener('contextmenu', this._panMenu);
+  }
+  /* 拡大図（国の拡大表示）が「国の形に合わせて寄せたい」半幅（=素の希望値。解像度上限は考慮しない） */
+  _provFitHalfW() {
+    const b = DATA.provBox[this.province];
+    return Math.max(0.035, (b.x1 - b.x0) / 2 + 0.022);
+  }
+  // 自動フィット時に実際に使う半幅＝「国の形」と「素材原寸のZOOM_CAP.prov倍（解像度の下限）」の広い方。
+  // 畿内のように国が小さいと解像度下限が勝つ（=そこが最大ズームインで、ユーザー操作でもそれ以上は寄れない）。
+  _provDefaultHalfW() { return Math.max(this._provFitHalfW(), this._minHalfW(L.prov, ZOOM_CAP.prov)); }
+  _ensureProvCam() {
+    if (!this.provCam) {
+      const b = DATA.provBox[this.province];
+      this.provCam = { cx: (b.x0 + b.x1) / 2, cy: (b.y0 + b.y1) / 2, halfW: this._provDefaultHalfW() };
+    }
+    return this.provCam;
+  }
+  // 半幅は「素材原寸のZOOM_CAP.provZoom倍（＝これ以上寄らない・ユーザー操作用の緩い上限）」〜
+  // 「自動フィットの4倍（＝周辺国まで見渡せる）」に収める。
+  // ズームインの下限にZOOM_CAP.prov（自動フィット用の保守的な値）をそのまま使うと、自動フィットが
+  // 既にその下限で頭打ちの国（66国中65国）でズームインが完全な無効操作になるためprovZoomを使う。
+  // 上限を自動フィットそのもの止まりにすると、自動フィットが下限で頭打ちの国（畿内等）で
+  // ズームアウトも一切できなくなるため、ズームインの下限とズームアウトの上限は別々に持つ。
+  _clampProvCam() {
+    if (!this.provCam) return;
+    const minHalfW = this._minHalfW(L.prov, ZOOM_CAP.provZoom);
+    const maxHalfW = Math.max(minHalfW, Math.min(0.5, this._provDefaultHalfW() * 4));
+    this.provCam.halfW = clamp(this.provCam.halfW, minHalfW, maxHalfW);
+    const r = L.prov, hw = this.provCam.halfW, hh = hw * (r.h / r.w) / mapAspect();
+    this.provCam.cx = clamp(this.provCam.cx, Math.min(0.5, hw), Math.max(0.5, 1 - hw));
+    this.provCam.cy = clamp(this.provCam.cy, Math.min(0.5, hh), Math.max(0.5, 1 - hh));
+  }
+  /* 拡大図: ホイールでカーソル位置を中心にズーム（全国図の_bindWheelと同じ考え方） */
+  _bindProvWheel(g) {
+    this._provWheel = (e) => {
+      const p = g.input.pointer;
+      if (this.panel || !inRect(L.prov, p)) return;
+      e.preventDefault();
+      this._ensureProvCam();
+      const before = this._provView().toMap(p.x, p.y);
+      this.provCam.halfW *= (e.deltaY < 0 ? 1 / 1.12 : 1.12);
+      this._clampProvCam();
+      const after = this._provView().toMap(p.x, p.y);
+      this.provCam.cx += before.x - after.x; this.provCam.cy += before.y - after.y;
+      this._clampProvCam();
+    };
+    canvas.addEventListener('wheel', this._provWheel, { passive: false });
+  }
+  /* 拡大図: 右／中ドラッグで平行移動（全国図の_bindPanと同じ考え方。左クリックは拠点選択に使う） */
+  _bindProvPan(g) {
+    this._provPanDown = (e) => {
+      if (e.button !== 1 && e.button !== 2) return;
+      this._suppressClick = true;
+      const p = g.input.pointer;
+      if (this.panel || !inRect(L.prov, p)) return;
+      e.preventDefault();
+      this._ensureProvCam();
+      this.provPan = { x: p.x, y: p.y, cx: this.provCam.cx, cy: this.provCam.cy };
+    };
+    this._provPanUp = () => { this.provPan = null; };
+    canvas.addEventListener('mousedown', this._provPanDown);
+    window.addEventListener('mouseup', this._provPanUp);
   }
   /* タッチ: 2本指ピンチで全国図を拡大縮小・1本指ドラッグで平行移動（taihei.html踏襲）。
    * ★GameKit.Input も同じ canvas に touchstart/touchmove/touchend を張っているため
@@ -2351,25 +2854,39 @@ class MapScene extends GameKit.Scene {
     const r = canvas.getBoundingClientRect();
     return { x: (clientX - r.left) / r.width * canvas.width, y: (clientY - r.top) / r.height * canvas.height };
   }
+  // 拡大図: 画面 → 地図正規化（全国図の_n2m相当。provCamのhalfWから実効スケールを出す）
+  _prov2m(p) { return this._provView().toMap(p.x, p.y); }
   _bindTouch(g) {
     this._touchPinch = null;
     this._touchPan = null;
+    this._provTouchPinch = null;
+    this._provTouchPan = null;
     this._touchSuppressUntil = 0;
     this._onTouchStart = (e) => {
       if (this.panel) return;
       if (e.touches.length === 2) {
         const p1 = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
         const p2 = this._clientToCanvasXY(e.touches[1].clientX, e.touches[1].clientY);
-        if (!inRect(L.nation, p1) && !inRect(L.nation, p2)) return;
         const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
         const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-        this._touchPinch = { dist, zoom: this.cam.zoom, m: this._n2m(mid) };
-        this._touchPan = null;
-        e.preventDefault();
+        if (inRect(L.nation, p1) || inRect(L.nation, p2)) {
+          this._touchPinch = { dist, zoom: this.cam.zoom, m: this._n2m(mid) };
+          this._touchPan = null;
+          e.preventDefault();
+        } else if (inRect(L.prov, p1) || inRect(L.prov, p2)) {
+          this._ensureProvCam();
+          this._provTouchPinch = { dist, halfW: this.provCam.halfW, m: this._prov2m(mid) };
+          this._provTouchPan = null;
+          e.preventDefault();
+        }
       } else if (e.touches.length === 1) {
         const p = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
-        if (!inRect(L.nation, p)) return;
-        this._touchPan = { x: p.x, y: p.y, cx: this.cam.cx, cy: this.cam.cy, dragging: false };
+        if (inRect(L.nation, p)) {
+          this._touchPan = { x: p.x, y: p.y, cx: this.cam.cx, cy: this.cam.cy, dragging: false };
+        } else if (inRect(L.prov, p)) {
+          this._ensureProvCam();
+          this._provTouchPan = { x: p.x, y: p.y, cx: this.provCam.cx, cy: this.provCam.cy, dragging: false };
+        }
       }
     };
     this._onTouchMove = (e) => {
@@ -2384,6 +2901,18 @@ class MapScene extends GameKit.Scene {
         this.cam.cy += this._touchPinch.m.y - after.y;
         this._clampCam();
         e.preventDefault();
+      } else if (e.touches.length === 2 && this._provTouchPinch) {
+        const p1 = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
+        const p2 = this._clientToCanvasXY(e.touches[1].clientX, e.touches[1].clientY);
+        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        this.provCam.halfW = this._provTouchPinch.halfW / (dist / Math.max(1, this._provTouchPinch.dist));
+        this._clampProvCam();
+        const after = this._prov2m(mid);
+        this.provCam.cx += this._provTouchPinch.m.x - after.x;
+        this.provCam.cy += this._provTouchPinch.m.y - after.y;
+        this._clampProvCam();
+        e.preventDefault();
       } else if (e.touches.length === 1 && this._touchPan) {
         const p = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
         const dx = p.x - this._touchPan.x, dy = p.y - this._touchPan.y;
@@ -2395,13 +2924,29 @@ class MapScene extends GameKit.Scene {
           this._clampCam();
           e.preventDefault();
         }
+      } else if (e.touches.length === 1 && this._provTouchPan) {
+        const p = this._clientToCanvasXY(e.touches[0].clientX, e.touches[0].clientY);
+        const dx = p.x - this._provTouchPan.x, dy = p.y - this._provTouchPan.y;
+        if (Math.abs(dx) + Math.abs(dy) > 6) this._provTouchPan.dragging = true;
+        if (this._provTouchPan.dragging) {
+          const s = L.prov.w / (2 * this.provCam.halfW);
+          this.provCam.cx = this._provTouchPan.cx - dx / s;
+          this.provCam.cy = this._provTouchPan.cy - dy / (s * mapAspect());
+          this._clampProvCam();
+          e.preventDefault();
+        }
       }
     };
     this._onTouchEnd = (e) => {
       if (e.touches.length < 2 && this._touchPinch) { this._touchPinch = null; this._touchSuppressUntil = performance.now() + 300; }
+      if (e.touches.length < 2 && this._provTouchPinch) { this._provTouchPinch = null; this._touchSuppressUntil = performance.now() + 300; }
       if (e.touches.length === 0 && this._touchPan) {
         if (this._touchPan.dragging) this._touchSuppressUntil = performance.now() + 150;
         this._touchPan = null;
+      }
+      if (e.touches.length === 0 && this._provTouchPan) {
+        if (this._provTouchPan.dragging) this._touchSuppressUntil = performance.now() + 150;
+        this._provTouchPan = null;
       }
     };
     canvas.addEventListener('touchstart', this._onTouchStart, { passive: false });
@@ -2449,11 +2994,12 @@ class MapScene extends GameKit.Scene {
   /* 表示半幅の下限＝拡大率の上限。これより寄せると素材の原寸を超えて引き伸ばすことになる */
   _minHalfW(rect, cap) { return rect.w / (2 * maxMapScale(cap)); }
 
+  // provCamが未実体化（=ホイール/ドラッグで一度も操作していない）間は国の自動フィットを返す。
+  // 操作後はprovCamに従う（国を選び直すとenter()と同じ理由でnullへ戻り、自動フィットに復帰する）
   _provView() {
+    if (this.provCam) return this._viewFor(L.prov, this.provCam.cx, this.provCam.cy, this.provCam.halfW);
     const b = DATA.provBox[this.province];
-    const want = Math.max(0.035, (b.x1 - b.x0) / 2 + 0.022);
-    const halfW = Math.max(want, this._minHalfW(L.prov, ZOOM_CAP.prov));
-    return this._viewFor(L.prov, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, halfW);
+    return this._viewFor(L.prov, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, this._provDefaultHalfW());
   }
   _localView() {
     const k = this.sel ? DATA.kyotenById[this.sel] : null;
@@ -2475,9 +3021,19 @@ class MapScene extends GameKit.Scene {
       this.cam.cy = this.pan.cy - (p.y - this.pan.y) / (s * mapAspect());
       this._clampCam();
     }
+    // 拡大図（国の拡大表示）の右／中ドラッグ平行移動
+    if (this.provPan) {
+      const s = L.prov.w / (2 * this.provCam.halfW);
+      this.provCam.cx = this.provPan.cx - (p.x - this.provPan.x) / s;
+      this.provCam.cy = this.provPan.cy - (p.y - this.provPan.y) / (s * mapAspect());
+      this._clampProvCam();
+    }
     if (this._suppressClick) { this._suppressClick = false; return; }
-    if (this._touchPinch || performance.now() < (this._touchSuppressUntil || 0)) return;
+    if (this._touchPinch || this._provTouchPinch || performance.now() < (this._touchSuppressUntil || 0)) return;
 
+    if (p.justPressed && this.help.open) { handleHelpClick(this.help, p); return; }
+    if (p.justPressed && this.helpBtn && hit(this.helpBtn, p)) { g.audio.jingle([{ f: 440, d: 0.07 }]); this.help.open = true; this.help.page = 0; return; }
+    if (p.justPressed && this.bgmBtn && hit(this.bgmBtn, p)) { BGM.toggle(); this.bgmBtn.jp = BGM.enabled ? '♪' : '🔇'; return; }
     if (p.justPressed && this.panel) {
       // 開いているパネルの操作を最優先で拾う（背後の地図に吸われないように）
       for (const b of this.panelButtons) {
@@ -2493,7 +3049,7 @@ class MapScene extends GameKit.Scene {
       for (const b of this.cmdButtons) {
         if (!hit(b, p)) continue;
         if (b.id === 'endTurn') {
-          if (!this.state.result) { this._fireEventArt(); endTurn(this.state, g.audio); g.audio.jingle([{ f: 330, d: 0.08 }, { f: 392, d: 0.12 }]); }
+          this._endPlayerTurn(g);
         } else if (b.id === 'kino') { g.changeScene(new TitleScene()); return; }
         else if (b.id === 'jinji2') { g.changeScene(new RetsudenScene(this.state, () => new MapScene(this.state))); return; }
         else if (OPEN_COMMANDS.has(b.id)) { this.panel = this.panel === b.id ? null : b.id; this.panelScroll = 0; }
@@ -2522,6 +3078,7 @@ class MapScene extends GameKit.Scene {
         const pid = this._pickProvince(p);
         if (pid) {
           this.province = pid; this.listScroll = 0;
+          this.provCam = null; // 国を選び直したら拡大図は自動フィットへ戻す
           const list = DATA.byProvince[pid];
           this.sel = list && list.length ? list[0].id : null;
           g.audio.jingle([{ f: 523, d: 0.06 }]);
@@ -2619,6 +3176,7 @@ class MapScene extends GameKit.Scene {
     if (this.eventArtT > 0) this._drawEventArt(ctx);
     if (this.panel) this._drawPanel(ctx, g);
     if (this.state.result) this._drawResult(ctx);
+    if (this.help.open) drawHelpOverlay(ctx, this.help);
   }
 
   /* -------- 上部ステータスバー -------- */
@@ -2629,7 +3187,9 @@ class MapScene extends GameKit.Scene {
     let x = L.bar.x + 12;
     const put = (s, color, font) => {
       txt(ctx, s, x, L.bar.y + 6, { font: font || '13px "Hiragino Mincho ProN", serif', color: color || '#e8eef5' });
-      ctx.save(); ctx.font = font || '13px "Hiragino Mincho ProN", serif';
+      // 幅計測は txt() の実描画幅（mobileFont適用後）と一致させる。ここがズレると
+      // タッチ端末の拡大フォントで次の項目に文字が重なる。
+      ctx.save(); ctx.font = mobileFont(font || '13px "Hiragino Mincho ProN", serif');
       x += ctx.measureText(s).width + 18; ctx.restore();
     };
     put(`${st.year}年（${waReki(st.year)}）${st.month}月`, '#f0e2c0');
@@ -2646,10 +3206,12 @@ class MapScene extends GameKit.Scene {
     if (me.choteki) put('朝敵', '#fca5a5', '600 13px "Hiragino Mincho ProN", serif');
     // 京の保持は木曽の勝利条件そのものなので、数えている月数を出す（見えないと詰められない）
     if (f.victory === 'seitai_shogun') {
-      const held = st.kyotoHoldMonths || 0;
+      const held = (st.kyotoHoldMonths && st.kyotoHoldMonths[st.faction]) || 0;
       put(`京 ${held}/${RULE.capital.holdMonths}ヶ月`, held >= RULE.capital.holdMonths ? '#5eead4' : held > 0 ? '#f9d423' : '#8b98ab');
     }
-    if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 12, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
+    if (Rule.famineActive(st)) txt(ctx, '養和の飢饉', L.bar.x + L.bar.w - 68, L.bar.y + 6, { font: '600 13px "Hiragino Mincho ProN", serif', color: '#f9d423', align: 'right' });
+    button(ctx, this.bgmBtn, false);
+    button(ctx, this.helpBtn, false);
   }
 
   /* -------- 全国図 -------- */
@@ -2857,16 +3419,23 @@ class MapScene extends GameKit.Scene {
     frameTitle(ctx, r.x, r.y, r.w, k ? k.jp : '拠点', k ? k.en : 'Site');
     if (!k) return;
     const st = this.state.kyoten[k.id], ty = KYOTEN_TYPE[k.type];
-    // 拠点の絵（大きめのアイコン）
+    // 拠点の絵。専用アセットがある拠点は、左側を大きく使って詳細を読ませる。
+    const detailArt = ASSETS.siteDetailArt[k.id] || ASSETS.siteDetailArt[k.type];
     ctx.save();
-    frame(ctx, r.x + 8, r.y + 28, r.w - 16, 62, { fill: 'rgba(255,255,255,0.03)', stroke: 'rgba(255,255,255,0.08)', radius: 4 });
-    drawLoadedSiteIcon(ctx, ty.icon, r.x + r.w / 2, r.y + 62, 22, ty.color);
+    if (detailArt) {
+      frame(ctx, r.x + 8, r.y + 28, 112, 126, { fill: 'rgba(255,255,255,0.03)', stroke: 'rgba(255,255,255,0.08)', radius: 4 });
+      ctx.drawImage(detailArt, r.x + 8, r.y + 34, 112, 112);
+    } else {
+      frame(ctx, r.x + 8, r.y + 28, r.w - 16, 62, { fill: 'rgba(255,255,255,0.03)', stroke: 'rgba(255,255,255,0.08)', radius: 4 });
+      drawLoadedSiteIcon(ctx, ty.icon, r.x + r.w / 2, r.y + 62, 22, ty.color);
+    }
     ctx.restore();
-    let y = r.y + 96;
+    let y = detailArt ? r.y + 42 : r.y + 96;
+    const rowX = detailArt ? r.x + 128 : r.x + 12;
     const rowLimit = r.y + r.h - 82;      // 命令ボタン（最大2段）の上端まで
     const row = (jp, v, color) => {
       if (y > rowLimit) return;
-      txt(ctx, jp, r.x + 12, y, { font: '11px "Hiragino Mincho ProN", serif', color: '#8a7a58' });
+      txt(ctx, jp, rowX, y, { font: '11px "Hiragino Mincho ProN", serif', color: '#8a7a58' });
       txt(ctx, String(v), r.x + r.w - 12, y - 1, { font: '600 12px "Segoe UI", sans-serif', color: color || '#e8eef5', align: 'right' });
       y += 17;
     };
@@ -2923,6 +3492,8 @@ class MapScene extends GameKit.Scene {
       return;
     }
     // ★プレイヤーの出兵はヘックス合戦へ。AI 同士は applyActions の自動解決のまま
+    st.achieveStats.armyMarchedCount++;
+    if (typeof checkAchievementsEvent === 'function') checkAchievementsEvent('army_marched', { fid: me });
     g.changeScene(new BattleScene(st, { fid: me, from: src.id, to: k.id, troops }, (res) => {
       st.kyoten[src.id].garrison = Math.max(0, st.kyoten[src.id].garrison - troops);
       if (res.winner === 'atk') {
@@ -3176,7 +3747,8 @@ class MapScene extends GameKit.Scene {
       }
     } else if (this.panel === 'joho') {
       note = `拠点 ${DATA.kyoten.length}／国 ${DATA.provinces.length}／武士団 ${Object.keys(st.bands).length}／`
-           + `${DATA.source === 'embed' ? '埋め込みデータ' : '外部データ'}　${st.year}年${st.month}月（${st.turn}ターン目）`;
+           + `${DATA.source === 'embed' ? '埋め込みデータ' : '外部データ'}　${st.year}年${st.month}月（${st.turn}ターン目）　`
+           + `難易度: ${difficultyOf(st).jp}`;
       head = ['年月', '出来事', '', '', ''];
       for (const l of st.log) rows.push({ cells: [`${l.y}年${l.m}月`, l.text], buttons: [] });
     }
@@ -3237,7 +3809,8 @@ class MapScene extends GameKit.Scene {
     if (bd.choteki || bd.reputation < 0) { ctx.fillStyle = 'rgba(248,113,113,0.85)'; ctx.fillRect(x + w - 4, y, 4, h); }
     // 凡例（保持している項目だけ列挙。折り返しは2行まで見込む）
     const legendFont = '11px "Hiragino Mincho ProN", serif';
-    ctx.save(); ctx.font = legendFont;
+    // 幅計測は txt() の実描画幅（mobileFont適用後）と一致させる（top barの put() と同じ理由）
+    ctx.save(); ctx.font = mobileFont(legendFont);
     let lx = x, ly = y + h + 16;
     for (const s of segs) {
       if (s.value <= 0) continue;
@@ -3256,6 +3829,9 @@ class MapScene extends GameKit.Scene {
     ctx.fillStyle = 'rgba(5,7,11,0.86)'; ctx.fillRect(0, 0, W, H);
     const r = this.state.result;
     txt(ctx, r.win ? '勝 利' : '終 幕', W / 2, H / 2 - 80, { font: '600 58px "Hiragino Mincho ProN", serif', color: r.win ? '#d8b26a' : '#cbd5e1', align: 'center' });
+    if (r.winner && FACTIONS[r.winner]) {
+      txt(ctx, `${FACTIONS[r.winner].jp} の勝利`, W / 2, H / 2 - 26, { font: '600 20px "Hiragino Mincho ProN", serif', color: '#f0e2c0', align: 'center' });
+    }
     txt(ctx, r.reason, W / 2, H / 2 + 6, { font: '16px "Hiragino Mincho ProN", serif', color: '#94a3b8', align: 'center' });
     txt(ctx, '「機能」からタイトルへ戻れます / Use 機能 to return to the title', W / 2, H / 2 + 46, { font: '12px "Segoe UI", sans-serif', color: '#6b7787', align: 'center' });
   }
@@ -3705,6 +4281,9 @@ const Battle = {
         if (p <= 0 || b.rng() >= p) continue;
         state.suigun[sid].faction = other;
         b.defected.push(sid);
+        if (typeof checkAchievementsEvent === 'function') {
+          checkAchievementsEvent('suigun_defected', { suigunId: sid, fromFid: mine, toFid: other, myFid: state.faction });
+        }
         // 離反した水軍の船に乗る隊が寝返る
         const flip = alive[alive.length - 1];
         if (flip) {
@@ -3799,6 +4378,7 @@ class BattleScene extends GameKit.Scene {
   enter() {
     this.sel = null; this.hover = null; this.notice = null; this.noticeT = 0;
     this.reach = null; this.result = null;
+    BGM.setMood('battle');
     const s = Math.min((BL.board.w - 40) / (Math.sqrt(3) * (HEX.cols + 0.5)), (BL.board.h - 40) / (1.5 * HEX.rows + 0.5));
     this.hs = s;
     this.ox = BL.board.x + 20 + s * Math.sqrt(3) / 2;
@@ -3877,6 +4457,10 @@ class BattleScene extends GameKit.Scene {
       // 名乗り(nanori)受諾: 法螺貝を模した低音beep → triangleの武張ったファンファーレ
       g.audio.beep(110, 0.24, 'sawtooth', 0.22);
       g.audio.jingle([{ f: 220, d: 0.09 }, { f: 330, d: 0.09 }, { f: 440, d: 0.1 }, { f: 587, d: 0.24 }], 'triangle', 0.2);
+      if (typeof checkAchievementsEvent === 'function') {
+        // ★BattleSceneはプレイヤーの出兵にしか開かれないため、atk側=常に自分
+        checkAchievementsEvent('duel_resolved', { accepted: true, death: r.death, winGenId: r.winGenId, loseGenId: r.loseGenId, winIsMine: r.win === 'atk', bandDuels: b.duels });
+      }
     } else {
       g.audio.jingle([{ f: 262, d: 0.14 }]);
     }
@@ -4271,8 +4855,17 @@ window.GENPEI_DEBUG = {
     game.changeScene(new BattleScene(st, { fid, from, to, troops: 3000 }, () => {})); return true; },
   scene: () => (game.scene ? game.scene.constructor.name : null),
   errors: () => game.errors || [],
-  gotoMap: (scnId, fid) => { game.changeScene(new MapScene(buildState(scnId, fid))); return true; },
+  gotoMap: (scnId, fid, difficulty, fid2) => { game.changeScene(new MapScene(buildState(scnId, fid, difficulty, fid2))); return true; },
+  HandoffScene,
+  gotoTitle: () => { game.changeScene(new TitleScene()); return true; },
+  gotoFactionSelect: (scnId) => { const scn = SCENARIOS.find((s) => s.id === scnId) || SCENARIOS[0]; game.changeScene(new FactionSelectScene(scn)); return true; },
   state: () => (game.scene && game.scene.state) || null,
+  DIFFICULTIES, difficultyOf, HELP_PAGES, drawHelpOverlay, handleHelpClick, helpButtonRects, BGM,
+  fitButtonFont, shrinkFont,
+  ACHIEVEMENTS: (typeof ACHIEVEMENTS !== 'undefined' ? ACHIEVEMENTS : null),
+  checkAchievementsPoll: (typeof checkAchievementsPoll !== 'undefined' ? checkAchievementsPoll : null),
+  checkAchievementsEvent: (typeof checkAchievementsEvent !== 'undefined' ? checkAchievementsEvent : null),
+  getEarnedAchievements: () => { try { return JSON.parse(localStorage.getItem('genpei_achievements') || '[]'); } catch (_) { return []; } },
 };
 </script>
 </body>
