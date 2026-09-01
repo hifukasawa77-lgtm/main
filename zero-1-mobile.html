@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!--
+    CSP: LLMはこの端末の中だけで動く。会話は一切外へ出ない。
+    外部通信は「初回のモデル取得」と「ライブラリ取得」に限る:
+      - cdn.jsdelivr.net       … WebLLM本体（SRI検証あり。下の importmap を参照）
+      - huggingface.co / *.hf.co … モデルの重み（初回のみ。以後は端末内に残る）
+      - raw.githubusercontent.com … モデルを動かすWebAssembly
+    'wasm-unsafe-eval' は必須。付け忘れると WebAssembly.instantiate が
+    CSPに弾かれ、「例外は出るのに理由が分からない」状態になる。
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com; worker-src 'self' blob:; base-uri 'self'; form-action 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="スマホの中だけで動くAIアシスタント。WebGPUでローカルLLMを端末内実行し、会話は外部へ送信しません。音声入力・読み上げ対応。ZERO-1 Mobile — a local LLM assistant that runs entirely on your phone.">
+  <title>ZERO-1 Mobile | スマホ内で動くAI</title>
+  <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/zero-1-mobile.html">
+  <link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#05070d">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="ZERO-1 Mobile | スマホ内で動くAI">
+  <meta property="og:description" content="WebGPUでローカルLLMを端末内実行。会話は外部へ送信しません。音声入力・読み上げ対応。">
+  <meta property="og:url" content="https://hifukasawa77-lgtm.github.io/main/zero-1-mobile.html">
+  <meta property="og:image" content="https://hifukasawa77-lgtm.github.io/main/assets/logo/favicon.svg">
+  <meta name="twitter:card" content="summary">
+
+  <!--
+    WebLLM 本体。1ファイル完結のESM（依存は同梱済み）なので、素のパスで読める。
+    importmap の integrity で改ざん検知する（動的importにはSRI属性を付けられないため）。
+    版を上げるときは integrity も必ず取り直すこと:
+      npm pack @mlc-ai/web-llm@<版> && tar xzf ... &&
+      openssl dgst -sha384 -binary package/lib/index.js | openssl base64 -A
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "web-llm": "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.84/lib/index.js"
+    },
+    "integrity": {
+      "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.84/lib/index.js": "sha384-5MijLIyJ9qCCduGUqcQWzGRAlKv5QcEBdmvFE2ScHZty1UnxxUKWE+Xc8uzMWKUE"
+    }
+  }
+  </script>
+
+  <style>
+    :root{
+      --bg:#05070d; --text:#e6edf6; --muted:#8b97a8;
+      --cyan:#22d3ee; --purple:#a78bfa;
+      --card:rgba(255,255,255,0.04); --border:rgba(255,255,255,0.09); --radius:18px;
+      --ok:#34d399; --warn:#fbbf24; --ng:#f87171;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;height:100%}
+    body{
+      background:var(--bg); color:var(--text);
+      font-family:"Aptos","Segoe UI Variable","Yu Gothic UI","Hiragino Sans","Meiryo",sans-serif;
+      line-height:1.6; -webkit-font-smoothing:antialiased;
+      /* スマホのアドレスバー伸縮で高さが飛ばないよう dvh を使う（vh だと下が隠れる） */
+      height:100dvh; overflow:hidden;
+      overscroll-behavior:none;
+    }
+    a{color:var(--cyan)}
+    /* canvas は置換要素で既定サイズが300×150。inset:0 だけでは伸びず、
+       残像トレイルの塗りつぶしが画面左上の300×150にだけ掛かって矩形の切れ目が出る。
+       幅と高さを明示すること（スクリーンショットで見つけた） */
+    #bg-canvas{position:fixed; inset:0; width:100%; height:100%; z-index:-1; pointer-events:none}
+
+    .app{
+      display:flex; flex-direction:column; height:100dvh; max-width:820px; margin:0 auto;
+      padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    .bar{
+      display:flex; align-items:center; gap:10px; padding:10px 14px;
+      border-bottom:1px solid var(--border); background:rgba(10,10,20,0.8);
+      backdrop-filter:blur(12px);
+    }
+    .bar .mark{
+      width:30px;height:30px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;
+      background:linear-gradient(135deg,var(--cyan) 0%,var(--purple) 100%); color:#04121a;
+      font-weight:800; font-size:.8rem;
+    }
+    .bar .who{flex:1; min-width:0}
+    .bar .who strong{display:block; font-size:.95rem; line-height:1.2}
+    .bar .who small{display:block; color:var(--muted); font-size:.72rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .icon-btn{
+      background:var(--card); color:var(--text); border:1px solid var(--border);
+      border-radius:12px; width:40px; height:40px; font-size:1.05rem; cursor:pointer;
+    }
+    .icon-btn:active{transform:scale(.96)}
+    .icon-btn[disabled]{opacity:.45}
+
+    .screen{flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:16px 14px 8px}
+    .hidden{display:none !important}
+
+    .card{
+      background:rgba(10,10,20,0.8); background:var(--card);
+      backdrop-filter:blur(12px); border:1px solid rgba(34,211,238,0.2);
+      border-radius:var(--radius); padding:16px; box-shadow:0 0 20px rgba(34,211,238,0.10);
+      margin-bottom:14px;
+    }
+    .card h2{margin:.1em 0 .5em; font-size:1.02rem}
+    .card p{margin:.35em 0; font-size:.86rem; color:var(--muted)}
+    .grad{background:linear-gradient(135deg,var(--cyan) 0%,var(--purple) 100%);
+      -webkit-background-clip:text; background-clip:text; color:transparent}
+
+    .hero{text-align:center; margin:6px 0 18px}
+    .hero h1{font-size:clamp(1.5rem,7vw,2.1rem); margin:.1em 0}
+    .hero .sub{color:var(--muted); font-size:.82rem; margin:.2em 0 0}
+
+    .status{display:flex; gap:9px; align-items:flex-start; font-size:.86rem; margin:.5em 0}
+    .status i{font-style:normal; flex:0 0 auto; width:1.2em}
+    .status.ok i{color:var(--ok)} .status.warn i{color:var(--warn)} .status.ng i{color:var(--ng)}
+
+    .models{display:grid; gap:9px; margin-top:10px}
+    .model{
+      display:flex; gap:11px; align-items:center; width:100%; text-align:left; cursor:pointer;
+      background:var(--card); color:var(--text); border:1px solid var(--border);
+      border-radius:14px; padding:11px 13px; font:inherit;
+    }
+    .model[aria-pressed="true"]{border-color:rgba(34,211,238,0.55); box-shadow:0 0 12px rgba(34,211,238,0.22)}
+    .model b{display:block; font-size:.9rem}
+    .model small{display:block; color:var(--muted); font-size:.75rem}
+    .model .size{margin-left:auto; color:var(--cyan); font-size:.78rem; white-space:nowrap; flex:0 0 auto}
+
+    .primary{
+      display:block; width:100%; margin-top:14px; padding:13px; border-radius:14px; cursor:pointer;
+      border:1px solid rgba(34,211,238,0.45); font:inherit; font-weight:700; font-size:.95rem;
+      background:linear-gradient(135deg,rgba(34,211,238,0.22) 0%,rgba(167,139,250,0.22) 100%);
+      color:var(--text);
+    }
+    .primary:active{transform:scale(.99)}
+    .primary[disabled]{opacity:.5; cursor:default}
+
+    .progress{height:7px; border-radius:99px; background:rgba(255,255,255,0.08); overflow:hidden; margin:10px 0 6px}
+    .progress>span{display:block; height:100%; width:0%;
+      background:linear-gradient(90deg,var(--cyan),var(--purple)); transition:width .25s ease}
+    .progress-note{font-size:.8rem; color:var(--muted); margin:0}
+
+    .msgs{display:flex; flex-direction:column; gap:11px}
+    .msg{max-width:88%; padding:10px 13px; border-radius:16px; font-size:.92rem; white-space:pre-wrap; word-break:break-word}
+    .msg.user{align-self:flex-end; background:rgba(34,211,238,0.13); border:1px solid rgba(34,211,238,0.25)}
+    .msg.ai{align-self:flex-start; background:var(--card); border:1px solid var(--border)}
+    .msg.ai.pending{color:var(--muted)}
+
+    .composer{
+      display:flex; gap:8px; align-items:flex-end; padding:10px 14px 14px;
+      border-top:1px solid var(--border); background:rgba(10,10,20,0.85); backdrop-filter:blur(12px);
+    }
+    .composer textarea{
+      flex:1; min-height:44px; max-height:34dvh; resize:none; padding:11px 13px; border-radius:14px;
+      background:var(--card); color:var(--text); border:1px solid var(--border);
+      font:inherit; font-size:16px; /* iOS/Androidの自動ズーム回避には16px以上が要る */
+      line-height:1.45;
+    }
+    .composer textarea:focus{outline:none; border-color:rgba(34,211,238,0.45)}
+    .send{
+      flex:0 0 auto; width:44px; height:44px; border-radius:14px; cursor:pointer; font-size:1.1rem;
+      border:1px solid rgba(34,211,238,0.45); color:var(--text);
+      background:linear-gradient(135deg,rgba(34,211,238,0.25) 0%,rgba(167,139,250,0.25) 100%);
+    }
+    .send[disabled]{opacity:.45}
+    .mic.on{border-color:rgba(248,113,113,0.6); color:#fecaca}
+
+    .foot{padding:0 14px 10px; font-size:.72rem; color:var(--muted); text-align:center}
+    .sheet{
+      position:fixed; inset:auto 0 0 0; z-index:5; max-height:82dvh; overflow-y:auto;
+      background:rgba(8,10,18,0.97); border-top:1px solid rgba(34,211,238,0.25);
+      border-radius:20px 20px 0 0; padding:16px 16px calc(16px + env(safe-area-inset-bottom));
+    }
+    .sheet h2{margin:.1em 0 .6em; font-size:1rem}
+    .row{display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border)}
+    .row:last-child{border-bottom:none}
+    .row .t{flex:1} .row .t b{display:block; font-size:.88rem} .row .t small{color:var(--muted); font-size:.75rem}
+    .ghost{background:transparent; color:var(--text); border:1px solid var(--border); border-radius:11px; padding:8px 12px; font:inherit; font-size:.82rem; cursor:pointer}
+    .backdrop{position:fixed; inset:0; z-index:4; background:rgba(0,0,0,0.5)}
+    @media (prefers-reduced-motion:reduce){ *{animation:none !important; transition:none !important} }
+  </style>
+</head>
+<body>
+<canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+<div class="app">
+  <header class="bar">
+    <span class="mark">Z1</span>
+    <span class="who">
+      <strong>ZERO-1 Mobile</strong>
+      <small id="head-note">スマホの中だけで動きます / Runs entirely on this phone</small>
+    </span>
+    <button class="icon-btn" id="btn-settings" aria-label="設定 / Settings" hidden>⚙</button>
+  </header>
+
+  <!-- 準備画面: 端末の対応確認 → モデル選択 → 取得 -->
+  <section class="screen" id="setup">
+    <div class="hero">
+      <h1 class="grad">スマホ内で動くAI</h1>
+      <p class="sub">On-device AI — 会話はこの端末から出ません</p>
+    </div>
+
+    <div class="card">
+      <h2>この端末で動くか / Device check</h2>
+      <div id="checks"><p class="progress-note">確認しています… / Checking…</p></div>
+    </div>
+
+    <div class="card" id="model-card">
+      <h2>モデルを選ぶ / Choose a model</h2>
+      <p>初回だけダウンロードします。以後はこの端末に残るので、圏外でも使えます。<br>
+        Downloaded once, then kept on this device — works offline afterwards.</p>
+      <div class="models" id="models" role="group" aria-label="モデル選択 / Model choice"></div>
+      <div class="progress" id="progress" hidden><span id="progress-bar"></span></div>
+      <p class="progress-note" id="progress-note"></p>
+      <button class="primary" id="btn-start">この端末で起動する / Start on this phone</button>
+    </div>
+
+    <p class="foot">ZERO-1のPC版はOllamaを使いますが、こちらはブラウザのWebGPUだけで動きます。<br>
+      作った会話・入力内容はどこにも送信されません。</p>
+  </section>
+
+  <!-- 会話画面 -->
+  <section class="screen hidden" id="chat">
+    <div class="msgs" id="msgs"></div>
+  </section>
+  <div class="composer hidden" id="composer">
+    <button class="icon-btn mic" id="btn-mic" aria-label="音声入力 / Voice input">🎙</button>
+    <textarea id="input" rows="1" placeholder="話しかける / Say something" aria-label="メッセージ / Message"></textarea>
+    <button class="send" id="btn-send" aria-label="送信 / Send">↑</button>
+  </div>
+</div>
+
+<div class="backdrop hidden" id="backdrop"></div>
+<div class="sheet hidden" id="sheet" role="dialog" aria-modal="true" aria-label="設定 / Settings">
+  <h2>設定 / Settings</h2>
+  <div class="row">
+    <span class="t"><b>読み上げ / Speak replies</b><small>返答を音声で読み上げます</small></span>
+    <button class="ghost" id="btn-speak" aria-pressed="false">OFF</button>
+  </div>
+  <div class="row">
+    <span class="t"><b>モデルを変える / Change model</b><small id="current-model">—</small></span>
+    <button class="ghost" id="btn-change">選び直す</button>
+  </div>
+  <div class="row">
+    <span class="t"><b>会話を消す / Clear chat</b><small>この端末に保存した履歴を削除します</small></span>
+    <button class="ghost" id="btn-clear">削除</button>
+  </div>
+  <div class="row">
+    <span class="t"><b>PC版 ZERO-1</b><small>家のPCではOllamaでより賢いモデルが使えます</small></span>
+    <a class="ghost" href="index.html">ホームへ</a>
+  </div>
+</div>
+
+<script type="module">
+// ZERO-1 Mobile — スマホの中だけで動くZERO-1。
+//
+// PC版（zero-1-local-ai）はPCのOllamaへ話しかける作りで、PCが起動していないと使えない。
+// こちらは**端末のWebGPUでLLMそのものを動かす**ので、PCもネットワークも要らない
+// （初回のモデル取得だけ通信する）。外出先・電車の中で使えるのが目的。
+//
+// 賢さはPC版に及ばない（0.5〜3B級 対 7B級）。そのぶん「いつでも手元で動く」を取る。
+
+// ---------------------------------------------------------------------------
+// ここから下の純粋関数は、画面を作らずに検査できる（scripts/verify-zero1-mobile.mjs）
+// ---------------------------------------------------------------------------
+
+/**
+ * スマホで現実的に動くモデル。**IDは実在するものだけ**を書くこと。
+ * WebLLM の prebuiltAppConfig に無いIDを書くと、読み込みが始まらず理由も出ない。
+ * 確認方法: npm pack @mlc-ai/web-llm@<版> して prebuiltAppConfig.model_list を見る。
+ * sizeMB は同じ一覧の vram_required_MB（端末が確保する量の目安）。
+ */
+const MODELS = [
+  { id:'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', sizeMB:945,  need:3,
+    name:'かるい / Light', note:'古い端末でも動く。短い返事向き' },
+  { id:'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', sizeMB:1630, need:4,
+    name:'ふつう / Standard', note:'日常の相談ならこれ。迷ったらこちら' },
+  { id:'gemma-2-2b-jpn-it-q4f16_1-MLC',     sizeMB:1895, need:6,
+    name:'日本語に強い / Japanese', note:'日本語向けに調整された2B。文章が自然' },
+  { id:'Qwen2.5-3B-Instruct-q4f16_1-MLC',   sizeMB:2505, need:8,
+    name:'かしこい / Smart', note:'メモリに余裕がある端末向け。少し遅い' },
+];
+
+/**
+ * 端末のメモリから既定のモデルを決める。
+ *
+ * `navigator.deviceMemory` は Android Chrome で 0.25〜8 を返す（8で頭打ち・非対応なら undefined）。
+ * **分からないときは真ん中を選ぶ**。大きい方を既定にすると、載らない端末で
+ * 1.6GB落としてから失敗する——一番やってはいけない外し方になる。
+ */
+function recommendModel(memoryGB, available = MODELS.map((m) => m.id)) {
+  const usable = MODELS.filter((m) => available.includes(m.id));
+  if (!usable.length) return null;
+  const fallback = usable.find((m) => m.id.includes('1.5B')) ?? usable[0];
+  if (!Number.isFinite(memoryGB) || memoryGB <= 0) return fallback;
+  // 収まるものの中でいちばん大きいもの。1つも無ければいちばん軽いもの
+  const fits = usable.filter((m) => memoryGB >= m.need);
+  return fits.length ? fits[fits.length - 1] : usable[0];
+}
+
+/** 端末が満たしているかを1か所で判定する。ここが偽ならモデルを落としても無駄になる */
+function deviceReport(env) {
+  const rows = [];
+  rows.push(env.webgpu
+    ? { level:'ok', text:'WebGPU に対応しています / WebGPU available' }
+    : { level:'ng', text:'WebGPU に対応していません。Chrome を最新にすると使えることがあります / WebGPU unavailable — update Chrome' });
+  rows.push(env.secure
+    ? { level:'ok', text:'安全な接続です / Secure context' }
+    : { level:'ng', text:'https で開いてください / Open over https' });
+  rows.push(Number.isFinite(env.memoryGB) && env.memoryGB > 0
+    ? { level: env.memoryGB >= 4 ? 'ok' : 'warn', text:`端末のメモリ: 約${env.memoryGB}GB / Device memory` }
+    : { level:'warn', text:'メモリ量を取得できません。ふつうのモデルから試します / Memory unknown' });
+  rows.push(env.storageGB > 0
+    ? { level: env.storageGB >= 3 ? 'ok' : 'warn', text:`保存できる空き: 約${env.storageGB}GB / Free storage` }
+    : { level:'warn', text:'空き容量を取得できません / Storage unknown' });
+  return rows;
+}
+
+/** 準備できているか。WebGPUと安全な接続の2つだけが必須 */
+function canRun(env) { return Boolean(env.webgpu && env.secure); }
+
+/**
+ * ZERO-1 の人格。正本はPC版の app/system-prompt.ts。
+ * こちらは 0.5〜3B 級に合わせて短くしてある——**小さいモデルほど長い指示を守れない**うえ、
+ * 指示が長いほど毎回の前処理が増えてスマホでは体感が落ちる。
+ * 事故の教訓（英語で書いてから訳させない／聞き返しだけを返さない）は落とさない。
+ */
+const SYSTEM_PROMPT = `あなたは深澤家専用AIシステム「ZERO-1」です。落ち着いて誠実に、結論から簡潔に答えます。
+・最初から日本語で考え、日本語で書きます。英語で答えを作ってから訳すことは禁止です。
+・利用者が英語で書いてきたときだけ、英語で考えて英語で書きます。
+・まず聞かれたことに答えます。最初の1文を結論にします。
+・情報が足りなくても答えを保留しません。「〜という前提で」と1行置いてから答え切ります。
+・質問だけを返してはいけません。聞き返しは答えを書いたあとの最後の1行だけにします。
+・健康・医療・薬・法律・お金では、思いついた対処法を並べません。一般に知られていることだけを述べ、専門家に相談するよう明記します。
+・確認していない数値・日付・固有名詞を、事実として書きません。
+・スマホで読むため、1回の返答は短くまとめます。`;
+
+/**
+ * モデルへ渡す会話を組む。
+ *
+ * スマホで動く 0.5〜3B のモデルは文脈が狭い。長い文章を貼られた1件だけで窓が埋まり、
+ * **いま聞かれた質問が押し出される**——すると残った文脈に対して答えてしまい、
+ * 例外も出ないまま見当違いの返事になる。そこで:
+ *   - 直近の数往復だけ送る
+ *   - 1件あたりの長さも切る
+ *   - ただし**最後の質問だけは絶対に切らない**（ここを切ると上記の事故が起きる）
+ */
+function buildMessages(history, turns = 8, maxChars = 1200) {
+  const recent = history.slice(-turns);
+  const lastUser = [...history].reverse().find((m) => m.role === 'user');
+  const trimmed = recent.map((m) => (m === lastUser
+    ? { role:m.role, content:m.text }
+    : { role:m.role, content: m.text.length > maxChars ? `${m.text.slice(0, maxChars)}…` : m.text }));
+  // 直近に入りきらなかった場合でも、最後の質問だけは必ず添える
+  if (lastUser && !recent.includes(lastUser)) trimmed.push({ role:lastUser.role, content:lastUser.text });
+  return [{ role:'system', content: SYSTEM_PROMPT }, ...trimmed];
+}
+
+/** 進捗の文言。%だけだと「止まっているのか進んでいるのか」が分からない */
+function progressText(report) {
+  const percent = Math.round((report?.progress ?? 0) * 100);
+  const detail = (report?.text ?? '').replace(/\s+/g, ' ').trim();
+  return { percent, label: detail ? `${percent}% ${detail}` : `${percent}%` };
+}
+
+// 検査から触るための橋渡し。新しい関数を足したらここへも足すこと
+// （足し忘れると検査側が "is not a function" で落ちる）
+window.ZERO1_MOBILE = { MODELS, recommendModel, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT };
+
+// ---------------------------------------------------------------------------
+// 画面
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const HISTORY_KEY = 'zero1-mobile-history';
+const MODEL_KEY = 'zero1-mobile-model';
+const SPEAK_KEY = 'zero1-mobile-speak';
+
+const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false };
+
+function readStore(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw === null ? fallback : JSON.parse(raw); }
+  catch { return fallback; }
+}
+function writeStore(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 容量制限は無視 */ } }
+
+async function readEnvironment() {
+  let memoryGB = Number(navigator.deviceMemory);
+  if (!Number.isFinite(memoryGB) || memoryGB <= 0) memoryGB = NaN;
+  let storageGB = 0;
+  try {
+    const quota = await navigator.storage?.estimate?.();
+    if (quota?.quota) storageGB = Math.round(((quota.quota - (quota.usage ?? 0)) / 1e9) * 10) / 10;
+  } catch { storageGB = 0; }
+  // WebGPU は「オブジェクトが在る」だけでは足りない。実際にアダプタが取れるかまで見る
+  let webgpu = false;
+  try { webgpu = Boolean(navigator.gpu && await navigator.gpu.requestAdapter()); } catch { webgpu = false; }
+  return { webgpu, secure:window.isSecureContext, memoryGB, storageGB };
+}
+
+function renderChecks(env) {
+  $('checks').innerHTML = '';
+  for (const row of deviceReport(env)) {
+    const line = document.createElement('p');
+    line.className = `status ${row.level}`;
+    line.innerHTML = `<i>${row.level === 'ok' ? '●' : row.level === 'warn' ? '△' : '✗'}</i><span></span>`;
+    line.querySelector('span').textContent = row.text;
+    $('checks').appendChild(line);
+  }
+}
+
+function renderModels(selectedId) {
+  $('models').innerHTML = '';
+  for (const model of MODELS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'model';
+    button.setAttribute('aria-pressed', String(model.id === selectedId));
+    button.dataset.model = model.id;
+    button.innerHTML = '<span><b></b><small></small></span><span class="size"></span>';
+    button.querySelector('b').textContent = model.name;
+    button.querySelector('small').textContent = model.note;
+    button.querySelector('.size').textContent = `${(model.sizeMB / 1024).toFixed(1)}GB`;
+    button.addEventListener('click', () => { state.model = model.id; writeStore(MODEL_KEY, model.id); renderModels(model.id); });
+    $('models').appendChild(button);
+  }
+  $('current-model').textContent = MODELS.find((m) => m.id === selectedId)?.name ?? '—';
+}
+
+function addMessage(role, text, pending = false) {
+  const node = document.createElement('div');
+  node.className = `msg ${role === 'user' ? 'user' : 'ai'}${pending ? ' pending' : ''}`;
+  node.textContent = text;
+  $('msgs').appendChild(node);
+  $('chat').scrollTop = $('chat').scrollHeight;
+  return node;
+}
+
+function renderHistory() {
+  $('msgs').innerHTML = '';
+  for (const message of state.history) addMessage(message.role, message.text);
+}
+
+function setProgress(percent, label) {
+  $('progress').hidden = false;
+  $('progress-bar').style.width = `${percent}%`;
+  $('progress-note').textContent = label;
+}
+
+async function startEngine() {
+  const env = await readEnvironment();
+  if (!canRun(env)) { $('progress-note').textContent = 'この端末では動かせません。上の確認結果をご覧ください。'; return; }
+  $('btn-start').disabled = true;
+  setProgress(0, 'ライブラリを読み込んでいます… / Loading library…');
+  try {
+    const webllm = await import('web-llm');
+    // 実在するIDだけを候補に残す。版が変わってIDが消えていても、黙って失敗させない
+    const available = webllm.prebuiltAppConfig.model_list.map((m) => m.model_id);
+    if (!available.includes(state.model)) {
+      const fallback = recommendModel(env.memoryGB, available);
+      if (!fallback) throw new Error('このライブラリの版に、使えるモデルが1つもありません');
+      state.model = fallback.id;
+      renderModels(state.model);
+    }
+    setProgress(0, 'モデルを準備しています… / Preparing model…');
+    state.engine = await webllm.CreateMLCEngine(state.model, {
+      initProgressCallback: (report) => {
+        const { percent, label } = progressText(report);
+        setProgress(percent, label);
+      },
+    });
+    $('setup').classList.add('hidden');
+    $('chat').classList.remove('hidden');
+    $('composer').classList.remove('hidden');
+    $('btn-settings').hidden = false;
+    $('head-note').textContent = `${MODELS.find((m) => m.id === state.model)?.name ?? state.model} · 端末内で実行中`;
+    if (!state.history.length) addMessage('assistant', 'おかえりなさい、ゼロさん。ここはスマホの中だけで動きます。何から始めますか？');
+  } catch (cause) {
+    // 失敗の理由をそのまま出す。「使えません」だけだと打つ手が無くなる
+    $('progress-note').textContent = `起動できませんでした: ${cause?.message ?? cause}`;
+    $('btn-start').disabled = false;
+  }
+}
+
+async function send(text) {
+  const clean = text.trim();
+  if (!clean || state.busy || !state.engine) return;
+  state.busy = true;
+  $('btn-send').disabled = true;
+  $('input').value = '';
+  state.history.push({ role:'user', text:clean });
+  addMessage('user', clean);
+  const node = addMessage('assistant', '考えています…', true);
+  let answer = '';
+  try {
+    const stream = await state.engine.chat.completions.create({
+      messages: buildMessages(state.history),
+      stream: true,
+      temperature: 0.6,
+      max_tokens: 512,
+    });
+    for await (const chunk of stream) {
+      const token = chunk.choices?.[0]?.delta?.content ?? '';
+      if (!token) continue;
+      if (!answer) node.classList.remove('pending');
+      answer += token;
+      node.textContent = answer;
+      $('chat').scrollTop = $('chat').scrollHeight;
+    }
+    if (!answer) { answer = 'うまく答えられませんでした。もう一度お願いします。'; node.textContent = answer; node.classList.remove('pending'); }
+    state.history.push({ role:'assistant', text:answer });
+    writeStore(HISTORY_KEY, state.history.slice(-40));
+    if (state.speak) speak(answer);
+  } catch (cause) {
+    node.classList.remove('pending');
+    node.textContent = `答えられませんでした: ${cause?.message ?? cause}`;
+  } finally {
+    state.busy = false;
+    $('btn-send').disabled = false;
+  }
+}
+
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text.slice(0, 600));
+  utterance.lang = 'ja-JP';
+  window.speechSynthesis.speak(utterance);
+}
+
+function startListening() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) { $('input').placeholder = 'この端末は音声入力に対応していません'; return; }
+  const recognition = new Recognition();
+  recognition.lang = 'ja-JP';
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  let heard = '';
+  state.listening = true;
+  $('btn-mic').classList.add('on');
+  recognition.onresult = (event) => {
+    heard = [...event.results].map((r) => r[0]?.transcript ?? '').join('');
+    $('input').value = heard;
+  };
+  recognition.onerror = () => { state.listening = false; $('btn-mic').classList.remove('on'); };
+  recognition.onend = () => {
+    state.listening = false;
+    $('btn-mic').classList.remove('on');
+    if (heard.trim()) void send(heard);
+  };
+  recognition.start();
+}
+
+function openSheet(open) {
+  $('sheet').classList.toggle('hidden', !open);
+  $('backdrop').classList.toggle('hidden', !open);
+}
+
+// --- 配線 -------------------------------------------------------------------
+$('btn-start').addEventListener('click', () => void startEngine());
+$('btn-send').addEventListener('click', () => void send($('input').value));
+$('input').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send($('input').value); }
+});
+$('input').addEventListener('input', () => {
+  $('input').style.height = 'auto';
+  $('input').style.height = `${Math.min($('input').scrollHeight, window.innerHeight * 0.34)}px`;
+});
+$('btn-mic').addEventListener('click', () => { if (!state.listening) startListening(); });
+$('btn-settings').addEventListener('click', () => openSheet(true));
+$('backdrop').addEventListener('click', () => openSheet(false));
+$('btn-speak').addEventListener('click', () => {
+  state.speak = !state.speak;
+  writeStore(SPEAK_KEY, state.speak);
+  $('btn-speak').textContent = state.speak ? 'ON' : 'OFF';
+  $('btn-speak').setAttribute('aria-pressed', String(state.speak));
+});
+$('btn-clear').addEventListener('click', () => {
+  state.history = [];
+  writeStore(HISTORY_KEY, []);
+  renderHistory();
+  openSheet(false);
+});
+$('btn-change').addEventListener('click', () => {
+  openSheet(false);
+  $('chat').classList.add('hidden');
+  $('composer').classList.add('hidden');
+  $('setup').classList.remove('hidden');
+  $('btn-start').disabled = false;
+  $('progress').hidden = true;
+  $('progress-note').textContent = 'モデルを選び直して、もう一度起動してください。';
+});
+
+(async function boot() {
+  state.history = readStore(HISTORY_KEY, []);
+  state.speak = readStore(SPEAK_KEY, false);
+  $('btn-speak').textContent = state.speak ? 'ON' : 'OFF';
+  $('btn-speak').setAttribute('aria-pressed', String(state.speak));
+  renderHistory();
+  const env = await readEnvironment();
+  renderChecks(env);
+  const saved = readStore(MODEL_KEY, null);
+  state.model = (MODELS.some((m) => m.id === saved) ? saved : recommendModel(env.memoryGB)?.id) ?? MODELS[1].id;
+  renderModels(state.model);
+  if (!canRun(env)) {
+    $('btn-start').disabled = true;
+    $('progress-note').textContent = 'この端末では動かせません。Android の Chrome を最新にしてお試しください。';
+  }
+  window.ZERO1_MOBILE_READY = true;
+})();
+
+// --- 背景のパーティクル ------------------------------------------------------
+(function background() {
+  const canvas = $('bg-canvas');
+  const ctx = canvas.getContext('2d');
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let particles = [];
+  function resize() {
+    canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight;
+    // スマホは電池を食うので控えめに。上限は画面サイズに比例させる
+    const count = Math.min(70, Math.round((canvas.width * canvas.height) / 24000));
+    particles = Array.from({ length: count }, () => ({
+      x: Math.random() * canvas.width, y: Math.random() * canvas.height,
+      vx: (Math.random() - 0.5) * 0.22, vy: (Math.random() - 0.5) * 0.22,
+      alpha: 0.16 + Math.random() * 0.3, size: 0.7 + Math.random() * 1.4,
+    }));
+  }
+  function frame() {
+    ctx.fillStyle = 'rgba(5,7,13,0.16)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0) p.x = canvas.width; if (p.x > canvas.width) p.x = 0;
+      if (p.y < 0) p.y = canvas.height; if (p.y > canvas.height) p.y = 0;
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(34,211,238,${p.alpha})`;
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    requestAnimationFrame(frame);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+  if (!reduce) requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
