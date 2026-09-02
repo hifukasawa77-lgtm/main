@@ -287,6 +287,36 @@ node scripts/gen-synth-eq-og.mjs   # UIを変えたら OGP 画像を撮り直す
 - **週次自己進化**: Claude Code Remote の Routine（毎週木曜 05:00 JST）が `/agent-evolve` を実行 → worker `/stats` で弱点発見 → `agent-data.js`/`data/agent-news.json` を小改善 → ローリングPR `claude/agent-evolve` に積み深澤が承認（mainへ直接pushしない）
 - **週次ブラッシュアップ提案**: Routine（毎週月曜 07:00 JST）が `/site-proposal` を実行 → 監査＋/stats＋トレンドからトップ3提案 → GitHub Issue（ラベル `proposal`）起票のみ。実装は深澤承認後に planner から
 
+## note での発信と収益化
+
+技術記事をnoteへ出す。**正本は `note/`**（ネタ帳・記事・公開ログ）、
+戦略と判断の記録は `docs/note-monetization.md`。
+
+- **noteには公式の投稿APIが無い**。非公式API（セッションCookie）での自動投稿は
+  **採らない**——規約抵触でアカウントが凍結されれば記事・フォロワー・導線をまとめて失い、
+  浮く手間（月十数分）に見合わない。判断の詳細と、覆すときの条件は `docs/note-monetization.md`
+- **自動化の境界**: 「書く」までが自動（週次Routine → `/note-post` → PR）、
+  「貼る」は人。**noteの予約投稿で4本まとめて積む**ので、人の手は月1回・十数分で済む
+- **予約投稿はnoteプレミアム（月500円）会員のWeb版限定**。本運用の前提条件
+  （プラットフォーム利用料も10%→5%に下がるので、売上1万円/月で会費を回収できる）
+- **1回に書くのは1本だけ**。noteはスパム的な大量投稿を規約で禁じている
+- **無料と有料を交互に出す**（無料が集客・有料が回収）。有料は500円を基準、
+  無料部分に結論まで置く（「続きが有料」だけの記事は返金申請の対象になる）
+- **一次情報だけを書く**。題材は `obsidian-vault/03-Decisions/`（ADR）と `04-Knowledge/`。
+  「例外もエラーも出ないのに壊れた」系の学びが最も売れる
+
+```bash
+node scripts/verify-note-articles.mjs   # 貼る前に必須（12項目）
+node scripts/note-export.mjs            # note貼り付け用テキストを note/export/ へ
+```
+
+- **記事に書いた総数は `<!--fact:キー-->` を付ける**（`games`/`agents`/`verifiers`/`adrs`）。
+  リポジトリが育つと「37本」は黙って嘘になる。検査#9が実データと突き合わせる。
+  マーカー無しでも実データと違えば警告は出る（**誤検知でFAILさせない**——
+  誤検知が出る検査は必ず無視されるようになるため、厳格は明示した箇所だけに掛ける）
+- **公開したら3箇所を同時に更新する**: 記事mdのfrontmatter（`status`/`published_at`/`note_url`）、
+  `note/publish-log.json`、`note/topics.json`。検査#10が3箇所のずれを検出する
+
 ## 定期実行（Routine）一覧 ※スケジュールの正はここ
 Claude Code Remote の Routine で自動起動されるスキル。**Routineを新設・変更・停止したら、この表と該当スキルの記載を必ず同時に更新する**（実態だけ変えて文書が残ると、次のセッションが誤った前提で動く。harness-lint 検査#11 が表とスキル記載の一致を機械検査する）。
 
@@ -296,6 +326,7 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 | `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
+| `/note-post` | 毎週水曜 06:00 | ローリングPR `claude/note-post`（note記事1本） | 禁止（深澤承認制） |
 
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
