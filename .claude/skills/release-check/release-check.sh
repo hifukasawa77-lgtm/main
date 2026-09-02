@@ -140,6 +140,8 @@ echo "== 10. 変更ファイルに対応する必須チェック（CLAUDE.md 規
 # 提示するだけに留める（Playwright検査は数分かかるため release-check 内では実行しない）。
 CHANGED_ALL=$(git diff HEAD --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null)
 req_for(){ grep -qx "$1" <<< "$CHANGED_ALL" && printf '%s\n' "$2"; }
+# ディレクトリ配下の変更に対応する検査（req_for は完全一致なので、配下のどれが変わっても効く形が要る）
+req_prefix(){ grep -q "^$1" <<< "$CHANGED_ALL" && printf '%s\n' "$2"; }
 REQ=$( {
   req_for sengoku.html      "node scripts/verify-sengoku-boot.mjs / verify-castle-csv.mjs / verify-castle-layouts.mjs / verify-map-assets.mjs / verify-force-list.mjs / verify-sengoku-balance.mjs"
   req_for sanguo.html       "node scripts/verify-sanguo-boot.mjs"
@@ -150,6 +152,7 @@ REQ=$( {
   req_for assets/js/agent-data.js "node scripts/agent-evolve-check.mjs / gen-agent-knowledge.mjs / agent-dynamic-test.cjs"
   req_for zero-1-mobile.html "node scripts/verify-zero1-mobile.mjs / verify-gesture-pointer.mjs"
   req_for assets/js/gesture-pointer.js "node scripts/verify-gesture-pointer.mjs"
+  req_prefix note/            "node scripts/verify-note-articles.mjs（noteへ貼る前に必須）"
 } | sort -u )
 if [ -z "$REQ" ]; then ok "対象ファイルの変更なし"; else
   while IFS= read -r r; do [ -n "$r" ] && note_warn "要実行: $r"; done <<< "$REQ"
