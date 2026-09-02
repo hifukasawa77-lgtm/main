@@ -177,6 +177,46 @@ const failureFields = await page.evaluate(() => {
 });
 check('16g. 失敗の手掛かりを画面に出す仕掛けがある', failureFields.exists && failureFields.copy);
 
+// ★実機で踏んだ壁（2026-09-01）。WebGPUは「対応しています」と緑で出るのに、
+//   float16 が使えない端末では q4f16 のモデルがシェーダーのコンパイルで落ちる:
+//   「[Invalid ShaderModule] ... entryPoint: "index_kernel"」
+//   画面上は緑なのに起動だけ失敗するので、対応の有無を必ず見て切り替える
+const precision = await page.evaluate(() => {
+  const { resolveModels, MODEL_TIERS, deviceReport } = window.ZERO1_MOBILE;
+  const f16 = resolveModels(true);
+  const f32 = resolveModels(false);
+  return {
+    f16ids: f16.map((m) => m.id),
+    f32ids: f32.map((m) => m.id),
+    tiers: MODEL_TIERS.length,
+    sameKeys: f16.every((m, i) => m.key === f32[i].key),
+    f32Bigger: f16.every((m, i) => f32[i].sizeMB >= m.sizeMB),
+    noteWhenMissing: deviceReport({ webgpu: true, f16: false, secure: true, memoryGB: 4, storageGB: 10 })
+      .map((r) => r.text).join(' / '),
+    noteWhenPresent: deviceReport({ webgpu: true, f16: true, secure: true, memoryGB: 4, storageGB: 10 })
+      .map((r) => r.text).join(' / '),
+  };
+});
+check('16h. float16の有無で別のモデルへ切り替える',
+  precision.f16ids.every((id) => /q4f16_1/.test(id)) && precision.f32ids.every((id) => /q4f32_1/.test(id)),
+  precision.f32ids[1]);
+check('16i. どちらの精度でも段（軽い〜かしこい）が揃っている',
+  precision.tiers === 4 && precision.sameKeys && precision.f16ids.length === 4 && precision.f32ids.length === 4);
+check('16j. float32版は容量が大きいことを正しく持っている', precision.f32Bigger);
+check('16k. float16が無い端末に、その旨と対処を伝える',
+  /float16/.test(precision.noteWhenMissing) && /float32/.test(precision.noteWhenMissing),
+  precision.noteWhenMissing.split(' / ')[1]);
+check('16l. float16がある端末には余計な警告を出さない',
+  /float16 が使えます/.test(precision.noteWhenPresent));
+
+// float32版のIDも実在しなければ、切り替えた先で同じように失敗する
+if (fs.existsSync(shipped)) {
+  const { prebuiltAppConfig } = await import(`file://${shipped}`);
+  const available = prebuiltAppConfig.model_list.map((m) => m.model_id);
+  const bogus = [...precision.f16ids, ...precision.f32ids].filter((id) => !available.includes(id));
+  check('16m. 両方の精度のモデルIDが実在する', bogus.length === 0, bogus.join(' / '));
+}
+
 // --- 会話の組み立て -----------------------------------------------------------
 const built = await page.evaluate(() => {
   const history = Array.from({ length: 14 }, (unused, i) => ({
@@ -233,6 +273,46 @@ const prompt = await page.evaluate(() => window.ZERO1_MOBILE.SYSTEM_PROMPT);
 check('25. 事故1（英語で書いてから訳す）への対策が入っている', /訳す/.test(prompt) && /禁止/.test(prompt));
 check('26. 事故2（聞き返しだけを返す）への対策が入っている', /質問だけを返しては/.test(prompt));
 check('27. 健康・法律・お金を断定させない', /健康|医療/.test(prompt) && /専門家/.test(prompt));
+
+// --- 端末を丸ごと再現して、画面が本当に切り替えているかを見る -------------------
+// ★純粋関数が正しくても、画面がそれを使っていなければ意味がない。
+//   実際、resolveModels は正しいのに画面が固定の一覧を使う改変が、
+//   関数だけの検査ではすり抜けた（故障注入で判明）。ここは通しで確かめる。
+async function withDevice({ f16, memoryGB, quotaGB }) {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(([hasF16, mem, quota]) => {
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: {
+      requestAdapter: async () => ({ features: new Set(hasF16 ? ['shader-f16'] : []) }),
+    }});
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: mem });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: {
+      estimate: async () => ({ quota: quota * 1e9, usage: 0 }),
+    }});
+  }, [f16, memoryGB, quotaGB]);
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  const result = await scoped.evaluate(() => ({
+    checks: document.getElementById('checks').innerText,
+    selected: window.ZERO1_MOBILE_STATE?.model ?? '',
+    sizes: [...document.querySelectorAll('.model .size')].map((n) => n.textContent),
+    startEnabled: !document.getElementById('btn-start').disabled,
+  }));
+  await scoped.close();
+  return result;
+}
+
+// 深澤さんの端末そのもの（WebGPUあり・float16なし・メモリ4GB・空き10.7GB）
+const noF16 = await withDevice({ f16: false, memoryGB: 4, quotaGB: 10.7 });
+check('28. float16が無い端末で、画面がfloat32版を並べる',
+  /q4f32_1/.test(noF16.selected), noF16.selected);
+check('29. その端末にも「float32を使う」と伝える', /float32/.test(noF16.checks));
+check('30. 一覧の容量もfloat32版の値になる', noF16.sizes[0] === '1.0GB', noF16.sizes.join(' '));
+check('31. その端末でも起動できる（止めない）', noF16.startEnabled);
+
+const withF16 = await withDevice({ f16: true, memoryGB: 4, quotaGB: 10.7 });
+check('32. float16がある端末では軽いfloat16版を並べる',
+  /q4f16_1/.test(withF16.selected), withF16.selected);
+check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0.9GB', withF16.sizes.join(' '));
 
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });

@@ -278,16 +278,42 @@
  * 確認方法: npm pack @mlc-ai/web-llm@<版> して prebuiltAppConfig.model_list を見る。
  * sizeMB は同じ一覧の vram_required_MB（端末が確保する量の目安）。
  */
-const MODELS = [
-  { id:'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', sizeMB:945,  need:3,
-    name:'かるい / Light', note:'古い端末でも動く。短い返事向き' },
-  { id:'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', sizeMB:1630, need:4,
-    name:'ふつう / Standard', note:'日常の相談ならこれ。迷ったらこちら' },
-  { id:'gemma-2-2b-jpn-it-q4f16_1-MLC',     sizeMB:1895, need:6,
-    name:'日本語に強い / Japanese', note:'日本語向けに調整された2B。文章が自然' },
-  { id:'Qwen2.5-3B-Instruct-q4f16_1-MLC',   sizeMB:2505, need:8,
-    name:'かしこい / Smart', note:'メモリに余裕がある端末向け。少し遅い' },
+const MODEL_TIERS = [
+  { key:'light', need:3, name:'かるい / Light', note:'古い端末でも動く。短い返事向き',
+    f16:{ id:'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', sizeMB:945 },
+    f32:{ id:'Qwen2.5-0.5B-Instruct-q4f32_1-MLC', sizeMB:1060 } },
+  { key:'standard', need:4, name:'ふつう / Standard', note:'日常の相談ならこれ。迷ったらこちら',
+    f16:{ id:'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', sizeMB:1630 },
+    f32:{ id:'Qwen2.5-1.5B-Instruct-q4f32_1-MLC', sizeMB:1889 } },
+  { key:'japanese', need:6, name:'日本語に強い / Japanese', note:'日本語向けに調整された2B。文章が自然',
+    f16:{ id:'gemma-2-2b-jpn-it-q4f16_1-MLC', sizeMB:1895 },
+    f32:{ id:'gemma-2-2b-jpn-it-q4f32_1-MLC', sizeMB:2509 } },
+  { key:'smart', need:8, name:'かしこい / Smart', note:'メモリに余裕がある端末向け。少し遅い',
+    f16:{ id:'Qwen2.5-3B-Instruct-q4f16_1-MLC', sizeMB:2505 },
+    f32:{ id:'Qwen2.5-3B-Instruct-q4f32_1-MLC', sizeMB:2894 } },
 ];
+
+/**
+ * 端末に合うモデルの並びを作る。
+ *
+ * ★2026-09-01、実機（メモリ4GB・空き10.7GB・WebGPUあり）で
+ *   「[Invalid ShaderModule] ... entryPoint: "index_kernel"」が出て起動できなかった。
+ *   原因は**用意したモデルが全部 q4f16（float16）だったこと**。
+ *   float16 を使うシェーダーは WebGPU の `shader-f16` 機能が要る。Androidでは
+ *   対応していない端末が珍しくなく、非対応だとシェーダーのコンパイルに失敗する。
+ *   WebGPU自体は「対応しています」と出るので、**画面上は緑なのに起動だけ失敗する**。
+ *   そこで非対応の端末には float32 版（q4f32）へ自動で切り替える。少し大きく少し遅いが動く。
+ */
+function resolveModels(hasF16) {
+  return MODEL_TIERS.map((tier) => {
+    const variant = hasF16 ? tier.f16 : tier.f32;
+    return { key:tier.key, need:tier.need, name:tier.name, note:tier.note,
+      id:variant.id, sizeMB:variant.sizeMB, precision: hasF16 ? 'f16' : 'f32' };
+  });
+}
+
+/** 既定は float16 版（対応端末が多数派）。実際の並びは端末を見てから決める */
+const MODELS = resolveModels(true);
 
 /**
  * そのモデルが端末の空き容量に収まるか。
@@ -312,8 +338,8 @@ function storageFit(model, storageGB) {
  * **分からないときは真ん中を選ぶ**。大きい方を既定にすると、載らない端末で
  * 1.6GB落としてから失敗する——一番やってはいけない外し方になる。
  */
-function recommendModel(memoryGB, available = MODELS.map((m) => m.id), storageGB = NaN) {
-  let usable = MODELS.filter((m) => available.includes(m.id));
+function recommendModel(memoryGB, available = MODELS.map((m) => m.id), storageGB = NaN, models = MODELS) {
+  let usable = models.filter((m) => available.includes(m.id));
   if (!usable.length) return null;
   // 保存できないものは最初から候補から外す
   const storable = usable.filter((m) => storageFit(m, storageGB) !== 'no');
@@ -334,6 +360,13 @@ function deviceReport(env) {
   rows.push(env.webgpu
     ? { level:'ok', text:'WebGPU に対応しています / WebGPU available' }
     : { level:'ng', text:'WebGPU に対応していません。Chrome を最新にすると使えることがあります / WebGPU unavailable — update Chrome' });
+  // ★WebGPUが緑でも、float16 が使えないとシェーダーのコンパイルで落ちる。
+  //   「WebGPU対応」だけ見て安心すると、起動して初めて失敗する
+  if (env.webgpu) {
+    rows.push(env.f16
+      ? { level:'ok', text:'float16 が使えます（軽いモデルを選べます） / shader-f16 available' }
+      : { level:'warn', text:'float16 が使えないため、少し大きいfloat32版を使います / Using float32 models' });
+  }
   rows.push(env.secure
     ? { level:'ok', text:'安全な接続です / Secure context' }
     : { level:'ng', text:'https で開いてください / Open over https' });
@@ -395,7 +428,7 @@ function progressText(report) {
 
 // 検査から触るための橋渡し。新しい関数を足したらここへも足すこと
 // （足し忘れると検査側が "is not a function" で落ちる）
-window.ZERO1_MOBILE = { MODELS, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT };
+window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -406,7 +439,7 @@ const MODEL_KEY = 'zero1-mobile-model';
 const SPEAK_KEY = 'zero1-mobile-speak';
 
 const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false,
-  stage:'—', violations:[], lastError:'', storageGB:NaN };
+  stage:'—', violations:[], lastError:'', storageGB:NaN, models:MODELS, env:null };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
 // ここで拾わないと「起動できませんでした」だけが残り、原因に辿り着けない。
@@ -430,8 +463,16 @@ async function readEnvironment() {
   } catch { storageGB = 0; }
   // WebGPU は「オブジェクトが在る」だけでは足りない。実際にアダプタが取れるかまで見る
   let webgpu = false;
-  try { webgpu = Boolean(navigator.gpu && await navigator.gpu.requestAdapter()); } catch { webgpu = false; }
-  return { webgpu, secure:window.isSecureContext, memoryGB, storageGB };
+  let f16 = false;
+  let features = [];
+  try {
+    const adapter = navigator.gpu ? await navigator.gpu.requestAdapter() : null;
+    webgpu = Boolean(adapter);
+    // shader-f16 が無い端末で q4f16 のモデルを読むと、シェーダーのコンパイルで落ちる
+    f16 = Boolean(adapter?.features?.has?.('shader-f16'));
+    features = adapter?.features ? [...adapter.features] : [];
+  } catch { webgpu = false; }
+  return { webgpu, f16, features, secure:window.isSecureContext, memoryGB, storageGB };
 }
 
 function renderChecks(env) {
@@ -447,7 +488,7 @@ function renderChecks(env) {
 
 function renderModels(selectedId, storageGB = state.storageGB) {
   $('models').innerHTML = '';
-  for (const model of MODELS) {
+  for (const model of state.models) {
     const fit = storageFit(model, storageGB);
     const button = document.createElement('button');
     button.type = 'button';
@@ -465,8 +506,8 @@ function renderModels(selectedId, storageGB = state.storageGB) {
     button.addEventListener('click', () => { state.model = model.id; writeStore(MODEL_KEY, model.id); renderModels(model.id); });
     $('models').appendChild(button);
   }
-  $('current-model').textContent = MODELS.find((m) => m.id === selectedId)?.name ?? '—';
-  const chosen = MODELS.find((m) => m.id === selectedId);
+  $('current-model').textContent = state.models.find((m) => m.id === selectedId)?.name ?? '—';
+  const chosen = state.models.find((m) => m.id === selectedId);
   const chosenFit = chosen ? storageFit(chosen, storageGB) : 'unknown';
   if (chosenFit === 'no') {
     $('btn-start').disabled = true;
@@ -525,7 +566,8 @@ function showFailure(env, message) {
     state.lastError && state.lastError !== message ? `直前の失敗: ${state.lastError}` : '',
     state.violations.length ? `CSP: ${state.violations.join(' / ')}` : '',
     `モデル: ${model ? `${model.name} (${state.model}) ${(model.sizeMB / 1024).toFixed(1)}GB` : state.model}`,
-    `WebGPU: ${env.webgpu ? 'あり' : 'なし'} / 安全な接続: ${env.secure ? 'はい' : 'いいえ'}`,
+    `WebGPU: ${env.webgpu ? 'あり' : 'なし'} / float16: ${env.f16 ? 'あり' : 'なし'} / 安全な接続: ${env.secure ? 'はい' : 'いいえ'}`,
+    `GPUの機能: ${(env.features ?? []).join(', ') || '取得できず'}`,
     `メモリ: ${Number.isFinite(env.memoryGB) ? env.memoryGB + 'GB' : '不明'} / 空き: ${env.storageGB || '不明'}GB`,
     `端末: ${navigator.userAgent}`,
   ].filter(Boolean);
@@ -552,7 +594,7 @@ async function startEngine() {
     // 実在するIDだけを候補に残す。版が変わってIDが消えていても、黙って失敗させない
     const available = webllm.prebuiltAppConfig.model_list.map((m) => m.model_id);
     if (!available.includes(state.model)) {
-      const fallback = recommendModel(env.memoryGB, available);
+      const fallback = recommendModel(env.memoryGB, available, state.storageGB, state.models);
       if (!fallback) throw new Error('このライブラリの版に、使えるモデルが1つもありません');
       state.model = fallback.id;
       renderModels(state.model);
@@ -702,13 +744,23 @@ $('btn-change').addEventListener('click', () => {
   renderHistory();
   const env = await readEnvironment();
   renderChecks(env);
+  state.env = env;
   state.storageGB = env.storageGB > 0 ? env.storageGB : NaN;
+  // float16 が使えない端末には float32 版を並べる（f16版はシェーダーのコンパイルで落ちる）
+  state.models = resolveModels(env.f16);
   const saved = readStore(MODEL_KEY, null);
-  const recommended = recommendModel(env.memoryGB, MODELS.map((m) => m.id), state.storageGB);
-  // 前に選んだものでも、空きが減って入らなくなっていたら勧め直す
-  const savedModel = MODELS.find((m) => m.id === saved);
-  state.model = (savedModel && storageFit(savedModel, state.storageGB) !== 'no' ? saved : recommended?.id) ?? MODELS[1].id;
+  const ids = state.models.map((m) => m.id);
+  const recommended = recommendModel(env.memoryGB, ids, state.storageGB, state.models);
+  // 前に選んだものでも、空きが減って入らなくなっていたら勧め直す。
+  // 精度が切り替わって別IDになっている場合も、同じ段（key）へ読み替える
+  const savedTier = MODEL_TIERS.find((t) => t.f16.id === saved || t.f32.id === saved);
+  const savedModel = savedTier ? state.models.find((m) => m.key === savedTier.key) : null;
+  state.model = (savedModel && storageFit(savedModel, state.storageGB) !== 'no' ? savedModel.id : recommended?.id)
+    ?? state.models[1].id;
   renderModels(state.model);
+  // 検査から「いま何が選ばれているか」を見るための橋渡し。
+  // 画面の見た目だけでは、切り替えが効いているかを機械が確かめられない
+  window.ZERO1_MOBILE_STATE = state;
   if (!canRun(env)) {
     $('btn-start').disabled = true;
     $('progress-note').textContent = 'この端末では動かせません。Android の Chrome を最新にしてお試しください。';
