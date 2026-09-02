@@ -212,12 +212,54 @@ node scripts/verify-bakumatsu-map.mjs   # 拠点14件が地図の陸に載って
 - 地図北西の雲は陸と誤判定するが、拠点は一つもその領域に無いので実害はない。
   閾値を触ったら「描画位置」の検査結果で校正すること
 
+## Service Worker（sw.js）の必須チェック — 全ページの通信に効く
+
+```bash
+node scripts/verify-service-worker.mjs   # 別オリジンの素通し／拒否の投げっぱなし／事前キャッシュのスコープ（11項目）
+```
+
+- **SWはスコープ内のページが出す全てのGETを横取りする。別オリジンにも及ぶ**。
+  何もしなければ「ページ → SW → ネットワーク」の中継が1段増えるだけだが、
+  **その中で起きた失敗はページ側には理由の消えた `TypeError: Failed to fetch` としてしか届かない**
+  （HTTPの状態もCSP違反も、どのホストで切れたのかも一切残らない）。
+  2026-09-02、ZERO-1 Mobile が huggingface.co から2.5GBのモデルを取る途中でこれを踏み、
+  画面には「Failed to fetch」の一行しか残らなかった。**別オリジンは `respondWith` を呼ばずに素通しする**
+- **`respondWith` に渡した約束を拒否で終わらせない**。Cache Storage は端末によって
+  （容量枯渇・シークレットタブ・破損）使えず `caches.match` 自体が落ちる。落ちたら
+  ページには原因の消えた Failed to fetch だけが返る
+- **事前キャッシュのパスは必ず相対で書く**。このサイトは `…github.io/main/` 配下にあり、
+  `/index.html` はスコープ外のオリジン直下を指す。`addAll` の失敗は握り潰しているので
+  **例外もエラーも出ず、事前キャッシュが空のままオフライン表示が無言で効かなくなる**
+- 検査はブラウザ無しで走る（node:vm に偽の `self`/`caches`/`fetch` を渡してSWを実行し、
+  合成した fetch イベントを流す）。**「origin という文字が在るか」の静的検査にしないこと**——
+  周りを壊すと素通りする
+
 ## ZERO-1 Mobile とエアタッチの必須チェック（zero-1-mobile.html / assets/js/gesture-pointer.js を触ったら必ず実行）
 
 ```bash
-node scripts/verify-zero1-mobile.mjs      # 端末判定→モデル選び→会話の組み立て→画面（49項目）
-node scripts/verify-gesture-pointer.mjs   # エアタッチ: 手ぶれ取り→押下判定→タップ/スワイプ/ドラッグ→カメラ入切（50項目）
+node scripts/verify-zero1-mobile.mjs      # 端末判定→モデル選び→起動失敗の手掛かり→会話の組み立て→画面（57項目）
+node scripts/verify-gesture-pointer.mjs   # エアタッチ: 手ぶれ取り→押下判定→タップ/スワイプ/ドラッグ→カメラ入切（57項目）
+node scripts/verify-service-worker.mjs    # 通信を横取りするSWがモデル取得を壊していないか（上記）
 ```
+
+**起動の失敗は「理由が残るか」まで作り込む**。スマホには開発者ツールが無く、
+`TypeError: Failed to fetch` はブラウザが理由を伏せる仕様なので、ページ側で足さないと誰も辿り着けない。
+
+- **2.5GBを落とし始める前に、行き先へ届くかを小さいファイルで確かめる**（`preflight()`）。
+  重みは huggingface.co、実行用WebAssemblyは raw.githubusercontent.com と**別のサーバ**で、
+  片方だけ塞がれていることがある。ここで独自ヘッダ（`Range` 等）を足さないこと——
+  CORSの事前問い合わせ（OPTIONS）が起きて、**実際には届くのに「届かない」と誤報告する**
+- **通信で切れたときだけ、続きからやり直す**（`createEngine()`・最大3回）。WebLLMは取得した
+  かたまりを1つずつ Cache Storage に入れるので、切れても落とした分は残り呼び直せば続きから進む。
+  逆に**端末側の理由（シェーダーのコンパイル失敗など）でやり直すのは時間を捨てるだけ**なので、
+  `isNetworkFailure()` に当たるものだけを対象にする
+- **失敗パネルには「配信経路（Service Workerの有無）」も出す**。古いSWは直しても端末に残り、
+  直したはずの不具合がそのまま再現する。何が仲介しているか分からないと、直ったかどうかも判別できない。
+  ページを開いた時点で `registration.update()` を呼び、入れ替わりを促す
+- **検査は合成のライブラリを差し込んで通しで確かめる**（`window.__ZERO1_WEBLLM`）。
+  エアタッチの `__AIRTOUCH_SOURCE_FACTORY` と同じ考え方で、CDNもGPUも無いヘッドレスで
+  「届かない」「途中で切れる」「やり直して起動する」を実際に通す。
+  **純粋関数だけを叩く検査にしないこと**（画面がそれを使っていなければ意味がない）
 
 **エアタッチ（カメラに指をかざしてポインター操作）は3層に分けてある**。推定層（MediaPipe
 HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用層（`PointerDriver`・実DOMへの

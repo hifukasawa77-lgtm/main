@@ -226,7 +226,8 @@
       <!-- 失敗したときの手掛かり。スマホには開発者ツールが無いので、画面に出して
            そのまま渡せるようにする（「起動できませんでした」だけでは打つ手が無い） -->
       <div id="failure" hidden>
-        <p class="progress-note" style="margin-top:12px">うまくいかないときは、下の内容をそのままお知らせください。</p>
+        <p class="progress-note" id="failure-hint" style="margin-top:12px;color:var(--cyan)"></p>
+        <p class="progress-note">うまくいかないときは、下の内容をそのままお知らせください。</p>
         <pre id="failure-detail" style="white-space:pre-wrap;word-break:break-all;font-size:.74rem;color:var(--muted);background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:12px;padding:10px;margin:6px 0"></pre>
         <button class="ghost" id="btn-copy" style="width:100%">この内容をコピー / Copy</button>
       </div>
@@ -441,7 +442,8 @@ function progressText(report) {
 
 // 検査から触るための橋渡し。新しい関数を足したらここへも足すこと
 // （足し忘れると検査側が "is not a function" で落ちる）
-window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT };
+window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT,
+  preflight, isNetworkFailure, failureHint, serviceWorkerNote, createEngine };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -452,7 +454,8 @@ const MODEL_KEY = 'zero1-mobile-model';
 const SPEAK_KEY = 'zero1-mobile-speak';
 
 const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false,
-  stage:'—', violations:[], lastError:'', storageGB:NaN, models:MODELS, env:null };
+  stage:'—', violations:[], lastError:'', unreachable:[], retries:0,
+  storageGB:NaN, models:MODELS, env:null };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
 // ここで拾わないと「起動できませんでした」だけが残り、原因に辿り着けない。
@@ -559,6 +562,10 @@ function setProgress(percent, label) {
  * どちらで通ったのかを必ず利用者へ知らせる（黙って検証を飛ばさない）。
  */
 async function loadLibrary() {
+  // ★検査はここを合成のライブラリへ差し替える。CDNもGPUも無いヘッドレスで
+  //   「取得先へ届かない」「途中で切れる」「やり直して起動する」を通しで確かめる
+  //   ための唯一の口（エアタッチの __AIRTOUCH_SOURCE_FACTORY と同じ考え方）。
+  if (window.__ZERO1_WEBLLM) return { module: window.__ZERO1_WEBLLM, verified: true };
   try {
     return { module: await import('web-llm'), verified: true };
   } catch (cause) {
@@ -570,6 +577,21 @@ async function loadLibrary() {
   }
 }
 
+/**
+ * 画面を仲介しているService Workerを見る。
+ *
+ * ★SWはページが出す通信を横取りできる。横取り先で起きた失敗は、ページ側には
+ *   理由の消えた `TypeError: Failed to fetch` としてしか届かない（実際にこれで
+ *   モデルの取得が落ちていた: sw.js のコメント参照）。**古いSWは直しても端末に残る**ので、
+ *   「いま何が仲介しているか」が分からないと、直ったのかどうかすら判別できない。
+ */
+function serviceWorkerNote() {
+  const controller = navigator.serviceWorker?.controller;
+  if (!controller) return '直接（Service Worker の仲介なし）';
+  try { return `Service Worker が仲介しています（${new URL(controller.scriptURL).pathname}）`; }
+  catch { return 'Service Worker が仲介しています'; }
+}
+
 /** 失敗の手掛かりを1か所に集める。これをそのまま渡せば原因が分かる形にする */
 function showFailure(env, message) {
   const model = MODELS.find((m) => m.id === state.model);
@@ -578,6 +600,9 @@ function showFailure(env, message) {
     `理由: ${message}`,
     state.lastError && state.lastError !== message ? `直前の失敗: ${state.lastError}` : '',
     state.violations.length ? `CSP: ${state.violations.join(' / ')}` : '',
+    state.unreachable.length ? `届かなかった行き先: ${state.unreachable.join(' / ')}` : '',
+    state.retries ? `やり直した回数: ${state.retries}回` : '',
+    `配信経路: ${serviceWorkerNote()}`,
     `モデル: ${model ? `${model.name} (${state.model}) ${(model.sizeMB / 1024).toFixed(1)}GB` : state.model}`,
     `WebGPU: ${env.webgpu ? 'あり' : 'なし'} / float16: ${env.f16 ? 'あり' : 'なし'} / 安全な接続: ${env.secure ? 'はい' : 'いいえ'}`,
     `GPUの機能: ${(env.features ?? []).join(', ') || '取得できず'}`,
@@ -585,7 +610,97 @@ function showFailure(env, message) {
     `端末: ${navigator.userAgent}`,
   ].filter(Boolean);
   $('failure-detail').textContent = lines.join('\n');
+  $('failure-hint').textContent = failureHint(message);
   $('failure').hidden = false;
+}
+
+/**
+ * 打つ手を1行で書く。
+ *
+ * ★`TypeError: Failed to fetch` はブラウザが理由を伏せる仕様で、CSPで止まったのか、
+ *   回線が切れたのか、相手が落ちているのかが**メッセージに一切書かれない**。
+ *   ここで文言を分けておかないと、利用者の手元には打つ手が何も残らない。
+ */
+function failureHint(message) {
+  if (/failed to fetch|networkerror|network error|load failed/i.test(message)) {
+    return 'モデルの取得に届きませんでした。Wi-Fiにつないで、ページを一度再読み込みしてから、もう一度お試しください。'
+      + '（通信を中継する古いService Workerが残っていると同じ失敗が続きます。再読み込みで入れ替わります）';
+  }
+  if (/shadermodule|shader-f16|compilation/i.test(message)) {
+    return 'この端末のGPUがモデルの形式に対応していません。「かるい」モデルをお試しください。';
+  }
+  if (/quota|storage|space/i.test(message)) {
+    return '端末の空き容量が足りていない可能性があります。軽いモデルを選ぶか、空きを増やしてお試しください。';
+  }
+  return 'もう一度お試しください。同じ内容が続くようなら、下の内容をコピーしてお知らせください。';
+}
+
+/**
+ * モデルを取りに行く前に、行き先へ本当に届くかを小さいファイルで確かめる。
+ *
+ * ★2.5GBの取得が「Failed to fetch」で落ちたとき、**どのホストで切れたのかが残らない**。
+ *   huggingface.co（重み）と raw.githubusercontent.com（実行用WebAssembly）は別のサーバで、
+ *   片方だけ塞がれていることがある（回線のフィルタ・社内網・障害）。先に叩いておけば、
+ *   少なくとも行き先の名前だけは利用者の手に残る。
+ * ★ここで独自ヘッダ（Range など）を足さないこと。CORSの事前問い合わせ（OPTIONS）が
+ *   発生して、実際には届くのに「届かない」と誤って報告する。
+ *   重みは小さい設定ファイル（GET）、WebAssemblyは HEAD で当たりだけ見る。
+ */
+async function preflight(webllm, modelId) {
+  const record = webllm.prebuiltAppConfig.model_list.find((m) => m.model_id === modelId);
+  const targets = [];
+  if (record?.model) {
+    targets.push({ host:'huggingface.co（モデルの重み）', method:'GET',
+      url:`${record.model.replace(/\/+$/, '')}/resolve/main/mlc-chat-config.json` });
+  }
+  if (record?.model_lib) {
+    targets.push({ host:'raw.githubusercontent.com（実行用WebAssembly）', method:'HEAD', url:record.model_lib });
+  }
+  const unreachable = [];
+  for (const target of targets) {
+    try {
+      const res = await fetch(target.url, { method:target.method, cache:'no-store' });
+      if (!res.ok) unreachable.push(`${target.host}: HTTP ${res.status}`);
+    } catch (cause) {
+      unreachable.push(`${target.host}: ${cause?.message ?? cause}`);
+    }
+  }
+  return unreachable;
+}
+
+/** 通信が切れたことによる失敗か。ここに当たるものだけ、やり直す価値がある */
+function isNetworkFailure(cause) {
+  const text = `${cause?.name ?? ''} ${cause?.message ?? cause ?? ''}`;
+  return /failed to fetch|networkerror|network error|load failed|the network connection was lost/i.test(text);
+}
+
+/**
+ * モデルを用意する。通信で切れたときだけ、続きからやり直す。
+ *
+ * ★WebLLM は取得したかたまり（shard）を1つずつ Cache Storage に入れる。
+ *   つまり**途中で切れても落とした分は端末に残り、呼び直せば続きから進む**。
+ *   携帯回線で2.5GBを一度も切らさずに落とせる方が珍しいのに、1回の失敗で
+ *   最初からやり直させるのは（利用者にとっても通信量にとっても）一番痛い。
+ * ★やり直すのは通信起因だけ。シェーダーのコンパイル失敗など端末側の理由で
+ *   繰り返すと、同じ失敗を3回見せて時間を捨てるだけになる。
+ */
+async function createEngine(webllm, modelId, attempts = 3) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await webllm.CreateMLCEngine(modelId, {
+        initProgressCallback: (report) => {
+          const { percent, label } = progressText(report);
+          setProgress(percent, attempt > 1 ? `${label}（続きから ${attempt}回目）` : label);
+        },
+      });
+    } catch (cause) {
+      if (attempt >= attempts || !isNetworkFailure(cause)) throw cause;
+      state.retries = attempt;
+      state.lastError = `${cause?.name ?? 'Error'}: ${cause?.message ?? cause}`;
+      setProgress(0, `通信が切れました。落とした分は残っているので、続きからやり直します…（${attempt + 1}回目）`);
+      await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+    }
+  }
 }
 
 async function startEngine() {
@@ -595,6 +710,8 @@ async function startEngine() {
   $('failure').hidden = true;
   state.violations = [];
   state.lastError = '';
+  state.unreachable = [];
+  state.retries = 0;
   state.stage = 'ライブラリの読み込み';
   setProgress(0, 'ライブラリを読み込んでいます… / Loading library…');
   try {
@@ -612,14 +729,15 @@ async function startEngine() {
       state.model = fallback.id;
       renderModels(state.model);
     }
+    // 落とし始める前に行き先へ届くか見る。2.5GB進んでから「届きません」は遅すぎる
+    state.stage = '取得先への接続確認';
+    setProgress(0, '接続を確かめています… / Checking connection…');
+    state.unreachable = await preflight(webllm, state.model);
+    if (state.unreachable.length) throw new Error(`取得先に届きませんでした（${state.unreachable.join(' / ')}）`);
+
     state.stage = 'モデルの取得と準備（初回は数分かかります）';
     setProgress(0, 'モデルを準備しています… / Preparing model…');
-    state.engine = await webllm.CreateMLCEngine(state.model, {
-      initProgressCallback: (report) => {
-        const { percent, label } = progressText(report);
-        setProgress(percent, label);
-      },
-    });
+    state.engine = await createEngine(webllm, state.model);
     $('setup').classList.add('hidden');
     $('chat').classList.remove('hidden');
     $('composer').classList.remove('hidden');
@@ -811,6 +929,10 @@ $('btn-change').addEventListener('click', () => {
 });
 
 (async function boot() {
+  // ★古いService Workerは、直しても端末に残り続ける。残ったまま起動すると
+  //   直したはずの不具合（通信の横取りによる Failed to fetch）がそのまま再現する。
+  //   開いた時点で更新を促しておけば、新しいものが入って仲介から降りる。
+  navigator.serviceWorker?.getRegistration?.().then((reg) => reg?.update?.()).catch(() => {});
   state.history = readStore(HISTORY_KEY, []);
   state.speak = readStore(SPEAK_KEY, false);
   $('btn-speak').textContent = state.speak ? 'ON' : 'OFF';
