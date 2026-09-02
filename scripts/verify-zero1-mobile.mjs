@@ -314,6 +314,102 @@ check('32. float16がある端末では軽いfloat16版を並べる',
   /q4f16_1/.test(withF16.selected), withF16.selected);
 check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0.9GB', withF16.sizes.join(' '));
 
+// --- 起動の失敗を、打つ手のある形で見せているか -------------------------------
+// ★2026-09-02、深澤さんの端末で起動に失敗し、画面に残ったのは
+//   「TypeError: Failed to fetch」の一行だけだった。原因は sw.js が別オリジンの通信まで
+//   横取りしていたこと（scripts/verify-service-worker.mjs で別途検査）。
+//   ブラウザは Failed to fetch の理由を伏せるので、**ページ側で手掛かりを足さないと
+//   誰も原因に辿り着けない**。ここは合成のライブラリを差し込んで通しで確かめる。
+//   ★純粋関数（preflight 等）だけを叩く検査にしないこと。画面がそれを使っていなければ
+//     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
+async function withEngine({ reachable = true, failTimes = 0, failWith = 'network' } = {}) {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(([canReach, times, kind]) => {
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: {
+      requestAdapter: async () => ({ features: new Set() }),   // float16なし = 深澤さんの端末
+    }});
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: {
+      estimate: async () => ({ quota: 10.7e9, usage: 0 }),
+    }});
+    window.__ZERO1_PROBE = { attempts: 0, requests: [] };
+    // 取得先への問い合わせだけを横取りする（ページ自身の読み込みは素通し）
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (/huggingface\.co|raw\.githubusercontent\.com/.test(url)) {
+        window.__ZERO1_PROBE.requests.push({ url, method: init?.method ?? 'GET', headers: Object.keys(init?.headers ?? {}) });
+        if (!canReach) return Promise.reject(new TypeError('Failed to fetch'));
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }
+      return original(input, init);
+    };
+    window.__ZERO1_WEBLLM = {
+      get prebuiltAppConfig() {
+        const tiers = window.ZERO1_MOBILE?.MODEL_TIERS ?? [];
+        return { model_list: tiers.flatMap((t) => [t.f16, t.f32]).map((v) => ({
+          model_id: v.id,
+          model: `https://huggingface.co/mlc-ai/${v.id}`,
+          model_lib: `https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/${v.id}.wasm`,
+        })) };
+      },
+      CreateMLCEngine: async (id, opts) => {
+        window.__ZERO1_PROBE.attempts++;
+        opts?.initProgressCallback?.({ progress: 0.5, text: 'Fetching param cache' });
+        if (window.__ZERO1_PROBE.attempts <= times) {
+          throw kind === 'network' ? new TypeError('Failed to fetch') : new Error('[Invalid ShaderModule] entryPoint: "index_kernel"');
+        }
+        return { chat: { completions: { create: async () => ({}) } } };
+      },
+    };
+  }, [reachable, failTimes, failWith]);
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  await scoped.locator('#btn-start').click();
+  await scoped.waitForFunction(
+    () => !document.getElementById('failure').hidden || !document.getElementById('chat').classList.contains('hidden'),
+    { timeout: 20_000 });
+  const result = await scoped.evaluate(() => ({
+    detail: document.getElementById('failure-detail').textContent,
+    hint: document.getElementById('failure-hint').textContent,
+    failed: !document.getElementById('failure').hidden,
+    chatting: !document.getElementById('chat').classList.contains('hidden'),
+    stage: window.ZERO1_MOBILE_STATE?.stage ?? '',
+    probe: window.__ZERO1_PROBE,
+  }));
+  await scoped.close();
+  return result;
+}
+
+const unreachable = await withEngine({ reachable: false });
+check('34. 取得先へ届かないとき、どのホストで切れたのかを残す',
+  /huggingface\.co/.test(unreachable.detail) && /raw\.githubusercontent\.com/.test(unreachable.detail),
+  unreachable.detail.split('\n').find((l) => l.startsWith('届かなかった')) ?? '（行が無い）');
+check('35. 2.5GB落とし始める前に、届くかを先に確かめる',
+  unreachable.probe.attempts === 0 && /接続/.test(unreachable.stage), `${unreachable.stage} / 取得試行 ${unreachable.probe.attempts}回`);
+check('36. Failed to fetch に、打つ手を1行添える',
+  /再読み込み/.test(unreachable.hint) && /Wi-Fi/.test(unreachable.hint), unreachable.hint.slice(0, 40));
+check('37. 通信を仲介しているService Workerの有無を手掛かりに残す',
+  /配信経路/.test(unreachable.detail),
+  unreachable.detail.split('\n').find((l) => l.startsWith('配信経路')) ?? '（行が無い）');
+check('38. 確認の問い合わせに独自ヘッダを足さない（CORSの事前問い合わせで誤検知しない）',
+  unreachable.probe.requests.length === 2
+    && unreachable.probe.requests.every((r) => r.headers.length === 0)
+    && unreachable.probe.requests.some((r) => r.method === 'HEAD'),
+  JSON.stringify(unreachable.probe.requests.map((r) => `${r.method}:${r.headers.join(',')}`)));
+
+// 途中で切れるのは携帯回線では当たり前。落とした分は端末に残るので続きからやり直す
+const flaky = await withEngine({ failTimes: 2, failWith: 'network' });
+check('39. 通信が切れても、続きからやり直して起動する',
+  flaky.chatting && !flaky.failed && flaky.probe.attempts === 3, `取得試行 ${flaky.probe.attempts}回`);
+
+// ★端末側の理由（シェーダーのコンパイル失敗など）で3回繰り返すのは、時間を捨てるだけ
+const broken = await withEngine({ failTimes: 9, failWith: 'device' });
+check('40. 通信起因でない失敗は、やり直さず即座に理由を出す',
+  broken.failed && broken.probe.attempts === 1, `取得試行 ${broken.probe.attempts}回`);
+check('41. GPUが原因のときは、GPU向けの打つ手を出す',
+  /かるい|GPU/.test(broken.hint), broken.hint.slice(0, 40));
+
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });
 await page.screenshot({ path: path.join(shot, 'zero-1-mobile.png'), fullPage: false });
