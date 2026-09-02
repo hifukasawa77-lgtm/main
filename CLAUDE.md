@@ -244,6 +244,12 @@ HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用
   ずれると、integrity検証を通った版とは**別の版**を直接URLで読み直してしまう（検査#5が突き合わせる）
 - カメラ映像は端末から出ない。外へ出る通信は手の認識モデル（`storage.googleapis.com`・約7MB）の
   初回取得だけで、以後は Cache Storage に残る
+- **スマホ専用ではない**。同じURLをPCのブラウザで開いてもWebカメラで動く。ただし
+  ①ポインターの座標は**画面全体**で持つこと（本文の幅 max-width:820px で持つと、
+  広い画面で左右の余白へ届かなくなる）②`facingMode` を `exact` で要求しないこと
+  （PCのWebカメラは前面/背面の区別を持たず `OverconstrainedError` で掴めない）。
+  検査#49〜54 がデスクトップ幅（1440×900）で通し確認する。
+  なお **PC版 ZERO-1 は別リポジトリ `zero-1-local-ai`（Ollama）** で、こことは別実装
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 

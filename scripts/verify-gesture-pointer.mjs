@@ -235,7 +235,7 @@ check('21. 4方向を正しく向き分ける', logic.dirs.join(',') === 'right,
 /* ------------------------------------------------------------------ *
  * 作用層 — 実DOMへイベントが届くか
  * ------------------------------------------------------------------ */
-const dom = await page.evaluate(async ([base]) => {
+const FIXTURE = async ([base]) => {
   const M = await import(`${base}/assets/js/gesture-pointer.js`);
   // 実物のDOMを相手にする。関数だけの検査は「合っているのに何も押せない」を見逃す
   const panel = document.createElement('div');
@@ -332,7 +332,9 @@ const dom = await page.evaluate(async ([base]) => {
   driver.destroy();
   panel.remove();
   return out;
-}, [BASE]);
+};
+
+const dom = await page.evaluate(FIXTURE, [BASE]);
 
 check('22. カーソルの層が本物の操作を邪魔しない（pointer-events:none）',
   dom.overlayPointerEvents === 'none', dom.overlayPointerEvents);
@@ -488,6 +490,66 @@ check('46. 失敗した理由がページに出る（押した所からたどれ
 check('47. 失敗したらONにならず、層も残らない',
   pageFailure.pressed === 'false' && pageFailure.layer === false, JSON.stringify(pageFailure));
 check('48. 一連の操作で例外が出ていない', errors.length === 0, errors.slice(0, 2).join(' / '));
+
+/* ------------------------------------------------------------------ *
+ * デスクトップ幅でも同じように使えるか
+ *
+ * ★このページは「スマホ内で動くAI」だが、PCのブラウザでも同じURLが開ける。
+ *   エアタッチはカメラさえあれば端末を選ばないので、**スマホ幅で通ったから
+ *   デスクトップでも通る、とは限らない所**を実際に通して確かめる:
+ *     - 中央寄せ（max-width:820px）のページで、画面の端まで狙えるか
+ *     - 広い画面でも、押した要素へイベントが届くか（座標は画面全体で持つ）
+ *     - PCのカメラは facingMode:'user' を必須にすると掴めないことがある
+ * ------------------------------------------------------------------ */
+const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const desktopErrors = [];
+desktop.on('pageerror', (e) => desktopErrors.push('pageerror: ' + e.message));
+desktop.on('console', (m) => { if (m.type() === 'error') desktopErrors.push('console: ' + m.text()); });
+await desktop.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+await desktop.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 }).catch(() => {});
+await desktop.evaluate(HELPERS);
+const wide = await desktop.evaluate(FIXTURE, [BASE]);
+// ★mapToScreen を直接呼んで確かめてはいけない。関数が正しくても、まとめ役が
+//   渡す画面サイズを本文の幅にしていたら端へ届かない（故障注入ですり抜けた）。
+//   実際に動く経路（AirTouch.tick）を通して、出てきたポインター位置を見る
+const wideMap = await desktop.evaluate(async ([base]) => {
+  const M = await import(`${base}/assets/js/gesture-pointer.js`);
+  const reach = async (nx, ny) => {
+    const air = new M.AirTouch({
+      createSource: () => ({ async start() {}, poll() { return window.makeHand(nx, ny, 0.9); }, stop() {} }),
+      preview: false,
+    });
+    await air.enable();
+    air.tick(1000); air.tick(1100);            // 手ぶれ取りが落ち着くまで2回
+    const at = { x: air.engine.x, y: air.engine.y };
+    air.disable();
+    return at;
+  };
+  return {
+    size: { width: window.innerWidth, height: window.innerHeight },
+    // xは鏡なので、カメラ画像の左端(0.16)が画面の右端に対応する
+    corner: await reach(0.16, 0.84),            // 画面の右下いっぱい
+    origin: await reach(0.84, 0.16),            // 画面の左上いっぱい
+  };
+}, [BASE]);
+
+check('49. デスクトップ幅でも例外が出ない', desktopErrors.length === 0, desktopErrors.slice(0, 2).join(' / '));
+check('50. デスクトップ幅でもタップが click として届く', wide.tapClicks === 1, `${wide.tapClicks}回`);
+check('51. デスクトップ幅でもなぞってスクロールできる', wide.pan.scrollTop > 60, `${wide.pan.scrollTop}px`);
+check('52. デスクトップ幅でもドラッグ&ドロップが成立する',
+  wide.drag.log.includes('fx-item:dragstart') && wide.drag.log.includes('fx-zone:drop'), wide.drag.gestures.join(','));
+// ★中央寄せ（max-width:820px）のページでも、座標は画面全体で持つ。
+//   ここを本文の幅で持つと、広い画面では左右の余白へポインターが届かなくなる
+check('53. 広い画面でも画面の隅まで狙える（座標を本文幅で持っていない）',
+  wideMap.corner.x >= wideMap.size.width - 1 && wideMap.corner.y >= wideMap.size.height - 1
+  && wideMap.origin.x <= 1 && wideMap.origin.y <= 1,
+  `右下 ${wideMap.corner.x.toFixed(0)},${wideMap.corner.y.toFixed(0)} / 画面 ${wideMap.size.width}x${wideMap.size.height}`);
+// ★PCのWebカメラは前面/背面の区別を持たない。facingMode を exact で要求すると
+//   OverconstrainedError で掴めない端末がある。希望として渡すだけにしておくこと
+check('54. カメラの向きを必須条件にしていない（PCのWebカメラでも掴める）',
+  !/exact\s*:\s*['"]?user/.test(moduleSource) && /facingMode,/.test(moduleSource));
+await desktop.screenshot({ path: path.join(ROOT, 'test-screenshots', 'zero-1-airtouch-desktop.png') });
+await desktop.close();
 
 const shots = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shots, { recursive: true });
