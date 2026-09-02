@@ -11,6 +11,8 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
 - `zero-1-mobile.html` — ZERO-1 Mobile（WebGPUで端末内実行するローカルLLM）＋エアタッチ
 - `assets/js/gesture-pointer.js` — エアタッチ（カメラに指をかざして画面を操作する）。他ページからも使える独立モジュール
+- `assets/js/zero1-worker.js` — ZERO-1 Mobile のモデルを画面とは別の糸で動かす worker（同じ糸でやると読み込み中に画面が固まる）
+- `sw.js` — サイト全体の Service Worker。**別オリジンの通信には触らない**（触ると失敗の理由が消える）
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。`obsidian-vault/`（第二の脳）とは別物。使い分けは「Obsidian メモリ層（Claudechord Vault）」節の早見表を参照。詳細: `claudechord-vault/README.md`）
 
 ## デザイン・スタイルのルール
@@ -237,7 +239,7 @@ node scripts/verify-service-worker.mjs   # 別オリジンの素通し／拒否�
 ## ZERO-1 Mobile とエアタッチの必須チェック（zero-1-mobile.html / assets/js/gesture-pointer.js を触ったら必ず実行）
 
 ```bash
-node scripts/verify-zero1-mobile.mjs      # 端末判定→モデル選び→起動失敗の手掛かり→会話の組み立て→画面（57項目）
+node scripts/verify-zero1-mobile.mjs      # 端末判定→モデル選び→起動失敗の手掛かり→会話の組み立て→画面（68項目）
 node scripts/verify-gesture-pointer.mjs   # エアタッチ: 手ぶれ取り→押下判定→タップ/スワイプ/ドラッグ→カメラ入切（57項目）
 node scripts/verify-service-worker.mjs    # 通信を横取りするSWがモデル取得を壊していないか（上記）
 ```
@@ -256,6 +258,22 @@ node scripts/verify-service-worker.mjs    # 通信を横取りするSWがモデ�
 - **失敗パネルには「配信経路（Service Workerの有無）」も出す**。古いSWは直しても端末に残り、
   直したはずの不具合がそのまま再現する。何が仲介しているか分からないと、直ったかどうかも判別できない。
   ページを開いた時点で `registration.update()` を呼び、入れ替わりを促す
+- **モデルは画面とは別の糸（Web Worker `assets/js/zero1-worker.js`）で動かす**。同じ糸でやると
+  取得〜WebAssemblyのコンパイル〜GPUへの転送のあいだ（スマホでは数分）**画面がまるごと固まり、
+  進捗も再描画されない**。「0%のまま動かない」に見えるうえ、進んでいるのか止まっているのかも
+  分からなくなる（2026-09-03 深澤報告。画面の一部だけが描き変わる崩れ方をしていた）。
+  版は importmap と worker の2か所にあるので検査#51が突き合わせ、
+  CSPが `worker-src` を締めていないかを検査#52が見る（締めると**worker は例外も出さずに黙る**）
+- **「糸が壊れた」と「モデルが失敗した」を混同しない**。モデル側の失敗で画面と同じ糸へ落とすと、
+  同じ失敗を2回やって二度手間になり、しかも次からずっと固まる経路へ落ちる。
+  落とすのは worker の `error` が上がったときだけ（検査#40が捕まえた実際のバグ）
+- **進捗と一緒に経過時間を毎秒出す**。`0%` だけでは固まりと進行中を区別できない。
+  時計が動いていること自体が「画面の糸が空いている」証拠にもなる（検査#46）
+- **`fetch` には既定の制限時間が無い**。相手が接続だけ受けて何も返さないと**永遠に待って
+  0%のまま止まる**（例外も出ない）。取得先の確認には必ず `AbortSignal.timeout` を渡す（検査#47〜48）
+- **空き容量（保存できるか）とメモリ（動かせるか）は別の話**。メモリが足りないモデルは、
+  取得は最後まで進むのにGPUへ載せる段で固まる——例外が出ないので「進まない」としか見えない。
+  一覧と選択後の両方で警告する。ただし**止めはしない**（推測で妨げない・検査#49〜50）
 - **検査は合成のライブラリを差し込んで通しで確かめる**（`window.__ZERO1_WEBLLM`）。
   エアタッチの `__AIRTOUCH_SOURCE_FACTORY` と同じ考え方で、CDNもGPUも無いヘッドレスで
   「届かない」「途中で切れる」「やり直して起動する」を実際に通す。

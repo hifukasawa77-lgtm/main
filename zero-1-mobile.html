@@ -222,6 +222,9 @@
       <div class="models" id="models" role="group" aria-label="モデル選択 / Model choice"></div>
       <div class="progress" id="progress" hidden><span id="progress-bar"></span></div>
       <p class="progress-note" id="progress-note"></p>
+      <!-- ★「0%」だけでは、進んでいるのか固まっているのかが分からない。
+           経過時間を毎秒書き換えることで、**止まったら止まったことが分かる** -->
+      <p class="progress-note" id="progress-clock" hidden></p>
       <button class="primary" id="btn-start">この端末で起動する / Start on this phone</button>
       <!-- 失敗したときの手掛かり。スマホには開発者ツールが無いので、画面に出して
            そのまま渡せるようにする（「起動できませんでした」だけでは打つ手が無い） -->
@@ -346,6 +349,22 @@ function storageFit(model, storageGB) {
 }
 
 /**
+ * そのモデルが端末のメモリに載るか。
+ *
+ * ★空き容量（保存できるか）とメモリ（動かせるか）は**別の話**。
+ *   これまで一覧に出していたのは空き容量だけで、メモリが足りない大きなモデルも
+ *   何の警告も無く選べてしまっていた。載らないモデルを選ぶと、取得は最後まで進むのに
+ *   GPUへ載せる段で端末が固まる——**例外も出ず「進捗が動かない」形で現れる**
+ *   （2026-09-03、メモリ4GBの端末で2.5GBのモデルを選んだ状態で報告された）。
+ * ★分からないとき（取得できない端末）は止めない——推測で妨げない。
+ */
+function memoryFit(model, memoryGB) {
+  if (!Number.isFinite(memoryGB) || memoryGB <= 0) return 'unknown';
+  if (memoryGB < model.need) return 'no';
+  return 'yes';
+}
+
+/**
  * 端末のメモリと空き容量から既定のモデルを決める。
  *
  * `navigator.deviceMemory` は Android Chrome で 0.25〜8 を返す（8で頭打ち・非対応なら undefined）。
@@ -443,7 +462,7 @@ function progressText(report) {
 // 検査から触るための橋渡し。新しい関数を足したらここへも足すこと
 // （足し忘れると検査側が "is not a function" で落ちる）
 window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT,
-  preflight, isNetworkFailure, failureHint, serviceWorkerNote, createEngine };
+  preflight, isNetworkFailure, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -455,6 +474,7 @@ const SPEAK_KEY = 'zero1-mobile-speak';
 
 const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false,
   stage:'—', violations:[], lastError:'', unreachable:[], retries:0,
+  worker:null, workerError:'', mainThreadOnly:false, lastProgressAt:0, clock:null,
   storageGB:NaN, models:MODELS, env:null };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
@@ -502,10 +522,11 @@ function renderChecks(env) {
   }
 }
 
-function renderModels(selectedId, storageGB = state.storageGB) {
+function renderModels(selectedId, storageGB = state.storageGB, memoryGB = state.env?.memoryGB) {
   $('models').innerHTML = '';
   for (const model of state.models) {
     const fit = storageFit(model, storageGB);
+    const mem = memoryFit(model, memoryGB);
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'model';
@@ -516,9 +537,10 @@ function renderModels(selectedId, storageGB = state.storageGB) {
     // 落とす前に「入るのか」を出す。落としてから失敗させない
     button.querySelector('small').textContent = fit === 'no'
       ? `空き容量が足りません（${model.note}）`
+      : mem === 'no' ? `この端末のメモリ（約${memoryGB}GB）では重すぎます。取得は進んでも、起動の途中で止まることがあります`
       : fit === 'tight' ? `空きがぎりぎりです（${model.note}）` : model.note;
     button.querySelector('.size').textContent = `${(model.sizeMB / 1024).toFixed(1)}GB`;
-    if (fit === 'no') button.style.opacity = '.5';
+    if (fit === 'no' || mem === 'no') button.style.opacity = '.5';
     button.addEventListener('click', () => { state.model = model.id; writeStore(MODEL_KEY, model.id); renderModels(model.id); });
     $('models').appendChild(button);
   }
@@ -529,7 +551,11 @@ function renderModels(selectedId, storageGB = state.storageGB) {
     $('btn-start').disabled = true;
     $('progress-note').textContent = `空き容量が足りません（必要 約${(chosen.sizeMB / 1024).toFixed(1)}GB / 空き 約${storageGB}GB）。軽いモデルを選ぶか、端末の空きを増やしてください。`;
   } else if (!$('failure') || $('failure').hidden) {
-    $('progress-note').textContent = chosenFit === 'tight' ? '空きがぎりぎりです。途中で失敗したら軽いモデルをお試しください。' : '';
+    // ★メモリ不足でも**止めはしない**（推測で妨げない）。ただし黙って通さない
+    const chosenMem = chosen ? memoryFit(chosen, memoryGB) : 'unknown';
+    $('progress-note').textContent = chosenMem === 'no'
+      ? `このモデルは、この端末のメモリ（約${memoryGB}GB）には重すぎます。目安は約${chosen.need}GB以上です。進まないときは軽いモデルをお試しください。`
+      : chosenFit === 'tight' ? '空きがぎりぎりです。途中で失敗したら軽いモデルをお試しください。' : '';
     $('btn-start').disabled = false;
   }
 }
@@ -546,6 +572,55 @@ function addMessage(role, text, pending = false) {
 function renderHistory() {
   $('msgs').innerHTML = '';
   for (const message of state.history) addMessage(message.role, message.text);
+}
+
+/** 秒を「◯分◯秒」に。数字だけだと長さの実感が湧かない */
+function elapsedText(seconds) {
+  if (seconds < 60) return `${seconds}秒`;
+  return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, '0')}秒`;
+}
+
+/**
+ * 進捗が動かなくなったときに、それが分かる文言を返す。
+ *
+ * ★「0%」を見せ続けるのが一番いけない。進んでいるのか、固まったのか、
+ *   待てば終わるのかが**利用者にも作った側にも判別できない**。
+ *   経過時間と「最後に進んだのはいつか」を出せば、少なくとも区別がつく。
+ */
+function clockText(elapsedSec, sinceProgressSec) {
+  if (sinceProgressSec >= 180) {
+    return `${elapsedText(elapsedSec)}経過（${elapsedText(sinceProgressSec)}進んでいません）。`
+      + '電波の弱い場所だと止まって見えることがあります。軽いモデルに変えると確実に進みます。';
+  }
+  if (sinceProgressSec >= 45) {
+    return `${elapsedText(elapsedSec)}経過（${elapsedText(sinceProgressSec)}進んでいません）。大きなかたまりを取得中かもしれません。`;
+  }
+  return `${elapsedText(elapsedSec)}経過`;
+}
+
+/**
+ * 経過時計を回す。**画面と別の糸でモデルを読んでいる証でもある**——
+ * 同じ糸で読んでいれば、ここは書き換わらずに固まる。
+ */
+function startClock() {
+  stopClock();
+  const began = Date.now();
+  state.lastProgressAt = began;
+  $('progress-clock').hidden = false;
+  const tick = () => {
+    const now = Date.now();
+    $('progress-clock').textContent = clockText(
+      Math.round((now - began) / 1000),
+      Math.round((now - state.lastProgressAt) / 1000));
+  };
+  tick();
+  state.clock = setInterval(tick, 1000);
+}
+
+function stopClock() {
+  if (state.clock) clearInterval(state.clock);
+  state.clock = null;
+  $('progress-clock').hidden = true;
 }
 
 function setProgress(percent, label) {
@@ -603,6 +678,7 @@ function showFailure(env, message) {
     state.unreachable.length ? `届かなかった行き先: ${state.unreachable.join(' / ')}` : '',
     state.retries ? `やり直した回数: ${state.retries}回` : '',
     `配信経路: ${serviceWorkerNote()}`,
+    `モデルを動かした糸: ${state.mainThreadOnly ? '画面と同じ糸（別の糸で動かせなかった）' : '画面とは別の糸（Web Worker）'}`,
     `モデル: ${model ? `${model.name} (${state.model}) ${(model.sizeMB / 1024).toFixed(1)}GB` : state.model}`,
     `WebGPU: ${env.webgpu ? 'あり' : 'なし'} / float16: ${env.f16 ? 'あり' : 'なし'} / 安全な接続: ${env.secure ? 'はい' : 'いいえ'}`,
     `GPUの機能: ${(env.features ?? []).join(', ') || '取得できず'}`,
@@ -646,6 +722,8 @@ function failureHint(message) {
  *   発生して、実際には届くのに「届かない」と誤って報告する。
  *   重みは小さい設定ファイル（GET）、WebAssemblyは HEAD で当たりだけ見る。
  */
+const PREFLIGHT_TIMEOUT_MS = 12_000;
+
 async function preflight(webllm, modelId) {
   const record = webllm.prebuiltAppConfig.model_list.find((m) => m.model_id === modelId);
   const targets = [];
@@ -659,10 +737,16 @@ async function preflight(webllm, modelId) {
   const unreachable = [];
   for (const target of targets) {
     try {
-      const res = await fetch(target.url, { method:target.method, cache:'no-store' });
+      // ★時間切れを必ず付ける。fetch には既定の制限時間が無く、相手が接続だけ受けて
+      //   何も返さない（回線側のフィルタ等）と**永遠に待って0%のまま止まる**。
+      //   例外も出ないので、利用者からは「固まった」としか見えない
+      const res = await fetch(target.url, { method:target.method, cache:'no-store',
+        signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS) });
       if (!res.ok) unreachable.push(`${target.host}: HTTP ${res.status}`);
     } catch (cause) {
-      unreachable.push(`${target.host}: ${cause?.message ?? cause}`);
+      const reason = cause?.name === 'TimeoutError'
+        ? `${Math.round(PREFLIGHT_TIMEOUT_MS / 1000)}秒たっても応答がありません` : (cause?.message ?? cause);
+      unreachable.push(`${target.host}: ${reason}`);
     }
   }
   return unreachable;
@@ -672,6 +756,71 @@ async function preflight(webllm, modelId) {
 function isNetworkFailure(cause) {
   const text = `${cause?.name ?? ''} ${cause?.message ?? cause ?? ''}`;
   return /failed to fetch|networkerror|network error|load failed|the network connection was lost/i.test(text);
+}
+
+/**
+ * モデルを用意する。**画面とは別の糸（Web Worker）で動かす。**
+ *
+ * ★これを画面と同じ糸でやると、取得〜WebAssemblyのコンパイル〜GPUへの転送のあいだ
+ *   （スマホでは数分）**画面がまるごと固まる**。進捗も再描画されないので「0%のまま
+ *   動かない」ように見え、進んでいるのか止まっているのかすら分からなくなる
+ *   （2026-09-03 深澤報告。画面の一部だけが描き変わる崩れ方をしていた）。
+ * ★Worker が作れない・落ちる端末では画面と同じ糸へ落とす。**動かないより固まる方がまし**
+ *   ——ただし落ちた事実は隠さず画面に出す。
+ */
+async function startModel(webllm, modelId, onProgress) {
+  if (!state.mainThreadOnly) {
+    state.workerError = '';
+    const worker = spawnWorker();
+    if (worker) {
+      try {
+        // ★worker 自体が動かなかった場合だけを拾うために競争させる。読み込みに失敗した
+        //   worker は「返事をしないまま黙る」ことがあり、待つだけでは 0% で止まってしまう
+        return await Promise.race([
+          webllm.CreateWebWorkerMLCEngine(worker, modelId, { initProgressCallback:onProgress }),
+          workerBroken(worker),
+        ]);
+      } catch (cause) {
+        // ★モデル側の失敗（シェーダー・通信・容量）を「糸が壊れた」と読み違えないこと。
+        //   読み違えると、同じ失敗を画面と同じ糸でもう一度やり直して二度手間になり、
+        //   しかも次からずっと固まる経路へ落ちてしまう（検査#40 が捕まえた）
+        if (!state.workerError) throw cause;
+        state.lastError = `別の糸で動かせませんでした: ${state.workerError}`;
+        state.mainThreadOnly = true;
+        setProgress(0, '別の糸で動かせないため、読み込み中は画面が固まります… / Falling back to the main thread…');
+      }
+    }
+  }
+  return await webllm.CreateMLCEngine(modelId, { initProgressCallback:onProgress });
+}
+
+/** 別の糸を用意する。作れない端末では null を返し、画面と同じ糸へ落とす */
+function spawnWorker() {
+  if (typeof Worker !== 'function') {
+    state.mainThreadOnly = true;
+    state.lastError = 'この端末では別の糸（Web Worker）を作れません';
+    return null;
+  }
+  try {
+    state.worker?.terminate?.();
+    state.worker = new Worker('assets/js/zero1-worker.js', { type:'module' });
+    return state.worker;
+  } catch (cause) {
+    state.worker = null;
+    state.mainThreadOnly = true;
+    state.lastError = `別の糸を作れませんでした: ${cause?.message ?? cause}`;
+    return null;
+  }
+}
+
+/** 糸そのものが落ちたときだけ拒否する約束。モデルの失敗とは区別する */
+function workerBroken(worker) {
+  return new Promise((_, reject) => {
+    worker.addEventListener('error', (event) => {
+      state.workerError = event?.message || '別の糸を読み込めませんでした';
+      reject(new Error(state.workerError));
+    });
+  });
 }
 
 /**
@@ -687,11 +836,10 @@ function isNetworkFailure(cause) {
 async function createEngine(webllm, modelId, attempts = 3) {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await webllm.CreateMLCEngine(modelId, {
-        initProgressCallback: (report) => {
-          const { percent, label } = progressText(report);
-          setProgress(percent, attempt > 1 ? `${label}（続きから ${attempt}回目）` : label);
-        },
+      return await startModel(webllm, modelId, (report) => {
+        state.lastProgressAt = Date.now();
+        const { percent, label } = progressText(report);
+        setProgress(percent, attempt > 1 ? `${label}（続きから ${attempt}回目）` : label);
       });
     } catch (cause) {
       if (attempt >= attempts || !isNetworkFailure(cause)) throw cause;
@@ -712,8 +860,10 @@ async function startEngine() {
   state.lastError = '';
   state.unreachable = [];
   state.retries = 0;
+  state.mainThreadOnly = false;
   state.stage = 'ライブラリの読み込み';
   setProgress(0, 'ライブラリを読み込んでいます… / Loading library…');
+  startClock();
   try {
     const { module: webllm, verified } = await loadLibrary();
     if (!verified) {
@@ -738,6 +888,7 @@ async function startEngine() {
     state.stage = 'モデルの取得と準備（初回は数分かかります）';
     setProgress(0, 'モデルを準備しています… / Preparing model…');
     state.engine = await createEngine(webllm, state.model);
+    stopClock();
     $('setup').classList.add('hidden');
     $('chat').classList.remove('hidden');
     $('composer').classList.remove('hidden');
@@ -746,6 +897,9 @@ async function startEngine() {
     if (!state.history.length) addMessage('assistant', 'おかえりなさい、ゼロさん。ここはスマホの中だけで動きます。何から始めますか？');
   } catch (cause) {
     // 失敗の理由をそのまま出す。「使えません」だけだと打つ手が無くなる
+    stopClock();
+    state.worker?.terminate?.();
+    state.worker = null;
     const message = `${cause?.name ?? 'Error'}: ${cause?.message ?? cause}`;
     $('progress-note').textContent = `起動できませんでした（${state.stage}）: ${cause?.message ?? cause}`;
     showFailure(env, message);

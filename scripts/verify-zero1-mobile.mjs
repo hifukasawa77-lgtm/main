@@ -322,9 +322,13 @@ check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0
 //   誰も原因に辿り着けない**。ここは合成のライブラリを差し込んで通しで確かめる。
 //   ★純粋関数（preflight 等）だけを叩く検査にしないこと。画面がそれを使っていなければ
 //     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
-async function withEngine({ reachable = true, failTimes = 0, failWith = 'network' } = {}) {
+async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false } = {}) {
   const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await scoped.addInitScript(([canReach, times, kind]) => {
+  await scoped.addInitScript(([canReach, times, kind, banWorker]) => {
+    if (banWorker) {
+      // Worker が作れない端末の再現（作れなければ画面と同じ糸へ落ちるはず）
+      Object.defineProperty(window, 'Worker', { configurable: true, value: function () { throw new Error('Worker は使えません'); } });
+    }
     Object.defineProperty(navigator, 'gpu', { configurable: true, value: {
       requestAdapter: async () => ({ features: new Set() }),   // float16なし = 深澤さんの端末
     }});
@@ -332,13 +336,18 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     Object.defineProperty(navigator, 'storage', { configurable: true, value: {
       estimate: async () => ({ quota: 10.7e9, usage: 0 }),
     }});
-    window.__ZERO1_PROBE = { attempts: 0, requests: [] };
+    window.__ZERO1_PROBE = { attempts: 0, requests: [], workerUsed: 0, mainThreadUsed: 0 };
     // 取得先への問い合わせだけを横取りする（ページ自身の読み込みは素通し）
     const original = window.fetch.bind(window);
     window.fetch = (input, init) => {
       const url = typeof input === 'string' ? input : input.url;
       if (/huggingface\.co|raw\.githubusercontent\.com/.test(url)) {
-        window.__ZERO1_PROBE.requests.push({ url, method: init?.method ?? 'GET', headers: Object.keys(init?.headers ?? {}) });
+        window.__ZERO1_PROBE.requests.push({ url, method: init?.method ?? 'GET', headers: Object.keys(init?.headers ?? {}), signal: Boolean(init?.signal) });
+        if (canReach === 'hang') {
+          // ★相手が接続だけ受けて何も返さない状態の再現。時間切れを渡していなければ
+          //   ここは永遠に解決せず、検査は待ちきれずに落ちる（＝時間切れの有無を見ている）
+          return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal.reason)));
+        }
         if (!canReach) return Promise.reject(new TypeError('Failed to fetch'));
         return Promise.resolve(new Response('{}', { status: 200 }));
       }
@@ -353,7 +362,13 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
           model_lib: `https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/${v.id}.wasm`,
         })) };
       },
+      CreateWebWorkerMLCEngine: async (worker, id, opts) => {
+        window.__ZERO1_PROBE.workerUsed++;
+        window.__ZERO1_PROBE.workerIsWorker = worker instanceof Worker;
+        return window.__ZERO1_WEBLLM.CreateMLCEngine(id, opts);
+      },
       CreateMLCEngine: async (id, opts) => {
+        if (!window.__ZERO1_PROBE.workerUsed || window.__ZERO1_PROBE.attempts) window.__ZERO1_PROBE.mainThreadUsed++;
         window.__ZERO1_PROBE.attempts++;
         opts?.initProgressCallback?.({ progress: 0.5, text: 'Fetching param cache' });
         if (window.__ZERO1_PROBE.attempts <= times) {
@@ -362,7 +377,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
         return { chat: { completions: { create: async () => ({}) } } };
       },
     };
-  }, [reachable, failTimes, failWith]);
+  }, [reachable, failTimes, failWith, noWorker]);
   await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
   await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
   await scoped.locator('#btn-start').click();
@@ -375,6 +390,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     failed: !document.getElementById('failure').hidden,
     chatting: !document.getElementById('chat').classList.contains('hidden'),
     stage: window.ZERO1_MOBILE_STATE?.stage ?? '',
+    mainThreadOnly: window.ZERO1_MOBILE_STATE?.mainThreadOnly ?? null,
     probe: window.__ZERO1_PROBE,
   }));
   await scoped.close();
@@ -409,6 +425,131 @@ check('40. 通信起因でない失敗は、やり直さず即座に理由を出
   broken.failed && broken.probe.attempts === 1, `取得試行 ${broken.probe.attempts}回`);
 check('41. GPUが原因のときは、GPU向けの打つ手を出す',
   /かるい|GPU/.test(broken.hint), broken.hint.slice(0, 40));
+
+// --- 読み込み中に画面が固まらないか（0%のまま動かない、の正体） ---------------
+// ★2026-09-03、深澤さんの端末で「エラーは出ないが0%のまま進まない」。
+//   モデルの読み込み（取得・WebAssemblyのコンパイル・GPUへの転送）を画面と同じ糸で
+//   やると、その数分ぶん画面がまるごと固まる。進捗も再描画されないので、進んでいるのか
+//   止まっているのかすら分からない。**例外は一切出ない**ので検査で押さえるしかない。
+const worker = await withEngine({});
+check('42. モデルは画面とは別の糸（Web Worker）で動かす',
+  worker.probe.workerUsed === 1 && worker.probe.workerIsWorker === true && worker.mainThreadOnly === false,
+  `別の糸 ${worker.probe.workerUsed}回 / 実物のWorker ${worker.probe.workerIsWorker}`);
+
+// Worker が使えない端末では画面と同じ糸へ落とす（動かないより固まる方がまし）。
+// ただし落ちた事実は隠さない
+const fallback = await withEngine({ noWorker: true });
+check('43. Workerが作れない端末でも起動する（画面と同じ糸へ落ちる）',
+  fallback.chatting && fallback.mainThreadOnly === true, `固まる経路: ${fallback.mainThreadOnly}`);
+
+// --- 「0%」が固まりなのか進行中なのかを、利用者が区別できるか -----------------
+const clock = await page.evaluate(() => {
+  const { clockText, elapsedText } = window.ZERO1_MOBILE;
+  return { moving: clockText(30, 3), stalled: clockText(400, 200), fmtSec: elapsedText(45), fmtMin: elapsedText(125) };
+});
+check('44. 進捗が止まったら「止まっている」と分かる文言になる',
+  !/進んでいません/.test(clock.moving) && /進んでいません/.test(clock.stalled) && /軽いモデル/.test(clock.stalled),
+  clock.stalled.slice(0, 40));
+check('45. 経過時間は分秒で読める形にする', clock.fmtSec === '45秒' && clock.fmtMin === '2分05秒',
+  `${clock.fmtSec} / ${clock.fmtMin}`);
+
+// 経過時計が実際に動くこと＝画面の糸が空いていること。ここが止まるなら固まっている
+const ticking = await (async () => {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(() => {
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async () => ({ features: new Set() }) } });
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: { estimate: async () => ({ quota: 10.7e9, usage: 0 }) } });
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (/huggingface\.co|raw\.githubusercontent\.com/.test(url)) return Promise.resolve(new Response('{}', { status: 200 }));
+      return original(input, init);
+    };
+    window.__ZERO1_WEBLLM = {
+      get prebuiltAppConfig() {
+        const tiers = window.ZERO1_MOBILE?.MODEL_TIERS ?? [];
+        return { model_list: tiers.flatMap((t) => [t.f16, t.f32]).map((v) => ({
+          model_id: v.id, model: `https://huggingface.co/mlc-ai/${v.id}`,
+          model_lib: `https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/${v.id}.wasm`,
+        })) };
+      },
+      // 読み込みに時間がかかる状態（進捗を1度も返さない）の再現
+      CreateWebWorkerMLCEngine: () => new Promise(() => {}),
+      CreateMLCEngine: () => new Promise(() => {}),
+    };
+  });
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  await scoped.locator('#btn-start').click();
+  await scoped.waitForFunction(() => !document.getElementById('progress-clock').hidden, { timeout: 10_000 });
+  const first = await scoped.locator('#progress-clock').innerText();
+  await scoped.waitForFunction((was) => document.getElementById('progress-clock').innerText !== was, first, { timeout: 8_000 })
+    .catch(() => {});
+  const second = await scoped.locator('#progress-clock').innerText();
+  await scoped.close();
+  return { first, second };
+})();
+check('46. 進捗が0%のあいだも、経過時間が動き続ける（固まっていないことが分かる）',
+  ticking.first !== '' && ticking.second !== ticking.first, `${ticking.first} → ${ticking.second}`);
+
+// --- 相手が応答しないとき、0%で永久に待たない -------------------------------
+// ★fetch には既定の制限時間が無い。時間切れを渡していないと、この検査は
+//   永遠に待って落ちる（＝時間切れの有無そのものを見ている）
+const hung = await withEngine({ reachable: 'hang' });
+check('47. 取得先が応答しないときは時間切れにする（0%で永久に待たない）',
+  hung.failed && /応答がありません/.test(hung.detail),
+  hung.detail.split('\n').find((l) => l.startsWith('届かなかった')) ?? '（行が無い）');
+check('48. 時間切れの仕掛けを実際に渡している',
+  hung.probe.requests.length > 0 && hung.probe.requests.every((r) => r.signal === true));
+
+// --- メモリが足りないモデルを、黙って選ばせない -------------------------------
+// ★空き容量（保存できるか）とメモリ（動かせるか）は別の話。メモリ4GBの端末に
+//   2.5GBのモデルを警告なしで選ばせていた。載らないと取得は最後まで進むのに
+//   GPUへ載せる段で固まる——例外が出ないので「進まない」としか見えない
+const heavy = await (async () => {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(() => {
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async () => ({ features: new Set() }) } });
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: { estimate: async () => ({ quota: 10.7e9, usage: 0 }) } });
+  });
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  // 深澤さんが実際に選んでいた「日本語に強い」（必要メモリ6GB）を押す
+  const japanese = scoped.locator('.model').nth(2);
+  const label = await japanese.innerText();
+  await japanese.click();
+  const note = await scoped.locator('#progress-note').innerText();
+  await scoped.close();
+  return { label, note };
+})();
+check('49. メモリが足りないモデルは、一覧の時点で重すぎると伝える',
+  /重すぎます/.test(heavy.label), heavy.label.replace(/\n/g, ' ').slice(0, 50));
+check('50. 選んだ後も、必要なメモリの目安を出す（止めはしない）',
+  /重すぎます/.test(heavy.note) && /6GB/.test(heavy.note), heavy.note.slice(0, 50));
+
+// --- Workerが読む版が、ページの importmap と同じか ---------------------------
+// ★ずれると、integrity を通った版とは別の版を読み込んでしまう
+const workerSrc = fs.readFileSync(path.join(ROOT, 'assets/js/zero1-worker.js'), 'utf8');
+const workerUrl = workerSrc.match(/WEBLLM_URL\s*=\s*'([^']+)'/)?.[1] ?? '';
+check('51. workerが読むライブラリの版が、ページの importmap と同じ',
+  workerUrl === libUrl, `worker ${workerUrl} / ページ ${libUrl}`);
+
+// --- CSPが「別の糸」を止めていないか ------------------------------------------
+// ★worker-src を締めると worker は**例外もエラーも出さずに黙る**（作られはするが動かない）。
+//   そうなると読み込みが 0% から進まない状態へ逆戻りする
+{
+  const csp = fs.readFileSync(path.join(ROOT, PAGE), 'utf8')
+    .match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1] ?? '';
+  const directive = (name) => (csp.split(';').map((d) => d.trim()).find((d) => d.startsWith(name + ' ')) ?? '');
+  const workerHost = new URL(workerUrl).origin;
+  check('52. CSPが別の糸（worker）と、そこが読むライブラリを止めていない',
+    /worker-src[^;]*'self'/.test(csp)
+      && directive('script-src').includes(workerHost)
+      && directive('connect-src').includes(workerHost),
+    `worker-src: ${directive('worker-src') || '（無し）'}`);
+}
 
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });
