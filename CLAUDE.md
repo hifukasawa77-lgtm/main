@@ -9,6 +9,8 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
+- `zero-1-mobile.html` — ZERO-1 Mobile（WebGPUで端末内実行するローカルLLM）＋エアタッチ
+- `assets/js/gesture-pointer.js` — エアタッチ（カメラに指をかざして画面を操作する）。他ページからも使える独立モジュール
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。`obsidian-vault/`（第二の脳）とは別物。使い分けは「Obsidian メモリ層（Claudechord Vault）」節の早見表を参照。詳細: `claudechord-vault/README.md`）
 
 ## デザイン・スタイルのルール
@@ -209,6 +211,39 @@ node scripts/verify-bakumatsu-map.mjs   # 拠点14件が地図の陸に載って
   必ず 13×13 画素のブロック平均で判定する（`verify-bakumatsu-map.mjs` の `isLand`）
 - 地図北西の雲は陸と誤判定するが、拠点は一つもその領域に無いので実害はない。
   閾値を触ったら「描画位置」の検査結果で校正すること
+
+## ZERO-1 Mobile とエアタッチの必須チェック（zero-1-mobile.html / assets/js/gesture-pointer.js を触ったら必ず実行）
+
+```bash
+node scripts/verify-zero1-mobile.mjs      # 端末判定→モデル選び→会話の組み立て→画面（49項目）
+node scripts/verify-gesture-pointer.mjs   # エアタッチ: 手ぶれ取り→押下判定→タップ/スワイプ/ドラッグ→カメラ入切（50項目）
+```
+
+**エアタッチ（カメラに指をかざしてポインター操作）は3層に分けてある**。推定層（MediaPipe
+HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用層（`PointerDriver`・実DOMへの
+イベント合成）。ヘッドレスにはカメラもGPUも無いので、**この分離が無いと一行も機械検査できない**。
+検査は `window.__AIRTOUCH_SOURCE_FACTORY` で推定層を合成データへ差し替え、時刻も明示的に渡す
+（rAF の実時間に頼ると「たまに落ちる検査」しか書けない）。
+
+- **合成した `PointerEvent` からは互換の `MouseEvent` が自動生成されない**。本物のポインターと違い、
+  `pointerdown` を出してもブラウザは `mousedown` を作ってくれない。**両方出さないと**、
+  mouse系だけを聞いている既存のUIが一切反応しない（例外は出ず、ただ無反応になる）
+- **CSSの `:hover` は合成イベントでは点かない**（ブラウザが持つ状態のため）。見た目のホバーは
+  自前のクラス（`.airtouch-hover`）で付ける
+- **オーバーレイに `pointer-events:none` を付け忘れると、`elementFromPoint` が自分のカーソルを拾い、
+  永遠に何も押せなくなる**。例外は出ない
+- **起動に失敗したときはオーバーレイを片付ける**。残すと透明な層が画面に居座り、
+  次に開いた画面でカーソルの残骸が出る（検査42b・47が見張る）
+- **ピンチ量は手の大きさで正規化する**。生の指間距離で閾値を切ると、カメラから離れた瞬間に
+  「ずっと摘まんでいる」判定になる
+- **押下の閾値は上下2つ（ヒステリシス）**。1つにすると境目の揺れで押下が連打される。
+  検査の並びは「押した後、上下の閾値の“間”で往復させる」こと——**閾値の外で往復させる並びだと、
+  閾値を1つに潰しても同じ結果になってすり抜ける**（故障注入で実際にすり抜けた）
+- **手を見失ったら押下を解除する**。しないと掴んだものが張り付いたまま固まる
+- **ライブラリの版は `assets/js/gesture-pointer.js` の `VISION_VERSION` と importmap の両方にある**。
+  ずれると、integrity検証を通った版とは**別の版**を直接URLで読み直してしまう（検査#5が突き合わせる）
+- カメラ映像は端末から出ない。外へ出る通信は手の認識モデル（`storage.googleapis.com`・約7MB）の
+  初回取得だけで、以後は Cache Storage に残る
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
