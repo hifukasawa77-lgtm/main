@@ -148,6 +148,8 @@ REQ=$( {
   req_for siro_ichi.csv     "node scripts/verify-castle-csv.mjs"
   req_for force_list.csv    "node scripts/verify-force-list.mjs"
   req_for assets/js/agent-data.js "node scripts/agent-evolve-check.mjs / gen-agent-knowledge.mjs / agent-dynamic-test.cjs"
+  req_for zero-1-mobile.html "node scripts/verify-zero1-mobile.mjs / verify-gesture-pointer.mjs"
+  req_for assets/js/gesture-pointer.js "node scripts/verify-gesture-pointer.mjs"
 } | sort -u )
 if [ -z "$REQ" ]; then ok "対象ファイルの変更なし"; else
   while IFS= read -r r; do [ -n "$r" ] && note_warn "要実行: $r"; done <<< "$REQ"
