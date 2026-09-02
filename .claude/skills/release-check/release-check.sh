@@ -152,6 +152,7 @@ REQ=$( {
   req_for assets/js/agent-data.js "node scripts/agent-evolve-check.mjs / gen-agent-knowledge.mjs / agent-dynamic-test.cjs"
   req_for zero-1-mobile.html "node scripts/verify-zero1-mobile.mjs / verify-gesture-pointer.mjs"
   req_for assets/js/gesture-pointer.js "node scripts/verify-gesture-pointer.mjs"
+  req_for assets/js/zero1-worker.js "node scripts/verify-zero1-mobile.mjs"
   req_for sw.js             "node scripts/verify-service-worker.mjs（別オリジンの横取り＝全ページの通信に効く）"
   req_prefix note/            "node scripts/verify-note-articles.mjs（noteへ貼る前に必須）"
 } | sort -u )
