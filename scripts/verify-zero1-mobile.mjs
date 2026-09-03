@@ -323,9 +323,19 @@ check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0
 //   ★純粋関数（preflight 等）だけを叩く検査にしないこと。画面がそれを使っていなければ
 //     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
 async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false,
-  workerLoads = true, timeouts = null, hang = false, gpuLoss = 0, ask = '' } = {}) {
+  workerLoads = true, timeouts = null, hang = false, gpuLoss = 0, ask = '', longAnswer = false, stopAt = 0,
+  speak = false, reply = '', chip = -1, noLibrary = false } = {}) {
   const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes]) => {
+  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes, streamsLong, readsAloud, fixedReply, skipLibrary]) => {
+    window.__ZERO1_LONG = streamsLong;
+    window.__ZERO1_REPLY = fixedReply;
+    // 読み上げが実際に走った回数を数える。止めたのに読み上げが続いたら止めた意味が無い
+    window.__ZERO1_SPOKEN = 0;
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: {
+      cancel() {}, speak() { window.__ZERO1_SPOKEN++; },
+    }});
+    window.SpeechSynthesisUtterance = function (text) { this.text = text; };
+    if (readsAloud) { try { localStorage.setItem('zero1-mobile-speak', 'true'); } catch { /* 無視 */ } }
     if (clocks) window.__ZERO1_TIMEOUTS = clocks;
     window.__ZERO1_HANG = neverFinishes;
     window.__ZERO1_GPU_LOSS = gpuLossTimes;
@@ -361,6 +371,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
       }
       return original(input, init);
     };
+    if (skipLibrary) return;   // 合成のライブラリを差し込まない＝本体を取りに行く経路を通す
     window.__ZERO1_WEBLLM = {
       get prebuiltAppConfig() {
         const tiers = window.ZERO1_MOBILE?.MODEL_TIERS ?? [];
@@ -393,13 +404,31 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
             lost.name = 'AbortError';
             throw lost;
           }
+          // 長い返答（止める操作を確かめるため）。interruptGenerate で打ち切れること、
+          // 打ち切れなくても受け取る側が抜けることの両方を見たいので、止まるのは
+          // **ページ側が抜けたとき**だけにしてある
+          if (window.__ZERO1_LONG) {
+            return (async function* () {
+              for (let i = 0; i < 400; i++) {
+                if (window.__ZERO1_PROBE.interrupted) return;
+                yield { choices: [{ delta: { content: `あ${i} ` } }] };
+                await new Promise((r) => setTimeout(r, 12));
+              }
+            })();
+          }
+          // 返答の中身を差し替えられるようにしておく（体裁の組み立てを通しで確かめるため）
+          const tokens = window.__ZERO1_REPLY
+            ? window.__ZERO1_REPLY.match(/[\s\S]{1,8}/g)
+            : ['こんに', 'ちは', '。'];
           return (async function* () {
-            for (const token of ['こんに', 'ちは', '。']) yield { choices: [{ delta: { content: token } }] };
+            for (const token of tokens) yield { choices: [{ delta: { content: token } }] };
           })();
-        } } } };
+        } } },
+        // 止めろと言われたことが、ちゃんとモデル側まで届いているか
+        interruptGenerate: () => { window.__ZERO1_PROBE.interrupted = true; } };
       },
     };
-  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss]);
+  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss, longAnswer, speak, reply, noLibrary]);
   // ★worker は実物を動かす（合図の受け渡しごと確かめる）。ただしCDNへは出ない
   await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
     status: workerLoads ? 200 : 503, contentType: 'text/javascript',
@@ -411,16 +440,49 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
   await scoped.waitForFunction(
     () => !document.getElementById('failure').hidden || !document.getElementById('chat').classList.contains('hidden'),
     { timeout: 20_000 });
+  if (chip >= 0) {
+    await scoped.locator('#chips button').nth(chip).click();
+    await scoped.waitForFunction(() => window.ZERO1_MOBILE_STATE?.busy === false
+      && (window.ZERO1_MOBILE_STATE?.history?.length ?? 0) >= 2, { timeout: 20_000 }).catch(() => {});
+  }
   if (ask) {
     await scoped.locator('#input').fill(ask);
     await scoped.locator('#btn-send').click();
+    if (stopAt) {
+      // 流れ始めてから止める（まだ1文字も出ていない状態で押すと、何を止めたのか分からない）
+      await scoped.waitForFunction(() => (document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '').length > 4,
+        { timeout: 10_000 }).catch(() => {});
+      await scoped.waitForTimeout(stopAt);
+      const sawWhileStreaming = await scoped.evaluate(() => ({
+        label: document.getElementById('btn-send').getAttribute('aria-label'),
+        stopClass: document.getElementById('btn-send').classList.contains('stop'),
+        disabled: document.getElementById('btn-send').disabled,
+        length: (document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '').length,
+      }));
+      await scoped.locator('#btn-send').click();
+      scoped.__stopped = sawWhileStreaming;
+    }
     await scoped.waitForFunction(() => {
       const last = document.querySelector('#msgs .msg:last-child');
-      return last && !last.classList.contains('pending') && !/考えています|載せ直して/.test(last.textContent);
+      return last && !last.classList.contains('pending')
+        && !/考えています|載せ直して/.test(last.textContent)
+        && window.ZERO1_MOBILE_STATE?.busy === false;
     }, { timeout: 30_000 }).catch(() => {});
   }
   const result = await scoped.evaluate(() => ({
     reply: document.querySelector('#msgs .msg:last-child')?.textContent ?? '',
+    body: document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '',
+    tag: document.querySelector('#msgs .msg:last-child .tag')?.textContent ?? '',
+    sendLabel: document.getElementById('btn-send').getAttribute('aria-label'),
+    sendStop: document.getElementById('btn-send').classList.contains('stop'),
+    stored: JSON.parse(localStorage.getItem('zero1-mobile-history') ?? '[]'),
+    bodyHtml: document.querySelector('#msgs .msg.ai:last-of-type .body')?.innerHTML ?? '',
+    announced: document.getElementById('announce').textContent,
+    headNote: document.getElementById('head-note').textContent,
+    chips: [...document.querySelectorAll('#chips button')].map((b) => b.textContent),
+    copyable: Boolean(document.querySelector('#msgs .msg.ai:last-of-type .tools button')),
+    pwned: window.__PWNED ?? 0,
+    spoken: window.__ZERO1_SPOKEN,
     detail: document.getElementById('failure-detail').textContent,
     hint: document.getElementById('failure-hint').textContent,
     failed: !document.getElementById('failure').hidden,
@@ -430,6 +492,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     workerError: window.ZERO1_MOBILE_STATE?.workerError ?? '',
     probe: window.__ZERO1_PROBE,
   }));
+  result.whileStreaming = scoped.__stopped ?? null;
   await scoped.close();
   return result;
 }
@@ -648,6 +711,317 @@ check('61. 読み込みのあいだ、画面を消させない（wake lock を�
       && directive('connect-src').includes(workerHost),
     `worker-src: ${directive('worker-src') || '（無し）'}`);
 }
+
+// --- 生成を止められるか -------------------------------------------------------
+// ★0.5〜3B級は的外れな長文を書き始めることがあり、出し切るまで数十秒かかる。
+//   その間ずっとGPUが回るので電池にも効く。**待つ以外の選択肢を必ず1つ置く**。
+//   例外もエラーも出ない類の不便なので、検査で押さえるしかない。
+const stopped = await withEngine({ ask: '長い話をして', longAnswer: true, stopAt: 250, speak: true });
+check('62. 生成中、送信ボタンは「止める」に変わる（押せないボタンにしない）',
+  stopped.whileStreaming?.stopClass === true
+    && /止める|Stop/.test(stopped.whileStreaming?.label ?? '')
+    && stopped.whileStreaming?.disabled === false,
+  JSON.stringify(stopped.whileStreaming));
+check('63. 止めると、その場で生成が終わる',
+  stopped.body.length > 0 && stopped.body.length < 400 * 4,
+  `${stopped.body.length}文字で停止`);
+check('64. 止めろがモデル側にも届く（受け取る側で抜けるだけにしない）',
+  stopped.probe.interrupted === true);
+check('65. 止めるまでに書けた分は捨てない（止める＝やり直しにしない）',
+  stopped.stored.some((m) => m.role === 'assistant' && m.text.length > 0)
+    && stopped.stored.at(-1)?.text === stopped.body,
+  `履歴 ${stopped.stored.length}件 / 末尾 ${String(stopped.stored.at(-1)?.text ?? '').slice(0, 12)}`);
+check('66. 止めたことが画面に残る（黙って途切れさせない）',
+  /止め|Stopped/.test(stopped.tag), stopped.tag);
+check('67. 止めたら読み上げも走らせない（止めた意味が消える）',
+  stopped.spoken === 0, `読み上げ ${stopped.spoken}回`);
+check('68. 止めたあとは、また送れる状態へ戻る',
+  stopped.sendStop === false && /送信|Send/.test(stopped.sendLabel ?? ''), stopped.sendLabel);
+
+// 止めなければ最後まで流れて、読み上げも走る（62〜68が「常に止まる」にすり替わらないこと）
+const finished = await withEngine({ ask: 'こんにちは', speak: true });
+check('69. 止めなければ最後まで答え、読み上げも走る',
+  /こんにちは。/.test(finished.body) && finished.spoken === 1 && !/止め|Stopped/.test(finished.tag),
+  `${finished.body} / 読み上げ ${finished.spoken}回`);
+
+// --- 端末に残っているモデルを、残っていると言えるか ---------------------------
+// ★2回目以降は取得が要らないのに、画面は常に「初回だけダウンロードします」と言っていた。
+//   すぐ起動するのに「これから2.5GB落ちる」ように見えるのは、そのまま離脱の理由になる。
+async function withCaches({ seeded = [], broken = false, quotaGB = 10.7 } = {}) {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(([urls, throws, quota]) => {
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async () => ({ features: new Set() }) } });
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: { estimate: async () => ({ quota: quota * 1e9, usage: 0 }) } });
+    // 合成の Cache Storage。実物と同じく「名前 → 要求の一覧」の2段
+    // モデル削除が会話を巻き込まないことを見るため、先に履歴を入れておく
+    try { localStorage.setItem('zero1-mobile-history', JSON.stringify([{ role:'user', text:'消さないで' }])); } catch { /* 無視 */ }
+    const store = new Map([['webllm/model', new Set(urls)], ['other-cache', new Set(['https://example.com/x'])]]);
+    window.__ZERO1_CACHE = store;
+    Object.defineProperty(window, 'caches', { configurable: true, value: {
+      keys: async () => { if (throws) throw new DOMException('storage unavailable'); return [...store.keys()]; },
+      open: async (name) => ({
+        keys: async () => [...(store.get(name) ?? new Set())].map((url) => ({ url })),
+        delete: async (url) => store.get(name)?.delete(url) ?? false,
+      }),
+    }});
+  }, [seeded, broken, quotaGB]);
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  return scoped;
+}
+
+// 「ふつう」（q4f32版＝float16の無い端末）を落とし終えている状態を作る
+const keptId = (await page.evaluate(() => window.ZERO1_MOBILE.resolveModels(false)[1].id));
+const kept = await withCaches({ seeded: [
+  `https://huggingface.co/mlc-ai/${keptId}/resolve/main/params_shard_0.bin`,
+  `https://huggingface.co/mlc-ai/${keptId}/resolve/main/mlc-chat-config.json`,
+] });
+const keptView = await kept.evaluate(() => {
+  const before = document.getElementById('model-lead').innerText;
+  document.querySelectorAll('#models .model')[0].click();   // 保存していないモデルへ切り替える
+  const other = document.getElementById('model-lead').innerText;
+  document.querySelectorAll('#models .model')[1].click();   // 戻す
+  return {
+    labels: [...document.querySelectorAll('#models .model')].map((b) => b.innerText),
+    start: document.getElementById('btn-start').innerText,
+    cached: [...(window.ZERO1_MOBILE_STATE?.cached ?? [])],
+    lead: before, leadOther: other,
+  };
+});
+check('70. 端末に残っているモデルを「保存済み」と伝える',
+  /保存済み/.test(keptView.labels[1]) && keptView.cached.includes(keptId),
+  keptView.labels[1].replace(/\n/g, ' ').slice(0, 46));
+check('71. 保存済みでないモデルには「保存済み」と書かない（全部に付けない）',
+  !/保存済み/.test(keptView.labels[0]) && !/保存済み/.test(keptView.labels[3]));
+check('72. 起動ボタンも「すぐ起動する」と分かる文言になる',
+  /保存済み|already/i.test(keptView.start), keptView.start);
+// ★説明文が「初回だけダウンロードします」のままだと、すぐ起動する人まで身構えてしまう
+check('72b. 保存済みのときは、取得の説明を出さない',
+  /保存済み/.test(keptView.lead) && !/初回だけ/.test(keptView.lead)
+    && /初回だけ/.test(keptView.leadOther),
+  keptView.lead.slice(0, 40));
+
+// 消す口が画面にあること。無ければブラウザ設定でサイトデータを全消しするしかない
+await kept.locator('#btn-settings').click();
+const rowBefore = await kept.locator('#model-storage').innerText();
+await kept.locator('#btn-drop').click();
+await kept.waitForFunction(() => /削除しました|削除できません/.test(document.getElementById('model-storage').innerText), { timeout: 8_000 })
+  .catch(() => {});   // ★解けなくても例外で落とさない（落とすと以降の検査が1件も走らない）
+const dropped = await kept.evaluate(() => ({
+  note: document.getElementById('model-storage').innerText,
+  left: [...(window.__ZERO1_CACHE.get('webllm/model') ?? [])].length,
+  other: [...(window.__ZERO1_CACHE.get('other-cache') ?? [])].length,
+  labels: [...document.querySelectorAll('#models .model')].map((b) => b.innerText),
+  history: localStorage.getItem('zero1-mobile-history'),
+}));
+await kept.close();
+check('73. 消す前に、何をどれだけ空けるのかが分かる',
+  /GB/.test(rowBefore) && /会話と設定は残ります/.test(rowBefore), rowBefore.slice(0, 46));
+check('74. 削除すると、モデルの実体が端末から消える',
+  dropped.left === 0 && /削除しました/.test(dropped.note), `残り ${dropped.left}件`);
+check('75. 削除は他のキャッシュ・会話履歴を巻き込まない',
+  dropped.other === 1 && /消さないで/.test(dropped.history ?? ''),
+  `他キャッシュ ${dropped.other}件 / 会話 ${dropped.history ?? '(消えた)'}`);
+check('76. 削除後は「保存済み」の表示も消える',
+  !/保存済み/.test(dropped.labels[1]), dropped.labels[1].replace(/\n/g, ' ').slice(0, 40));
+
+// ★保存済みなら、空き容量の警告より先にそれを言う。すでに端末にあるものへ
+//   「空きが足りません」と出して起動を止めるのは端的に誤り
+const tight = await withCaches({ quotaGB: 0.2, seeded: [
+  `https://huggingface.co/mlc-ai/${keptId}/resolve/main/params_shard_0.bin`,
+] });
+const tightView = await tight.evaluate(() => {
+  const models = [...document.querySelectorAll('#models .model')];
+  models[1].click();
+  return { disabled: document.getElementById('btn-start').disabled, note: document.getElementById('progress-note').innerText };
+});
+await tight.close();
+check('77. 保存済みのモデルは、空きが少なくても起動を止めない',
+  tightView.disabled === false && !/空き容量が足りません/.test(tightView.note),
+  `起動不可: ${tightView.disabled} / ${tightView.note.slice(0, 30) || '（警告なし）'}`);
+
+// ★Cache Storage はシークレットタブ・容量枯渇・破損で落ちる。落ちても画面を止めない
+const noCaches = await withCaches({ broken: true });
+const noCachesView = await noCaches.evaluate(() => ({
+  count: document.querySelectorAll('#models .model').length,
+  disabled: document.getElementById('btn-start').disabled,
+  labels: [...document.querySelectorAll('#models .model')].map((b) => b.innerText).join(' '),
+}));
+await noCaches.close();
+check('78. Cache Storage が使えない端末でも、起動画面が止まらない',
+  noCachesView.count === 4 && noCachesView.disabled === false && !/保存済み/.test(noCachesView.labels),
+  `モデル ${noCachesView.count}件 / 起動不可 ${noCachesView.disabled}`);
+
+// --- 返答の体裁と、渡っていない文脈の見え方 -----------------------------------
+// ★モデルの出力は `**強調**` や `- 箇条書き` を含むのに、素の文字として並べていたので
+//   記号がそのまま読者に見えていた。ただし体裁を整える＝モデルの出力を解釈するので、
+//   **HTMLを組み立てたら負け**（`<img onerror=…>` がそのまま動く道ができる）。
+const FORMATTED = [
+  '## 手順',
+  '- **鍋**に水を入れる',
+  '- `salt` をひとつまみ',
+  '',
+  '```js',
+  'const x = 1 < 2;',
+  '```',
+  '',
+  '危険なもの: <img src=x onerror="window.__PWNED=1"> と <script>window.__PWNED=1</script>',
+].join('\n');
+const rich = await withEngine({ ask: '教えて', reply: FORMATTED });
+check('79. 箇条書き・見出し・コードを、記号のまま見せない',
+  /<h3>/.test(rich.bodyHtml) && /<ul>/.test(rich.bodyHtml) && /<li>/.test(rich.bodyHtml)
+    && /<pre>/.test(rich.bodyHtml) && /<strong>鍋<\/strong>/.test(rich.bodyHtml),
+  rich.bodyHtml.slice(0, 60));
+check('80. モデルの出力からHTMLを組み立てない（返答経由のXSSを作らない）',
+  !/<img/i.test(rich.bodyHtml) && !/<script/i.test(rich.bodyHtml)
+    && /&lt;img/i.test(rich.bodyHtml) && rich.pwned !== 1,
+  rich.bodyHtml.includes('&lt;img') ? '文字として出ている' : rich.bodyHtml.slice(-60));
+check('81. 返答をコピーできる口がある（指で長押しの範囲選択に頼らない）', rich.copyable);
+// ★#msgs 自体を live 領域にすると、流れてくる途中を1トークンずつ読み上げてしまう
+check('82. 画面読み上げへは、書き終わった全文を1度だけ渡す',
+  rich.announced.includes('鍋') && rich.announced.includes('salt')
+    && rich.announced === FORMATTED,
+  `${rich.announced.length}文字`);
+
+// --- 最初の一言のとっかかり ---------------------------------------------------
+const chipped = await withEngine({ chip: 0 });
+check('83. 起動直後に、聞き方の候補を出す',
+  chipped.stored[0]?.role === 'user' && chipped.stored[0]?.text.length > 0,
+  chipped.stored[0]?.text ?? '（送られていない）');
+check('84. 一度話し始めたら候補は引っ込める（邪魔をしない）',
+  chipped.chips.length === 0, `残っている候補 ${chipped.chips.length}件`);
+
+// --- モデルに渡っていない分を、渡っていないと分かるようにする -----------------
+// ★buildMessages は直近の数往復しか渡さないのに、画面には40件残る。
+//   利用者からは全部覚えているように見えて、実際は覚えていない
+const memory = await page.evaluate(() => {
+  const st = window.ZERO1_MOBILE_STATE;
+  const api = window.ZERO1_MOBILE;
+  st.history = Array.from({ length: 12 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: `発言${i}` }));
+  api.renderHistory();
+  const line = document.querySelector('#msgs .forget');
+  const seen = { text: line?.textContent ?? '', above: line?.previousElementSibling?.textContent ?? '',
+    below: line?.nextElementSibling?.textContent ?? '' };
+  // 渡る分（8往復）に収まっているうちは、線を引かない
+  st.history = st.history.slice(0, 4);
+  api.renderHistory();
+  seen.shortHasLine = Boolean(document.querySelector('#msgs .forget'));
+  // 会話が空なら候補が戻る
+  st.history = [];
+  api.renderHistory();
+  seen.chips = document.querySelectorAll('#chips button').length;
+  return { ...seen, boundary: api.memoryBoundary(Array(12), 8), none: api.memoryBoundary(Array(4), 8) };
+});
+check('85. モデルに渡らなくなった位置に、境目を出す',
+  /覚えて|memory/i.test(memory.text) && /発言4/.test(memory.below) && /発言3/.test(memory.above),
+  `${memory.above.slice(0, 6)} ┃ ${memory.below.slice(0, 6)}`);
+check('86. 境目の位置が、実際に渡す範囲（直近8件）と一致する',
+  memory.boundary === 4 && memory.none === -1, `境目 ${memory.boundary} / 短い会話 ${memory.none}`);
+check('87. 全部渡っているうちは境目を出さない（意味の無い線を引かない）',
+  memory.shortHasLine === false);
+check('88. 会話を消したら、候補がまた出る', memory.chips >= 3, `候補 ${memory.chips}件`);
+
+// ★境目は「履歴の何番目か」で決めること。子要素の並び順で数えると、履歴に無い吹き出し
+//   （起動直後のあいさつ、失敗の通知）の分だけ無言で1つずれる——例外は出ず、線だけが動く
+const greeted = await page.evaluate(() => {
+  const st = window.ZERO1_MOBILE_STATE;
+  const api = window.ZERO1_MOBILE;
+  st.history = Array.from({ length: 12 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: `発言${i}` }));
+  api.renderHistory();
+  const hello = document.createElement('div');   // 起動直後のあいさつ（履歴には無い）
+  hello.className = 'msg ai';
+  hello.textContent = 'おかえりなさい';
+  document.getElementById('msgs').prepend(hello);
+  api.paintMemoryBoundary();
+  const line = document.querySelector('#msgs .forget');
+  return { below: line?.nextElementSibling?.textContent ?? '', above: line?.previousElementSibling?.textContent ?? '' };
+});
+check('89. 履歴に無い吹き出し（あいさつ等）が在っても、境目がずれない',
+  /発言4/.test(greeted.below) && /発言3/.test(greeted.above),
+  `${greeted.above.slice(0, 6)} ┃ ${greeted.below.slice(0, 6)}`);
+
+// --- 速さを数字で見せる -------------------------------------------------------
+// ★「スマホの中だけで動く」の説得力は、結局この数字に出る。
+//   合計だけ見ると遅く見えるので、最初の1つが届くまでの時間を別に出す
+check('90. 返答に、端末内での速さを添える',
+  /tok\/秒/.test(finished.tag) && /最初の返事まで/.test(finished.tag) && /端末内/.test(finished.tag),
+  finished.tag);
+const speedShapes = await page.evaluate(() => {
+  const { speedText, bootText } = window.ZERO1_MOBILE;
+  return {
+    normal: speedText({ tokens: 120, firstMs: 1200, streamMs: 10_000 }),
+    single: speedText({ tokens: 1, firstMs: 900, streamMs: 0 }),
+    empty: speedText(null),
+    boot: bootText('ふつう / Standard', 3.4),
+    bootFloor: bootText('かるい / Light', 0.2),
+  };
+});
+check('91. 速さの数字が読める形になっている（tok/秒・最初の返事まで）',
+  /約12\.0 tok\/秒/.test(speedShapes.normal) && /1\.2秒/.test(speedShapes.normal), speedShapes.normal);
+check('92. 数えるものが足りないときは、数字を出さない（意味の無い精度を出さない）',
+  speedShapes.single === '' && speedShapes.empty === '');
+check('93. 起動にかかった時間を出す（2回目が速いことは数字でしか伝わらない）',
+  /起動3秒/.test(speedShapes.boot) && /起動1秒/.test(speedShapes.bootFloor),
+  `${speedShapes.boot} / ${speedShapes.bootFloor}`);
+check('94. 起動したら、その時間が画面のヘッダに出る',
+  /端末内/.test(finished.headNote) && /起動/.test(finished.headNote), finished.headNote);
+
+// --- ホーム画面に置けるか -----------------------------------------------------
+// ★2.5GBのモデルを端末に持っているのに、毎回ブラウザでURLを辿る必要があった。
+//   サイト共通の manifest.json は start_url が index.html を指していて、
+//   ホーム画面から開いてもZERO-1には来ない
+const installable = await page.evaluate(async () => {
+  const link = document.querySelector('link[rel="manifest"]');
+  if (!link) return { linked: false };
+  const url = new URL(link.getAttribute('href'), location.href).href;
+  const res = await fetch(url);
+  if (!res.ok) return { linked: true, fetched: false, url };
+  const manifest = await res.json();
+  return {
+    linked: true, fetched: true, url,
+    // ★相対パスの解決まで見る。書き間違えても静かに別のページが開くだけで、
+    //   例外もエラーも出ない
+    start: new URL(manifest.start_url, url).pathname,
+    display: manifest.display,
+    theme: manifest.theme_color,
+    background: manifest.background_color,
+    icons: (manifest.icons ?? []).length,
+    pageTheme: document.querySelector('meta[name="theme-color"]')?.content ?? '',
+  };
+});
+check('95. ホーム画面に置ける（このページ専用の manifest がある）',
+  installable.linked && installable.fetched && /zero-1-mobile\.html$/.test(installable.start ?? ''),
+  installable.start ?? '（manifestが無い）');
+check('96. アプリとして開く（アドレスバーの分だけ画面が広くなる）',
+  installable.display === 'standalone' && installable.icons > 0, `${installable.display} / 図案 ${installable.icons}件`);
+// ★背景色がページと違うと、起動直後に白い画面が一瞬光る（黒基調のページでは特に目立つ）
+check('97. manifest の色がページと合っている（起動時に白く光らない）',
+  installable.theme === installable.pageTheme && installable.background === installable.pageTheme,
+  `manifest ${installable.theme}/${installable.background} · ページ ${installable.pageTheme}`);
+
+// --- 圏外でページ自体が開けるか -----------------------------------------------
+// ★モデルは端末に残るのに、ページ本体が取れないと起動できない。
+//   「圏外でも使えます」と謳っている以上、ページと worker は先に確保しておく
+{
+  const swSource = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  const list = swSource.match(/const PRECACHE_URLS = \[([\s\S]*?)\];/)?.[1] ?? '';
+  const urls = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const needed = ['./zero-1-mobile.html', './assets/js/zero1-worker.js'];
+  const listed = needed.filter((u) => urls.includes(u));
+  // 実体が在るかまで見る。書き間違えても addAll の失敗は握り潰されるので何も起きない
+  const real = urls.filter((u) => u !== './' && !fs.existsSync(path.join(ROOT, u.replace(/^\.\//, ''))));
+  check('98. 圏外でも開けるよう、ページと worker を事前に確保している',
+    listed.length === needed.length, `${listed.length}/${needed.length}件`);
+  check('99. 事前確保の一覧が、実在するファイルだけを指している',
+    real.length === 0, real.join(' / ') || '全て実在');
+}
+
+// ★WebLLM本体はCDN（別オリジン）なので事前確保できない。取れなかったときに
+//   「なぜ起動できないのか」が残らないと、圏外で詰まった人には何も分からない
+const noLib = await withEngine({ noLibrary: true, workerLoads: false });
+check('100. ライブラリ本体を取得できないときも、理由と次の一手を出す',
+  noLib.failed && /ライブラリ本体/.test(noLib.hint), noLib.hint.slice(0, 52));
 
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });
