@@ -324,10 +324,11 @@ check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0
 //     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
 async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false,
   workerLoads = true, timeouts = null, hang = false, gpuLoss = 0, ask = '', longAnswer = false, stopAt = 0,
-  speak = false } = {}) {
+  speak = false, reply = '', chip = -1 } = {}) {
   const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes, streamsLong, readsAloud]) => {
+  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes, streamsLong, readsAloud, fixedReply]) => {
     window.__ZERO1_LONG = streamsLong;
+    window.__ZERO1_REPLY = fixedReply;
     // 読み上げが実際に走った回数を数える。止めたのに読み上げが続いたら止めた意味が無い
     window.__ZERO1_SPOKEN = 0;
     Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: {
@@ -414,15 +415,19 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
               }
             })();
           }
+          // 返答の中身を差し替えられるようにしておく（体裁の組み立てを通しで確かめるため）
+          const tokens = window.__ZERO1_REPLY
+            ? window.__ZERO1_REPLY.match(/[\s\S]{1,8}/g)
+            : ['こんに', 'ちは', '。'];
           return (async function* () {
-            for (const token of ['こんに', 'ちは', '。']) yield { choices: [{ delta: { content: token } }] };
+            for (const token of tokens) yield { choices: [{ delta: { content: token } }] };
           })();
         } } },
         // 止めろと言われたことが、ちゃんとモデル側まで届いているか
         interruptGenerate: () => { window.__ZERO1_PROBE.interrupted = true; } };
       },
     };
-  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss, longAnswer, speak]);
+  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss, longAnswer, speak, reply]);
   // ★worker は実物を動かす（合図の受け渡しごと確かめる）。ただしCDNへは出ない
   await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
     status: workerLoads ? 200 : 503, contentType: 'text/javascript',
@@ -434,6 +439,11 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
   await scoped.waitForFunction(
     () => !document.getElementById('failure').hidden || !document.getElementById('chat').classList.contains('hidden'),
     { timeout: 20_000 });
+  if (chip >= 0) {
+    await scoped.locator('#chips button').nth(chip).click();
+    await scoped.waitForFunction(() => window.ZERO1_MOBILE_STATE?.busy === false
+      && (window.ZERO1_MOBILE_STATE?.history?.length ?? 0) >= 2, { timeout: 20_000 }).catch(() => {});
+  }
   if (ask) {
     await scoped.locator('#input').fill(ask);
     await scoped.locator('#btn-send').click();
@@ -465,6 +475,11 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     sendLabel: document.getElementById('btn-send').getAttribute('aria-label'),
     sendStop: document.getElementById('btn-send').classList.contains('stop'),
     stored: JSON.parse(localStorage.getItem('zero1-mobile-history') ?? '[]'),
+    bodyHtml: document.querySelector('#msgs .msg.ai:last-of-type .body')?.innerHTML ?? '',
+    announced: document.getElementById('announce').textContent,
+    chips: [...document.querySelectorAll('#chips button')].map((b) => b.textContent),
+    copyable: Boolean(document.querySelector('#msgs .msg.ai:last-of-type .tools button')),
+    pwned: window.__PWNED ?? 0,
     spoken: window.__ZERO1_SPOKEN,
     detail: document.getElementById('failure-detail').textContent,
     hint: document.getElementById('failure-hint').textContent,
@@ -823,6 +838,94 @@ await noCaches.close();
 check('78. Cache Storage が使えない端末でも、起動画面が止まらない',
   noCachesView.count === 4 && noCachesView.disabled === false && !/保存済み/.test(noCachesView.labels),
   `モデル ${noCachesView.count}件 / 起動不可 ${noCachesView.disabled}`);
+
+// --- 返答の体裁と、渡っていない文脈の見え方 -----------------------------------
+// ★モデルの出力は `**強調**` や `- 箇条書き` を含むのに、素の文字として並べていたので
+//   記号がそのまま読者に見えていた。ただし体裁を整える＝モデルの出力を解釈するので、
+//   **HTMLを組み立てたら負け**（`<img onerror=…>` がそのまま動く道ができる）。
+const FORMATTED = [
+  '## 手順',
+  '- **鍋**に水を入れる',
+  '- `salt` をひとつまみ',
+  '',
+  '```js',
+  'const x = 1 < 2;',
+  '```',
+  '',
+  '危険なもの: <img src=x onerror="window.__PWNED=1"> と <script>window.__PWNED=1</script>',
+].join('\n');
+const rich = await withEngine({ ask: '教えて', reply: FORMATTED });
+check('79. 箇条書き・見出し・コードを、記号のまま見せない',
+  /<h3>/.test(rich.bodyHtml) && /<ul>/.test(rich.bodyHtml) && /<li>/.test(rich.bodyHtml)
+    && /<pre>/.test(rich.bodyHtml) && /<strong>鍋<\/strong>/.test(rich.bodyHtml),
+  rich.bodyHtml.slice(0, 60));
+check('80. モデルの出力からHTMLを組み立てない（返答経由のXSSを作らない）',
+  !/<img/i.test(rich.bodyHtml) && !/<script/i.test(rich.bodyHtml)
+    && /&lt;img/i.test(rich.bodyHtml) && rich.pwned !== 1,
+  rich.bodyHtml.includes('&lt;img') ? '文字として出ている' : rich.bodyHtml.slice(-60));
+check('81. 返答をコピーできる口がある（指で長押しの範囲選択に頼らない）', rich.copyable);
+// ★#msgs 自体を live 領域にすると、流れてくる途中を1トークンずつ読み上げてしまう
+check('82. 画面読み上げへは、書き終わった全文を1度だけ渡す',
+  rich.announced.includes('鍋') && rich.announced.includes('salt')
+    && rich.announced === FORMATTED,
+  `${rich.announced.length}文字`);
+
+// --- 最初の一言のとっかかり ---------------------------------------------------
+const chipped = await withEngine({ chip: 0 });
+check('83. 起動直後に、聞き方の候補を出す',
+  chipped.stored[0]?.role === 'user' && chipped.stored[0]?.text.length > 0,
+  chipped.stored[0]?.text ?? '（送られていない）');
+check('84. 一度話し始めたら候補は引っ込める（邪魔をしない）',
+  chipped.chips.length === 0, `残っている候補 ${chipped.chips.length}件`);
+
+// --- モデルに渡っていない分を、渡っていないと分かるようにする -----------------
+// ★buildMessages は直近の数往復しか渡さないのに、画面には40件残る。
+//   利用者からは全部覚えているように見えて、実際は覚えていない
+const memory = await page.evaluate(() => {
+  const st = window.ZERO1_MOBILE_STATE;
+  const api = window.ZERO1_MOBILE;
+  st.history = Array.from({ length: 12 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: `発言${i}` }));
+  api.renderHistory();
+  const line = document.querySelector('#msgs .forget');
+  const seen = { text: line?.textContent ?? '', above: line?.previousElementSibling?.textContent ?? '',
+    below: line?.nextElementSibling?.textContent ?? '' };
+  // 渡る分（8往復）に収まっているうちは、線を引かない
+  st.history = st.history.slice(0, 4);
+  api.renderHistory();
+  seen.shortHasLine = Boolean(document.querySelector('#msgs .forget'));
+  // 会話が空なら候補が戻る
+  st.history = [];
+  api.renderHistory();
+  seen.chips = document.querySelectorAll('#chips button').length;
+  return { ...seen, boundary: api.memoryBoundary(Array(12), 8), none: api.memoryBoundary(Array(4), 8) };
+});
+check('85. モデルに渡らなくなった位置に、境目を出す',
+  /覚えて|memory/i.test(memory.text) && /発言4/.test(memory.below) && /発言3/.test(memory.above),
+  `${memory.above.slice(0, 6)} ┃ ${memory.below.slice(0, 6)}`);
+check('86. 境目の位置が、実際に渡す範囲（直近8件）と一致する',
+  memory.boundary === 4 && memory.none === -1, `境目 ${memory.boundary} / 短い会話 ${memory.none}`);
+check('87. 全部渡っているうちは境目を出さない（意味の無い線を引かない）',
+  memory.shortHasLine === false);
+check('88. 会話を消したら、候補がまた出る', memory.chips >= 3, `候補 ${memory.chips}件`);
+
+// ★境目は「履歴の何番目か」で決めること。子要素の並び順で数えると、履歴に無い吹き出し
+//   （起動直後のあいさつ、失敗の通知）の分だけ無言で1つずれる——例外は出ず、線だけが動く
+const greeted = await page.evaluate(() => {
+  const st = window.ZERO1_MOBILE_STATE;
+  const api = window.ZERO1_MOBILE;
+  st.history = Array.from({ length: 12 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: `発言${i}` }));
+  api.renderHistory();
+  const hello = document.createElement('div');   // 起動直後のあいさつ（履歴には無い）
+  hello.className = 'msg ai';
+  hello.textContent = 'おかえりなさい';
+  document.getElementById('msgs').prepend(hello);
+  api.paintMemoryBoundary();
+  const line = document.querySelector('#msgs .forget');
+  return { below: line?.nextElementSibling?.textContent ?? '', above: line?.previousElementSibling?.textContent ?? '' };
+});
+check('89. 履歴に無い吹き出し（あいさつ等）が在っても、境目がずれない',
+  /発言4/.test(greeted.below) && /発言3/.test(greeted.above),
+  `${greeted.above.slice(0, 6)} ┃ ${greeted.below.slice(0, 6)}`);
 
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });

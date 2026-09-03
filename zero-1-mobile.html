@@ -155,6 +155,38 @@
     .msg .body{white-space:pre-wrap}
     /* 返答に添える一行（止めた・速さなど）。本文と混ざらないよう色と大きさを落とす */
     .msg .tag{display:block; margin-top:6px; font-size:.72rem; color:var(--muted)}
+    /* 体裁を整えた返答。見出し・箇条書き・コードだけ。凝ると読みにくくなる */
+    .msg .body h3{font-size:.95rem; margin:.6em 0 .3em}
+    .msg .body p{margin:.45em 0}
+    .msg .body p:first-child,.msg .body h3:first-child{margin-top:0}
+    .msg .body ul,.msg .body ol{margin:.45em 0; padding-left:1.35em}
+    .msg .body li{margin:.2em 0}
+    .msg .body pre{margin:.5em 0; padding:9px 11px; border-radius:10px; overflow-x:auto;
+      background:rgba(0,0,0,0.35); border:1px solid var(--border); font-size:.8rem; white-space:pre}
+    .msg .body code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em}
+    .msg .body :not(pre)>code{padding:1px 5px; border-radius:6px; background:rgba(34,211,238,0.12)}
+    .msg .body strong{color:#cfeffa}
+    .msg .tools{display:flex; gap:6px; margin-top:7px}
+    .msg .tools button{background:transparent; color:var(--muted); border:1px solid var(--border);
+      border-radius:9px; padding:3px 9px; font:inherit; font-size:.72rem; cursor:pointer}
+    .msg .tools button:active{transform:scale(.97)}
+
+    /* ★窓から外れた分は、モデルには渡っていない。画面には残っているので
+       「全部覚えている」ように見えてしまう——例外もエラーも出ない食い違い */
+    .forget{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:.7rem; margin:3px 0}
+    .forget::before,.forget::after{content:''; flex:1; height:1px; background:var(--border)}
+
+    /* 最初の一言のとっかかり。小さいモデルは聞き方で品質が大きく変わる */
+    .chips{display:flex; flex-wrap:wrap; gap:7px; margin-top:14px}
+    .chips p{width:100%; margin:0 0 2px; font-size:.75rem; color:var(--muted)}
+    .chips button{background:var(--card); color:var(--text); border:1px solid rgba(34,211,238,0.28);
+      border-radius:999px; padding:7px 13px; font:inherit; font-size:.8rem; cursor:pointer}
+    .chips button:active{transform:scale(.97)}
+
+    /* 画面には出さず、読み上げにだけ渡す。流れている途中を毎回読み上げると
+       うるさくて使い物にならないので、書き終わってから1度だけ渡す */
+    .sr-only{position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+      clip:rect(0 0 0 0); white-space:nowrap; border:0}
     .msg.user{align-self:flex-end; background:rgba(34,211,238,0.13); border:1px solid rgba(34,211,238,0.25)}
     .msg.ai{align-self:flex-start; background:var(--card); border:1px solid var(--border)}
     .msg.ai.pending{color:var(--muted)}
@@ -252,7 +284,14 @@
   <!-- 会話画面 -->
   <section class="screen hidden" id="chat">
     <div class="msgs" id="msgs"></div>
+    <!-- 起動直後は空の入力欄しか無く、何を聞けばいいのか分からない -->
+    <div class="chips hidden" id="chips">
+      <p>何から始めますか？ / Try one of these</p>
+    </div>
   </section>
+  <!-- 返答が返ったことを読み上げへ伝える。#msgs 自体を live 領域にすると
+       流れてくる途中を1トークンずつ読み上げてしまう -->
+  <p class="sr-only" id="announce" aria-live="polite" aria-atomic="true"></p>
   <div class="composer hidden" id="composer">
     <button class="icon-btn mic" id="btn-mic" aria-label="音声入力 / Voice input">🎙</button>
     <textarea id="input" rows="1" placeholder="話しかける / Say something" aria-label="メッセージ / Message"></textarea>
@@ -467,6 +506,73 @@ function buildMessages(history, turns = 8, maxChars = 1200) {
   return [{ role:'system', content: SYSTEM_PROMPT }, ...trimmed];
 }
 
+/**
+ * 返答を「かたまり」に分ける。見出し・箇条書き・コード・段落だけ。
+ *
+ * ★モデルの出力は `**強調**` や `- 箇条書き` を含むのに、これまで素の文字として
+ *   並べていたので、記号がそのまま読者に見えていた。
+ * ★**HTMLは組み立てない**。ここはモデルが書いた文字列をそのまま解釈する場所で、
+ *   innerHTML を使うと `<img onerror=…>` がそのまま動く道ができる。
+ *   組み立ては createElement と textContent だけで行う（renderRich）。
+ */
+function parseBlocks(text) {
+  const lines = String(text ?? '').split('\n');
+  const isBullet = (line) => /^\s*([-*+]|\d+[.)])\s+/.test(line);
+  const isHeading = (line) => /^#{1,6}\s+/.test(line);
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      const lang = line.replace(/^\s*```/, '').trim();
+      const body = [];
+      i += 1;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) body.push(lines[i++]);
+      i += 1;   // 閉じの ```（無いまま終わっても、ここまでをコードとして出す）
+      blocks.push({ type:'code', lang, text: body.join('\n') });
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) { blocks.push({ type:'heading', text: heading[2].trim() }); i += 1; continue; }
+    if (isBullet(line)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(line);
+      const items = [];
+      while (i < lines.length && isBullet(lines[i])) items.push(lines[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, ''));
+      blocks.push({ type:'list', ordered, items });
+      continue;
+    }
+    if (line.trim() === '') { i += 1; continue; }
+    const para = [];
+    while (i < lines.length && lines[i].trim() !== ''
+      && !/^\s*```/.test(lines[i]) && !isHeading(lines[i]) && !isBullet(lines[i])) para.push(lines[i++]);
+    blocks.push({ type:'para', text: para.join('\n') });
+  }
+  return blocks;
+}
+
+/** 行内の **強調** と `コード` を切り分ける。ここでも文字列のまま返す（HTMLを作らない） */
+function parseInline(text) {
+  const spans = [];
+  const pattern = /\*\*([^*\n]+)\*\*|`([^`\n]+)`/g;
+  let last = 0;
+  let found;
+  while ((found = pattern.exec(text)) !== null) {
+    if (found.index > last) spans.push({ kind:'text', text: text.slice(last, found.index) });
+    spans.push(found[1] !== undefined ? { kind:'strong', text:found[1] } : { kind:'code', text:found[2] });
+    last = found.index + found[0].length;
+  }
+  if (last < text.length) spans.push({ kind:'text', text: text.slice(last) });
+  return spans.length ? spans : [{ kind:'text', text }];
+}
+
+/** 最初の一言のとっかかり。小さいモデルは聞き方で品質が大きく変わる */
+const SUGGESTIONS = [
+  'この文章を3行にまとめて',
+  '明日の持ち物を一覧にして',
+  '「お疲れさまです」の言い換えを5つ',
+  'カレーの作り方を手短に',
+];
+
 /** 進捗の文言。%だけだと「止まっているのか進んでいるのか」が分からない */
 function progressText(report) {
   const percent = Math.round((report?.progress ?? 0) * 100);
@@ -549,7 +655,9 @@ function storageRowText(model, cached) {
 // （足し忘れると検査側が "is not a function" で落ちる）
 window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT,
   preflight, isNetworkFailure, isDeviceLost, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText, stallGuard,
-  modelCacheEntries, isModelCached, cachedModelIds, deleteModelCache, storageRowText, stopGenerating, paintSend };
+  modelCacheEntries, isModelCached, cachedModelIds, deleteModelCache, storageRowText, stopGenerating, paintSend,
+  parseBlocks, parseInline, renderRich, memoryBoundary, SUGGESTIONS,
+  renderHistory, paintMemoryBoundary, paintSuggestions, finishAnswer };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -684,6 +792,123 @@ function addMessage(role, text, pending = false) {
 /** 吹き出しの本文。streamAnswer はここだけを書き換える */
 function bodyOf(node) { return node.querySelector('.body') ?? node; }
 
+/** 行内の断片をDOMへ。innerHTML は使わない（モデルの出力をそのまま解釈する場所） */
+function appendInline(parent, text) {
+  for (const span of parseInline(text)) {
+    if (span.kind === 'text') { parent.appendChild(document.createTextNode(span.text)); continue; }
+    const element = document.createElement(span.kind === 'strong' ? 'strong' : 'code');
+    element.textContent = span.text;
+    parent.appendChild(element);
+  }
+}
+
+/** 返答の体裁を整えて描き直す。流している途中ではなく、書き終わってから1度だけ呼ぶ */
+function renderRich(target, text) {
+  target.textContent = '';
+  target.classList.add('rich');
+  for (const block of parseBlocks(text)) {
+    if (block.type === 'code') {
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.textContent = block.text;
+      pre.appendChild(code);
+      target.appendChild(pre);
+      continue;
+    }
+    if (block.type === 'heading') {
+      const heading = document.createElement('h3');
+      appendInline(heading, block.text);
+      target.appendChild(heading);
+      continue;
+    }
+    if (block.type === 'list') {
+      const list = document.createElement(block.ordered ? 'ol' : 'ul');
+      for (const item of block.items) {
+        const li = document.createElement('li');
+        appendInline(li, item);
+        list.appendChild(li);
+      }
+      target.appendChild(list);
+      continue;
+    }
+    const paragraph = document.createElement('p');
+    appendInline(paragraph, block.text);
+    target.appendChild(paragraph);
+  }
+  return target;
+}
+
+/**
+ * 返答を仕上げる。体裁を整え、コピーの口を付け、読み上げへ1度だけ渡す。
+ * ★流している途中で体裁を組み直すと、長い返答ほど毎トークン重くなる。
+ */
+function finishAnswer(node, text, announce = true) {
+  const body = bodyOf(node);
+  renderRich(body, text);
+  let tools = node.querySelector('.tools');
+  if (!tools) {
+    tools = document.createElement('div');
+    tools.className = 'tools';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'コピー / Copy';
+    // ★指で長押しして範囲選択は現実的でない。押せば済む口を必ず置く
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(text); copy.textContent = 'コピーしました / Copied'; }
+      catch { copy.textContent = '長押しで選択してください'; }
+      setTimeout(() => { copy.textContent = 'コピー / Copy'; }, 2000);
+    });
+    tools.appendChild(copy);
+    node.appendChild(tools);
+  }
+  // 画面読み上げへは、書き終わってから1度だけ渡す
+  if (announce) $('announce').textContent = text;
+  return node;
+}
+
+/**
+ * モデルに渡らない位置（＝もう覚えていない境目）を返す。
+ *
+ * ★buildMessages は直近の数往復しか渡さないのに、画面には40件残る。
+ *   利用者からは全部覚えているように見えて、実際は覚えていない——
+ *   例外もエラーも出ないまま「さっき言ったのに」が起きる。
+ * 境目が無い（全部渡っている）ときは -1。
+ */
+function memoryBoundary(history, turns = 8) {
+  const total = history?.length ?? 0;
+  return total > turns ? total - turns : -1;
+}
+
+/** 「ここから上は覚えていません」の線を引き直す */
+function paintMemoryBoundary() {
+  $('msgs').querySelector('.forget')?.remove();
+  const at = memoryBoundary(state.history);
+  if (at < 0) return;
+  const anchor = $('msgs').querySelector(`.msg[data-h="${at}"]`);
+  if (!anchor) return;
+  const line = document.createElement('div');
+  line.className = 'forget';
+  line.textContent = 'ここから上はモデルに渡していません / Above is outside the model’s memory';
+  $('msgs').insertBefore(line, anchor);
+}
+
+/** 候補を出す／引っ込める。1度でも話し始めたら邪魔なので消す */
+function paintSuggestions() {
+  const box = $('chips');
+  const stale = box.querySelectorAll('button');
+  for (const button of stale) button.remove();
+  const show = state.history.length === 0 && !state.busy;
+  box.classList.toggle('hidden', !show);
+  if (!show) return;
+  for (const text of SUGGESTIONS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = text;
+    button.addEventListener('click', () => void send(text));
+    box.appendChild(button);
+  }
+}
+
 /** 吹き出しに添え書きを1行足す（同じ吹き出しに二重に付けない） */
 function tagMessage(node, text) {
   let tag = node.querySelector('.tag');
@@ -694,7 +919,13 @@ function tagMessage(node, text) {
 
 function renderHistory() {
   $('msgs').innerHTML = '';
-  for (const message of state.history) addMessage(message.role, message.text);
+  state.history.forEach((message, index) => {
+    const node = addMessage(message.role, message.text);
+    node.dataset.h = String(index);
+    if (message.role !== 'user') finishAnswer(node, message.text, false);
+  });
+  paintMemoryBoundary();
+  paintSuggestions();
 }
 
 /** 秒を「◯分◯秒」に。数字だけだと長さの実感が湧かない */
@@ -1118,6 +1349,7 @@ async function startEngine() {
     $('composer').classList.remove('hidden');
     $('head-note').textContent = `${MODELS.find((m) => m.id === state.model)?.name ?? state.model} · 端末内で実行中`;
     if (!state.history.length) addMessage('assistant', 'おかえりなさい、ゼロさん。ここはスマホの中だけで動きます。何から始めますか？');
+    paintSuggestions();
   } catch (cause) {
     // 失敗の理由をそのまま出す。「使えません」だけだと打つ手が無くなる
     stopClock();
@@ -1218,7 +1450,8 @@ async function send(text) {
   paintSend(true);
   $('input').value = '';
   state.history.push({ role:'user', text:clean });
-  addMessage('user', clean);
+  addMessage('user', clean).dataset.h = String(state.history.length - 1);
+  paintSuggestions();
   const node = addMessage('assistant', '考えています…', true);
   let answer = '';
   try {
@@ -1234,11 +1467,13 @@ async function send(text) {
     }
     // 止めた直後は空のことがある。空の吹き出しを残さない
     if (!answer) { answer = state.stopping ? '（止めました / Stopped）' : 'うまく答えられませんでした。もう一度お願いします。'; }
-    bodyOf(node).textContent = answer;
     node.classList.remove('pending');
+    finishAnswer(node, answer);
     if (state.stopping) tagMessage(node, '途中で止めました / Stopped');
     state.history.push({ role:'assistant', text:answer });
+    node.dataset.h = String(state.history.length - 1);
     writeStore(HISTORY_KEY, state.history.slice(-40));
+    paintMemoryBoundary();
     // 止めたのに読み上げが続くと、止めた意味が無い
     if (state.speak && !state.stopping) speak(answer);
   } catch (cause) {
@@ -1250,6 +1485,7 @@ async function send(text) {
     state.busy = false;
     state.stopping = false;
     paintSend(false);
+    paintSuggestions();
   }
 }
 
