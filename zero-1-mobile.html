@@ -462,7 +462,7 @@ function progressText(report) {
 // 検査から触るための橋渡し。新しい関数を足したらここへも足すこと
 // （足し忘れると検査側が "is not a function" で落ちる）
 window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT,
-  preflight, isNetworkFailure, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText, stallGuard };
+  preflight, isNetworkFailure, isDeviceLost, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText, stallGuard };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -475,7 +475,7 @@ const SPEAK_KEY = 'zero1-mobile-speak';
 const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false,
   stage:'—', violations:[], lastError:'', unreachable:[], retries:0,
   worker:null, workerError:'', mainThreadOnly:false, lastProgressAt:0, clock:null,
-  sawProgress:false, stallTimer:null,
+  sawProgress:false, stallTimer:null, wakeLock:null, loading:false,
   storageGB:NaN, models:MODELS, env:null };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
@@ -782,6 +782,29 @@ function isNetworkFailure(cause) {
  *   ——ただし落ちた事実は隠さず画面に出す。
  */
 /**
+ * 読み込みのあいだ、画面を消させない。
+ *
+ * ★スマホの画面が消えると、AndroidはGPUの資源を手放すことがある。数分かかる読み込みの
+ *   最中にそれが起きると、載せ終わった直後の**最初の返事**で「GPUとの接続が無い」と言われる。
+ *   利用者から見ると「起動はしたのに答えない」——一番分かりにくい壊れ方になる。
+ * ★取れなくても止めない（対応していないブラウザがある）。あくまで転ばぬ先の杖。
+ */
+async function keepAwake() {
+  try { state.wakeLock = (await navigator.wakeLock?.request?.('screen')) ?? null; }
+  catch { state.wakeLock = null; }
+}
+
+function releaseAwake() {
+  try { state.wakeLock?.release?.(); } catch { /* すでに解放されている */ }
+  state.wakeLock = null;
+}
+
+// 一度画面が消えると解放されるので、戻ってきたら取り直す（読み込み中だけ）
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.loading && !state.wakeLock) void keepAwake();
+});
+
+/**
  * 別の糸は「作れても動かない」ことがある。返事が無い時間の上限を決めておく。
  * ★検査は `window.__ZERO1_TIMEOUTS` で短くする（実時間で待つ検査は、遅いだけで落ちる）。
  */
@@ -939,6 +962,9 @@ async function startEngine() {
   state.stage = 'ライブラリの読み込み';
   setProgress(0, 'ライブラリを読み込んでいます… / Loading library…');
   startClock();
+  // 読み込みは数分かかる。その途中で画面が消えるとGPUとの接続が切れる
+  state.loading = true;
+  void keepAwake();
   try {
     const { module: webllm, verified } = await loadLibrary();
     if (!verified) {
@@ -980,7 +1006,56 @@ async function startEngine() {
     $('progress-note').textContent = `起動できませんでした（${state.stage}）: ${cause?.message ?? cause}`;
     showFailure(env, message);
     $('btn-start').disabled = false;
+  } finally {
+    state.loading = false;
+    releaseAwake();
   }
+}
+
+/**
+ * 端末のGPUとの接続が切れたか。
+ *
+ * ★スマホでは、読み込みの数分のあいだに**画面が消えるだけ**でGPUの資源が手放されることがある。
+ *   モデルは載り終わっているのに、最初の返事の瞬間に切断が露見する
+ *   （2026-09-03 深澤報告: `AbortError: Failed to execute 'mapAsync' on 'GPUBuffer':
+ *   A valid external Instance reference no longer exists.`）。
+ * ★ここで諦めるのが一番もったいない。**モデルは端末に残っている**ので、
+ *   載せ直せば取得はやり直さずに数秒で戻る。
+ */
+function isDeviceLost(cause) {
+  const text = `${cause?.name ?? ''} ${cause?.message ?? cause ?? ''}`;
+  return /external Instance|device (is |was )?lost|lost the device|destroyed device|GPUBuffer|GPUDevice|GPUAdapter/i.test(text);
+}
+
+/** モデルを載せ直す。取得済みのものは端末に残っているので、通信はほぼ発生しない */
+async function reloadEngine() {
+  state.engine = null;
+  state.mainThreadOnly = false;
+  state.sawProgress = false;
+  state.workerError = '';
+  state.stage = 'GPUとの接続が切れたため、モデルを載せ直しています';
+  const { module: webllm } = await loadLibrary();
+  state.engine = await createEngine(webllm, state.model);
+}
+
+/** 1回ぶんの返答を流し込む。載せ直しのため、送信本体から切り出してある */
+async function streamAnswer(node) {
+  const stream = await state.engine.chat.completions.create({
+    messages: buildMessages(state.history),
+    stream: true,
+    temperature: 0.6,
+    max_tokens: 512,
+  });
+  let answer = '';
+  for await (const chunk of stream) {
+    const token = chunk.choices?.[0]?.delta?.content ?? '';
+    if (!token) continue;
+    if (!answer) node.classList.remove('pending');
+    answer += token;
+    node.textContent = answer;
+    $('chat').scrollTop = $('chat').scrollHeight;
+  }
+  return answer;
 }
 
 async function send(text) {
@@ -994,32 +1069,33 @@ async function send(text) {
   const node = addMessage('assistant', '考えています…', true);
   let answer = '';
   try {
-    const stream = await state.engine.chat.completions.create({
-      messages: buildMessages(state.history),
-      stream: true,
-      temperature: 0.6,
-      max_tokens: 512,
-    });
-    for await (const chunk of stream) {
-      const token = chunk.choices?.[0]?.delta?.content ?? '';
-      if (!token) continue;
-      if (!answer) node.classList.remove('pending');
-      answer += token;
-      node.textContent = answer;
-      $('chat').scrollTop = $('chat').scrollHeight;
+    try {
+      answer = await streamAnswer(node);
+    } catch (cause) {
+      if (!isDeviceLost(cause)) throw cause;
+      // ★切れただけなら、黙って載せ直して答え直す。利用者に打ち直させない
+      node.textContent = '端末のGPUとの接続が切れました。モデルを載せ直しています…';
+      await reloadEngine();
+      node.textContent = '考えています…';
+      answer = await streamAnswer(node);
     }
-    if (!answer) { answer = 'うまく答えられませんでした。もう一度お願いします。'; node.textContent = answer; node.classList.remove('pending'); }
+    if (!answer) { answer = 'うまく答えられませんでした。もう一度お願いします。'; }
+    node.textContent = answer;
+    node.classList.remove('pending');
     state.history.push({ role:'assistant', text:answer });
     writeStore(HISTORY_KEY, state.history.slice(-40));
     if (state.speak) speak(answer);
   } catch (cause) {
     node.classList.remove('pending');
-    node.textContent = `答えられませんでした: ${cause?.message ?? cause}`;
+    node.textContent = isDeviceLost(cause)
+      ? `端末のGPUとの接続が戻りませんでした。ページを再読み込みしてください（モデルは端末に残っているので、次はすぐ起動します）: ${cause?.message ?? cause}`
+      : `答えられませんでした: ${cause?.message ?? cause}`;
   } finally {
     state.busy = false;
     $('btn-send').disabled = false;
   }
 }
+
 
 function speak(text) {
   if (!('speechSynthesis' in window)) return;

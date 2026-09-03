@@ -323,11 +323,16 @@ check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0
 //   ★純粋関数（preflight 等）だけを叩く検査にしないこと。画面がそれを使っていなければ
 //     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
 async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false,
-  workerLoads = true, timeouts = null, hang = false } = {}) {
+  workerLoads = true, timeouts = null, hang = false, gpuLoss = 0, ask = '' } = {}) {
   const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes]) => {
+  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes]) => {
     if (clocks) window.__ZERO1_TIMEOUTS = clocks;
     window.__ZERO1_HANG = neverFinishes;
+    window.__ZERO1_GPU_LOSS = gpuLossTimes;
+    // 画面を消させない仕掛けを使っているかを見る（実機で切れた原因そのもの）
+    Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: {
+      request: async () => { window.__ZERO1_PROBE.wakeLocks++; return { release: async () => {} }; },
+    }});
     if (banWorker) {
       // Worker が作れない端末の再現（作れなければ画面と同じ糸へ落ちるはず）
       Object.defineProperty(window, 'Worker', { configurable: true, value: function () { throw new Error('Worker は使えません'); } });
@@ -339,7 +344,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     Object.defineProperty(navigator, 'storage', { configurable: true, value: {
       estimate: async () => ({ quota: 10.7e9, usage: 0 }),
     }});
-    window.__ZERO1_PROBE = { attempts: 0, requests: [], workerUsed: 0, mainThreadUsed: 0 };
+    window.__ZERO1_PROBE = { attempts: 0, requests: [], workerUsed: 0, mainThreadUsed: 0, wakeLocks: 0, asked: 0 };
     // 取得先への問い合わせだけを横取りする（ページ自身の読み込みは素通し）
     const original = window.fetch.bind(window);
     window.fetch = (input, init) => {
@@ -379,10 +384,22 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
         if (window.__ZERO1_PROBE.attempts <= times) {
           throw kind === 'network' ? new TypeError('Failed to fetch') : new Error('[Invalid ShaderModule] entryPoint: "index_kernel"');
         }
-        return { chat: { completions: { create: async () => ({}) } } };
+        return { chat: { completions: { create: async () => {
+          window.__ZERO1_PROBE.asked++;
+          // ★実機で出たそのままの文言。GPUとの接続が切れた形を再現する
+          if (window.__ZERO1_GPU_LOSS > 0) {
+            window.__ZERO1_GPU_LOSS--;
+            const lost = new Error("Failed to execute 'mapAsync' on 'GPUBuffer': A valid external Instance reference no longer exists.");
+            lost.name = 'AbortError';
+            throw lost;
+          }
+          return (async function* () {
+            for (const token of ['こんに', 'ちは', '。']) yield { choices: [{ delta: { content: token } }] };
+          })();
+        } } } };
       },
     };
-  }, [reachable, failTimes, failWith, noWorker, timeouts, hang]);
+  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss]);
   // ★worker は実物を動かす（合図の受け渡しごと確かめる）。ただしCDNへは出ない
   await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
     status: workerLoads ? 200 : 503, contentType: 'text/javascript',
@@ -394,7 +411,16 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
   await scoped.waitForFunction(
     () => !document.getElementById('failure').hidden || !document.getElementById('chat').classList.contains('hidden'),
     { timeout: 20_000 });
+  if (ask) {
+    await scoped.locator('#input').fill(ask);
+    await scoped.locator('#btn-send').click();
+    await scoped.waitForFunction(() => {
+      const last = document.querySelector('#msgs .msg:last-child');
+      return last && !last.classList.contains('pending') && !/考えています|載せ直して/.test(last.textContent);
+    }, { timeout: 30_000 }).catch(() => {});
+  }
   const result = await scoped.evaluate(() => ({
+    reply: document.querySelector('#msgs .msg:last-child')?.textContent ?? '',
     detail: document.getElementById('failure-detail').textContent,
     hint: document.getElementById('failure-hint').textContent,
     failed: !document.getElementById('failure').hidden,
@@ -574,6 +600,39 @@ check('56. 進捗が1度も出なかった事実を手掛かりに残す',
 const staged = await page.evaluate(() => window.ZERO1_MOBILE.clockText(400, 200, 'モデルの取得と準備'));
 check('57. 経過時計に、いまどの段階かを添える（画面写真だけで場所が分かる）',
   /モデルの取得と準備/.test(staged), staged.slice(0, 40));
+
+// --- GPUとの接続が切れたときに、載せ直して答え直すか -------------------------
+// ★2026-09-03、深澤さんの端末は起動には成功したのに、最初の返事で
+//   `AbortError: Failed to execute 'mapAsync' on 'GPUBuffer':
+//    A valid external Instance reference no longer exists.` を返した。
+//   数分の読み込みのあいだに画面が消え、AndroidがGPUの資源を手放したため。
+//   **モデルは端末に残っている**ので、載せ直せば数秒で戻る。諦めるのが一番もったいない。
+const lostOnce = await withEngine({ ask: 'こんにちは', gpuLoss: 1 });
+check('58. GPUとの接続が切れたら、載せ直して答え直す（打ち直させない）',
+  /こんにちは。/.test(lostOnce.reply) && lostOnce.probe.asked === 2,
+  `返答「${lostOnce.reply.slice(0, 20)}」/ 問い合わせ ${lostOnce.probe.asked}回`);
+
+// 載せ直しても戻らないときは、打つ手（再読み込み）を出す
+const lostForever = await withEngine({ ask: 'こんにちは', gpuLoss: 9 });
+check('59. 載せ直しても戻らないときは、次の一手を出す',
+  /再読み込み/.test(lostForever.reply) && /端末に残っている/.test(lostForever.reply),
+  lostForever.reply.slice(0, 40));
+
+const lostKinds = await page.evaluate(() => {
+  const { isDeviceLost } = window.ZERO1_MOBILE;
+  return {
+    real: isDeviceLost({ name:'AbortError', message:"Failed to execute 'mapAsync' on 'GPUBuffer': A valid external Instance reference no longer exists." }),
+    network: isDeviceLost(new TypeError('Failed to fetch')),
+    shader: isDeviceLost(new Error('[Invalid ShaderModule] entryPoint: "index_kernel"')),
+  };
+});
+check('60. GPUの切断と、通信・シェーダーの失敗を取り違えない',
+  lostKinds.real === true && lostKinds.network === false && lostKinds.shader === false,
+  JSON.stringify(lostKinds));
+
+// ★そもそも切らせない。数分の読み込み中に画面が消えるのが引き金だった
+check('61. 読み込みのあいだ、画面を消させない（wake lock を要求する）',
+  lostOnce.probe.wakeLocks >= 1, `要求 ${lostOnce.probe.wakeLocks}回`);
 
 // --- CSPが「別の糸」を止めていないか ------------------------------------------
 // ★worker-src を締めると worker は**例外もエラーも出さずに黙る**（作られはするが動かない）。

@@ -239,7 +239,7 @@ node scripts/verify-service-worker.mjs   # 別オリジンの素通し／拒否�
 ## ZERO-1 Mobile とエアタッチの必須チェック（zero-1-mobile.html / assets/js/gesture-pointer.js を触ったら必ず実行）
 
 ```bash
-node scripts/verify-zero1-mobile.mjs      # 端末判定→モデル選び→起動失敗の手掛かり→会話の組み立て→画面（73項目）
+node scripts/verify-zero1-mobile.mjs      # 端末判定→モデル選び→起動失敗の手掛かり→会話の組み立て→画面（77項目）
 node scripts/verify-gesture-pointer.mjs   # エアタッチ: 手ぶれ取り→押下判定→タップ/スワイプ/ドラッグ→カメラ入切（57項目）
 node scripts/verify-service-worker.mjs    # 通信を横取りするSWがモデル取得を壊していないか（上記）
 ```
@@ -264,6 +264,13 @@ node scripts/verify-service-worker.mjs    # 通信を横取りするSWがモデ�
   分からなくなる（2026-09-03 深澤報告。画面の一部だけが描き変わる崩れ方をしていた）。
   版は importmap と worker の2か所にあるので検査#51が突き合わせ、
   CSPが `worker-src` を締めていないかを検査#52が見る（締めると**worker は例外も出さずに黙る**）
+- **スマホでは、読み込み中に画面が消えるだけでGPUとの接続が切れる**。モデルは載り終わって
+  いるのに、**最初の返事の瞬間**に露見する（2026-09-03 深澤報告:
+  `AbortError: ... 'mapAsync' on 'GPUBuffer': A valid external Instance reference no longer exists`）。
+  利用者からは「起動はしたのに答えない」に見える。①読み込み中は Screen Wake Lock で画面を
+  消させない ②切れたら**黙って載せ直して答え直す**（モデルは端末に残っているので数秒で戻る。
+  ここで諦めるのが一番もったいない）。ただし `isDeviceLost()` は通信・シェーダーの失敗と
+  取り違えないこと——広げると、直しようのない失敗まで何度も載せ直すことになる
 - **worker は「作れても動かない」**。読み込みに失敗しても例外を投げず**ただ黙る**ので、
   仕事を渡した側は返事を待ち続けて**0%のまま永久に止まる**（2026-09-03、経過時計だけが
   動いて進捗が1度も出ない形で再現）。**worker 自身に「動き出した」と言わせ**（`{zero1:'ready'}`）、
