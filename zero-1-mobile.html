@@ -680,7 +680,7 @@ window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, stor
   modelCacheEntries, isModelCached, cachedModelIds, deleteModelCache, storageRowText, stopGenerating, paintSend,
   parseBlocks, parseInline, renderRich, memoryBoundary, SUGGESTIONS,
   renderHistory, paintMemoryBoundary, paintSuggestions, finishAnswer, speedText, bootText,
-  waitForAdapter, ensureGpuAlive, reloadEngine };
+  waitForAdapter, ensureGpuAlive, reloadEngine, keepResume, takeResume, offerReload };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -689,6 +689,9 @@ const $ = (id) => document.getElementById(id);
 const HISTORY_KEY = 'zero1-mobile-history';
 const MODEL_KEY = 'zero1-mobile-model';
 const SPEAK_KEY = 'zero1-mobile-speak';
+// ★再読み込みをまたいで「聞きかけの質問」を運ぶ。sessionStorage なので
+//   このタブを閉じれば消える（次に開いた人へ他人の質問を持ち越さない）
+const RESUME_KEY = 'zero1-mobile-resume';
 
 const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false,
   stage:'—', violations:[], lastError:'', unreachable:[], retries:0,
@@ -696,7 +699,7 @@ const state = { engine:null, model:null, busy:false, history:[], speak:false, li
   sawProgress:false, stallTimer:null, wakeLock:null, loading:false,
   storageGB:NaN, models:MODELS, env:null,
   // 生成を途中で止めたか／どのモデルが端末に残っているか
-  stopping:false, cached:new Set(), speed:null, bootMs:0, recovery:null };
+  stopping:false, cached:new Set(), speed:null, bootMs:0, recovery:null, pending:'' };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
 // ここで拾わないと「起動できませんでした」だけが残り、原因に辿り着けない。
@@ -935,6 +938,56 @@ function paintSuggestions() {
     button.addEventListener('click', () => void send(text));
     box.appendChild(button);
   }
+}
+
+/**
+ * 再読み込み後に続きをやるための覚書。
+ *
+ * ★**読んだ時点で消す**。消さずに残すと、起動のたびに同じ質問を投げ直して
+ *   同じ失敗を繰り返す輪に入る（利用者は止められない）。
+ */
+function keepResume(question) {
+  try { sessionStorage.setItem(RESUME_KEY, JSON.stringify({ question, at: Date.now() })); }
+  catch { /* 使えない端末では諦める。ボタンでの再読み込み自体は効く */ }
+}
+
+function takeResume() {
+  try {
+    const raw = sessionStorage.getItem(RESUME_KEY);
+    sessionStorage.removeItem(RESUME_KEY);   // 読んだら必ず消す
+    const saved = raw ? JSON.parse(raw) : null;
+    // 10分以上前のものは引き継がない（別の日の質問が突然飛ぶのを防ぐ）
+    if (!saved?.question || Date.now() - (saved.at ?? 0) > 600_000) return null;
+    return saved;
+  } catch { return null; }
+}
+
+/** 吹き出しに押せる次の一手を置く（文字で頼まず、押せば済むようにする） */
+function actionMessage(node, label, onClick) {
+  let tools = node.querySelector('.tools');
+  if (!tools) { tools = document.createElement('div'); tools.className = 'tools'; node.appendChild(tools); }
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  tools.appendChild(button);
+  return button;
+}
+
+/**
+ * GPUが戻らなかったときの行き止まりを、押せば済む一手に変える。
+ *
+ * ★「ページを再読み込みしてください」と文字で頼むのは、利用者に手順を丸投げしている。
+ *   モデルは端末に残っているので、再読み込みすれば数秒で戻る——**その数秒を
+ *   こちらでやる**。聞きかけの質問も持ち越して、戻ったら自動で投げ直す。
+ */
+function offerReload(node, question) {
+  bodyOf(node).textContent = '端末のGPUとの接続が戻りませんでした。'
+    + 'ページを読み込み直すと直ります（モデルはこの端末に残っているので数秒です）。';
+  actionMessage(node, '再読み込みして続ける / Reload and continue', () => {
+    if (question) keepResume(question);
+    location.reload();
+  });
 }
 
 /** 吹き出しに添え書きを1行足す（同じ吹き出しに二重に付けない） */
@@ -1404,6 +1457,9 @@ async function startEngine() {
       state.models.find((m) => m.id === state.model)?.name ?? state.model, state.bootMs / 1000);
     if (!state.history.length) addMessage('assistant', 'おかえりなさい、ゼロさん。ここはスマホの中だけで動きます。何から始めますか？');
     paintSuggestions();
+    // ★GPUが戻らずに読み込み直した場合は、聞きかけの質問をそのまま投げ直す。
+    //   打ち直させない（打ち直させると、直ったこと自体が伝わらない）
+    if (state.pending) { const again = state.pending; state.pending = ''; void send(again); }
   } catch (cause) {
     // 失敗の理由をそのまま出す。「使えません」だけだと打つ手が無くなる
     stopClock();
@@ -1574,7 +1630,7 @@ async function send(text) {
   if (!state.engine) {
     addMessage('user', clean);
     $('input').value = '';
-    addMessage('assistant', '端末のGPUとの接続が戻りませんでした。ページを再読み込みしてください（モデルは端末に残っているので、次はすぐ起動します）。');
+    offerReload(addMessage('assistant', ''), clean);
     return;
   }
   state.busy = true;
@@ -1615,9 +1671,12 @@ async function send(text) {
     if (state.speak && !state.stopping) speak(answer);
   } catch (cause) {
     node.classList.remove('pending');
-    bodyOf(node).textContent = isDeviceLost(cause)
-      ? `端末のGPUとの接続が戻りませんでした。ページを再読み込みしてください（モデルは端末に残っているので、次はすぐ起動します）: ${cause?.message ?? cause}`
-      : `答えられませんでした: ${cause?.message ?? cause}`;
+    if (isDeviceLost(cause)) {
+      // 直前の質問ごと持ち越す。押せば数秒で同じ問いの答えが返る
+      offerReload(node, clean);
+    } else {
+      bodyOf(node).textContent = `答えられませんでした: ${cause?.message ?? cause}`;
+    }
   } finally {
     state.busy = false;
     state.stopping = false;
@@ -1817,6 +1876,14 @@ $('btn-change').addEventListener('click', () => {
   if (!canRun(env)) {
     $('btn-start').disabled = true;
     $('progress-note').textContent = 'この端末では動かせません。Android の Chrome を最新にしてお試しください。';
+  }
+  // ★GPUが戻らずに読み込み直したときは、押させずにそのまま起動へ進む。
+  //   覚書は takeResume() が読んだ時点で消えているので、失敗しても輪にならない
+  const resume = takeResume();
+  if (resume && canRun(env)) {
+    state.pending = resume.question;
+    $('progress-note').textContent = '続きから起動しています… / Resuming…';
+    void startEngine();
   }
   window.ZERO1_MOBILE_READY = true;
 })();
