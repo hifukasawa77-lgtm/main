@@ -462,7 +462,7 @@ function progressText(report) {
 // 検査から触るための橋渡し。新しい関数を足したらここへも足すこと
 // （足し忘れると検査側が "is not a function" で落ちる）
 window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT,
-  preflight, isNetworkFailure, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText };
+  preflight, isNetworkFailure, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText, stallGuard };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -475,6 +475,7 @@ const SPEAK_KEY = 'zero1-mobile-speak';
 const state = { engine:null, model:null, busy:false, history:[], speak:false, listening:false,
   stage:'—', violations:[], lastError:'', unreachable:[], retries:0,
   worker:null, workerError:'', mainThreadOnly:false, lastProgressAt:0, clock:null,
+  sawProgress:false, stallTimer:null,
   storageGB:NaN, models:MODELS, env:null };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
@@ -587,15 +588,17 @@ function elapsedText(seconds) {
  *   待てば終わるのかが**利用者にも作った側にも判別できない**。
  *   経過時間と「最後に進んだのはいつか」を出せば、少なくとも区別がつく。
  */
-function clockText(elapsedSec, sinceProgressSec) {
+function clockText(elapsedSec, sinceProgressSec, stage = '') {
+  // ★段階を必ず添える。画面写真1枚で「どこで止まったのか」が分かるようにする
+  const where = stage ? `［${stage}］ ` : '';
   if (sinceProgressSec >= 180) {
-    return `${elapsedText(elapsedSec)}経過（${elapsedText(sinceProgressSec)}進んでいません）。`
+    return `${where}${elapsedText(elapsedSec)}経過（${elapsedText(sinceProgressSec)}進んでいません）。`
       + '電波の弱い場所だと止まって見えることがあります。軽いモデルに変えると確実に進みます。';
   }
   if (sinceProgressSec >= 45) {
-    return `${elapsedText(elapsedSec)}経過（${elapsedText(sinceProgressSec)}進んでいません）。大きなかたまりを取得中かもしれません。`;
+    return `${where}${elapsedText(elapsedSec)}経過（${elapsedText(sinceProgressSec)}進んでいません）。大きなかたまりを取得中かもしれません。`;
   }
-  return `${elapsedText(elapsedSec)}経過`;
+  return `${where}${elapsedText(elapsedSec)}経過`;
 }
 
 /**
@@ -611,7 +614,8 @@ function startClock() {
     const now = Date.now();
     $('progress-clock').textContent = clockText(
       Math.round((now - began) / 1000),
-      Math.round((now - state.lastProgressAt) / 1000));
+      Math.round((now - state.lastProgressAt) / 1000),
+      state.stage);
   };
   tick();
   state.clock = setInterval(tick, 1000);
@@ -679,6 +683,8 @@ function showFailure(env, message) {
     state.retries ? `やり直した回数: ${state.retries}回` : '',
     `配信経路: ${serviceWorkerNote()}`,
     `モデルを動かした糸: ${state.mainThreadOnly ? '画面と同じ糸（別の糸で動かせなかった）' : '画面とは別の糸（Web Worker）'}`,
+    state.workerError ? `別の糸が動かなかった理由: ${state.workerError}` : '',
+    `進捗が1度でも出たか: ${state.sawProgress ? 'はい' : 'いいえ'}`,
     `モデル: ${model ? `${model.name} (${state.model}) ${(model.sizeMB / 1024).toFixed(1)}GB` : state.model}`,
     `WebGPU: ${env.webgpu ? 'あり' : 'なし'} / float16: ${env.f16 ? 'あり' : 'なし'} / 安全な接続: ${env.secure ? 'はい' : 'いいえ'}`,
     `GPUの機能: ${(env.features ?? []).join(', ') || '取得できず'}`,
@@ -698,6 +704,13 @@ function showFailure(env, message) {
  *   ここで文言を分けておかないと、利用者の手元には打つ手が何も残らない。
  */
 function failureHint(message) {
+  if (/進みませんでした/.test(message)) {
+    return 'モデルの準備が止まりました。軽いモデル（かるい / ふつう）に変えると通ることが多いです。'
+      + 'Wi-Fiにつなぎ、他のアプリを閉じてからお試しください。';
+  }
+  if (/別の糸/.test(message)) {
+    return '読み込みを別の糸で動かせませんでした。ページを再読み込みしてからもう一度お試しください。';
+  }
   if (/failed to fetch|networkerror|network error|load failed/i.test(message)) {
     return 'モデルの取得に届きませんでした。Wi-Fiにつないで、ページを一度再読み込みしてから、もう一度お試しください。'
       + '（通信を中継する古いService Workerが残っていると同じ失敗が続きます。再読み込みで入れ替わります）';
@@ -768,59 +781,118 @@ function isNetworkFailure(cause) {
  * ★Worker が作れない・落ちる端末では画面と同じ糸へ落とす。**動かないより固まる方がまし**
  *   ——ただし落ちた事実は隠さず画面に出す。
  */
+/**
+ * 別の糸は「作れても動かない」ことがある。返事が無い時間の上限を決めておく。
+ * ★検査は `window.__ZERO1_TIMEOUTS` で短くする（実時間で待つ検査は、遅いだけで落ちる）。
+ */
+const TIMEOUTS = Object.assign({
+  workerReady: 25_000,   // 動き出したという合図を待つ上限
+  firstProgress: 90_000, // 進捗が1度も出ないまま待つ上限
+  stall: 240_000,        // 一度は進んだ後、次の進捗までの上限
+}, window.__ZERO1_TIMEOUTS ?? {});
+
 async function startModel(webllm, modelId, onProgress) {
   if (!state.mainThreadOnly) {
-    state.workerError = '';
-    const worker = spawnWorker();
+    state.stage = '別の糸（Web Worker）の起動';
+    setProgress(0, '別の糸を用意しています… / Starting the worker…');
+    const worker = await spawnWorker();
     if (worker) {
+      state.stage = 'モデルの取得と準備（別の糸・初回は数分かかります）';
+      setProgress(0, 'モデルを準備しています… / Preparing model…');
       try {
-        // ★worker 自体が動かなかった場合だけを拾うために競争させる。読み込みに失敗した
-        //   worker は「返事をしないまま黙る」ことがあり、待つだけでは 0% で止まってしまう
         return await Promise.race([
           webllm.CreateWebWorkerMLCEngine(worker, modelId, { initProgressCallback:onProgress }),
-          workerBroken(worker),
+          stallGuard(),
         ]);
-      } catch (cause) {
-        // ★モデル側の失敗（シェーダー・通信・容量）を「糸が壊れた」と読み違えないこと。
-        //   読み違えると、同じ失敗を画面と同じ糸でもう一度やり直して二度手間になり、
-        //   しかも次からずっと固まる経路へ落ちてしまう（検査#40 が捕まえた）
-        if (!state.workerError) throw cause;
-        state.lastError = `別の糸で動かせませんでした: ${state.workerError}`;
-        state.mainThreadOnly = true;
-        setProgress(0, '別の糸で動かせないため、読み込み中は画面が固まります… / Falling back to the main thread…');
+      } finally {
+        stopStallGuard();
       }
     }
+    setProgress(0, `${state.lastError}。画面と同じ糸で続けます… / Falling back to the main thread…`);
   }
+  // ★同じ糸で読むと、読み込みのあいだ画面は固まる。動かないよりはまし、という判断
+  state.stage = 'モデルの取得と準備（画面と同じ糸・読み込み中は固まります）';
   return await webllm.CreateMLCEngine(modelId, { initProgressCallback:onProgress });
 }
 
-/** 別の糸を用意する。作れない端末では null を返し、画面と同じ糸へ落とす */
-function spawnWorker() {
+/**
+ * 別の糸を用意し、**本当に動き出したことを確かめてから**返す。
+ *
+ * ★`new Worker()` は、中の読み込みが失敗しても例外を投げない。失敗した糸は
+ *   ただ黙るだけで、仕事を渡した側は返事を待ち続けて**0%のまま永久に止まる**。
+ *   だから「作れたか」ではなく「動き出したか」を待つ（worker 側が自分から合図を送る）。
+ */
+async function spawnWorker() {
   if (typeof Worker !== 'function') {
     state.mainThreadOnly = true;
     state.lastError = 'この端末では別の糸（Web Worker）を作れません';
     return null;
   }
+  let worker;
   try {
     state.worker?.terminate?.();
-    state.worker = new Worker('assets/js/zero1-worker.js', { type:'module' });
-    return state.worker;
+    worker = new Worker('assets/js/zero1-worker.js', { type:'module' });
   } catch (cause) {
     state.worker = null;
     state.mainThreadOnly = true;
     state.lastError = `別の糸を作れませんでした: ${cause?.message ?? cause}`;
     return null;
   }
+  const problem = await new Promise((resolve) => {
+    const finish = (why) => {
+      clearTimeout(timer);
+      worker.removeEventListener('message', onMessage);
+      worker.removeEventListener('error', onError);
+      resolve(why);
+    };
+    const timer = setTimeout(
+      () => finish(`${Math.round(TIMEOUTS.workerReady / 1000)}秒たっても動き出しませんでした`),
+      TIMEOUTS.workerReady);
+    const onMessage = (event) => {
+      if (event.data?.zero1 === 'ready') finish('');
+      else if (event.data?.zero1 === 'failed') finish(event.data.message);
+    };
+    const onError = (event) => finish(event?.message || '別の糸が落ちました');
+    worker.addEventListener('message', onMessage);
+    worker.addEventListener('error', onError);
+  });
+  if (problem) {
+    worker.terminate();
+    state.worker = null;
+    state.workerError = problem;
+    state.mainThreadOnly = true;
+    state.lastError = `別の糸が動きませんでした: ${problem}`;
+    return null;
+  }
+  state.worker = worker;
+  return worker;
 }
 
-/** 糸そのものが落ちたときだけ拒否する約束。モデルの失敗とは区別する */
-function workerBroken(worker) {
+/**
+ * 進捗が止まったら諦める。
+ *
+ * ★止まったまま待ち続けるのが一番いけない。WebLLM の読み込みには時間切れが無く、
+ *   取得先が黙り込む・糸が死ぬ・端末のメモリが尽きる、のどれでも
+ *   **例外も出ないまま 0% で永久に待つ**。せめて「何秒進まなかったか」を持って
+ *   失敗として出せば、次の一手（軽いモデル・Wi-Fi）が選べる。
+ */
+function stallGuard() {
   return new Promise((_, reject) => {
-    worker.addEventListener('error', (event) => {
-      state.workerError = event?.message || '別の糸を読み込めませんでした';
-      reject(new Error(state.workerError));
-    });
+    state.stallTimer = setInterval(() => {
+      const since = Date.now() - state.lastProgressAt;
+      const limit = state.sawProgress ? TIMEOUTS.stall : TIMEOUTS.firstProgress;
+      if (since < limit) return;
+      stopStallGuard();
+      state.worker?.terminate?.();
+      state.worker = null;
+      reject(new Error(`${Math.round(since / 1000)}秒のあいだ、モデルの準備が1つも進みませんでした`));
+    }, 1000);
   });
+}
+
+function stopStallGuard() {
+  if (state.stallTimer) clearInterval(state.stallTimer);
+  state.stallTimer = null;
 }
 
 /**
@@ -838,6 +910,7 @@ async function createEngine(webllm, modelId, attempts = 3) {
     try {
       return await startModel(webllm, modelId, (report) => {
         state.lastProgressAt = Date.now();
+        state.sawProgress = true;
         const { percent, label } = progressText(report);
         setProgress(percent, attempt > 1 ? `${label}（続きから ${attempt}回目）` : label);
       });
@@ -861,6 +934,8 @@ async function startEngine() {
   state.unreachable = [];
   state.retries = 0;
   state.mainThreadOnly = false;
+  state.sawProgress = false;
+  state.workerError = '';
   state.stage = 'ライブラリの読み込み';
   setProgress(0, 'ライブラリを読み込んでいます… / Loading library…');
   startClock();
@@ -898,6 +973,7 @@ async function startEngine() {
   } catch (cause) {
     // 失敗の理由をそのまま出す。「使えません」だけだと打つ手が無くなる
     stopClock();
+    stopStallGuard();
     state.worker?.terminate?.();
     state.worker = null;
     const message = `${cause?.name ?? 'Error'}: ${cause?.message ?? cause}`;

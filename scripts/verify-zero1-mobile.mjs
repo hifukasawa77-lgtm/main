@@ -322,9 +322,12 @@ check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0
 //   誰も原因に辿り着けない**。ここは合成のライブラリを差し込んで通しで確かめる。
 //   ★純粋関数（preflight 等）だけを叩く検査にしないこと。画面がそれを使っていなければ
 //     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
-async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false } = {}) {
+async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false,
+  workerLoads = true, timeouts = null, hang = false } = {}) {
   const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await scoped.addInitScript(([canReach, times, kind, banWorker]) => {
+  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes]) => {
+    if (clocks) window.__ZERO1_TIMEOUTS = clocks;
+    window.__ZERO1_HANG = neverFinishes;
     if (banWorker) {
       // Worker が作れない端末の再現（作れなければ画面と同じ糸へ落ちるはず）
       Object.defineProperty(window, 'Worker', { configurable: true, value: function () { throw new Error('Worker は使えません'); } });
@@ -365,6 +368,8 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
       CreateWebWorkerMLCEngine: async (worker, id, opts) => {
         window.__ZERO1_PROBE.workerUsed++;
         window.__ZERO1_PROBE.workerIsWorker = worker instanceof Worker;
+        // 返事が返ってこないまま黙る糸の再現（実際に深澤さんの端末で起きた形）
+        if (window.__ZERO1_HANG) return new Promise(() => {});
         return window.__ZERO1_WEBLLM.CreateMLCEngine(id, opts);
       },
       CreateMLCEngine: async (id, opts) => {
@@ -377,7 +382,12 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
         return { chat: { completions: { create: async () => ({}) } } };
       },
     };
-  }, [reachable, failTimes, failWith, noWorker]);
+  }, [reachable, failTimes, failWith, noWorker, timeouts, hang]);
+  // ★worker は実物を動かす（合図の受け渡しごと確かめる）。ただしCDNへは出ない
+  await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
+    status: workerLoads ? 200 : 503, contentType: 'text/javascript',
+    body: 'export class WebWorkerMLCEngineHandler { onmessage() {} }',
+  }));
   await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
   await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
   await scoped.locator('#btn-start').click();
@@ -391,6 +401,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     chatting: !document.getElementById('chat').classList.contains('hidden'),
     stage: window.ZERO1_MOBILE_STATE?.stage ?? '',
     mainThreadOnly: window.ZERO1_MOBILE_STATE?.mainThreadOnly ?? null,
+    workerError: window.ZERO1_MOBILE_STATE?.workerError ?? '',
     probe: window.__ZERO1_PROBE,
   }));
   await scoped.close();
@@ -479,6 +490,10 @@ const ticking = await (async () => {
       CreateMLCEngine: () => new Promise(() => {}),
     };
   });
+  await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
+    status: 200, contentType: 'text/javascript',
+    body: 'export class WebWorkerMLCEngineHandler { onmessage() {} }',
+  }));
   await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
   await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
   await scoped.locator('#btn-start').click();
@@ -535,6 +550,30 @@ const workerSrc = fs.readFileSync(path.join(ROOT, 'assets/js/zero1-worker.js'), 
 const workerUrl = workerSrc.match(/WEBLLM_URL\s*=\s*'([^']+)'/)?.[1] ?? '';
 check('51. workerが読むライブラリの版が、ページの importmap と同じ',
   workerUrl === libUrl, `worker ${workerUrl} / ページ ${libUrl}`);
+
+// --- 別の糸が「作れても動かない」場合に、待ち続けないか -----------------------
+// ★2026-09-03、深澤さんの端末は経過時計だけが動き、進捗は1度も出ないまま止まった。
+//   worker は読み込みに失敗しても例外を投げず**ただ黙る**ので、仕事を渡した側は
+//   返事を待ち続けて 0% のまま永久に止まる。例外もエラーも出ない
+const deadWorker = await withEngine({ workerLoads: false });
+check('53. 別の糸が動き出さないときは、待たずに画面と同じ糸へ落とす',
+  deadWorker.chatting && deadWorker.mainThreadOnly === true && deadWorker.workerError !== '',
+  deadWorker.workerError.slice(0, 60));
+
+// 返事が返らないまま黙る糸。待ち続けず、何秒進まなかったかを持って失敗にする
+const stalled = await withEngine({ hang: true, timeouts: { firstProgress: 2500 } });
+check('54. 進捗が1度も出ないまま止まったら、待ち続けずに失敗として出す',
+  stalled.failed && /進みませんでした/.test(stalled.detail),
+  stalled.detail.split('\n').find((l) => l.startsWith('理由')) ?? '（行が無い）');
+check('55. 止まったときは「軽いモデル」という打つ手を出す',
+  /軽いモデル/.test(stalled.hint), stalled.hint.slice(0, 40));
+check('56. 進捗が1度も出なかった事実を手掛かりに残す',
+  /進捗が1度でも出たか: いいえ/.test(stalled.detail));
+
+// ★画面写真1枚で「どこで止まったか」が分かること。文字で聞き返す往復が消える
+const staged = await page.evaluate(() => window.ZERO1_MOBILE.clockText(400, 200, 'モデルの取得と準備'));
+check('57. 経過時計に、いまどの段階かを添える（画面写真だけで場所が分かる）',
+  /モデルの取得と準備/.test(staged), staged.slice(0, 40));
 
 // --- CSPが「別の糸」を止めていないか ------------------------------------------
 // ★worker-src を締めると worker は**例外もエラーも出さずに黙る**（作られはするが動かない）。
