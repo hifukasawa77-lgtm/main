@@ -511,6 +511,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     headNote: document.getElementById('head-note').textContent,
     chips: [...document.querySelectorAll('#chips button')].map((b) => b.textContent),
     copyable: Boolean(document.querySelector('#msgs .msg.ai:last-of-type .tools button')),
+    actions: [...document.querySelectorAll('#msgs .msg .tools button')].map((b) => b.textContent ?? ''),
     pwned: window.__PWNED ?? 0,
     spoken: window.__ZERO1_SPOKEN,
     detail: document.getElementById('failure-detail').textContent,
@@ -1095,7 +1096,7 @@ check('104. GPUが戻るのを待ってから載せ直す（すぐ載せ直し�
 const adapterDead = await withEngine({ ask: 'こんにちは', gpuLoss: 9, gpuLossKind: 'adapter',
   adapterGoneFor: 999, timeouts: { adapterWait: 2500 } });
 check('105. 戻らないときは、待ち続けず日本語で次の一手を出す',
-  /再読み込み/.test(adapterDead.body) && /端末に残っている/.test(adapterDead.body)
+  /読み込み直す/.test(adapterDead.body) && /端末に残っている/.test(adapterDead.body)
     && !/Unable to find/.test(adapterDead.body),
   adapterDead.body.slice(0, 44));
 
@@ -1113,6 +1114,110 @@ check('106. 載せ終わった時点で切れていても、質問される前�
 // ★長い返答の途中で画面が消えると、読み込み中と同じようにGPUの資源が手放される
 check('107. 答えている間も画面を消させない（読み込み中だけにしない）',
   finished.probe.wakeLocks >= 2, `wake lock 要求 ${finished.probe.wakeLocks}回`);
+
+// --- GPUが戻らなかったときを、行き止まりにしないか ---------------------------
+// ★2026-09-03 深澤報告（3件目）: 英文は消えたが「ページを再読み込みしてください」で
+//   止まっていた。文字で手順を頼むのは利用者への丸投げで、しかも聞きかけの質問は消える。
+//   モデルは端末に残っているので**その数秒はこちらでやる**。
+const dead = await withEngine({ ask: 'カレーの作り方を手短に', gpuLoss: 9, gpuLossKind: 'adapter',
+  adapterGoneFor: 999, timeouts: { adapterWait: 2000 } });
+check('108. 行き止まりにせず、押せば済む一手を置く',
+  dead.actions.some((label) => /再読み込み/.test(label)),
+  dead.actions.join(' / ') || '（ボタンが無い）');
+check('109. 英文ではなく、何が起きたかを日本語で言う',
+  /GPUとの接続/.test(dead.body) && !/Unable to find/.test(dead.body), dead.body.slice(0, 40));
+
+// 覚書の作法。**読んだ時点で消す**——消さないと、起動のたびに同じ質問を投げ直して
+// 同じ失敗を繰り返す輪に入り、利用者には止められない
+const resumeRules = await page.evaluate(() => {
+  const { keepResume, takeResume } = window.ZERO1_MOBILE;
+  keepResume('明日の持ち物');
+  const first = takeResume();
+  const second = takeResume();           // 2回目はもう無い
+  sessionStorage.setItem('zero1-mobile-resume', JSON.stringify({ question:'古い質問', at: Date.now() - 700_000 }));
+  const stale = takeResume();            // 10分以上前のものは引き継がない
+  return { first: first?.question ?? null, second, stale };
+});
+check('110. 聞きかけの質問を持ち越す', resumeRules.first === '明日の持ち物', String(resumeRules.first));
+check('111. 覚書は読んだ時点で消す（同じ失敗を繰り返す輪に入らない）', resumeRules.second === null);
+check('112. 古すぎる覚書は引き継がない（別の日の質問が突然飛ばない）', resumeRules.stale === null);
+
+// 通しで確かめる: 1回目はGPUが死ぬ → ボタンを押す → 読み込み直して自動で起動 →
+// **打ち直さずに**同じ質問の答えが返る
+const resumed = await (async () => {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(() => {
+    window.__ZERO1_TIMEOUTS = { adapterWait: 1200 };
+    // 1回目の読み込みだけGPUが死ぬ。読み込み直せば生き返る（実機と同じ形）
+    const already = sessionStorage.getItem('z1-test-died') === '1';
+    let gone = false;
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: {
+      requestAdapter: async () => (gone ? null : { features: new Set() }),
+    }});
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: { estimate: async () => ({ quota: 10.7e9, usage: 0 }) } });
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (/huggingface\.co|raw\.githubusercontent\.com/.test(url)) return Promise.resolve(new Response('{}', { status: 200 }));
+      return original(input, init);
+    };
+    window.__ZERO1_WEBLLM = {
+      get prebuiltAppConfig() {
+        const tiers = window.ZERO1_MOBILE?.MODEL_TIERS ?? [];
+        return { model_list: tiers.flatMap((t) => [t.f16, t.f32]).map((v) => ({
+          model_id: v.id, model: `https://huggingface.co/mlc-ai/${v.id}`,
+          model_lib: `https://raw.githubusercontent.com/x/${v.id}.wasm`,
+        })) };
+      },
+      CreateWebWorkerMLCEngine: (worker, id, opts) => window.__ZERO1_WEBLLM.CreateMLCEngine(id, opts),
+      CreateMLCEngine: async (id, opts) => {
+        opts?.initProgressCallback?.({ progress: 1, text: 'done' });
+        return { chat: { completions: { create: async () => {
+          if (!already) {
+            sessionStorage.setItem('z1-test-died', '1');
+            gone = true;
+            throw new Error('Unable to find a compatible GPU.');
+          }
+          return (async function* () {
+            for (const token of ['カレー', 'は', '玉ねぎから']) yield { choices: [{ delta: { content: token } }] };
+          })();
+        } } }, interruptGenerate() {} };
+      },
+    };
+  });
+  await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
+    status: 200, contentType: 'text/javascript', body: 'export class WebWorkerMLCEngineHandler { onmessage() {} }',
+  }));
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  await scoped.locator('#btn-start').click();
+  await scoped.waitForSelector('#chips button', { timeout: 20_000 });
+  await scoped.locator('#input').fill('カレーの作り方を手短に');
+  await scoped.locator('#btn-send').click();
+  await scoped.waitForSelector('#msgs .msg .tools button', { timeout: 25_000 });
+  // 押すだけ。打ち直させない
+  await scoped.locator('#msgs .msg .tools button').last().click();
+  await scoped.waitForFunction(
+    () => !document.getElementById('chat').classList.contains('hidden')
+      && /カレーは玉ねぎから/.test(document.getElementById('msgs').textContent ?? ''),
+    { timeout: 30_000 }).catch(() => {});
+  const seen = await scoped.evaluate(() => ({
+    started: !document.getElementById('chat').classList.contains('hidden'),
+    texts: [...document.querySelectorAll('#msgs .msg')].map((m) => m.textContent ?? ''),
+    left: sessionStorage.getItem('zero1-mobile-resume'),
+  }));
+  await scoped.close();
+  return seen;
+})();
+check('113. 押したら、起動ボタンを押させずに続きから起動する',
+  resumed.started === true, `会話画面: ${resumed.started}`);
+check('114. 打ち直さずに、同じ質問の答えが返る',
+  resumed.texts.some((t) => /カレーの作り方を手短に/.test(t))
+    && resumed.texts.some((t) => /カレーは玉ねぎから/.test(t)),
+  resumed.texts.map((t) => t.slice(0, 14)).join(' | '));
+check('115. 引き継ぎの覚書は残さない（次の起動で勝手に投げ直さない）',
+  resumed.left === null, String(resumed.left));
 
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });
