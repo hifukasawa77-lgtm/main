@@ -324,9 +324,10 @@ check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0
 //     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
 async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false,
   workerLoads = true, timeouts = null, hang = false, gpuLoss = 0, ask = '', longAnswer = false, stopAt = 0,
-  speak = false, reply = '', chip = -1, noLibrary = false } = {}) {
+  speak = false, reply = '', chip = -1, noLibrary = false,
+  gpuLossKind = 'mapAsync', adapterGoneFor = 0, adapterGoesAt = 'loss' } = {}) {
   const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes, streamsLong, readsAloud, fixedReply, skipLibrary]) => {
+  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes, streamsLong, readsAloud, fixedReply, skipLibrary, lossKind, adapterGone, adapterGoesAt]) => {
     window.__ZERO1_LONG = streamsLong;
     window.__ZERO1_REPLY = fixedReply;
     // 読み上げが実際に走った回数を数える。止めたのに読み上げが続いたら止めた意味が無い
@@ -339,6 +340,13 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     if (clocks) window.__ZERO1_TIMEOUTS = clocks;
     window.__ZERO1_HANG = neverFinishes;
     window.__ZERO1_GPU_LOSS = gpuLossTimes;
+    window.__ZERO1_LOSS_KIND = lossKind;
+    // ★切れた直後は requestAdapter が null を返し続ける。実機はこの状態だった。
+    //   ただし**消えるのは切れた瞬間から**で、起動前の端末確認では見えている——
+    //   最初から消しておくと「WebGPU非対応の端末」を再現してしまい別物になる
+    window.__ZERO1_ADAPTER_GONE = 0;
+    window.__ZERO1_ADAPTER_BUDGET = adapterGone;
+    window.__ZERO1_ADAPTER_AT = adapterGoesAt;   // 'engine'=載せ終わった瞬間 / 'loss'=切れた瞬間
     // 画面を消させない仕掛けを使っているかを見る（実機で切れた原因そのもの）
     Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: {
       request: async () => { window.__ZERO1_PROBE.wakeLocks++; return { release: async () => {} }; },
@@ -347,8 +355,14 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
       // Worker が作れない端末の再現（作れなければ画面と同じ糸へ落ちるはず）
       Object.defineProperty(window, 'Worker', { configurable: true, value: function () { throw new Error('Worker は使えません'); } });
     }
+    window.__ZERO1_PROBE_ADAPTER = 0;
     Object.defineProperty(navigator, 'gpu', { configurable: true, value: {
-      requestAdapter: async () => ({ features: new Set() }),   // float16なし = 深澤さんの端末
+      requestAdapter: async () => {
+        window.__ZERO1_PROBE_ADAPTER++;
+        // 切れている間は null を返す（実機で WebLLM が受け取っていたもの）
+        if (window.__ZERO1_ADAPTER_GONE > 0) { window.__ZERO1_ADAPTER_GONE--; return null; }
+        return { features: new Set() };   // float16なし = 深澤さんの端末
+      },
     }});
     Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
     Object.defineProperty(navigator, 'storage', { configurable: true, value: {
@@ -389,17 +403,32 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
         return window.__ZERO1_WEBLLM.CreateMLCEngine(id, opts);
       },
       CreateMLCEngine: async (id, opts) => {
+        const armAdapter = (when) => {
+          if (window.__ZERO1_ADAPTER_AT === when) {
+            window.__ZERO1_ADAPTER_GONE = window.__ZERO1_ADAPTER_BUDGET;
+            window.__ZERO1_ADAPTER_BUDGET = 0;
+          }
+        };
         if (!window.__ZERO1_PROBE.workerUsed || window.__ZERO1_PROBE.attempts) window.__ZERO1_PROBE.mainThreadUsed++;
         window.__ZERO1_PROBE.attempts++;
         opts?.initProgressCallback?.({ progress: 0.5, text: 'Fetching param cache' });
         if (window.__ZERO1_PROBE.attempts <= times) {
           throw kind === 'network' ? new TypeError('Failed to fetch') : new Error('[Invalid ShaderModule] entryPoint: "index_kernel"');
         }
+        // ★読み込みは数分かかる。載せ終わった時点で既に切れていることがある
+        armAdapter('engine');
         return { chat: { completions: { create: async () => {
           window.__ZERO1_PROBE.asked++;
           // ★実機で出たそのままの文言。GPUとの接続が切れた形を再現する
           if (window.__ZERO1_GPU_LOSS > 0) {
             window.__ZERO1_GPU_LOSS--;
+            armAdapter('loss');
+            if (window.__ZERO1_LOSS_KIND === 'adapter') {
+              // ★2026-09-03 深澤報告（2件目）の文言そのまま。切れたGPUを取り直そうとした
+              //   WebLLM が requestAdapter() から null を受け取ったときに出る
+              throw new Error('Unable to find a compatible GPU. This issue might be because your computer'
+                + " doesn't have a GPU, or your system settings are not configured properly.");
+            }
             const lost = new Error("Failed to execute 'mapAsync' on 'GPUBuffer': A valid external Instance reference no longer exists.");
             lost.name = 'AbortError';
             throw lost;
@@ -428,7 +457,8 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
         interruptGenerate: () => { window.__ZERO1_PROBE.interrupted = true; } };
       },
     };
-  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss, longAnswer, speak, reply, noLibrary]);
+  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss, longAnswer, speak, reply, noLibrary,
+    gpuLossKind, adapterGoneFor, adapterGoesAt]);
   // ★worker は実物を動かす（合図の受け渡しごと確かめる）。ただしCDNへは出ない
   await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
     status: workerLoads ? 200 : 503, contentType: 'text/javascript',
@@ -491,6 +521,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     mainThreadOnly: window.ZERO1_MOBILE_STATE?.mainThreadOnly ?? null,
     workerError: window.ZERO1_MOBILE_STATE?.workerError ?? '',
     probe: window.__ZERO1_PROBE,
+    adapterAsks: window.__ZERO1_PROBE_ADAPTER,
   }));
   result.whileStreaming = scoped.__stopped ?? null;
   await scoped.close();
@@ -1022,6 +1053,66 @@ check('97. manifest の色がページと合っている（起動時に白く光
 const noLib = await withEngine({ noLibrary: true, workerLoads: false });
 check('100. ライブラリ本体を取得できないときも、理由と次の一手を出す',
   noLib.failed && /ライブラリ本体/.test(noLib.hint), noLib.hint.slice(0, 52));
+
+// --- 実機で出た「GPUが見つからない」を、切断として扱えているか -----------------
+// ★2026-09-03 深澤報告（2件目）: 起動には成功した（1分01秒）のに、最初の質問で
+//   `Error: Unable to find a compatible GPU.` が**英語のまま**出た。中身は
+//   「読み込み中にGPUとの接続が切れた」で1件目と同じなのに、判定に入っておらず
+//   載せ直しが一度も走らなかった。打つ手の無い英文だけが利用者に残る。
+const adapterKind = await page.evaluate(() => {
+  const { isDeviceLost } = window.ZERO1_MOBILE;
+  return {
+    real: isDeviceLost(new Error('Unable to find a compatible GPU. This issue might be because your'
+      + " computer doesn't have a GPU, or your system settings are not configured properly.")),
+    mapAsync: isDeviceLost({ name:'AbortError', message:"Failed to execute 'mapAsync' on 'GPUBuffer': A valid external Instance reference no longer exists." }),
+    network: isDeviceLost(new TypeError('Failed to fetch')),
+    shader: isDeviceLost(new Error('[Invalid ShaderModule] entryPoint: "index_kernel"')),
+    quota: isDeviceLost(new Error('QuotaExceededError: storage full')),
+  };
+});
+check('101. 「GPUが見つからない」もGPU切断として扱う（英文を放置しない）',
+  adapterKind.real === true && adapterKind.mapAsync === true, JSON.stringify(adapterKind));
+// ★広げすぎない。通信・シェーダー・容量の失敗まで切断扱いにすると、
+//   直しようのない失敗を何度も載せ直すことになる
+check('102. 通信・シェーダー・容量の失敗まで切断扱いにしない',
+  adapterKind.network === false && adapterKind.shader === false && adapterKind.quota === false,
+  JSON.stringify(adapterKind));
+
+// 実機と同じ形で通しで確かめる: 最初の質問が「GPUが見つからない」で落ちる
+const adapterLost = await withEngine({ ask: '明日の持ち物を一覧にして', gpuLoss: 1, gpuLossKind: 'adapter' });
+check('103. その形で切れても、載せ直して答え直す（英文を見せない）',
+  /こんにちは。/.test(adapterLost.body) && !/Unable to find/.test(adapterLost.reply),
+  `返答「${adapterLost.body.slice(0, 16)}」/ 問い合わせ ${adapterLost.probe.asked}回`);
+
+// ★切れた直後は requestAdapter が null を返し続ける。待たずに載せ直すと同じ失敗をするだけ
+const adapterSlow = await withEngine({ ask: 'こんにちは', gpuLoss: 1, gpuLossKind: 'adapter',
+  adapterGoneFor: 3, timeouts: { adapterWait: 8000 } });
+check('104. GPUが戻るのを待ってから載せ直す（すぐ載せ直して同じ失敗をしない）',
+  /こんにちは。/.test(adapterSlow.body) && adapterSlow.adapterAsks >= 4,
+  `アダプタ確認 ${adapterSlow.adapterAsks}回 / 返答「${adapterSlow.body.slice(0, 12)}」`);
+
+// 戻らないままなら、待ち続けずに日本語で次の一手を出す
+const adapterDead = await withEngine({ ask: 'こんにちは', gpuLoss: 9, gpuLossKind: 'adapter',
+  adapterGoneFor: 999, timeouts: { adapterWait: 2500 } });
+check('105. 戻らないときは、待ち続けず日本語で次の一手を出す',
+  /再読み込み/.test(adapterDead.body) && /端末に残っている/.test(adapterDead.body)
+    && !/Unable to find/.test(adapterDead.body),
+  adapterDead.body.slice(0, 44));
+
+// --- 載せ終わった時点で既に切れている場合 -------------------------------------
+// ★読み込みは数分かかる。載せ終わった瞬間には切れていて、最初の質問で初めて露見する
+//   ——これが「起動はしたのに答えない」の正体。聞かれる前に気づく
+const lostAtBoot = await withEngine({ ask: 'こんにちは', adapterGoneFor: 3, adapterGoesAt: 'engine',
+  timeouts: { adapterWait: 6000 } });
+check('106. 載せ終わった時点で切れていても、質問される前に気づいて直す',
+  lostAtBoot.chatting && /こんにちは。/.test(lostAtBoot.body) && !lostAtBoot.failed
+    && lostAtBoot.adapterAsks >= 3,
+  `会話へ到達: ${lostAtBoot.chatting} / アダプタ確認 ${lostAtBoot.adapterAsks}回`);
+
+// --- 答えている最中に画面を消させない -----------------------------------------
+// ★長い返答の途中で画面が消えると、読み込み中と同じようにGPUの資源が手放される
+check('107. 答えている間も画面を消させない（読み込み中だけにしない）',
+  finished.probe.wakeLocks >= 2, `wake lock 要求 ${finished.probe.wakeLocks}回`);
 
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });

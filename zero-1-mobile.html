@@ -679,7 +679,8 @@ window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, stor
   preflight, isNetworkFailure, isDeviceLost, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText, stallGuard,
   modelCacheEntries, isModelCached, cachedModelIds, deleteModelCache, storageRowText, stopGenerating, paintSend,
   parseBlocks, parseInline, renderRich, memoryBoundary, SUGGESTIONS,
-  renderHistory, paintMemoryBoundary, paintSuggestions, finishAnswer, speedText, bootText };
+  renderHistory, paintMemoryBoundary, paintSuggestions, finishAnswer, speedText, bootText,
+  waitForAdapter, ensureGpuAlive, reloadEngine };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -695,7 +696,7 @@ const state = { engine:null, model:null, busy:false, history:[], speak:false, li
   sawProgress:false, stallTimer:null, wakeLock:null, loading:false,
   storageGB:NaN, models:MODELS, env:null,
   // 生成を途中で止めたか／どのモデルが端末に残っているか
-  stopping:false, cached:new Set(), speed:null, bootMs:0 };
+  stopping:false, cached:new Set(), speed:null, bootMs:0, recovery:null };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
 // ここで拾わないと「起動できませんでした」だけが残り、原因に辿り着けない。
@@ -1188,9 +1189,14 @@ function releaseAwake() {
   state.wakeLock = null;
 }
 
-// 一度画面が消えると解放されるので、戻ってきたら取り直す（読み込み中だけ）
+// 一度画面が消えると解放されるので、戻ってきたら取り直す。
+// ★答えを書いている間も対象にする——長い返答の途中で画面が消えると、
+//   読み込み中と同じようにGPUの資源を手放される
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && state.loading && !state.wakeLock) void keepAwake();
+  if (document.visibilityState !== 'visible') return;
+  if ((state.loading || state.busy) && !state.wakeLock) void keepAwake();
+  // ★聞かれる前に直しておく。質問の瞬間まで気づかないと「答えない」に見える
+  void ensureGpuAlive();
 });
 
 /**
@@ -1201,6 +1207,7 @@ const TIMEOUTS = Object.assign({
   workerReady: 25_000,   // 動き出したという合図を待つ上限
   firstProgress: 90_000, // 進捗が1度も出ないまま待つ上限
   stall: 240_000,        // 一度は進んだ後、次の進捗までの上限
+  adapterWait: 15_000,   // 切れたGPUが戻るのを待つ上限（すぐ載せ直しても失敗するため）
 }, window.__ZERO1_TIMEOUTS ?? {});
 
 async function startModel(webllm, modelId, onProgress) {
@@ -1379,6 +1386,14 @@ async function startEngine() {
     state.stage = 'モデルの取得と準備（初回は数分かかります）';
     setProgress(0, 'モデルを準備しています… / Preparing model…');
     state.engine = await createEngine(webllm, state.model);
+    // ★読み込みは数分かかる。**載せ終わった時点で既に切れている**ことがあり、
+    //   そのままだと最初の質問で初めて露見する（＝一番分かりにくい壊れ方）。
+    //   ここで気づけば、利用者を待たせるのは数秒で済む
+    state.stage = 'GPUとの接続の確認';
+    if (!(await waitForAdapter(2000))) {
+      setProgress(100, 'GPUとの接続が切れていました。載せ直しています… / Reconnecting…');
+      await reloadEngine();
+    }
     state.cached.add(state.model);
     stopClock();
     $('setup').classList.add('hidden');
@@ -1414,10 +1429,43 @@ async function startEngine() {
  *   A valid external Instance reference no longer exists.`）。
  * ★ここで諦めるのが一番もったいない。**モデルは端末に残っている**ので、
  *   載せ直せば取得はやり直さずに数秒で戻る。
+ *
+ * ★2026-09-03 深澤報告（2件目）: 起動には成功した（1分01秒）のに、最初の質問で
+ *   `Error: Unable to find a compatible GPU.` が英語のまま出た。切れたGPUを
+ *   取り直そうとした WebLLM が `requestAdapter()` から null を受け取ったときの文言で、
+ *   **中身は上と同じ「GPUとの接続が切れた」**。ところがこの判定に入っていなかったため
+ *   載せ直しが一度も走らず、打つ手の無い英文だけが残っていた。
+ *
+ * ★広げすぎないための足場: **この判定を見るのは `send()` だけ＝起動に成功した後だけ**。
+ *   WebGPU に本当に対応していない端末はここへ到達しない（起動の段で止まる）ので、
+ *   「GPUが見つからない」を切断として扱ってよい。起動時の再試行は `isNetworkFailure()`
+ *   が担っており、そちらは広げない（直しようのない失敗を何度も繰り返さないため）。
  */
 function isDeviceLost(cause) {
   const text = `${cause?.name ?? ''} ${cause?.message ?? cause ?? ''}`;
-  return /external Instance|device (is |was )?lost|lost the device|destroyed device|GPUBuffer|GPUDevice|GPUAdapter/i.test(text);
+  return /external Instance|device (is |was )?lost|lost the device|destroyed device|GPUBuffer|GPUDevice|GPUAdapter/i.test(text)
+    || /unable to find a compatible gpu|compatible gpu|requestadapter|adapter is null|no (gpu )?adapter/i.test(text);
+}
+
+/**
+ * 切れたGPUが戻るのを待つ。
+ *
+ * ★切れた直後は `requestAdapter()` が null を返し続ける。ここを待たずにすぐ載せ直すと、
+ *   同じ「GPUが見つからない」で失敗するだけで、利用者には**1回も直った様子が見えない**。
+ * ★戻らないまま上限に達したら null を返す。待ち続けるのが一番いけない。
+ */
+async function waitForAdapter(deadlineMs = TIMEOUTS.adapterWait) {
+  const until = Date.now() + deadlineMs;
+  let wait = 250;
+  for (;;) {
+    try {
+      const adapter = await navigator.gpu?.requestAdapter?.();
+      if (adapter) return adapter;
+    } catch { /* 戻る途中は例外になることがある。待って試し直す */ }
+    if (Date.now() >= until) return null;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    wait = Math.min(wait * 2, 2000);
+  }
 }
 
 /** モデルを載せ直す。取得済みのものは端末に残っているので、通信はほぼ発生しない */
@@ -1426,9 +1474,38 @@ async function reloadEngine() {
   state.mainThreadOnly = false;
   state.sawProgress = false;
   state.workerError = '';
+  state.stage = 'GPUとの接続が戻るのを待っています';
+  // ★戻る前に載せ直すと、同じ「GPUが見つからない」で落ちるだけ
+  if (!(await waitForAdapter())) {
+    const lost = new Error('GPUが戻りませんでした');
+    lost.name = 'GPUDeviceLost';   // isDeviceLost に切断として拾わせる目印
+    throw lost;
+  }
   state.stage = 'GPUとの接続が切れたため、モデルを載せ直しています';
   const { module: webllm } = await loadLibrary();
   state.engine = await createEngine(webllm, state.model);
+}
+
+/**
+ * 画面が戻ってきた時点で、GPUがまだ生きているかを確かめる。
+ *
+ * ★切れたことに「最初の質問の瞬間」まで気づかないと、利用者には
+ *   「起動はしたのに答えない」としか見えない。**聞かれる前に直しておく**。
+ * ★載せ直しの最中に送信されると `state.engine` が空で、押しても何も起きない
+ *   （例外もエラーも出ない）。送信側がこの約束を待てるよう state.recovery に持たせる。
+ */
+function ensureGpuAlive() {
+  if (state.recovery || !state.engine || state.busy || state.loading) return state.recovery;
+  state.recovery = (async () => {
+    let alive = false;
+    try { alive = Boolean(await navigator.gpu?.requestAdapter?.()); } catch { alive = false; }
+    if (alive) return;
+    const note = $('head-note').textContent;
+    $('head-note').textContent = 'GPUとの接続を戻しています… / Reconnecting…';
+    try { await reloadEngine(); $('head-note').textContent = note; }
+    catch { $('head-note').textContent = 'GPUとの接続が戻りませんでした / GPU unavailable'; }
+  })().finally(() => { state.recovery = null; });
+  return state.recovery;
 }
 
 /** 1回ぶんの返答を流し込む。載せ直しのため、送信本体から切り出してある */
@@ -1490,10 +1567,21 @@ function paintSend(busy) {
 
 async function send(text) {
   const clean = text.trim();
-  if (!clean || state.busy || !state.engine) return;
+  if (!clean || state.busy) return;
+  // ★載せ直しの最中なら、それを待ってから送る。ここで弾くと
+  //   「押しても何も起きない」になる（例外もエラーも出ない）
+  if (state.recovery) await state.recovery.catch(() => {});
+  if (!state.engine) {
+    addMessage('user', clean);
+    $('input').value = '';
+    addMessage('assistant', '端末のGPUとの接続が戻りませんでした。ページを再読み込みしてください（モデルは端末に残っているので、次はすぐ起動します）。');
+    return;
+  }
   state.busy = true;
   state.stopping = false;
   paintSend(true);
+  // ★長い返答の途中で画面が消えると、読み込み中と同じようにGPUが手放される
+  void keepAwake();
   $('input').value = '';
   state.history.push({ role:'user', text:clean });
   addMessage('user', clean).dataset.h = String(state.history.length - 1);
@@ -1506,9 +1594,9 @@ async function send(text) {
     } catch (cause) {
       if (!isDeviceLost(cause)) throw cause;
       // ★切れただけなら、黙って載せ直して答え直す。利用者に打ち直させない
-      node.textContent = '端末のGPUとの接続が切れました。モデルを載せ直しています…';
+      bodyOf(node).textContent = '端末のGPUとの接続が切れました。モデルを載せ直しています…';
       await reloadEngine();
-      node.textContent = '考えています…';
+      bodyOf(node).textContent = '考えています…';
       answer = await streamAnswer(node);
     }
     // 止めた直後は空のことがある。空の吹き出しを残さない
@@ -1533,6 +1621,7 @@ async function send(text) {
   } finally {
     state.busy = false;
     state.stopping = false;
+    if (!state.loading) releaseAwake();
     paintSend(false);
     paintSuggestions();
   }
