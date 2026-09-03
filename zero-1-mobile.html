@@ -22,6 +22,9 @@
   <title>ZERO-1 Mobile | スマホ内で動くAI</title>
   <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/zero-1-mobile.html">
   <link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
+  <!-- ★このページ専用の manifest。サイト共通の manifest.json は start_url が
+       index.html を指しており、ホーム画面から開いてもZERO-1には来ない -->
+  <link rel="manifest" href="zero-1-mobile.webmanifest">
   <meta name="theme-color" content="#05070d">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -258,7 +261,7 @@
 
     <div class="card" id="model-card">
       <h2>モデルを選ぶ / Choose a model</h2>
-      <p>初回だけダウンロードします。以後はこの端末に残るので、圏外でも使えます。<br>
+      <p id="model-lead">初回だけダウンロードします。以後はこの端末に残るので、圏外でも使えます。<br>
         Downloaded once, then kept on this device — works offline afterwards.</p>
       <div class="models" id="models" role="group" aria-label="モデル選択 / Model choice"></div>
       <div class="progress" id="progress" hidden><span id="progress-bar"></span></div>
@@ -512,7 +515,7 @@ function buildMessages(history, turns = 8, maxChars = 1200) {
  * ★モデルの出力は `**強調**` や `- 箇条書き` を含むのに、これまで素の文字として
  *   並べていたので、記号がそのまま読者に見えていた。
  * ★**HTMLは組み立てない**。ここはモデルが書いた文字列をそのまま解釈する場所で、
- *   innerHTML を使うと `<img onerror=…>` がそのまま動く道ができる。
+ *   innerHTML を使うと、モデルが書いた img タグの onerror がそのまま動く道ができる。
  *   組み立ては createElement と textContent だけで行う（renderRich）。
  */
 function parseBlocks(text) {
@@ -563,6 +566,25 @@ function parseInline(text) {
   }
   if (last < text.length) spans.push({ kind:'text', text: text.slice(last) });
   return spans.length ? spans : [{ kind:'text', text }];
+}
+
+/**
+ * 返答の速さ。「スマホの中だけで動く」の説得力は、結局この数字に出る。
+ *
+ * ★数えているのは WebLLM が流してくるかたまりの数で、これは1つ＝1トークン。
+ *   文字数ではないので「字/秒」と書かない（日本語では倍以上ずれる）。
+ * ★最初の1つが届くまでの時間を別に出す。スマホでは前処理に数秒かかることがあり、
+ *   合計だけ見ると「遅い」に見えてしまう。
+ */
+function speedText(stats) {
+  if (!stats || !(stats.tokens > 1) || !(stats.streamMs > 0)) return '';
+  const rate = stats.tokens / (stats.streamMs / 1000);
+  return `端末内 · 最初の返事まで${(stats.firstMs / 1000).toFixed(1)}秒 · 約${rate.toFixed(1)} tok/秒`;
+}
+
+/** 起動にかかった時間。2回目が速いことは、数字で見せないと伝わらない */
+function bootText(name, seconds) {
+  return `${name} · 端末内 · 起動${elapsedText(Math.max(1, Math.round(seconds)))}`;
 }
 
 /** 最初の一言のとっかかり。小さいモデルは聞き方で品質が大きく変わる */
@@ -657,7 +679,7 @@ window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, stor
   preflight, isNetworkFailure, isDeviceLost, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText, stallGuard,
   modelCacheEntries, isModelCached, cachedModelIds, deleteModelCache, storageRowText, stopGenerating, paintSend,
   parseBlocks, parseInline, renderRich, memoryBoundary, SUGGESTIONS,
-  renderHistory, paintMemoryBoundary, paintSuggestions, finishAnswer };
+  renderHistory, paintMemoryBoundary, paintSuggestions, finishAnswer, speedText, bootText };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -673,7 +695,7 @@ const state = { engine:null, model:null, busy:false, history:[], speak:false, li
   sawProgress:false, stallTimer:null, wakeLock:null, loading:false,
   storageGB:NaN, models:MODELS, env:null,
   // 生成を途中で止めたか／どのモデルが端末に残っているか
-  stopping:false, cached:new Set() };
+  stopping:false, cached:new Set(), speed:null, bootMs:0 };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
 // ここで拾わないと「起動できませんでした」だけが残り、原因に辿り着けない。
@@ -752,6 +774,11 @@ function renderModels(selectedId, storageGB = state.storageGB, memoryGB = state.
     $('models').appendChild(button);
   }
   $('current-model').textContent = state.models.find((m) => m.id === selectedId)?.name ?? '—';
+  // ★選んでいるモデルが端末にあるなら、取得の話はもうしない。
+  //   「初回だけダウンロードします」を出し続けると、すぐ起動する人まで身構えてしまう
+  $('model-lead').textContent = state.cached.has(selectedId)
+    ? 'このモデルはこの端末に保存済みです。取得は不要で、すぐ起動します。 / Already on this device — starts right away.'
+    : '初回だけダウンロードします。以後はこの端末に残るので、圏外でも使えます。 / Downloaded once, then kept on this device — works offline afterwards.';
   const chosen = state.models.find((m) => m.id === selectedId);
   $('model-storage').textContent = storageRowText(chosen, state.cached.has(selectedId));
   // 保存済みなら、取得にまつわる文言と警告は全部いらない
@@ -1064,6 +1091,15 @@ function failureHint(message) {
   if (/別の糸/.test(message)) {
     return '読み込みを別の糸で動かせませんでした。ページを再読み込みしてからもう一度お試しください。';
   }
+  // ★モデルは端末に残るのに、WebLLM本体はCDNから取る。ここが落ちると
+  //   「圏外でも使えます」と書いてあるのに起動できない——理由を必ず出す
+  if (/dynamically imported module|importing a module script/i.test(message)) {
+    return navigator.onLine === false
+      ? 'オフラインのため、AIを動かすライブラリ本体（CDN）を取得できませんでした。'
+        + 'モデル自体はこの端末に残っています。一度オンラインで開き直せば、以後はブラウザの保存分で起動できます。'
+      : 'AIを動かすライブラリ本体（cdn.jsdelivr.net）を取得できませんでした。'
+        + '通信がブロックされていないかご確認のうえ、ページを再読み込みしてお試しください。';
+  }
   if (/failed to fetch|networkerror|network error|load failed/i.test(message)) {
     return 'モデルの取得に届きませんでした。Wi-Fiにつないで、ページを一度再読み込みしてから、もう一度お試しください。'
       + '（通信を中継する古いService Workerが残っていると同じ失敗が続きます。再読み込みで入れ替わります）';
@@ -1312,6 +1348,7 @@ async function startEngine() {
   state.mainThreadOnly = false;
   state.sawProgress = false;
   state.workerError = '';
+  const bootBegan = performance.now();
   state.stage = 'ライブラリの読み込み';
   setProgress(0, 'ライブラリを読み込んでいます… / Loading library…');
   startClock();
@@ -1347,7 +1384,9 @@ async function startEngine() {
     $('setup').classList.add('hidden');
     $('chat').classList.remove('hidden');
     $('composer').classList.remove('hidden');
-    $('head-note').textContent = `${MODELS.find((m) => m.id === state.model)?.name ?? state.model} · 端末内で実行中`;
+    state.bootMs = performance.now() - bootBegan;
+    $('head-note').textContent = bootText(
+      state.models.find((m) => m.id === state.model)?.name ?? state.model, state.bootMs / 1000);
     if (!state.history.length) addMessage('assistant', 'おかえりなさい、ゼロさん。ここはスマホの中だけで動きます。何から始めますか？');
     paintSuggestions();
   } catch (cause) {
@@ -1401,6 +1440,9 @@ async function streamAnswer(node) {
     max_tokens: 512,
   });
   const body = bodyOf(node);
+  const began = performance.now();
+  let firstAt = 0;
+  let tokens = 0;
   let answer = '';
   for await (const chunk of stream) {
     // ★止めると言われたら、その場で抜ける。interruptGenerate が効かない版・
@@ -1408,13 +1450,17 @@ async function streamAnswer(node) {
     if (state.stopping) break;
     const token = chunk.choices?.[0]?.delta?.content ?? '';
     if (!token) continue;
-    if (!answer) node.classList.remove('pending');
+    if (!answer) { node.classList.remove('pending'); firstAt = performance.now(); }
+    tokens += 1;
     answer += token;
     // ★流している間は素のテキストのまま。1トークンごとに組み直すと、
     //   長い返答ほど重くなる（体裁を整えるのは書き終わってから）
     body.textContent = answer;
     $('chat').scrollTop = $('chat').scrollHeight;
   }
+  state.speed = firstAt
+    ? { tokens, firstMs: firstAt - began, streamMs: performance.now() - firstAt }
+    : null;
   return answer;
 }
 
@@ -1469,7 +1515,10 @@ async function send(text) {
     if (!answer) { answer = state.stopping ? '（止めました / Stopped）' : 'うまく答えられませんでした。もう一度お願いします。'; }
     node.classList.remove('pending');
     finishAnswer(node, answer);
-    if (state.stopping) tagMessage(node, '途中で止めました / Stopped');
+    // ★止めた事実と速さは同じ一行に置く。二行にすると吹き出しが重くなる
+    const speed = speedText(state.speed);
+    const marks = [state.stopping ? '途中で止めました / Stopped' : '', speed].filter(Boolean);
+    if (marks.length) tagMessage(node, marks.join(' · '));
     state.history.push({ role:'assistant', text:answer });
     node.dataset.h = String(state.history.length - 1);
     writeStore(HISTORY_KEY, state.history.slice(-40));

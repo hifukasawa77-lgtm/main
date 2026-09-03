@@ -324,9 +324,9 @@ check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0
 //     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
 async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false,
   workerLoads = true, timeouts = null, hang = false, gpuLoss = 0, ask = '', longAnswer = false, stopAt = 0,
-  speak = false, reply = '', chip = -1 } = {}) {
+  speak = false, reply = '', chip = -1, noLibrary = false } = {}) {
   const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes, streamsLong, readsAloud, fixedReply]) => {
+  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes, streamsLong, readsAloud, fixedReply, skipLibrary]) => {
     window.__ZERO1_LONG = streamsLong;
     window.__ZERO1_REPLY = fixedReply;
     // 読み上げが実際に走った回数を数える。止めたのに読み上げが続いたら止めた意味が無い
@@ -371,6 +371,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
       }
       return original(input, init);
     };
+    if (skipLibrary) return;   // 合成のライブラリを差し込まない＝本体を取りに行く経路を通す
     window.__ZERO1_WEBLLM = {
       get prebuiltAppConfig() {
         const tiers = window.ZERO1_MOBILE?.MODEL_TIERS ?? [];
@@ -427,7 +428,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
         interruptGenerate: () => { window.__ZERO1_PROBE.interrupted = true; } };
       },
     };
-  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss, longAnswer, speak, reply]);
+  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss, longAnswer, speak, reply, noLibrary]);
   // ★worker は実物を動かす（合図の受け渡しごと確かめる）。ただしCDNへは出ない
   await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
     status: workerLoads ? 200 : 503, contentType: 'text/javascript',
@@ -477,6 +478,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     stored: JSON.parse(localStorage.getItem('zero1-mobile-history') ?? '[]'),
     bodyHtml: document.querySelector('#msgs .msg.ai:last-of-type .body')?.innerHTML ?? '',
     announced: document.getElementById('announce').textContent,
+    headNote: document.getElementById('head-note').textContent,
     chips: [...document.querySelectorAll('#chips button')].map((b) => b.textContent),
     copyable: Boolean(document.querySelector('#msgs .msg.ai:last-of-type .tools button')),
     pwned: window.__PWNED ?? 0,
@@ -739,7 +741,7 @@ check('68. 止めたあとは、また送れる状態へ戻る',
 // 止めなければ最後まで流れて、読み上げも走る（62〜68が「常に止まる」にすり替わらないこと）
 const finished = await withEngine({ ask: 'こんにちは', speak: true });
 check('69. 止めなければ最後まで答え、読み上げも走る',
-  /こんにちは。/.test(finished.body) && finished.spoken === 1 && finished.tag === '',
+  /こんにちは。/.test(finished.body) && finished.spoken === 1 && !/止め|Stopped/.test(finished.tag),
   `${finished.body} / 読み上げ ${finished.spoken}回`);
 
 // --- 端末に残っているモデルを、残っていると言えるか ---------------------------
@@ -775,11 +777,18 @@ const kept = await withCaches({ seeded: [
   `https://huggingface.co/mlc-ai/${keptId}/resolve/main/params_shard_0.bin`,
   `https://huggingface.co/mlc-ai/${keptId}/resolve/main/mlc-chat-config.json`,
 ] });
-const keptView = await kept.evaluate(() => ({
-  labels: [...document.querySelectorAll('#models .model')].map((b) => b.innerText),
-  start: document.getElementById('btn-start').innerText,
-  cached: [...(window.ZERO1_MOBILE_STATE?.cached ?? [])],
-}));
+const keptView = await kept.evaluate(() => {
+  const before = document.getElementById('model-lead').innerText;
+  document.querySelectorAll('#models .model')[0].click();   // 保存していないモデルへ切り替える
+  const other = document.getElementById('model-lead').innerText;
+  document.querySelectorAll('#models .model')[1].click();   // 戻す
+  return {
+    labels: [...document.querySelectorAll('#models .model')].map((b) => b.innerText),
+    start: document.getElementById('btn-start').innerText,
+    cached: [...(window.ZERO1_MOBILE_STATE?.cached ?? [])],
+    lead: before, leadOther: other,
+  };
+});
 check('70. 端末に残っているモデルを「保存済み」と伝える',
   /保存済み/.test(keptView.labels[1]) && keptView.cached.includes(keptId),
   keptView.labels[1].replace(/\n/g, ' ').slice(0, 46));
@@ -787,6 +796,11 @@ check('71. 保存済みでないモデルには「保存済み」と書かない
   !/保存済み/.test(keptView.labels[0]) && !/保存済み/.test(keptView.labels[3]));
 check('72. 起動ボタンも「すぐ起動する」と分かる文言になる',
   /保存済み|already/i.test(keptView.start), keptView.start);
+// ★説明文が「初回だけダウンロードします」のままだと、すぐ起動する人まで身構えてしまう
+check('72b. 保存済みのときは、取得の説明を出さない',
+  /保存済み/.test(keptView.lead) && !/初回だけ/.test(keptView.lead)
+    && /初回だけ/.test(keptView.leadOther),
+  keptView.lead.slice(0, 40));
 
 // 消す口が画面にあること。無ければブラウザ設定でサイトデータを全消しするしかない
 await kept.locator('#btn-settings').click();
@@ -926,6 +940,88 @@ const greeted = await page.evaluate(() => {
 check('89. 履歴に無い吹き出し（あいさつ等）が在っても、境目がずれない',
   /発言4/.test(greeted.below) && /発言3/.test(greeted.above),
   `${greeted.above.slice(0, 6)} ┃ ${greeted.below.slice(0, 6)}`);
+
+// --- 速さを数字で見せる -------------------------------------------------------
+// ★「スマホの中だけで動く」の説得力は、結局この数字に出る。
+//   合計だけ見ると遅く見えるので、最初の1つが届くまでの時間を別に出す
+check('90. 返答に、端末内での速さを添える',
+  /tok\/秒/.test(finished.tag) && /最初の返事まで/.test(finished.tag) && /端末内/.test(finished.tag),
+  finished.tag);
+const speedShapes = await page.evaluate(() => {
+  const { speedText, bootText } = window.ZERO1_MOBILE;
+  return {
+    normal: speedText({ tokens: 120, firstMs: 1200, streamMs: 10_000 }),
+    single: speedText({ tokens: 1, firstMs: 900, streamMs: 0 }),
+    empty: speedText(null),
+    boot: bootText('ふつう / Standard', 3.4),
+    bootFloor: bootText('かるい / Light', 0.2),
+  };
+});
+check('91. 速さの数字が読める形になっている（tok/秒・最初の返事まで）',
+  /約12\.0 tok\/秒/.test(speedShapes.normal) && /1\.2秒/.test(speedShapes.normal), speedShapes.normal);
+check('92. 数えるものが足りないときは、数字を出さない（意味の無い精度を出さない）',
+  speedShapes.single === '' && speedShapes.empty === '');
+check('93. 起動にかかった時間を出す（2回目が速いことは数字でしか伝わらない）',
+  /起動3秒/.test(speedShapes.boot) && /起動1秒/.test(speedShapes.bootFloor),
+  `${speedShapes.boot} / ${speedShapes.bootFloor}`);
+check('94. 起動したら、その時間が画面のヘッダに出る',
+  /端末内/.test(finished.headNote) && /起動/.test(finished.headNote), finished.headNote);
+
+// --- ホーム画面に置けるか -----------------------------------------------------
+// ★2.5GBのモデルを端末に持っているのに、毎回ブラウザでURLを辿る必要があった。
+//   サイト共通の manifest.json は start_url が index.html を指していて、
+//   ホーム画面から開いてもZERO-1には来ない
+const installable = await page.evaluate(async () => {
+  const link = document.querySelector('link[rel="manifest"]');
+  if (!link) return { linked: false };
+  const url = new URL(link.getAttribute('href'), location.href).href;
+  const res = await fetch(url);
+  if (!res.ok) return { linked: true, fetched: false, url };
+  const manifest = await res.json();
+  return {
+    linked: true, fetched: true, url,
+    // ★相対パスの解決まで見る。書き間違えても静かに別のページが開くだけで、
+    //   例外もエラーも出ない
+    start: new URL(manifest.start_url, url).pathname,
+    display: manifest.display,
+    theme: manifest.theme_color,
+    background: manifest.background_color,
+    icons: (manifest.icons ?? []).length,
+    pageTheme: document.querySelector('meta[name="theme-color"]')?.content ?? '',
+  };
+});
+check('95. ホーム画面に置ける（このページ専用の manifest がある）',
+  installable.linked && installable.fetched && /zero-1-mobile\.html$/.test(installable.start ?? ''),
+  installable.start ?? '（manifestが無い）');
+check('96. アプリとして開く（アドレスバーの分だけ画面が広くなる）',
+  installable.display === 'standalone' && installable.icons > 0, `${installable.display} / 図案 ${installable.icons}件`);
+// ★背景色がページと違うと、起動直後に白い画面が一瞬光る（黒基調のページでは特に目立つ）
+check('97. manifest の色がページと合っている（起動時に白く光らない）',
+  installable.theme === installable.pageTheme && installable.background === installable.pageTheme,
+  `manifest ${installable.theme}/${installable.background} · ページ ${installable.pageTheme}`);
+
+// --- 圏外でページ自体が開けるか -----------------------------------------------
+// ★モデルは端末に残るのに、ページ本体が取れないと起動できない。
+//   「圏外でも使えます」と謳っている以上、ページと worker は先に確保しておく
+{
+  const swSource = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  const list = swSource.match(/const PRECACHE_URLS = \[([\s\S]*?)\];/)?.[1] ?? '';
+  const urls = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const needed = ['./zero-1-mobile.html', './assets/js/zero1-worker.js'];
+  const listed = needed.filter((u) => urls.includes(u));
+  // 実体が在るかまで見る。書き間違えても addAll の失敗は握り潰されるので何も起きない
+  const real = urls.filter((u) => u !== './' && !fs.existsSync(path.join(ROOT, u.replace(/^\.\//, ''))));
+  check('98. 圏外でも開けるよう、ページと worker を事前に確保している',
+    listed.length === needed.length, `${listed.length}/${needed.length}件`);
+  check('99. 事前確保の一覧が、実在するファイルだけを指している',
+    real.length === 0, real.join(' / ') || '全て実在');
+}
+
+// ★WebLLM本体はCDN（別オリジン）なので事前確保できない。取れなかったときに
+//   「なぜ起動できないのか」が残らないと、圏外で詰まった人には何も分からない
+const noLib = await withEngine({ noLibrary: true, workerLoads: false });
+check('100. ライブラリ本体を取得できないときも、理由と次の一手を出す',
+  noLib.failed && /ライブラリ本体/.test(noLib.hint), noLib.hint.slice(0, 52));
 
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });

@@ -14,7 +14,14 @@ const PRECACHE_URLS = [
   './index.html',
   './styles.css',
   './app.js',
-  './manifest.json'
+  './manifest.json',
+  // ★ZERO-1 Mobile はモデルを端末に持つのに、ページ本体が取れないと起動できない。
+  //   「圏外でも使えます」と謳っている以上、ページと worker は先に確保しておく
+  //   （WebLLM本体はCDN＝別オリジンなので、ここでは触らない。下の理由を参照）
+  './zero-1-mobile.html',
+  './zero-1-mobile.webmanifest',
+  './assets/js/zero1-worker.js',
+  './assets/js/gesture-pointer.js'
 ];
 
 self.addEventListener('install', event => {
