@@ -323,9 +323,18 @@ check('33. 一覧の容量もfloat16版の値になる', withF16.sizes[0] === '0
 //   ★純粋関数（preflight 等）だけを叩く検査にしないこと。画面がそれを使っていなければ
 //     「関数は正しいのに動かない」を見逃す（エアタッチの移植で実際に踏んだ）。
 async function withEngine({ reachable = true, failTimes = 0, failWith = 'network', noWorker = false,
-  workerLoads = true, timeouts = null, hang = false, gpuLoss = 0, ask = '' } = {}) {
+  workerLoads = true, timeouts = null, hang = false, gpuLoss = 0, ask = '', longAnswer = false, stopAt = 0,
+  speak = false } = {}) {
   const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes]) => {
+  await scoped.addInitScript(([canReach, times, kind, banWorker, clocks, neverFinishes, gpuLossTimes, streamsLong, readsAloud]) => {
+    window.__ZERO1_LONG = streamsLong;
+    // 読み上げが実際に走った回数を数える。止めたのに読み上げが続いたら止めた意味が無い
+    window.__ZERO1_SPOKEN = 0;
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: {
+      cancel() {}, speak() { window.__ZERO1_SPOKEN++; },
+    }});
+    window.SpeechSynthesisUtterance = function (text) { this.text = text; };
+    if (readsAloud) { try { localStorage.setItem('zero1-mobile-speak', 'true'); } catch { /* 無視 */ } }
     if (clocks) window.__ZERO1_TIMEOUTS = clocks;
     window.__ZERO1_HANG = neverFinishes;
     window.__ZERO1_GPU_LOSS = gpuLossTimes;
@@ -393,13 +402,27 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
             lost.name = 'AbortError';
             throw lost;
           }
+          // 長い返答（止める操作を確かめるため）。interruptGenerate で打ち切れること、
+          // 打ち切れなくても受け取る側が抜けることの両方を見たいので、止まるのは
+          // **ページ側が抜けたとき**だけにしてある
+          if (window.__ZERO1_LONG) {
+            return (async function* () {
+              for (let i = 0; i < 400; i++) {
+                if (window.__ZERO1_PROBE.interrupted) return;
+                yield { choices: [{ delta: { content: `あ${i} ` } }] };
+                await new Promise((r) => setTimeout(r, 12));
+              }
+            })();
+          }
           return (async function* () {
             for (const token of ['こんに', 'ちは', '。']) yield { choices: [{ delta: { content: token } }] };
           })();
-        } } } };
+        } } },
+        // 止めろと言われたことが、ちゃんとモデル側まで届いているか
+        interruptGenerate: () => { window.__ZERO1_PROBE.interrupted = true; } };
       },
     };
-  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss]);
+  }, [reachable, failTimes, failWith, noWorker, timeouts, hang, gpuLoss, longAnswer, speak]);
   // ★worker は実物を動かす（合図の受け渡しごと確かめる）。ただしCDNへは出ない
   await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
     status: workerLoads ? 200 : 503, contentType: 'text/javascript',
@@ -414,13 +437,35 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
   if (ask) {
     await scoped.locator('#input').fill(ask);
     await scoped.locator('#btn-send').click();
+    if (stopAt) {
+      // 流れ始めてから止める（まだ1文字も出ていない状態で押すと、何を止めたのか分からない）
+      await scoped.waitForFunction(() => (document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '').length > 4,
+        { timeout: 10_000 }).catch(() => {});
+      await scoped.waitForTimeout(stopAt);
+      const sawWhileStreaming = await scoped.evaluate(() => ({
+        label: document.getElementById('btn-send').getAttribute('aria-label'),
+        stopClass: document.getElementById('btn-send').classList.contains('stop'),
+        disabled: document.getElementById('btn-send').disabled,
+        length: (document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '').length,
+      }));
+      await scoped.locator('#btn-send').click();
+      scoped.__stopped = sawWhileStreaming;
+    }
     await scoped.waitForFunction(() => {
       const last = document.querySelector('#msgs .msg:last-child');
-      return last && !last.classList.contains('pending') && !/考えています|載せ直して/.test(last.textContent);
+      return last && !last.classList.contains('pending')
+        && !/考えています|載せ直して/.test(last.textContent)
+        && window.ZERO1_MOBILE_STATE?.busy === false;
     }, { timeout: 30_000 }).catch(() => {});
   }
   const result = await scoped.evaluate(() => ({
     reply: document.querySelector('#msgs .msg:last-child')?.textContent ?? '',
+    body: document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '',
+    tag: document.querySelector('#msgs .msg:last-child .tag')?.textContent ?? '',
+    sendLabel: document.getElementById('btn-send').getAttribute('aria-label'),
+    sendStop: document.getElementById('btn-send').classList.contains('stop'),
+    stored: JSON.parse(localStorage.getItem('zero1-mobile-history') ?? '[]'),
+    spoken: window.__ZERO1_SPOKEN,
     detail: document.getElementById('failure-detail').textContent,
     hint: document.getElementById('failure-hint').textContent,
     failed: !document.getElementById('failure').hidden,
@@ -430,6 +475,7 @@ async function withEngine({ reachable = true, failTimes = 0, failWith = 'network
     workerError: window.ZERO1_MOBILE_STATE?.workerError ?? '',
     probe: window.__ZERO1_PROBE,
   }));
+  result.whileStreaming = scoped.__stopped ?? null;
   await scoped.close();
   return result;
 }
@@ -648,6 +694,135 @@ check('61. 読み込みのあいだ、画面を消させない（wake lock を�
       && directive('connect-src').includes(workerHost),
     `worker-src: ${directive('worker-src') || '（無し）'}`);
 }
+
+// --- 生成を止められるか -------------------------------------------------------
+// ★0.5〜3B級は的外れな長文を書き始めることがあり、出し切るまで数十秒かかる。
+//   その間ずっとGPUが回るので電池にも効く。**待つ以外の選択肢を必ず1つ置く**。
+//   例外もエラーも出ない類の不便なので、検査で押さえるしかない。
+const stopped = await withEngine({ ask: '長い話をして', longAnswer: true, stopAt: 250, speak: true });
+check('62. 生成中、送信ボタンは「止める」に変わる（押せないボタンにしない）',
+  stopped.whileStreaming?.stopClass === true
+    && /止める|Stop/.test(stopped.whileStreaming?.label ?? '')
+    && stopped.whileStreaming?.disabled === false,
+  JSON.stringify(stopped.whileStreaming));
+check('63. 止めると、その場で生成が終わる',
+  stopped.body.length > 0 && stopped.body.length < 400 * 4,
+  `${stopped.body.length}文字で停止`);
+check('64. 止めろがモデル側にも届く（受け取る側で抜けるだけにしない）',
+  stopped.probe.interrupted === true);
+check('65. 止めるまでに書けた分は捨てない（止める＝やり直しにしない）',
+  stopped.stored.some((m) => m.role === 'assistant' && m.text.length > 0)
+    && stopped.stored.at(-1)?.text === stopped.body,
+  `履歴 ${stopped.stored.length}件 / 末尾 ${String(stopped.stored.at(-1)?.text ?? '').slice(0, 12)}`);
+check('66. 止めたことが画面に残る（黙って途切れさせない）',
+  /止め|Stopped/.test(stopped.tag), stopped.tag);
+check('67. 止めたら読み上げも走らせない（止めた意味が消える）',
+  stopped.spoken === 0, `読み上げ ${stopped.spoken}回`);
+check('68. 止めたあとは、また送れる状態へ戻る',
+  stopped.sendStop === false && /送信|Send/.test(stopped.sendLabel ?? ''), stopped.sendLabel);
+
+// 止めなければ最後まで流れて、読み上げも走る（62〜68が「常に止まる」にすり替わらないこと）
+const finished = await withEngine({ ask: 'こんにちは', speak: true });
+check('69. 止めなければ最後まで答え、読み上げも走る',
+  /こんにちは。/.test(finished.body) && finished.spoken === 1 && finished.tag === '',
+  `${finished.body} / 読み上げ ${finished.spoken}回`);
+
+// --- 端末に残っているモデルを、残っていると言えるか ---------------------------
+// ★2回目以降は取得が要らないのに、画面は常に「初回だけダウンロードします」と言っていた。
+//   すぐ起動するのに「これから2.5GB落ちる」ように見えるのは、そのまま離脱の理由になる。
+async function withCaches({ seeded = [], broken = false, quotaGB = 10.7 } = {}) {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(([urls, throws, quota]) => {
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: { requestAdapter: async () => ({ features: new Set() }) } });
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: { estimate: async () => ({ quota: quota * 1e9, usage: 0 }) } });
+    // 合成の Cache Storage。実物と同じく「名前 → 要求の一覧」の2段
+    // モデル削除が会話を巻き込まないことを見るため、先に履歴を入れておく
+    try { localStorage.setItem('zero1-mobile-history', JSON.stringify([{ role:'user', text:'消さないで' }])); } catch { /* 無視 */ }
+    const store = new Map([['webllm/model', new Set(urls)], ['other-cache', new Set(['https://example.com/x'])]]);
+    window.__ZERO1_CACHE = store;
+    Object.defineProperty(window, 'caches', { configurable: true, value: {
+      keys: async () => { if (throws) throw new DOMException('storage unavailable'); return [...store.keys()]; },
+      open: async (name) => ({
+        keys: async () => [...(store.get(name) ?? new Set())].map((url) => ({ url })),
+        delete: async (url) => store.get(name)?.delete(url) ?? false,
+      }),
+    }});
+  }, [seeded, broken, quotaGB]);
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  return scoped;
+}
+
+// 「ふつう」（q4f32版＝float16の無い端末）を落とし終えている状態を作る
+const keptId = (await page.evaluate(() => window.ZERO1_MOBILE.resolveModels(false)[1].id));
+const kept = await withCaches({ seeded: [
+  `https://huggingface.co/mlc-ai/${keptId}/resolve/main/params_shard_0.bin`,
+  `https://huggingface.co/mlc-ai/${keptId}/resolve/main/mlc-chat-config.json`,
+] });
+const keptView = await kept.evaluate(() => ({
+  labels: [...document.querySelectorAll('#models .model')].map((b) => b.innerText),
+  start: document.getElementById('btn-start').innerText,
+  cached: [...(window.ZERO1_MOBILE_STATE?.cached ?? [])],
+}));
+check('70. 端末に残っているモデルを「保存済み」と伝える',
+  /保存済み/.test(keptView.labels[1]) && keptView.cached.includes(keptId),
+  keptView.labels[1].replace(/\n/g, ' ').slice(0, 46));
+check('71. 保存済みでないモデルには「保存済み」と書かない（全部に付けない）',
+  !/保存済み/.test(keptView.labels[0]) && !/保存済み/.test(keptView.labels[3]));
+check('72. 起動ボタンも「すぐ起動する」と分かる文言になる',
+  /保存済み|already/i.test(keptView.start), keptView.start);
+
+// 消す口が画面にあること。無ければブラウザ設定でサイトデータを全消しするしかない
+await kept.locator('#btn-settings').click();
+const rowBefore = await kept.locator('#model-storage').innerText();
+await kept.locator('#btn-drop').click();
+await kept.waitForFunction(() => /削除しました|削除できません/.test(document.getElementById('model-storage').innerText), { timeout: 8_000 })
+  .catch(() => {});   // ★解けなくても例外で落とさない（落とすと以降の検査が1件も走らない）
+const dropped = await kept.evaluate(() => ({
+  note: document.getElementById('model-storage').innerText,
+  left: [...(window.__ZERO1_CACHE.get('webllm/model') ?? [])].length,
+  other: [...(window.__ZERO1_CACHE.get('other-cache') ?? [])].length,
+  labels: [...document.querySelectorAll('#models .model')].map((b) => b.innerText),
+  history: localStorage.getItem('zero1-mobile-history'),
+}));
+await kept.close();
+check('73. 消す前に、何をどれだけ空けるのかが分かる',
+  /GB/.test(rowBefore) && /会話と設定は残ります/.test(rowBefore), rowBefore.slice(0, 46));
+check('74. 削除すると、モデルの実体が端末から消える',
+  dropped.left === 0 && /削除しました/.test(dropped.note), `残り ${dropped.left}件`);
+check('75. 削除は他のキャッシュ・会話履歴を巻き込まない',
+  dropped.other === 1 && /消さないで/.test(dropped.history ?? ''),
+  `他キャッシュ ${dropped.other}件 / 会話 ${dropped.history ?? '(消えた)'}`);
+check('76. 削除後は「保存済み」の表示も消える',
+  !/保存済み/.test(dropped.labels[1]), dropped.labels[1].replace(/\n/g, ' ').slice(0, 40));
+
+// ★保存済みなら、空き容量の警告より先にそれを言う。すでに端末にあるものへ
+//   「空きが足りません」と出して起動を止めるのは端的に誤り
+const tight = await withCaches({ quotaGB: 0.2, seeded: [
+  `https://huggingface.co/mlc-ai/${keptId}/resolve/main/params_shard_0.bin`,
+] });
+const tightView = await tight.evaluate(() => {
+  const models = [...document.querySelectorAll('#models .model')];
+  models[1].click();
+  return { disabled: document.getElementById('btn-start').disabled, note: document.getElementById('progress-note').innerText };
+});
+await tight.close();
+check('77. 保存済みのモデルは、空きが少なくても起動を止めない',
+  tightView.disabled === false && !/空き容量が足りません/.test(tightView.note),
+  `起動不可: ${tightView.disabled} / ${tightView.note.slice(0, 30) || '（警告なし）'}`);
+
+// ★Cache Storage はシークレットタブ・容量枯渇・破損で落ちる。落ちても画面を止めない
+const noCaches = await withCaches({ broken: true });
+const noCachesView = await noCaches.evaluate(() => ({
+  count: document.querySelectorAll('#models .model').length,
+  disabled: document.getElementById('btn-start').disabled,
+  labels: [...document.querySelectorAll('#models .model')].map((b) => b.innerText).join(' '),
+}));
+await noCaches.close();
+check('78. Cache Storage が使えない端末でも、起動画面が止まらない',
+  noCachesView.count === 4 && noCachesView.disabled === false && !/保存済み/.test(noCachesView.labels),
+  `モデル ${noCachesView.count}件 / 起動不可 ${noCachesView.disabled}`);
 
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });

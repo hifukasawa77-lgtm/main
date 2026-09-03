@@ -132,6 +132,9 @@
     .model b{display:block; font-size:.9rem}
     .model small{display:block; color:var(--muted); font-size:.75rem}
     .model .size{margin-left:auto; color:var(--cyan); font-size:.78rem; white-space:nowrap; flex:0 0 auto}
+    /* 「この端末に保存済み」は、2回目以降の人にとって一番知りたい一行。
+       これが無いと、すぐ起動するのに「これから2.5GB落ちる」ように見える */
+    .model .kept{display:block; color:var(--ok); font-size:.75rem}
 
     .primary{
       display:block; width:100%; margin-top:14px; padding:13px; border-radius:14px; cursor:pointer;
@@ -148,7 +151,10 @@
     .progress-note{font-size:.8rem; color:var(--muted); margin:0}
 
     .msgs{display:flex; flex-direction:column; gap:11px}
-    .msg{max-width:88%; padding:10px 13px; border-radius:16px; font-size:.92rem; white-space:pre-wrap; word-break:break-word}
+    .msg{max-width:88%; padding:10px 13px; border-radius:16px; font-size:.92rem; word-break:break-word}
+    .msg .body{white-space:pre-wrap}
+    /* 返答に添える一行（止めた・速さなど）。本文と混ざらないよう色と大きさを落とす */
+    .msg .tag{display:block; margin-top:6px; font-size:.72rem; color:var(--muted)}
     .msg.user{align-self:flex-end; background:rgba(34,211,238,0.13); border:1px solid rgba(34,211,238,0.25)}
     .msg.ai{align-self:flex-start; background:var(--card); border:1px solid var(--border)}
     .msg.ai.pending{color:var(--muted)}
@@ -170,6 +176,9 @@
       background:linear-gradient(135deg,rgba(34,211,238,0.25) 0%,rgba(167,139,250,0.25) 100%);
     }
     .send[disabled]{opacity:.45}
+    /* 生成中は「止める」に変わる。小さいモデルは的外れな長文を書き始めることがあり、
+       出し切るまで待たせるとGPUが回り続けて電池も食う。押せないボタンにすると待つしかなくなる */
+    .send.stop{border-color:rgba(248,113,113,0.55); background:rgba(248,113,113,0.18)}
     .mic.on{border-color:rgba(248,113,113,0.6); color:#fecaca}
     /* エアタッチ作動中。カメラが動いていることを、画面のどこかに必ず出しておく */
     #btn-air[aria-pressed="true"]{border-color:rgba(34,211,238,0.65); color:#a5f3fc; background:rgba(34,211,238,0.14)}
@@ -200,7 +209,7 @@
       <small id="head-note">スマホの中だけで動きます / Runs entirely on this phone</small>
     </span>
     <button class="icon-btn" id="btn-air" aria-label="エアタッチ / Air touch" aria-pressed="false" title="カメラに指をかざして操作する / Point with your finger">✋</button>
-    <button class="icon-btn" id="btn-settings" aria-label="設定 / Settings" hidden>⚙</button>
+    <button class="icon-btn" id="btn-settings" aria-label="設定 / Settings">⚙</button>
   </header>
 
   <!-- 準備画面: 端末の対応確認 → モデル選択 → 取得 -->
@@ -265,6 +274,12 @@
   <div class="row">
     <span class="t"><b>モデルを変える / Change model</b><small id="current-model">—</small></span>
     <button class="ghost" id="btn-change">選び直す</button>
+  </div>
+  <div class="row">
+    <!-- ★モデルを消す口が画面のどこにも無かった。容量を空けたい人は
+         ブラウザ設定でサイトデータを全消しするしかなく、会話も設定も一緒に消えていた -->
+    <span class="t"><b>モデルを削除する / Delete model</b><small id="model-storage">—</small></span>
+    <button class="ghost" id="btn-drop">削除</button>
   </div>
   <div class="row">
     <span class="t"><b>会話を消す / Clear chat</b><small>この端末に保存した履歴を削除します</small></span>
@@ -459,10 +474,82 @@ function progressText(report) {
   return { percent, label: detail ? `${percent}% ${detail}` : `${percent}%` };
 }
 
+/**
+ * WebLLM が端末に置いたモデルの実体を数える。
+ *
+ * ★2回目以降は取得が要らないのに、画面は常に「初回だけダウンロードします」と言っていた。
+ *   すぐ起動するのに「これから2.5GB落ちる」ように見えるのは、そのまま離脱の理由になる。
+ * ★Cache Storage は端末によって（容量枯渇・シークレットタブ・破損）使えず、
+ *   `caches.keys()` 自体が落ちる。**落ちても画面を止めない**——保存済みかどうかは
+ *   分かれば嬉しい情報であって、これが取れないだけで起動を妨げてはいけない。
+ * ★キャッシュ名は WebLLM の版で変わり得るので、名前の完全一致に頼らず 'webllm' の
+ *   部分一致で拾い、モデルIDがURLに含まれるものだけ数える。
+ */
+async function modelCacheEntries(modelId, store = window.caches) {
+  if (!modelId || !store?.keys) return [];
+  const hits = [];
+  try {
+    const names = (await store.keys()).filter((name) => /webllm/i.test(name));
+    for (const name of names) {
+      const cache = await store.open(name);
+      for (const request of await cache.keys()) {
+        if (String(request.url).includes(modelId)) hits.push({ name, url: request.url });
+      }
+    }
+  } catch { return []; }
+  return hits;
+}
+
+/**
+ * 端末に残っているモデルIDの集合を返す。
+ * Cache Storage の走査は1度だけにする（モデルの数だけ開き直すと起動画面が待たされる）。
+ */
+async function cachedModelIds(modelIds, store = window.caches) {
+  const found = new Set();
+  if (!modelIds?.length || !store?.keys) return found;
+  try {
+    const names = (await store.keys()).filter((name) => /webllm/i.test(name));
+    for (const name of names) {
+      const cache = await store.open(name);
+      for (const request of await cache.keys()) {
+        const url = String(request.url);
+        for (const id of modelIds) if (url.includes(id)) found.add(id);
+      }
+    }
+  } catch { return found; }
+  return found;
+}
+
+/** そのモデルがこの端末に残っているか。取れないときは false（推測で「ある」と言わない） */
+async function isModelCached(modelId, store = window.caches) {
+  return (await modelCacheEntries(modelId, store)).length > 0;
+}
+
+/** モデルの実体を消す。会話や設定（localStorage）には触らない */
+async function deleteModelCache(modelId, store = window.caches) {
+  const hits = await modelCacheEntries(modelId, store);
+  let removed = 0;
+  for (const hit of hits) {
+    try {
+      const cache = await store.open(hit.name);
+      if (await cache.delete(hit.url)) removed += 1;
+    } catch { /* 1件消せなくても残りは消す */ }
+  }
+  return removed;
+}
+
+/** モデル削除の説明文。消せる大きさが分かってはじめて「消す」を選べる */
+function storageRowText(model, cached) {
+  if (!model) return 'モデルが選ばれていません / No model selected';
+  if (!cached) return `${model.name} はまだこの端末にありません / Not downloaded yet`;
+  return `${model.name}（約${(model.sizeMB / 1024).toFixed(1)}GB）を消して容量を空けます。会話と設定は残ります。`;
+}
+
 // 検査から触るための橋渡し。新しい関数を足したらここへも足すこと
 // （足し忘れると検査側が "is not a function" で落ちる）
 window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, storageFit, deviceReport, canRun, buildMessages, progressText, SYSTEM_PROMPT,
-  preflight, isNetworkFailure, isDeviceLost, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText, stallGuard };
+  preflight, isNetworkFailure, isDeviceLost, failureHint, serviceWorkerNote, createEngine, startModel, spawnWorker, memoryFit, clockText, elapsedText, stallGuard,
+  modelCacheEntries, isModelCached, cachedModelIds, deleteModelCache, storageRowText, stopGenerating, paintSend };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -476,7 +563,9 @@ const state = { engine:null, model:null, busy:false, history:[], speak:false, li
   stage:'—', violations:[], lastError:'', unreachable:[], retries:0,
   worker:null, workerError:'', mainThreadOnly:false, lastProgressAt:0, clock:null,
   sawProgress:false, stallTimer:null, wakeLock:null, loading:false,
-  storageGB:NaN, models:MODELS, env:null };
+  storageGB:NaN, models:MODELS, env:null,
+  // 生成を途中で止めたか／どのモデルが端末に残っているか
+  stopping:false, cached:new Set() };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
 // ここで拾わないと「起動できませんでした」だけが残り、原因に辿り着けない。
@@ -541,19 +630,34 @@ function renderModels(selectedId, storageGB = state.storageGB, memoryGB = state.
       : mem === 'no' ? `この端末のメモリ（約${memoryGB}GB）では重すぎます。取得は進んでも、起動の途中で止まることがあります`
       : fit === 'tight' ? `空きがぎりぎりです（${model.note}）` : model.note;
     button.querySelector('.size').textContent = `${(model.sizeMB / 1024).toFixed(1)}GB`;
-    if (fit === 'no' || mem === 'no') button.style.opacity = '.5';
+    // ★保存済みなら、空き容量・メモリの警告より先にそれを言う。
+    //   すでに端末にあるものに「空きが足りません」と出すのは端的に誤りで、
+    //   すぐ起動できる人を追い返してしまう
+    if (state.cached.has(model.id)) {
+      const keptLabel = document.createElement('small');
+      keptLabel.className = 'kept';
+      keptLabel.textContent = '✓ この端末に保存済み・すぐ起動します / Already on this device';
+      button.querySelector('span').appendChild(keptLabel);
+    }
+    if ((fit === 'no' || mem === 'no') && !state.cached.has(model.id)) button.style.opacity = '.5';
     button.addEventListener('click', () => { state.model = model.id; writeStore(MODEL_KEY, model.id); renderModels(model.id); });
     $('models').appendChild(button);
   }
   $('current-model').textContent = state.models.find((m) => m.id === selectedId)?.name ?? '—';
   const chosen = state.models.find((m) => m.id === selectedId);
-  const chosenFit = chosen ? storageFit(chosen, storageGB) : 'unknown';
+  $('model-storage').textContent = storageRowText(chosen, state.cached.has(selectedId));
+  // 保存済みなら、取得にまつわる文言と警告は全部いらない
+  const kept = state.cached.has(selectedId);
+  $('btn-start').textContent = kept
+    ? 'この端末で起動する（保存済み） / Start — already downloaded'
+    : 'この端末で起動する / Start on this phone';
+  const chosenFit = kept ? 'yes' : (chosen ? storageFit(chosen, storageGB) : 'unknown');
   if (chosenFit === 'no') {
     $('btn-start').disabled = true;
     $('progress-note').textContent = `空き容量が足りません（必要 約${(chosen.sizeMB / 1024).toFixed(1)}GB / 空き 約${storageGB}GB）。軽いモデルを選ぶか、端末の空きを増やしてください。`;
   } else if (!$('failure') || $('failure').hidden) {
     // ★メモリ不足でも**止めはしない**（推測で妨げない）。ただし黙って通さない
-    const chosenMem = chosen ? memoryFit(chosen, memoryGB) : 'unknown';
+    const chosenMem = kept ? 'yes' : (chosen ? memoryFit(chosen, memoryGB) : 'unknown');
     $('progress-note').textContent = chosenMem === 'no'
       ? `このモデルは、この端末のメモリ（約${memoryGB}GB）には重すぎます。目安は約${chosen.need}GB以上です。進まないときは軽いモデルをお試しください。`
       : chosenFit === 'tight' ? '空きがぎりぎりです。途中で失敗したら軽いモデルをお試しください。' : '';
@@ -561,13 +665,31 @@ function renderModels(selectedId, storageGB = state.storageGB, memoryGB = state.
   }
 }
 
+/**
+ * 吹き出しを1つ足す。本文（.body）と添え書き（.tag）を分けてあるのは、
+ * 「途中で止めました」「◯tok/秒」を本文へ混ぜると、コピーや読み上げに紛れ込むため。
+ */
 function addMessage(role, text, pending = false) {
   const node = document.createElement('div');
   node.className = `msg ${role === 'user' ? 'user' : 'ai'}${pending ? ' pending' : ''}`;
-  node.textContent = text;
+  const body = document.createElement('div');
+  body.className = 'body';
+  body.textContent = text;
+  node.appendChild(body);
   $('msgs').appendChild(node);
   $('chat').scrollTop = $('chat').scrollHeight;
   return node;
+}
+
+/** 吹き出しの本文。streamAnswer はここだけを書き換える */
+function bodyOf(node) { return node.querySelector('.body') ?? node; }
+
+/** 吹き出しに添え書きを1行足す（同じ吹き出しに二重に付けない） */
+function tagMessage(node, text) {
+  let tag = node.querySelector('.tag');
+  if (!tag) { tag = document.createElement('small'); tag.className = 'tag'; node.appendChild(tag); }
+  tag.textContent = text;
+  return tag;
 }
 
 function renderHistory() {
@@ -989,11 +1111,11 @@ async function startEngine() {
     state.stage = 'モデルの取得と準備（初回は数分かかります）';
     setProgress(0, 'モデルを準備しています… / Preparing model…');
     state.engine = await createEngine(webllm, state.model);
+    state.cached.add(state.model);
     stopClock();
     $('setup').classList.add('hidden');
     $('chat').classList.remove('hidden');
     $('composer').classList.remove('hidden');
-    $('btn-settings').hidden = false;
     $('head-note').textContent = `${MODELS.find((m) => m.id === state.model)?.name ?? state.model} · 端末内で実行中`;
     if (!state.history.length) addMessage('assistant', 'おかえりなさい、ゼロさん。ここはスマホの中だけで動きます。何から始めますか？');
   } catch (cause) {
@@ -1046,23 +1168,54 @@ async function streamAnswer(node) {
     temperature: 0.6,
     max_tokens: 512,
   });
+  const body = bodyOf(node);
   let answer = '';
   for await (const chunk of stream) {
+    // ★止めると言われたら、その場で抜ける。interruptGenerate が効かない版・
+    //   効く前に次のかたまりが届く場合があるので、受け取る側でも必ず見る
+    if (state.stopping) break;
     const token = chunk.choices?.[0]?.delta?.content ?? '';
     if (!token) continue;
     if (!answer) node.classList.remove('pending');
     answer += token;
-    node.textContent = answer;
+    // ★流している間は素のテキストのまま。1トークンごとに組み直すと、
+    //   長い返答ほど重くなる（体裁を整えるのは書き終わってから）
+    body.textContent = answer;
     $('chat').scrollTop = $('chat').scrollHeight;
   }
   return answer;
+}
+
+/**
+ * 生成を止める。
+ *
+ * ★0.5〜3B級は的外れな長文を書き始めることがあり、出し切るまで数十秒かかる。
+ *   その間ずっとGPUが回るので電池にも効く。**待つ以外の選択肢を必ず1つ置く**。
+ * ★それまでに書けた分は捨てない。捨てると「止める＝やり直し」になってしまい、
+ *   結局みんな待つようになる。
+ */
+function stopGenerating() {
+  if (!state.busy) return false;
+  state.stopping = true;
+  try { state.engine?.interruptGenerate?.(); } catch { /* 効かなくても受け取る側で抜ける */ }
+  return true;
+}
+
+/** 送信ボタンの見た目。生成中は「止める」に変わる（押せないボタンにすると待つしかなくなる） */
+function paintSend(busy) {
+  const button = $('btn-send');
+  button.classList.toggle('stop', busy);
+  button.textContent = busy ? '■' : '↑';
+  button.setAttribute('aria-label', busy ? '止める / Stop' : '送信 / Send');
+  button.disabled = false;
 }
 
 async function send(text) {
   const clean = text.trim();
   if (!clean || state.busy || !state.engine) return;
   state.busy = true;
-  $('btn-send').disabled = true;
+  state.stopping = false;
+  paintSend(true);
   $('input').value = '';
   state.history.push({ role:'user', text:clean });
   addMessage('user', clean);
@@ -1079,20 +1232,24 @@ async function send(text) {
       node.textContent = '考えています…';
       answer = await streamAnswer(node);
     }
-    if (!answer) { answer = 'うまく答えられませんでした。もう一度お願いします。'; }
-    node.textContent = answer;
+    // 止めた直後は空のことがある。空の吹き出しを残さない
+    if (!answer) { answer = state.stopping ? '（止めました / Stopped）' : 'うまく答えられませんでした。もう一度お願いします。'; }
+    bodyOf(node).textContent = answer;
     node.classList.remove('pending');
+    if (state.stopping) tagMessage(node, '途中で止めました / Stopped');
     state.history.push({ role:'assistant', text:answer });
     writeStore(HISTORY_KEY, state.history.slice(-40));
-    if (state.speak) speak(answer);
+    // 止めたのに読み上げが続くと、止めた意味が無い
+    if (state.speak && !state.stopping) speak(answer);
   } catch (cause) {
     node.classList.remove('pending');
-    node.textContent = isDeviceLost(cause)
+    bodyOf(node).textContent = isDeviceLost(cause)
       ? `端末のGPUとの接続が戻りませんでした。ページを再読み込みしてください（モデルは端末に残っているので、次はすぐ起動します）: ${cause?.message ?? cause}`
       : `答えられませんでした: ${cause?.message ?? cause}`;
   } finally {
     state.busy = false;
-    $('btn-send').disabled = false;
+    state.stopping = false;
+    paintSend(false);
   }
 }
 
@@ -1197,7 +1354,10 @@ $('btn-copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(text); $('btn-copy').textContent = 'コピーしました'; }
   catch { $('btn-copy').textContent = '長押しで選択してコピーしてください'; }
 });
-$('btn-send').addEventListener('click', () => void send($('input').value));
+$('btn-send').addEventListener('click', () => {
+  if (state.busy) { stopGenerating(); return; }
+  void send($('input').value);
+});
 $('input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send($('input').value); }
 });
@@ -1217,6 +1377,18 @@ $('btn-speak').addEventListener('click', () => {
   writeStore(SPEAK_KEY, state.speak);
   $('btn-speak').textContent = state.speak ? 'ON' : 'OFF';
   $('btn-speak').setAttribute('aria-pressed', String(state.speak));
+});
+$('btn-drop').addEventListener('click', async () => {
+  const model = state.models.find((m) => m.id === state.model);
+  if (!model || !state.cached.has(model.id)) { $('model-storage').textContent = 'この端末には保存されていません / Nothing to delete'; return; }
+  $('btn-drop').disabled = true;
+  const removed = await deleteModelCache(model.id);
+  state.cached.delete(model.id);
+  renderModels(state.model);
+  $('btn-drop').disabled = false;
+  $('model-storage').textContent = removed
+    ? `${model.name} を削除しました（約${(model.sizeMB / 1024).toFixed(1)}GB）。次に起動するときは取得し直します。`
+    : '削除できませんでした。ブラウザの設定からサイトデータを消してください。';
 });
 $('btn-clear').addEventListener('click', () => {
   state.history = [];
@@ -1259,6 +1431,9 @@ $('btn-change').addEventListener('click', () => {
   const savedModel = savedTier ? state.models.find((m) => m.key === savedTier.key) : null;
   state.model = (savedModel && storageFit(savedModel, state.storageGB) !== 'no' ? savedModel.id : recommended?.id)
     ?? state.models[1].id;
+  // ★どれが端末に残っているかを、モデルを並べる前に調べる。
+  //   これを後回しにすると、保存済みの人にも一瞬「空きが足りません」が見えてしまう
+  state.cached = await cachedModelIds(state.models.map((m) => m.id));
   renderModels(state.model);
   // 検査から「いま何が選ばれているか」を見るための橋渡し。
   // 画面の見た目だけでは、切り替えが効いているかを機械が確かめられない
