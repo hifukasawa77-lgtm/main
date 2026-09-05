@@ -21,7 +21,11 @@ const PRECACHE_URLS = [
   './zero-1-mobile.html',
   './zero-1-mobile.webmanifest',
   './assets/js/zero1-worker.js',
-  './assets/js/gesture-pointer.js'
+  './assets/js/gesture-pointer.js',
+  // 端末内ツール層とサイトの知識。これが取れないと ZERO-1 は起動しない
+  // （import が解決できずモジュールごと落ちる）。圏外で使う前提なので必ず先に確保する
+  './assets/js/zero1-tools.js',
+  './assets/js/agent-data.js'
 ];
 
 self.addEventListener('install', event => {

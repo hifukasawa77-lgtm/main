@@ -333,6 +333,14 @@
   </div>
 </div>
 
+<!--
+  サイトの知識（ゲーム一覧・FAQ）。案内エージェント（assets/js/agent.js）と**同じ正本**を読む。
+  ここを別に持つと、ゲームを1本足したときに片方だけ古くなり、
+  例外もエラーも出ないまま ZERO-1 だけが存在しないゲームを勧めるようになる。
+  取れなくても起動は止めない（window.AGENT_DATA が無いだけ＝ツールと文脈が黙って無効になる）。
+-->
+<script src="assets/js/agent-data.js"></script>
+
 <script type="module">
 // ZERO-1 Mobile — スマホの中だけで動くZERO-1。
 //
@@ -341,6 +349,12 @@
 // （初回のモデル取得だけ通信する）。外出先・電車の中で使えるのが目的。
 //
 // 賢さはPC版に及ばない（0.5〜3B級 対 7B級）。そのぶん「いつでも手元で動く」を取る。
+//
+// ★モデルを通さずに答える道を1本持っている（端末内ツール層＝assets/js/zero1-tools.js）。
+//   時計・タイマー・メモ・単位換算・計算・サイト内検索は、0.5〜3B級に任せると
+//   **自信たっぷりに間違える**（しかも例外もエラーも出ない）。決定的に判定して横取りする。
+
+import { runTool, buildSiteContext, durationText, matchTool, pickGames } from './assets/js/zero1-tools.js';
 
 // ---------------------------------------------------------------------------
 // ここから下の純粋関数は、画面を作らずに検査できる（scripts/verify-zero1-mobile.mjs）
@@ -498,7 +512,7 @@ const SYSTEM_PROMPT = `あなたは深澤家専用AIシステム「ZERO-1」で�
  *   - 1件あたりの長さも切る
  *   - ただし**最後の質問だけは絶対に切らない**（ここを切ると上記の事故が起きる）
  */
-function buildMessages(history, turns = 8, maxChars = 1200) {
+function buildMessages(history, turns = 8, maxChars = 1200, context = '') {
   const recent = history.slice(-turns);
   const lastUser = [...history].reverse().find((m) => m.role === 'user');
   const trimmed = recent.map((m) => (m === lastUser
@@ -506,7 +520,11 @@ function buildMessages(history, turns = 8, maxChars = 1200) {
     : { role:m.role, content: m.text.length > maxChars ? `${m.text.slice(0, maxChars)}…` : m.text }));
   // 直近に入りきらなかった場合でも、最後の質問だけは必ず添える
   if (lastUser && !recent.includes(lastUser)) trimmed.push({ role:lastUser.role, content:lastUser.text });
-  return [{ role:'system', content: SYSTEM_PROMPT }, ...trimmed];
+  // ★サイトの知識は**system を1つに畳んで**渡す。会話の途中に2つ目の system を
+  //   挟むと、チャットテンプレート（Qwen/Gemma系）は先頭の1つしか描かないことがあり、
+  //   **例外もエラーも出ないまま知識だけが届かない**。届いたかを確かめる術も無い。
+  const system = context ? `${SYSTEM_PROMPT}\n\n${context}` : SYSTEM_PROMPT;
+  return [{ role:'system', content: system }, ...trimmed];
 }
 
 /**
@@ -591,8 +609,11 @@ function bootText(name, seconds) {
 const SUGGESTIONS = [
   'この文章を3行にまとめて',
   '明日の持ち物を一覧にして',
-  '「お疲れさまです」の言い換えを5つ',
   'カレーの作り方を手短に',
+  // 端末内ツールは、在ることを知らなければ一生使われない。最初の画面で1つずつ見せる
+  '3分タイマー',
+  'メモ: 牛乳を買う',
+  'おすすめのゲームは？',
 ];
 
 /** 進捗の文言。%だけだと「止まっているのか進んでいるのか」が分からない */
@@ -680,7 +701,10 @@ window.ZERO1_MOBILE = { MODELS, MODEL_TIERS, resolveModels, recommendModel, stor
   modelCacheEntries, isModelCached, cachedModelIds, deleteModelCache, storageRowText, stopGenerating, paintSend,
   parseBlocks, parseInline, renderRich, memoryBoundary, SUGGESTIONS,
   renderHistory, paintMemoryBoundary, paintSuggestions, finishAnswer, speedText, bootText,
-  waitForAdapter, ensureGpuAlive, reloadEngine, keepResume, takeResume, offerReload };
+  waitForAdapter, ensureGpuAlive, reloadEngine, keepResume, takeResume, offerReload,
+  // 端末内ツール層とサイト知識層（判定は assets/js/zero1-tools.js の純粋関数）
+  runTool, matchTool, pickGames, buildSiteContext, durationText, answerWithTool, toolContext,
+  siteData: () => window.AGENT_DATA ?? null };
 
 // ---------------------------------------------------------------------------
 // 画面
@@ -699,7 +723,9 @@ const state = { engine:null, model:null, busy:false, history:[], speak:false, li
   sawProgress:false, stallTimer:null, wakeLock:null, loading:false,
   storageGB:NaN, models:MODELS, env:null,
   // 生成を途中で止めたか／どのモデルが端末に残っているか
-  stopping:false, cached:new Set(), speed:null, bootMs:0, recovery:null, pending:'' };
+  stopping:false, cached:new Set(), speed:null, bootMs:0, recovery:null, pending:'',
+  // 端末内ツール（時計・タイマー・メモ・単位換算・計算・サイト内検索）の作用側
+  timers:[], toolUses:0 };
 
 // CSPが何かを止めたときは、例外のメッセージには出ないことがある。
 // ここで拾わないと「起動できませんでした」だけが残り、原因に辿り着けない。
@@ -712,6 +738,107 @@ function readStore(key, fallback) {
   catch { return fallback; }
 }
 function writeStore(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 容量制限は無視 */ } }
+
+// ---------------------------------------------------------------------------
+// 端末内ツールの作用側（判定は assets/js/zero1-tools.js の純粋関数が持つ）
+// ---------------------------------------------------------------------------
+
+const MEMO_KEY = 'zero1-mobile-memos';
+const MEMO_LIMIT = 50;
+
+/** メモの読み書き。localStorage は容量枯渇・シークレットタブで落ちるので readStore 経由 */
+const memoStore = {
+  list: () => { const saved = readStore(MEMO_KEY, []); return Array.isArray(saved) ? saved : []; },
+  add(text) {
+    // 古いものから捨てる。上限を持たないと、いつか書き込みが黙って失敗するようになる
+    const items = [...memoStore.list(), text].slice(-MEMO_LIMIT);
+    writeStore(MEMO_KEY, items);
+    return items.length;
+  },
+  clear() { const count = memoStore.list().length; writeStore(MEMO_KEY, []); return count; },
+};
+
+let timerSeq = 0;
+
+/**
+ * タイマーを貼り直す。
+ *
+ * ★setTimeout の残り時間を信じない。スマホでは画面を消す・タブを背面に回すだけで
+ *   タイマーが遅れる・止まる（例外もエラーも出ない。ただ鳴らない）。
+ *   だから**終わる時刻（絶対時刻）を正本にして**、画面が戻るたびに貼り直す。
+ */
+function armTimer(timer) {
+  clearTimeout(timer.handle);
+  timer.handle = setTimeout(() => fireTimer(timer), Math.max(0, timer.endAt - Date.now()));
+}
+
+function fireTimer(timer) {
+  clearTimeout(timer.handle);
+  const at = state.timers.indexOf(timer);
+  if (at < 0) return;                       // すでに鳴らした／止められた
+  state.timers.splice(at, 1);
+  const text = `⏰ ${durationText(timer.totalSec)}たちました。`;
+  // 履歴には積まない。会話ではなく通知なので、次の質問の文脈を食わせない
+  const node = addMessage('assistant', text);
+  tagMessage(node, '端末内ツール · タイマー / On-device tool · Timer');
+  $('announce').textContent = text;
+  try { navigator.vibrate?.([200, 100, 200]); } catch { /* 対応していない端末は静かに諦める */ }
+  beep();
+  if (state.speak) speak(text);
+}
+
+/** 期限切れを鳴らし、残りを貼り直す。画面が戻ったときに必ず通る */
+function sweepTimers() {
+  for (const timer of [...state.timers]) {
+    if (Date.now() >= timer.endAt) fireTimer(timer); else armTimer(timer);
+  }
+}
+
+/**
+ * 鳴らす。
+ * ★画面を見ていない人には、文字も振動も届かないことがある。
+ *   AudioContext は利用者の操作（送信ボタン）を起点に作られるので鳴らせる。
+ *   鳴らせない端末では黙って諦める——ここで例外を投げると通知ごと消える。
+ */
+let audio = null;
+function beep() {
+  try {
+    audio ??= new (window.AudioContext || window.webkitAudioContext)();
+    void audio.resume?.();
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, audio.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.2, audio.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + 0.9);
+    osc.connect(gain).connect(audio.destination);
+    osc.start();
+    osc.stop(audio.currentTime + 0.9);
+  } catch { /* 鳴らせなくても、吹き出しと振動は出ている */ }
+}
+
+const timerStore = {
+  start(seconds) {
+    const timer = { id: ++timerSeq, endAt: Date.now() + seconds * 1000, totalSec: seconds, handle: null };
+    state.timers.push(timer);
+    armTimer(timer);
+    return timer.id;
+  },
+  cancel() {
+    const count = state.timers.length;
+    for (const timer of state.timers) clearTimeout(timer.handle);
+    state.timers = [];
+    return count;
+  },
+  list: () => state.timers.map((t) => ({ totalSec: t.totalSec, remainSec: Math.max(0, (t.endAt - Date.now()) / 1000) })),
+};
+
+/** ツール層へ渡す作用一式。端末に触るのはここだけ */
+function toolContext() {
+  return { now: new Date(), memo: memoStore, timer: timerStore, data: window.AGENT_DATA ?? null };
+}
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) sweepTimers(); });
 
 async function readEnvironment() {
   let memoryGB = Number(navigator.deviceMemory);
@@ -1565,9 +1692,9 @@ function ensureGpuAlive() {
 }
 
 /** 1回ぶんの返答を流し込む。載せ直しのため、送信本体から切り出してある */
-async function streamAnswer(node) {
+async function streamAnswer(node, context = '') {
   const stream = await state.engine.chat.completions.create({
-    messages: buildMessages(state.history),
+    messages: buildMessages(state.history, 8, 1200, context),
     stream: true,
     temperature: 0.6,
     max_tokens: 512,
@@ -1621,9 +1748,58 @@ function paintSend(busy) {
   button.disabled = false;
 }
 
+/**
+ * 端末内ツールで答えられるなら答えて true を返す。答えられないなら false（＝モデルへ）。
+ *
+ * ★ここも innerHTML は使わない。ツールの文面はこちらが書いたものだが、
+ *   メモとサイト内検索は**利用者が打った文字とデータ由来の文字**を含む。
+ *   組み立て方を1箇所でも変えると、そこだけが抜け道になる。finishAnswer 経由で統一する。
+ */
+function answerWithTool(clean) {
+  let result = null;
+  try {
+    result = runTool(clean, toolContext());
+  } catch (cause) {
+    // ツールが落ちてもチャットは止めない。黙ってモデルへ渡す方が利用者には自然
+    state.lastError = `tool: ${cause?.message ?? cause}`;
+    return false;
+  }
+  if (!result) return false;
+
+  $('input').value = '';
+  state.history.push({ role:'user', text:clean });
+  addMessage('user', clean).dataset.h = String(state.history.length - 1);
+
+  const node = addMessage('assistant', '');
+  finishAnswer(node, result.answer);
+  // ★モデルが答えたのか、端末内ツールが答えたのかを必ず見せる。
+  //   区別が付かないと「AIが時計を読めた」と誤解され、できないことまで期待される
+  tagMessage(node, `端末内ツール · ${result.label}`);
+  // ★URLを文字で見せて打たせない。押せる一手を置く（offerReload と同じ考え方）。
+  //   別タブで開くのは、このタブを離れるとモデルが端末のGPUから降りてしまうため
+  for (const link of result.links ?? []) {
+    actionMessage(node, link.label, () => window.open(link.href, '_blank', 'noopener'));
+  }
+  state.history.push({ role:'assistant', text:result.answer });
+  node.dataset.h = String(state.history.length - 1);
+  writeStore(HISTORY_KEY, state.history.slice(-40));
+  state.toolUses += 1;
+  paintMemoryBoundary();
+  paintSuggestions();
+  if (state.speak) speak(result.answer);
+  return true;
+}
+
 async function send(text) {
   const clean = text.trim();
   if (!clean || state.busy) return;
+
+  // ★端末内ツールを**モデルより先に**見る。ここで確定するものは
+  //   GPUを一度も回さずに答える＝即答・電池を食わない・言い間違えない。
+  //   モデルの載っていない状態（起動前・GPUが切れた後）でも時計とメモは答えられる——
+  //   engine の有無を見る前に置いているのはそのため。
+  if (answerWithTool(clean)) return;
+
   // ★載せ直しの最中なら、それを待ってから送る。ここで弾くと
   //   「押しても何も起きない」になる（例外もエラーも出ない）
   if (state.recovery) await state.recovery.catch(() => {});
@@ -1643,17 +1819,21 @@ async function send(text) {
   addMessage('user', clean).dataset.h = String(state.history.length - 1);
   paintSuggestions();
   const node = addMessage('assistant', '考えています…', true);
+  // ★このサイトの知識は、**当たったときだけ**足す（無関係なら0文字）。
+  //   毎回まるごと足すと窓が埋まり、いま聞かれた質問が押し出されて
+  //   見当違いの答えが返る（buildMessages の注意書きと同じ事故）。
+  const context = buildSiteContext(clean, window.AGENT_DATA ?? null);
   let answer = '';
   try {
     try {
-      answer = await streamAnswer(node);
+      answer = await streamAnswer(node, context);
     } catch (cause) {
       if (!isDeviceLost(cause)) throw cause;
       // ★切れただけなら、黙って載せ直して答え直す。利用者に打ち直させない
       bodyOf(node).textContent = '端末のGPUとの接続が切れました。モデルを載せ直しています…';
       await reloadEngine();
       bodyOf(node).textContent = '考えています…';
-      answer = await streamAnswer(node);
+      answer = await streamAnswer(node, context);
     }
     // 止めた直後は空のことがある。空の吹き出しを残さない
     if (!answer) { answer = state.stopping ? '（止めました / Stopped）' : 'うまく答えられませんでした。もう一度お願いします。'; }
@@ -1661,7 +1841,10 @@ async function send(text) {
     finishAnswer(node, answer);
     // ★止めた事実と速さは同じ一行に置く。二行にすると吹き出しが重くなる
     const speed = speedText(state.speed);
-    const marks = [state.stopping ? '途中で止めました / Stopped' : '', speed].filter(Boolean);
+    // ★何を見て答えたのかを見せる。見せないと、サイトの知識が届いているのか
+    //   モデルが思いつきで書いたのかを、利用者も開発者も区別できない
+    const marks = [state.stopping ? '途中で止めました / Stopped' : '',
+      context ? 'サイトの知識を参照 / Used site knowledge' : '', speed].filter(Boolean);
     if (marks.length) tagMessage(node, marks.join(' · '));
     state.history.push({ role:'assistant', text:answer });
     node.dataset.h = String(state.history.length - 1);

@@ -1219,6 +1219,202 @@ check('114. 打ち直さずに、同じ質問の答えが返る',
 check('115. 引き継ぎの覚書は残さない（次の起動で勝手に投げ直さない）',
   resumed.left === null, String(resumed.left));
 
+// ---------------------------------------------------------------------------
+// 端末内ツール層（意図ルーティング）とサイト知識（ローカルRAG）
+//
+// ★「関数が正しいか」ではなく「画面がそれを使っているか」を見る。
+//   純粋関数だけを叩く検査は、配線が外れても素通りする（エアタッチの移植で踏んだ）。
+//   だから合成のライブラリを差し込んで**実際に送信ボタンを押し**、
+//   モデルへ渡った messages まで覗く。
+// ---------------------------------------------------------------------------
+
+const tools = await (async () => {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(() => {
+    window.__ASKED = [];        // モデルへ渡った messages を全部覚えておく
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: { cancel() {}, speak() {} } });
+    window.SpeechSynthesisUtterance = function (text) { this.text = text; };
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: {
+      requestAdapter: async () => ({ features: new Set() }) } });
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: {
+      estimate: async () => ({ quota: 10.7e9, usage: 0 }) } });
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (/huggingface\.co|raw\.githubusercontent\.com/.test(url)) return Promise.resolve(new Response('{}', { status: 200 }));
+      return original(input, init);
+    };
+    window.__ZERO1_WEBLLM = {
+      get prebuiltAppConfig() {
+        const tiers = window.ZERO1_MOBILE?.MODEL_TIERS ?? [];
+        return { model_list: tiers.flatMap((t) => [t.f16, t.f32]).map((v) => ({
+          model_id: v.id, model: `https://huggingface.co/mlc-ai/${v.id}`,
+          model_lib: `https://raw.githubusercontent.com/x/${v.id}.wasm`,
+        })) };
+      },
+      CreateWebWorkerMLCEngine: (worker, id, opts) => window.__ZERO1_WEBLLM.CreateMLCEngine(id, opts),
+      CreateMLCEngine: async (id, opts) => {
+        opts?.initProgressCallback?.({ progress: 1, text: 'done' });
+        return { chat: { completions: { create: async (request) => {
+          window.__ASKED.push(request.messages);
+          return (async function* () { yield { choices: [{ delta: { content: 'モデルが答えました。' } }] }; })();
+        } } }, interruptGenerate() {} };
+      },
+    };
+  });
+  await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
+    status: 200, contentType: 'text/javascript', body: 'export class WebWorkerMLCEngineHandler { onmessage() {} }',
+  }));
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  await scoped.locator('#btn-start').click();
+  await scoped.waitForSelector('#chips button', { timeout: 20_000 });
+  return scoped;
+})();
+
+/** 実際に打って送る。返ってくるのは画面に出たものと、モデルへ渡ったもの */
+const askTool = async (text) => {
+  await tools.locator('#input').fill(text);
+  await tools.locator('#btn-send').click();
+  await tools.waitForFunction(() => {
+    const last = document.querySelector('#msgs .msg:last-child');
+    return last && !last.classList.contains('pending') && window.ZERO1_MOBILE_STATE?.busy === false;
+  }, { timeout: 15_000 }).catch(() => {});
+  return tools.evaluate(() => ({
+    body: document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '',
+    html: document.querySelector('#msgs .msg:last-child .body')?.innerHTML ?? '',
+    tag: document.querySelector('#msgs .msg:last-child .tag')?.textContent ?? '',
+    actions: [...document.querySelectorAll('#msgs .msg:last-child .tools button')].map((b) => b.textContent ?? ''),
+    asked: window.__ASKED.length,
+    last: window.__ASKED[window.__ASKED.length - 1] ?? null,
+    pwned: window.__PWNED ?? 0,
+    timers: window.ZERO1_MOBILE_STATE?.timers?.length ?? -1,
+  }));
+};
+
+check('116. ツール層の橋渡しが開いている',
+  await tools.evaluate(() => ['runTool', 'buildSiteContext', 'matchTool', 'pickGames']
+    .every((name) => typeof window.ZERO1_MOBILE?.[name] === 'function')));
+
+const toolClock = await askTool('今何時？');
+check('117. 時計はモデルを通さずに答える（GPUを回さない）',
+  toolClock.asked === 0 && /時計/.test(toolClock.tag) && /\d+時\d+分/.test(toolClock.body), `${toolClock.body} ｜ ${toolClock.tag}`);
+
+const unit = await askTool('10kmは何マイル');
+check('118. 単位換算は端末内で答える', unit.asked === 0 && /6\.21/.test(unit.body), unit.body);
+
+// ★0.5〜3B級は桁の多い掛け算を**自信たっぷりに間違える**。ここは必ず横取りする
+const math = await askTool('1234*5678は？');
+check('119. 桁の多い計算をモデルに渡さない（黙って間違えさせない）',
+  math.asked === 0 && /7,?006,?652/.test(math.body), math.body);
+
+// ★「eval が無いこと」は静的に見ないと保証にならない。利用者が打った式を
+//   そのまま評価する道が1本でもあれば、そこが抜け道になる
+const toolSource = fs.readFileSync(path.join(ROOT, 'assets/js/zero1-tools.js'), 'utf8');
+const pageSource = fs.readFileSync(path.join(ROOT, PAGE), 'utf8');
+check('120. 式の評価に eval / new Function を使っていない',
+  !/\beval\s*\(/.test(toolSource) && !/new\s+Function\s*\(/.test(toolSource)
+    && !/\beval\s*\(/.test(pageSource) && !/new\s+Function\s*\(/.test(pageSource));
+
+await askTool('メモ: 牛乳を買う');
+const memo = await askTool('メモを見せて');
+check('121. メモを覚えて、聞かれたら出す', memo.asked === 0 && /牛乳を買う/.test(memo.body), memo.body);
+check('122. メモは端末に残る（次に開いても消えていない）',
+  /牛乳/.test(await tools.evaluate(() => localStorage.getItem('zero1-mobile-memos') ?? '')));
+
+// 故障注入: メモとサイト内検索は「利用者が打った文字」を含む。ここが抜け道になっていないか
+await askTool('メモ: <img src=x onerror="window.__PWNED=1">');
+const xss = await askTool('メモを見せて');
+check('123. メモの中身からHTMLを組み立てない（ツール経由のXSSを作らない）',
+  xss.pwned === 0 && !/<img/i.test(xss.html) && /onerror/.test(xss.body), xss.body.slice(0, 40));
+
+const timer = await askTool('3分タイマー');
+check('124. タイマーを始められる', timer.asked === 0 && timer.timers === 1 && /タイマー/.test(timer.tag), timer.body.split('\n')[0]);
+
+// ★スマホでは画面を消すだけで setTimeout が遅れる・止まる（例外もエラーも出ない）。
+//   終わる時刻を正本に持ち、画面が戻ったときに貼り直しているかを見る。
+//   setTimeout だけに頼った実装は、ここで**鳴らないまま**すり抜けられない
+const fired = await tools.evaluate(async () => {
+  const timers = window.ZERO1_MOBILE_STATE.timers;
+  if (!timers.length) return { ok:false, why:'タイマーが無い' };
+  timers[0].endAt = Date.now() - 1000;             // 画面を消していた間に期限が過ぎた状態
+  document.dispatchEvent(new Event('visibilitychange'));
+  await new Promise((r) => setTimeout(r, 200));
+  return { ok:true, left: window.ZERO1_MOBILE_STATE.timers.length,
+    text: document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '' };
+});
+check('125. 画面が戻ったときに、期限切れのタイマーを鳴らす（setTimeout を信じない）',
+  fired.ok && fired.left === 0 && /たちました/.test(fired.text), `${fired.text} ｜ 残り${fired.left}`);
+
+await askTool('10分タイマー');
+const timerStopped = await askTool('タイマー止めて');
+check('126. タイマーを止められる（作成より先に取り消しを見る）',
+  timerStopped.asked === 0 && timerStopped.timers === 0 && /止め/.test(timerStopped.body), timerStopped.body);
+
+const games = await askTool('おすすめのゲームは？');
+check('127. サイト内検索は、押せるボタンで開かせる（URLを打たせない）',
+  games.asked === 0 && games.actions.length >= 2, games.actions.join(' / '));
+
+// ★モデルはゲーム名を知らないので、空振りを渡すと**存在しないタイトルを作る**。
+//   返すのは必ず実在のファイルであること
+const hrefs = await tools.evaluate(() => (window.ZERO1_MOBILE.pickGames('おすすめのゲームは？', window.ZERO1_MOBILE.siteData())?.games ?? []).map((g) => g.href));
+const ghosts = hrefs.filter((href) => !fs.existsSync(path.join(ROOT, href)));
+check('128. 検索が返すゲームが全部実在する（存在しないゲームを勧めない）',
+  hrefs.length > 0 && ghosts.length === 0, ghosts.join(' / ') || `${hrefs.length}本`);
+
+// ★誤爆すると利用者からは「AIが答えてくれなくなった」に見える。
+//   ツールの言葉を含むのに、ツールでは答えられない質問を必ず流す
+const passthrough = await askTool('ゲームの作り方を教えて');
+check('129. ツールで答えられないものは、黙ってモデルへ流す',
+  passthrough.asked === 1 && !/端末内ツール/.test(passthrough.tag), `モデル ${passthrough.asked}回 ｜ ${passthrough.tag}`);
+
+const site = await askTool('このサイトは無料ですか？');
+const systems = (site.last ?? []).filter((m) => m.role === 'system');
+check('130. サイトの知識が、実際にモデルへ渡っている',
+  systems.length === 1 && /無料/.test(systems[0]?.content ?? ''), (systems[0]?.content ?? '').slice(-60));
+// ★2つ目の system は、チャットテンプレートが黙って捨てることがある。
+//   捨てられても例外は出ないので、届かなかったことに誰も気づけない
+check('131. system は1つに畳んで渡す（2つ目を作らない）', systems.length === 1, `system ${systems.length}件`);
+check('132. 文脈を足しても、最後の質問が押し出されない',
+  (site.last ?? []).at(-1)?.role === 'user' && /無料/.test((site.last ?? []).at(-1)?.content ?? ''),
+  (site.last ?? []).at(-1)?.content ?? '');
+
+// ★当たらない質問に毎回29KBを足すと、窓が埋まって質問の方が押し出される。
+//   「知っているときほど質問を忘れる」が一番たちの悪い壊れ方
+const rag = await tools.evaluate(() => {
+  const { buildSiteContext, siteData } = window.ZERO1_MOBILE;
+  const data = siteData();
+  return {
+    none: buildSiteContext('量子力学について', data).length,
+    hit: buildSiteContext('三郷市ってどんな街？', data).length,
+    // 5件当たる質問。上限を絞ったときに本当に切り詰まるかを見る
+    //（0文字で通ってしまう条件にしないこと——上限が効かなくても素通りする）
+    wide: buildSiteContext('将棋と麻雀とチェスは無料ですか 三郷', data).length,
+    capped: buildSiteContext('将棋と麻雀とチェスは無料ですか 三郷', data, { budget: 200 }).length,
+    count: buildSiteContext('hideさんについて教えて', data),
+    games: (data?.GAMES ?? []).length,
+  };
+});
+check('133. 関係の無い質問には、1文字も足さない', rag.none === 0, `${rag.none}文字`);
+check('134. 当たったときだけ足す', rag.hit > 0 && rag.hit < 400, `${rag.hit}文字`);
+check('135. 当たりが増えても上限で頭打ちになる',
+  rag.wide > rag.capped && rag.capped > 0, `上限なし${rag.wide}文字 → 上限あり${rag.capped}文字`);
+// ★KBの本文には {GAME_COUNT} という差し込み記号がある。そのまま渡すと
+//   モデルは答えにもその記号を書き写す（例外もエラーも出ない）
+check('136. 差し込み記号を、そのままモデルへ渡さない',
+  !/\{GAME_COUNT\}/.test(rag.count) && rag.count.includes(String(rag.games)),
+  `ゲーム${rag.games}本`);
+
+// ★「圏外でも使える」と謳っている以上、import できないと**モジュールごと落ちる**
+const swSource = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+const needed = ['./assets/js/zero1-tools.js', './assets/js/agent-data.js'];
+check('137. ツール層とサイト知識を事前キャッシュに入れている（圏外で起動できる）',
+  needed.every((url) => swSource.includes(`'${url}'`) && fs.existsSync(path.join(ROOT, url.replace('./', '')))),
+  needed.filter((url) => !swSource.includes(`'${url}'`)).join(' / ') || '2/2件');
+
+await tools.close();
+
 const shot = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shot, { recursive: true });
 await page.screenshot({ path: path.join(shot, 'zero-1-mobile.png'), fullPage: false });
