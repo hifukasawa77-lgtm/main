@@ -21,6 +21,11 @@ Obsidian アプリでこのフォルダ（`obsidian-vault/`）をVaultとして�
 | `04-Knowledge/` | 再利用可能な知見・ハマりどころ・パターン集 |
 | `Templates/` | 各ノート種別のテンプレート |
 
+## ローカルObsidian保管庫との連携
+深澤のローカル保管庫（Windows: `...\オブシディアン\保管庫１`）とはgit経由の双方向同期で連携する。
+セットアップ手順は [[obsidian-vault-git-sync|docs/obsidian-vault-git-sync.md]]、
+方式の決定理由は [[0035-local-vault-git-sync]] を参照。
+
 ## PMO（`pmo/` Google Drive）との役割分担
 - **このVault**: 個人の知的資産（意思決定の理由・学び・気づき）
 - **PMOの`pmo/`**: ステークホルダー向けの進捗・リスク・KPI管理文書
