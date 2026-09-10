@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sys
@@ -123,7 +124,12 @@ def fetch_standings(slug: str) -> list[dict[str, str]]:
                 rows = parse_standings(_read_json_response(response))
             print(f"{slug}: fetched successfully on attempt {attempt}")
             return rows
-        except (OSError, urllib.error.URLError, ResponseValidationError) as exc:
+        except (
+            OSError,
+            http.client.HTTPException,
+            urllib.error.URLError,
+            ResponseValidationError,
+        ) as exc:
             last_error = str(exc).replace("\r", " ").replace("\n", " ")
             if attempt < MAX_ATTEMPTS:
                 print(

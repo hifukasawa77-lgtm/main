@@ -20,8 +20,6 @@ def response(body: bytes, content_type: str = "application/json"):
     headers["Content-Type"] = content_type
     result = io.BytesIO(body)
     result.headers = headers
-    result.__enter__ = lambda self: self
-    result.__exit__ = lambda *args: None
     return result
 
 
