@@ -144,13 +144,44 @@ def fetch_standings(slug: str) -> list[dict[str, str]]:
     )
 
 
-def write_standings(output_file: Path) -> None:
-    document = {
-        "j1": fetch_standings("jpn.1"),
-        "j2": fetch_standings("jpn.2"),
-        "j3": fetch_standings("jpn.3"),
-        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+def load_previous_standings(output_file: Path) -> dict[str, list[dict[str, Any]]]:
+    try:
+        previous = json.loads(output_file.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(previous, dict):
+        return {}
+    return {
+        league: rows
+        for league in ("j1", "j2", "j3")
+        if isinstance((rows := previous.get(league)), list)
+        and all(isinstance(row, dict) for row in rows)
     }
+
+
+def write_standings(output_file: Path) -> None:
+    previous = load_previous_standings(output_file)
+    document: dict[str, Any] = {}
+    successful_fetches = 0
+
+    for league, slug in (("j1", "jpn.1"), ("j2", "jpn.2"), ("j3", "jpn.3")):
+        try:
+            document[league] = fetch_standings(slug)
+            successful_fetches += 1
+        except RuntimeError as exc:
+            document[league] = previous.get(league, [])
+            message = str(exc).replace("\r", " ").replace("\n", " ")
+            print(
+                f"::warning title=ESPN API fallback::{message}; "
+                f"keeping {len(document[league])} previous {league.upper()} rows",
+                file=sys.stderr,
+            )
+
+    if successful_fetches == 0:
+        raise RuntimeError("all ESPN league requests failed; standings file was not changed")
+
+    document["updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     temp_name: str | None = None

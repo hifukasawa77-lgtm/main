@@ -72,13 +72,34 @@ class UpdateStandingsTest(unittest.TestCase):
         self.assertEqual(3, urlopen.call_count)
 
     @mock.patch.object(standings, "fetch_standings")
-    def test_existing_output_is_preserved_if_a_league_fails(self, fetch):
-        fetch.side_effect = [[{"strTeam": "J1"}], RuntimeError("bad response")]
+    def test_failed_league_keeps_previous_rows(self, fetch):
+        fetch.side_effect = [
+            [{"strTeam": "New J1"}],
+            RuntimeError("bad response"),
+            [{"strTeam": "New J3"}],
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "standings.json"
+            output.write_text(
+                json.dumps({"j1": [], "j2": [{"strTeam": "Old J2"}], "j3": []}),
+                encoding="utf-8",
+            )
+
+            standings.write_standings(output)
+
+            updated = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("New J1", updated["j1"][0]["strTeam"])
+            self.assertEqual("Old J2", updated["j2"][0]["strTeam"])
+            self.assertEqual("New J3", updated["j3"][0]["strTeam"])
+
+    @mock.patch.object(standings, "fetch_standings")
+    def test_all_failures_preserve_the_entire_output(self, fetch):
+        fetch.side_effect = RuntimeError("bad response")
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "standings.json"
             output.write_text("existing data", encoding="utf-8")
 
-            with self.assertRaisesRegex(RuntimeError, "bad response"):
+            with self.assertRaisesRegex(RuntimeError, "all ESPN league requests failed"):
                 standings.write_standings(output)
 
             self.assertEqual("existing data", output.read_text(encoding="utf-8"))
