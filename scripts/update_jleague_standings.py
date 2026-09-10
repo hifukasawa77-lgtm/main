@@ -17,7 +17,7 @@ from typing import Any
 
 ESPN_BASE_URL = os.environ.get(
     "ESPN_BASE_URL",
-    "https://site.api.espn.com/apis/site/v2/sports/soccer",
+    "https://site.api.espn.com/apis/v2/sports/soccer",
 ).rstrip("/")
 MAX_ATTEMPTS = int(os.environ.get("STANDINGS_MAX_ATTEMPTS", "3"))
 RETRY_DELAY_SECONDS = float(os.environ.get("STANDINGS_RETRY_DELAY_SECONDS", "2"))
