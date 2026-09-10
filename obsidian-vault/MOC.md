@@ -17,6 +17,9 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - `03-Decisions/` — 意思決定ログ（ADR形式）
 - `04-Knowledge/` — 再利用可能な知見・ハマりどころ・パターン集
 
+## 👤 本人情報
+- [[fukazawa-profile]] — 深澤さんの役割・目標・価値観・意思決定スタイル・AIへの期待
+
 ## 📌 進行中プロジェクト
 - [[second-brain-system]] — このセカンドブレイン基盤自体
 - [[recursive-self-improvement]] — 学び→反映の閉ループ（自己改善基盤）
