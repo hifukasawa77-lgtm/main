@@ -17,6 +17,9 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - `03-Decisions/` — 意思決定ログ（ADR形式）
 - `04-Knowledge/` — 再利用可能な知見・ハマりどころ・パターン集
 
+## 👤 本人情報
+- [[fukazawa-profile]] — 深澤さんの役割・目標・価値観・意思決定スタイル・AIへの期待
+
 ## 📌 進行中プロジェクト
 - [[second-brain-system]] — このセカンドブレイン基盤自体
 - [[recursive-self-improvement]] — 学び→反映の閉ループ（自己改善基盤）
@@ -57,8 +60,8 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0031-verification-cost-and-fast-path-guards]] — 検査の反復コストを実測して速い経路を分離（44秒→1秒）＋抜け道が広がらない検査4件
 - [[0032-marketer-data-driven-evolve-loop]] — マーケターを反応駆動の週次学習ループへ（個別ゲーム自動告知＋反応計測＋/marketer-evolve）
 - [[0033-note-monetization-automation-boundary]] — noteの自動化境界を「書くまで」に置く（規約リスク＞収益）
-- [[0034-agent-contract-and-least-privilege]]
-- [[0035-zero1-claude-md-and-behaviour-only-checks]] — ZERO-1にCLAUDE.mdを新設／検査は振る舞いだけを見る — 全エージェントに契約・最小権限・必須検査を導入し検査#14で強制（19体→22体）
+- [[0034-agent-contract-and-least-privilege]] — 全エージェントに契約・最小権限・必須検査を導入し検査#14で強制（19体→22体）
+- [[0035-zero1-claude-md-and-behaviour-only-checks]] — ZERO-1にCLAUDE.mdを新設／検査は振る舞いだけを見る
 - [[0036-exemptions-are-per-line]] — 検査の免除は1行ずつ／照合の線は「import して呼べるか」
 - [[0037-warnings-that-get-ignored]] — 繰り返し無視される警告は、警告のほうを疑う
 
