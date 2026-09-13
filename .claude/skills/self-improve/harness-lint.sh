@@ -173,12 +173,23 @@ else
       WORKDAYS="$WORKDAYS$d"$'\n'
     fi
   done <<< "$COMMITS"
+  # その日に新しく作られた知見/意思決定ノート（Dailyの代わりに学びが残っている日）。
+  # ★2026-09-13 修正: Daily だけを見ていたため、知見ノートを書いた日まで咎めていた
+  #   （09-07「同じ値を3か所…」／09-08「成功しましたが嘘をつく…」）。3回続けて
+  #   同じ4日を警告し、そのたびに無視されていた——**無視される警告は、あるだけ害**。
+  # ★広げるのはここまで。04-Knowledge / 03-Decisions は「学びを残した」と言い切れる。
+  #   CLAUDE.md の編集まで数えると、無関係な編集で素通りする（免除は必要な分ぴったりに切る）。
+  RECORDED=$(git log --no-merges --since='14 days ago' --date=short --diff-filter=A \
+    --pretty='%ad' --name-only -- obsidian-vault/04-Knowledge obsidian-vault/03-Decisions 2>/dev/null || true)
+  RECORDED_DAYS=$(awk '/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ { day = $0; next } /^obsidian-vault\// { print day }' <<< "$RECORDED" | sort -u)
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     if [ -f "obsidian-vault/01-Daily/$d.md" ]; then
       ok "$d（Dailyあり）"
+    elif grep -qx "$d" <<< "$RECORDED_DAYS"; then
+      ok "$d（Dailyは無いが、その日に知見/意思決定ノートを書いている）"
     else
-      note_warn "$d: 作業コミットあり・Dailyなし（学び/決定があれば obsidian-vault/01-Daily/$d.md へ記録）"
+      note_warn "$d: 作業コミットあり・記録なし（学び/決定があれば obsidian-vault/01-Daily/$d.md へ記録）"
     fi
   done <<< "$(printf '%s' "$WORKDAYS" | sort -u)"
 fi

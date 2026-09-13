@@ -60,6 +60,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0034-agent-contract-and-least-privilege]]
 - [[0035-zero1-claude-md-and-behaviour-only-checks]] — ZERO-1にCLAUDE.mdを新設／検査は振る舞いだけを見る — 全エージェントに契約・最小権限・必須検査を導入し検査#14で強制（19体→22体）
 - [[0036-exemptions-are-per-line]] — 検査の免除は1行ずつ／照合の線は「import して呼べるか」
+- [[0037-warnings-that-get-ignored]] — 繰り返し無視される警告は、警告のほうを疑う
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
