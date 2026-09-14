@@ -65,6 +65,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0036-exemptions-are-per-line]] — 検査の免除は1行ずつ／照合の線は「import して呼べるか」
 - [[0037-warnings-that-get-ignored]] — 繰り返し無視される警告は、警告のほうを疑う
 - [[0038-registries-need-mechanical-guards]] — 手で更新する登録簿には機械の見張りを付ける（ZERO-1）
+- [[0039-four-rejections-mean-the-loop-is-wrong]] — 4回差し戻されたら、直し方のほうを疑う
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
@@ -75,6 +76,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[verification-counts-the-wrong-thing]] — 検査が数える対象を間違えると故障注入をすり抜ける
 - [[false-red-checks-are-worse-than-none]] — 偽の赤は検査が無いより悪い（必須検査が常に赤いなら、まず検査を疑う）
 - [[registries-drift-silently]] — 手で更新する登録簿は、黙ってずれる
+- [[count-what-repeated-not-what-broke]] — 直したものではなく、繰り返したものを数える
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール

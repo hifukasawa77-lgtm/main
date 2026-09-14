@@ -104,3 +104,5 @@ const ALLOWED = new Set(["rendered-html.test.mjs"]);   // ファイル単位で�
 実際に import して呼んでいる検査は、切り出しても lazy 化しても1件も落ちていない。
 
 → `zero-1-local-ai/docs/開発の注意.md` §6 と `.claude/agents/verifier.md` 原則#2 へ昇格済み（2026-09-10）
+
+→ さらに [[0039-four-rejections-mean-the-loop-is-wrong]] で機械検査（tests/fragile-checks.test.mjs）へ昇格済み（2026-09-14）
