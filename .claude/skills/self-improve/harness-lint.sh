@@ -157,7 +157,14 @@ echo "== 9. Dailyなしの作業日（直近14日・警告のみ／exit codeに�
 # 昇格漏れ」しか見えず、Dailyごと書かれなかった作業日は蓄積ループから漏れる
 # （2026-07-15の大型実装5件が無記録だった実例）。記録要否の判断はLLM作業のため
 # 非ブロッキング（△）。古い作業日を延々警告しないよう直近14日に限定する。
-COMMITS=$(git log --no-merges --since='14 days ago' --date=short --pretty='%H %ad' 2>/dev/null || true)
+# ★**自動更新（ボット）のコミットは「作業」に数えない。**
+#   2026-09-12 は `github-actions[bot]` の「Jリーグ順位表を更新 [skip ci]」だけで、
+#   学びも決定も生まれない日だった。それを「記録なし」と咎めると、誤検知が混ざる——
+#   誤検知の出る検査は必ず無視されるようになる（0037 の学びが、翌日その検査自身に効いた）。
+# ★**除外はこの1点だけ**（作者がボット）。メッセージの `[skip ci]` や変更先の `data/` で
+#   広げない。人が同じ印を付けた本物の作業まで見逃す（免除は必要な分ぴったりに切る／0036）。
+COMMITS=$(git log --no-merges --since='14 days ago' --date=short \
+  --perl-regexp --author='^(?!github-actions\[bot\])' --pretty='%H %ad' 2>/dev/null || true)
 if [ -z "$COMMITS" ]; then
   echo "  - 直近14日のコミットなし（スキップ）"
 else
