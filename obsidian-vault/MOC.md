@@ -64,6 +64,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0035-zero1-claude-md-and-behaviour-only-checks]] — ZERO-1にCLAUDE.mdを新設／検査は振る舞いだけを見る
 - [[0036-exemptions-are-per-line]] — 検査の免除は1行ずつ／照合の線は「import して呼べるか」
 - [[0037-warnings-that-get-ignored]] — 繰り返し無視される警告は、警告のほうを疑う
+- [[0038-registries-need-mechanical-guards]] — 手で更新する登録簿には機械の見張りを付ける（ZERO-1）
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
@@ -73,6 +74,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[native-dialog-toplayer-pitfall]] — ネイティブ`<dialog>`のトップレイヤーがposition:fixed要素を隠す不具合と対処
 - [[verification-counts-the-wrong-thing]] — 検査が数える対象を間違えると故障注入をすり抜ける
 - [[false-red-checks-are-worse-than-none]] — 偽の赤は検査が無いより悪い（必須検査が常に赤いなら、まず検査を疑う）
+- [[registries-drift-silently]] — 手で更新する登録簿は、黙ってずれる
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール
