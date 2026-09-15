@@ -1,16 +1,11 @@
-const ALLOWED_ORIGIN = 'https://hifukasawa77-lgtm.github.io';
+import { allowedOrigin, publicHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
 const MAX_SOURCE_CHARS = 8000;
 const MAX_SOURCES = 5;
 const MAX_TOTAL_CHARS = 20000;
 const MODEL = '@cf/qwen/qwen2.5-72b-instruct';
 
 function corsHeaders(origin) {
-  const allowed = origin === ALLOWED_ORIGIN || origin === 'http://127.0.0.1:5500' || origin?.startsWith('http://localhost');
-  return {
-    'Access-Control-Allow-Origin': allowed ? origin : ALLOWED_ORIGIN,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
+  return publicHeaders(origin);
 }
 
 function buildPrompt(text, mode) {
@@ -42,6 +37,7 @@ async function runAI(env, prompt) {
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') ?? '';
+    if (!allowedOrigin(origin, env)) return errorResponse(403, 'Forbidden');
     const headers = { ...corsHeaders(origin), 'Content-Type': 'application/json' };
 
     if (request.method === 'OPTIONS') {
@@ -50,12 +46,14 @@ export default {
     if (request.method !== 'POST') {
       return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers });
     }
+    const limited = await limitRequest(request, env, headers);
+    if (limited) return limited;
 
     let body;
     try {
-      body = await request.json();
-    } catch {
-      return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400, headers });
+      body = await readJson(request, 131072);
+    } catch (error) {
+      return errorResponse(error.status || 400, error.status ? error.message : 'Invalid request', headers);
     }
 
     const { sources, mode } = body ?? {};
@@ -67,6 +65,10 @@ export default {
     }
     if (sources.length > MAX_SOURCES) {
       return new Response(JSON.stringify({ error: `Max ${MAX_SOURCES} sources allowed` }), { status: 400, headers });
+    }
+    if (sources.some(source => typeof source !== 'string' || !source.trim() || source.length > MAX_SOURCE_CHARS) ||
+        sources.reduce((sum, source) => sum + source.length, 0) > MAX_TOTAL_CHARS) {
+      return errorResponse(400, 'Invalid or oversized sources', headers);
     }
 
     const truncated = sources.map(s => (typeof s === 'string' ? s : '').slice(0, MAX_SOURCE_CHARS));
@@ -82,7 +84,7 @@ export default {
       }
       return new Response(JSON.stringify(result), { status: 200, headers });
     } catch (err) {
-      return new Response(JSON.stringify({ error: 'AI generation failed', detail: String(err) }), { status: 500, headers });
+      return errorResponse(502, 'AI generation failed', headers);
     }
   },
 };

@@ -1,12 +1,13 @@
 /**
  * AI Agent Proxy — Cloudflare Worker
  *
- * 役割: Workers AI を呼び出すプロキシ ＋ KV共有学習メモリ
- * APIキー不要 — Workers AI バインディングを使用（最もセキュアな構成）
+ * 役割: Workers AI プロキシ ＋ 旧KVデータの管理（会話の共有・自動保存は停止）
+ * APIキーをブラウザへ渡さず Workers AI バインディングを使用
  *
  * バインディング:
  *   AI — Workers AI（必須）
- *   KV — KV namespace（任意。未設定なら学習機能をスキップして動作）
+ *   KV — 旧学習データの管理用（任意）
+ *   RATE_LIMITER — リクエスト回数制限（必須）
  *
  * シークレット（任意）:
  *   ADMIN_TOKEN — /admin/* エンドポイントの認証トークン。未設定ならadminは404
@@ -14,12 +15,7 @@
  * 設定方法: README.md を参照
  */
 import { buildSystemPrompt } from './site-knowledge.js';
-
-const ALLOWED_ORIGINS = [
-  'https://hifukasawa77-lgtm.github.io',
-  'http://localhost',
-  'http://127.0.0.1',
-];
+import { allowedOrigin, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
 
 // 上から順に試行（先頭が利用不可・エラーの場合は次へフォールバック）
 const MODELS = [
@@ -34,67 +30,6 @@ const SYSTEM_PROMPT = buildSystemPrompt();
 
 // ── 共有学習メモリ（KV） ─────────────────────────────────
 const LEARN_INDEX_KEY = 'learn:index';
-const LEARN_MAX_ENTRIES = 400;
-const SIMILARITY_THRESHOLD = 0.75;
-const REMOVE_SCORE = -2; // 👎が積み重なってこの値以下になったら削除
-const MIN_QUERY_LEN = 2; // 短すぎる質問は誤マッチを防ぐため学習メモリ対象外
-
-function normalizeQ(s) {
-  return (s || '').toLowerCase()
-    .replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-    .replace(/[\s、。！？!?.,]+/g, '')
-    .trim();
-}
-
-// 表記ゆれ吸収: 文末の決まり文句（教えて/ください/ですか等）や末尾助詞を除去してから比較する。
-// 「ドル円教えて」と「今日のドル円のレートを教えてください」のような言い換えでもヒットしやすくする。
-const TRAILING_PHRASES = [
-  '教えてください', '教えてくれる', '教えてもらえる', '教えて',
-  'お願いします', 'おねがいします', 'ください', 'でしょうか',
-  'ですか', 'かな', 'かしら', 'です', 'ます',
-];
-
-function canonicalizeQ(qNorm) {
-  let s = qNorm;
-  let changed = true;
-  let guard = 0;
-  while (changed && guard++ < 5) {
-    changed = false;
-    for (const p of TRAILING_PHRASES) {
-      if (s.length > p.length && s.endsWith(p)) {
-        s = s.slice(0, -p.length).replace(/[をのはがにでもと]+$/g, '');
-        changed = true;
-        break;
-      }
-    }
-  }
-  return s.length >= 1 ? s : qNorm;
-}
-
-function bigrams(s) {
-  const set = new Set();
-  for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
-  if (s.length === 1) set.add(s);
-  return set;
-}
-
-function similarity(a, b) {
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  const sa = bigrams(a), sb = bigrams(b);
-  if (sa.size === 0 || sb.size === 0) return 0;
-  let inter = 0;
-  for (const g of sa) if (sb.has(g)) inter++;
-  const union = sa.size + sb.size - inter;
-  return union === 0 ? 0 : inter / union;
-}
-
-async function qHash(s) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-  return Array.from(new Uint8Array(buf)).slice(0, 12)
-    .map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
 async function loadIndex(env) {
   try {
     const raw = await env.KV.get(LEARN_INDEX_KEY);
@@ -107,108 +42,6 @@ async function loadIndex(env) {
 
 async function saveIndex(env, index) {
   await env.KV.put(LEARN_INDEX_KEY, JSON.stringify(index));
-}
-
-// インデックス内から最も似ている質問を探す（正規化＋表記ゆれ吸収後の文字列で比較）
-function findBestMatch(index, qCanon) {
-  if (qCanon.length < MIN_QUERY_LEN) return null;
-  let best = null, bestSim = 0;
-  for (const entry of index) {
-    const sim = similarity(qCanon, entry.q);
-    if (sim > bestSim) { bestSim = sim; best = entry; }
-  }
-  if (!best || bestSim < SIMILARITY_THRESHOLD) return null;
-  return best;
-}
-
-async function findLearned(env, ctx, qCanon) {
-  const index = await loadIndex(env);
-  const best = findBestMatch(index, qCanon);
-  if (!best) return null;
-  const raw = await env.KV.get('learn:' + best.k);
-  if (!raw) return null;
-  const item = JSON.parse(raw);
-  if (!item.a) return null;
-  // 利用統計（ヒット数・最終利用時刻）の更新はレスポンスをブロックしない
-  ctx.waitUntil(touchLearned(env, index, best.k, item));
-  return { key: best.k, text: item.a };
-}
-
-async function touchLearned(env, index, key, item) {
-  const now = Date.now();
-  item.hits = (item.hits || 0) + 1;
-  item.lastUsed = now;
-  const entry = index.find(e => e.k === key);
-  if (entry) { entry.hits = item.hits; entry.lastUsed = now; }
-  await Promise.all([
-    env.KV.put('learn:' + key, JSON.stringify(item)),
-    saveIndex(env, index),
-  ]);
-}
-
-// AIが生成した回答を学習メモリへ保存。容量超過時は「価値（評価×10＋利用回数）が低く
-// 最近使われていない」エントリから削除する（鮮度・有用性ベースの入れ替え）。
-async function saveLearned(env, key, qCanon, question, answer) {
-  const index = await loadIndex(env);
-  const now = Date.now();
-  const filtered = index.filter(e => e.k !== key);
-  filtered.push({ q: qCanon, k: key, ts: now, score: 0, hits: 0, lastUsed: now });
-
-  let removedKeys = [];
-  if (filtered.length > LEARN_MAX_ENTRIES) {
-    const overflow = filtered.length - LEARN_MAX_ENTRIES;
-    const sorted = [...filtered].sort((a, b) => {
-      const va = (a.score || 0) * 10 + (a.hits || 0);
-      const vb = (b.score || 0) * 10 + (b.hits || 0);
-      if (va !== vb) return va - vb;
-      return (a.lastUsed || a.ts || 0) - (b.lastUsed || b.ts || 0);
-    });
-    removedKeys = sorted.filter(e => e.k !== key).slice(0, overflow).map(e => e.k);
-    const removeSet = new Set(removedKeys);
-    for (let i = filtered.length - 1; i >= 0; i--) {
-      if (removeSet.has(filtered[i].k)) filtered.splice(i, 1);
-    }
-  }
-
-  await Promise.all([
-    env.KV.put('learn:' + key, JSON.stringify({
-      q: question.slice(0, 200), a: answer.slice(0, 1000),
-      score: 0, hits: 0, ts: now, lastUsed: now,
-    })),
-    saveIndex(env, filtered),
-    ...removedKeys.map(k => env.KV.delete('learn:' + k)),
-  ]);
-}
-
-// 👍/👎 フィードバック。response の key を使って直接エントリを更新する（精度優先）。
-// key 不明（旧クライアント）の場合のみ質問文の類似検索でフォールバックする。
-async function applyFeedback(env, key, qFallback, vote) {
-  const index = await loadIndex(env);
-  let entry = key ? index.find(e => e.k === key) : null;
-  if (!entry && qFallback) {
-    entry = findBestMatch(index, canonicalizeQ(normalizeQ(qFallback)));
-  }
-  if (!entry) return { ok: false };
-
-  const raw = await env.KV.get('learn:' + entry.k);
-  if (!raw) return { ok: false };
-  const item = JSON.parse(raw);
-  item.score = (item.score || 0) + (vote === 'up' ? 1 : -1);
-  entry.score = item.score;
-
-  if (item.score <= REMOVE_SCORE) {
-    const filtered = index.filter(e => e.k !== entry.k);
-    await Promise.all([
-      env.KV.delete('learn:' + entry.k),
-      saveIndex(env, filtered),
-    ]);
-    return { ok: true, removed: true };
-  }
-  await Promise.all([
-    env.KV.put('learn:' + entry.k, JSON.stringify(item)),
-    saveIndex(env, index),
-  ]);
-  return { ok: true };
 }
 
 async function runAI(env, messages, opts) {
@@ -330,7 +163,7 @@ async function handleVideoScript(env, body, origin) {
     }
     return jsonResponse({ storyboard: json, research: research ? { title: research.title, url: research.url } : null, source: 'ai' }, origin);
   } catch (e) {
-    return jsonResponse({ error: 'ai_error', message: String(e && e.message || e) }, origin, 200);
+    return jsonResponse({ error: 'ai_error' }, origin, 502);
   }
 }
 
@@ -346,7 +179,7 @@ async function handleVideoImage(env, body, origin) {
     }
     return jsonResponse({ image, mime: 'image/jpeg' }, origin);
   } catch (e) {
-    return jsonResponse({ error: 'image_error', message: String(e && e.message || e) }, origin, 200);
+    return jsonResponse({ error: 'image_error' }, origin, 502);
   }
 }
 
@@ -362,20 +195,21 @@ async function handleVideoTts(env, body, origin) {
     }
     return jsonResponse({ audio, mime: 'audio/mpeg' }, origin);
   } catch (e) {
-    return jsonResponse({ error: 'tts_error', message: String(e && e.message || e) }, origin, 200);
+    return jsonResponse({ error: 'tts_error' }, origin, 502);
   }
 }
 
 export default {
   async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
-    const isAllowed = ALLOWED_ORIGINS.some(o => origin.startsWith(o));
+    const isAllowed = allowedOrigin(origin, env);
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
       if (url.pathname.startsWith('/admin/')) {
         return new Response(null, { status: 204, headers: adminCorsHeaders() });
       }
+      if (!isAllowed) return errorResponse(403, 'Forbidden');
       return new Response(null, {
         status: 204,
         headers: corsHeaders(isAllowed ? origin : ''),
@@ -393,17 +227,20 @@ export default {
       return handleStats(env, isAllowed ? origin : '');
     }
 
-    if (!isAllowed) return new Response('Forbidden', { status: 403 });
-    if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 });
+    if (!isAllowed) return errorResponse(403, 'Forbidden');
+    if (request.method !== 'POST') return errorResponse(405, 'Method Not Allowed', corsHeaders(origin));
+    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts'].includes(url.pathname)) {
+      return errorResponse(404, 'Not Found', corsHeaders(origin));
+    }
+    const limited = await limitRequest(request, env, corsHeaders(origin));
+    if (limited) return limited;
 
     let body;
     try {
-      body = await request.json();
-    } catch {
-      return new Response('Invalid JSON', { status: 400 });
+      body = await readJson(request, 16384);
+    } catch (error) {
+      return errorResponse(error.status || 400, error.status ? error.message : 'Invalid request', corsHeaders(origin));
     }
-
-    const hasKV = !!env.KV;
 
     // ── AI Video Studio エンドポイント ──
     if (url.pathname === '/video/script') return handleVideoScript(env, body, origin);
@@ -412,17 +249,8 @@ export default {
 
     // ── フィードバック受付（👍/👎 → 共有メモリのスコア更新） ──
     if (url.pathname === '/feedback') {
-      const { q, vote, key } = body;
-      if (!hasKV || (vote !== 'up' && vote !== 'down') || (!key && !q)) {
-        return jsonResponse({ ok: false }, origin);
-      }
-      const result = await applyFeedback(
-        env,
-        typeof key === 'string' ? key : null,
-        q ? String(q).slice(0, 500) : null,
-        vote,
-      );
-      return jsonResponse(result, origin);
+      // Legacy public feedback must not mutate shared knowledge anonymously.
+      return jsonResponse({ ok: false, reason: 'shared_learning_disabled' }, origin);
     }
 
     // ── チャット ──
@@ -435,20 +263,14 @@ export default {
     }
 
     const userText = message.trim();
-    const qCanon = canonicalizeQ(normalizeQ(userText));
 
-    // ① 共有学習メモリから類似質問の回答を検索（AI消費ゼロで即答）
-    if (hasKV) {
-      const learned = await findLearned(env, ctx, qCanon);
-      if (learned) {
-        return jsonResponse({ text: learned.text, source: 'learned', key: learned.key }, origin);
-      }
-    }
+    // Do not reuse private conversations across visitors. Legacy KV entries
+    // remain accessible only to authenticated administrators for review/removal.
 
     // ② AIで回答生成
     const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
     for (const m of (Array.isArray(history) ? history : []).slice(-6)) {
-      if (m.role && typeof m.text === 'string') {
+      if (m && (m.role === 'user' || m.role === 'assistant') && typeof m.text === 'string') {
         messages.push({
           role: m.role === 'user' ? 'user' : 'assistant',
           content: m.text.slice(0, 500),
@@ -459,15 +281,10 @@ export default {
 
     try {
       const text = await runAI(env, messages);
-      // ③ 回答を共有メモリへ保存（AI生成回答のみ保存＝汚染対策）。レスポンスはブロックしない
-      let key = null;
-      if (hasKV && text && qCanon.length >= MIN_QUERY_LEN) {
-        key = await qHash(qCanon);
-        ctx.waitUntil(saveLearned(env, key, qCanon, userText, text.trim()).catch(() => {}));
-      }
-      return jsonResponse({ text, source: 'ai', key }, origin);
+      // No automatic persistence of user questions or history-derived answers.
+      return jsonResponse({ text, source: 'ai', key: null }, origin);
     } catch (e) {
-      return new Response('AI error: ' + e.message, { status: 502 });
+      return errorResponse(502, 'AI service unavailable', corsHeaders(origin));
     }
   },
 };
@@ -475,7 +292,7 @@ export default {
 // ── 管理API: 学習エントリの閲覧・削除（ADMIN_TOKEN必須） ──
 // ── 公開統計エンドポイント ─────────────────────────────────
 // 共有学習メモリの「集計」だけを返す。回答本文・質問全文は返さない（プライバシー/汚染対策）。
-// negatives = 👎が積み重なった質問（辞書/KBの穴の発見に使う）。
+// negatives / topHits expose numeric legacy metrics only; never questions or keys.
 async function handleStats(env, origin) {
   const now = new Date().toISOString();
   if (!env.KV) {
@@ -485,7 +302,7 @@ async function handleStats(env, origin) {
   const total = index.length;
   const sum = index.reduce((a, e) => a + (e.score || 0), 0);
   const avgScore = total ? Math.round((sum / total) * 100) / 100 : 0;
-  const brief = (e) => ({ q: String(e.q || '').slice(0, 40), score: e.score || 0, hits: e.hits || 0 });
+  const brief = (e) => ({ score: e.score || 0, hits: e.hits || 0 });
   const negatives = index.filter(e => (e.score || 0) < 0)
     .sort((a, b) => (a.score || 0) - (b.score || 0)).slice(0, 10).map(brief);
   const topHits = index.slice()
@@ -495,7 +312,7 @@ async function handleStats(env, origin) {
 
 async function handleAdmin(request, env, url) {
   if (!env.ADMIN_TOKEN) return new Response('Not Found', { status: 404 });
-  const token = request.headers.get('X-Admin-Token') || url.searchParams.get('token') || '';
+  const token = request.headers.get('X-Admin-Token') || '';
   if (token !== env.ADMIN_TOKEN) {
     return new Response('Unauthorized', { status: 401, headers: adminCorsHeaders() });
   }
@@ -540,20 +357,17 @@ function jsonResponse(obj, origin, status) {
 function jsonResponseWithHeaders(obj, headers, status) {
   return new Response(JSON.stringify(obj), {
     status: status || 200,
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { ...securityHeaders, 'Content-Type': 'application/json', ...headers },
   });
 }
 
 function corsHeaders(origin) {
-  return {
-    'Access-Control-Allow-Origin': origin || '',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
+  return publicHeaders(origin);
 }
 
 function adminCorsHeaders() {
   return {
+    ...securityHeaders,
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Token',
