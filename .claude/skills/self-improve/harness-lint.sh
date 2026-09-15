@@ -157,7 +157,14 @@ echo "== 9. Dailyなしの作業日（直近14日・警告のみ／exit codeに�
 # 昇格漏れ」しか見えず、Dailyごと書かれなかった作業日は蓄積ループから漏れる
 # （2026-07-15の大型実装5件が無記録だった実例）。記録要否の判断はLLM作業のため
 # 非ブロッキング（△）。古い作業日を延々警告しないよう直近14日に限定する。
-COMMITS=$(git log --no-merges --since='14 days ago' --date=short --pretty='%H %ad' 2>/dev/null || true)
+# ★**自動更新（ボット）のコミットは「作業」に数えない。**
+#   2026-09-12 は `github-actions[bot]` の「Jリーグ順位表を更新 [skip ci]」だけで、
+#   学びも決定も生まれない日だった。それを「記録なし」と咎めると、誤検知が混ざる——
+#   誤検知の出る検査は必ず無視されるようになる（0037 の学びが、翌日その検査自身に効いた）。
+# ★**除外はこの1点だけ**（作者がボット）。メッセージの `[skip ci]` や変更先の `data/` で
+#   広げない。人が同じ印を付けた本物の作業まで見逃す（免除は必要な分ぴったりに切る／0036）。
+COMMITS=$(git log --no-merges --since='14 days ago' --date=short \
+  --perl-regexp --author='^(?!github-actions\[bot\])' --pretty='%H %ad' 2>/dev/null || true)
 if [ -z "$COMMITS" ]; then
   echo "  - 直近14日のコミットなし（スキップ）"
 else
@@ -173,12 +180,23 @@ else
       WORKDAYS="$WORKDAYS$d"$'\n'
     fi
   done <<< "$COMMITS"
+  # その日に新しく作られた知見/意思決定ノート（Dailyの代わりに学びが残っている日）。
+  # ★2026-09-13 修正: Daily だけを見ていたため、知見ノートを書いた日まで咎めていた
+  #   （09-07「同じ値を3か所…」／09-08「成功しましたが嘘をつく…」）。3回続けて
+  #   同じ4日を警告し、そのたびに無視されていた——**無視される警告は、あるだけ害**。
+  # ★広げるのはここまで。04-Knowledge / 03-Decisions は「学びを残した」と言い切れる。
+  #   CLAUDE.md の編集まで数えると、無関係な編集で素通りする（免除は必要な分ぴったりに切る）。
+  RECORDED=$(git log --no-merges --since='14 days ago' --date=short --diff-filter=A \
+    --pretty='%ad' --name-only -- obsidian-vault/04-Knowledge obsidian-vault/03-Decisions 2>/dev/null || true)
+  RECORDED_DAYS=$(awk '/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ { day = $0; next } /^obsidian-vault\// { print day }' <<< "$RECORDED" | sort -u)
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     if [ -f "obsidian-vault/01-Daily/$d.md" ]; then
       ok "$d（Dailyあり）"
+    elif grep -qx "$d" <<< "$RECORDED_DAYS"; then
+      ok "$d（Dailyは無いが、その日に知見/意思決定ノートを書いている）"
     else
-      note_warn "$d: 作業コミットあり・Dailyなし（学び/決定があれば obsidian-vault/01-Daily/$d.md へ記録）"
+      note_warn "$d: 作業コミットあり・記録なし（学び/決定があれば obsidian-vault/01-Daily/$d.md へ記録）"
     fi
   done <<< "$(printf '%s' "$WORKDAYS" | sort -u)"
 fi
