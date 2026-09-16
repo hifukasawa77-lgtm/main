@@ -39,8 +39,13 @@ console.log('\n🔧 Service Worker の検査\n');
  */
 function boot(opts = {}) {
   const listeners = new Map();
-  const calls = { fetched: [], matched: [], put: [] };
+  const calls = { fetched: [], matched: [], put: [], opened: [], deleted: [] };
   const cache = {
+    match: async (req) => {
+      calls.matched.push(typeof req === 'string' ? req : req.url);
+      if (opts.cacheBroken) throw new Error('Cache Storage unavailable');
+      return opts.cached ? new Response('cached', { status: 200 }) : undefined;
+    },
     addAll: async (urls) => { if (opts.precacheFails) throw new Error('404'); calls.added = urls; },
     put: async (req, res) => { calls.put.push(typeof req === 'string' ? req : req.url); },
   };
@@ -53,19 +58,15 @@ function boot(opts = {}) {
   const sandbox = {
     self, URL, Headers, Response, Request, console, setTimeout, Promise,
     caches: {
-      open: async () => cache,
-      keys: async () => ['hide-portfolio-v1'],
-      delete: async () => true,
-      match: async (req) => {
-        calls.matched.push(typeof req === 'string' ? req : req.url);
-        if (opts.cacheBroken) throw new Error('Cache Storage が使えません');
-        return opts.cached ? new Response('cached', { status: 200 }) : undefined;
-      },
+      open: async (name) => { calls.opened.push(name); return cache; },
+      keys: async () => ['hide-portfolio-v1', 'hide-portfolio-v6', 'webllm-models', 'other-project'],
+      delete: async (name) => { calls.deleted.push(name); return true; },
+      match: async () => { throw new Error('Cross-cache lookup prohibited'); },
     },
     fetch: async (req) => {
       calls.fetched.push(typeof req === 'string' ? req : req.url);
       if (opts.networkFails) throw new TypeError('Failed to fetch');
-      return new Response('live', { status: 200 });
+      return new Response('live', { status: opts.status || 200, headers: opts.headers || {} });
     },
   };
   sandbox.globalThis = sandbox;
@@ -75,9 +76,9 @@ function boot(opts = {}) {
 }
 
 /** fetch イベントを1つ流し、SWが横取りしたかどうかを返す */
-async function dispatchFetch(sw, url, { method = 'GET', accept = '', mode = 'no-cors' } = {}) {
+async function dispatchFetch(sw, url, { method = 'GET', accept = '', mode = 'no-cors', headers = {} } = {}) {
   const event = {
-    request: { url, method, mode, headers: new Headers(accept ? { accept } : {}) },
+    request: { url, method, mode, headers: new Headers({ ...headers, ...(accept ? { accept } : {}) }) },
     respondWith(promise) { event.responded = promise; },
     waitUntil() {},
     responded: null,
@@ -157,5 +158,28 @@ async function dispatchFetch(sw, url, { method = 'GET', accept = '', mode = 'no-
     urls.length > 0 && outside.length === 0, outside.join(' / '));
 }
 
+// Security regression coverage for scoping, private responses, and patch freshness.
+{
+  const sw = boot({ cached: true });
+  check('12. 別プロジェクトの同一オリジンURLは横取りしない', !(await dispatchFetch(sw, 'https://hifukasawa77-lgtm.github.io/other/file.js')).intercepted);
+  check('13. クエリ付きURLを保存しない', !(await dispatchFetch(sw, `${SCOPE}file.json?token=test`)).intercepted);
+  check('14. 認証ヘッダー付きURLを保存しない', !(await dispatchFetch(sw, `${SCOPE}private.json`, {headers:{Authorization:'Bearer test'}})).intercepted);
+  const script = await dispatchFetch(sw, `${SCOPE}assets/js/app.js`);
+  check('15. JavaScriptの修正版をネットワークから優先取得', await script.response.text() === 'live');
+  check('16. キャッシュの読み書きは自分の現在バージョンに限定', sw.calls.opened.every(name => name === sw.sandbox.__CACHE_NAME));
+  let activation;
+  sw.listeners.get('activate')[0]({waitUntil: promise => { activation = promise; }});
+  await activation;
+  check('17. 他アプリのキャッシュを削除しない', sw.calls.deleted.length === 1 && sw.calls.deleted[0] === 'hide-portfolio-v1');
+}
+for (const [label, options] of [
+  ['404', {status:404}], ['private', {headers:{'Cache-Control':'private'}}],
+  ['no-store', {headers:{'Cache-Control':'no-store'}}], ['Set-Cookie', {headers:{'Set-Cookie':'private=test'}}],
+]) {
+  const sw = boot(options);
+  await dispatchFetch(sw, `${SCOPE}index.html`, {mode:'navigate'});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  check(`${label} レスポンスをキャッシュしない`, sw.calls.put.length === 0);
+}
 console.log(`\n  合計: ${pass} 件合格 / ${fail} 件不合格\n`);
 process.exit(fail ? 1 : 0);

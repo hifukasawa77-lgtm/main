@@ -1,3 +1,11 @@
+// Explicit handlers: never interpret event attributes or data as JavaScript.
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-home-action]');
+  if (!button) return;
+  const actions = { toggleWeatherRadar, initTrainCard, pomodoroToggle, pomodoroReset,
+    pomoToggleSetting, pomoApplySetting, initQuakeCard, initNewsCard, initAINewsCard };
+  if (Object.hasOwn(actions, button.dataset.homeAction)) actions[button.dataset.homeAction]();
+});
     /* ────────────────────────────────────────
        Canvas Background — コンステレーション
        オーブ(8) + スパーク(45) + 接続線
@@ -5941,7 +5949,7 @@
         return;
       }
       grid.innerHTML = blogs.map((b, i) =>
-        `<a href="blog-post.html?id=${encodeURIComponent(b.id)}" style="text-decoration:none;color:inherit;background:#fff;border:1.5px solid #e7e5e4;border-radius:16px;box-shadow:0 2px 12px rgba(0,0,0,0.06);overflow:hidden;display:flex;flex-direction:column;transition:transform 0.2s,box-shadow 0.2s;" onmouseover="this.style.transform='translateY(-4px)';this.style.boxShadow='0 10px 32px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='';this.style.boxShadow='0 2px 12px rgba(0,0,0,0.06)';">
+        `<a href="blog-post.html?id=${encodeURIComponent(b.id)}" style="text-decoration:none;color:inherit;background:#fff;border:1.5px solid #e7e5e4;border-radius:16px;box-shadow:0 2px 12px rgba(0,0,0,0.06);overflow:hidden;display:flex;flex-direction:column;transition:transform 0.2s,box-shadow 0.2s;" class="home-blog-card">
           <div class="blog-card-cover ${COVER[i % COVER.length]}"></div>
           <div style="padding:20px 22px 22px;display:flex;flex-direction:column;gap:8px;flex:1;">
             <span style="font-size:0.7rem;color:#78716c;">${fmtDate(b.updated_at)}</span>
@@ -7821,7 +7829,7 @@
         const awayMark = NPB_TEAM_MARK[g.awayShort] || { bg:'#444', fg:'#fff', abbr: esc(String(g.awayShort).slice(0,2)) };
 
         const makeLogo = (url, mark, name) => safeUrl(url)
-          ? `<img class="npb-team-logo" src="${safeUrl(url)}" alt="${esc(name)}" loading="lazy" onerror="this.outerHTML='<span class=npb-team-badge style=background:${encodeURIComponent(mark.bg)};color:${encodeURIComponent(mark.fg)}>${esc(mark.abbr)}</span>'">`
+          ? `<img class="npb-team-logo" src="${safeUrl(url)}" alt="${esc(name)}" loading="lazy" data-badge-bg="${esc(mark.bg)}" data-badge-fg="${esc(mark.fg)}" data-badge-text="${esc(mark.abbr)}">`
           : `<span class="npb-team-badge" style="background:${esc(mark.bg)};color:${esc(mark.fg)}">${esc(mark.abbr)}</span>`;
 
         const hasScore = g.homeScore !== null && g.awayScore !== null;
@@ -7839,6 +7847,16 @@
           makeLogo(g.awayLogo, awayMark, g.awayJP) +
           `<span class="npb-status-badge ${esc(g.statusCls)}">${esc(g.statusText)}</span>` +
           `<span class="npb-game-venue">${esc(g.venue)}</span>`;
+        row.querySelectorAll('img[data-badge-text]').forEach(img => {
+          img.addEventListener('error', () => {
+            const badge = document.createElement('span');
+            badge.className = 'npb-team-badge';
+            badge.style.backgroundColor = img.dataset.badgeBg;
+            badge.style.color = img.dataset.badgeFg;
+            badge.textContent = img.dataset.badgeText;
+            img.replaceWith(badge);
+          }, { once: true });
+        });
         container.appendChild(row);
       });
     }

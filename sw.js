@@ -3,7 +3,8 @@
 // 静的アセットは cache-first（速度維持）。バージョン更新で旧キャッシュを破棄する。
 //
 // ★このSWが見るのは**同じオリジンの通信だけ**。別オリジンへは一切触らない（下の理由を参照）。
-const CACHE_NAME = 'hide-portfolio-v5';
+const CACHE_NAME = 'hide-portfolio-v6';
+const SITE_SCOPE = new URL('./', self.location.href);
 
 // ★パスは必ず相対で書く。このサイトは https://…github.io/main/ 配下にあり、
 //   '/index.html' と書くとオリジン直下（= スコープ外の別サイト）を取りに行って
@@ -14,6 +15,8 @@ const PRECACHE_URLS = [
   './index.html',
   './styles.css',
   './app.js',
+  './assets/js/app.js',
+  './assets/js/agent.js',
   './manifest.json',
   // ★ZERO-1 Mobile はモデルを端末に持つのに、ページ本体が取れないと起動できない。
   //   「圏外でも使えます」と謳っている以上、ページと worker は先に確保しておく
@@ -39,7 +42,7 @@ self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
       .then(names => Promise.all(
-        names.filter(name => name !== CACHE_NAME).map(name => caches.delete(name))
+        names.filter(name => /^hide-portfolio-v\d+$/.test(name) && name !== CACHE_NAME).map(name => caches.delete(name))
       ))
       .then(() => self.clients.claim())
   );
@@ -65,9 +68,13 @@ self.addEventListener('fetch', event => {
   //   どのホストで切れたのかも一切出ない。SWは自分のサイトの資源だけ見ればよく、
   //   他所への通信はブラウザに直接やらせるのが正しい。
   if (new URL(req.url).origin !== self.location.origin) return;
+  const url = new URL(req.url);
+  if (!url.pathname.startsWith(SITE_SCOPE.pathname)) return;
+  // Never persist authenticated or query-bearing responses (tokens, private searches).
+  if (req.headers.has('Authorization') || url.search || req.cache === 'no-store') return;
 
   const accept = req.headers.get('accept') || '';
-  const isHTML = req.mode === 'navigate' || accept.includes('text/html');
+  const isHTML = req.mode === 'navigate' || accept.includes('text/html') || /\.(?:html?|m?js)$/i.test(url.pathname);
 
   // ★どちらの経路も、SWの中で例外を投げっぱなしにしないこと。
   //   respondWith に渡した約束が拒否で終わると、ページ側に届くのは理由の消えた
@@ -79,11 +86,14 @@ self.addEventListener('fetch', event => {
     event.respondWith((async () => {
       try {
         const res = await fetch(req);
-        const copy = res.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(req, copy)).catch(() => {});
+        if (cacheable(res)) {
+          const copy = res.clone();
+          const write = caches.open(CACHE_NAME).then(cache => cache.put(req, copy)).catch(() => {});
+          event.waitUntil?.(write);
+        }
         return res;
       } catch (offline) {
-        const hit = await matchInCache(req) || await matchInCache('./index.html');
+        const hit = await matchInCache(req) || (req.mode === 'navigate' ? await matchInCache('./index.html') : undefined);
         return hit || Response.error();
       }
     })());
@@ -96,9 +106,10 @@ self.addEventListener('fetch', event => {
     if (hit) return hit;
     try {
       const res = await fetch(req);
-      if (res && res.status === 200 && (res.type === 'basic' || res.type === 'default')) {
+      if (cacheable(res)) {
         const copy = res.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(req, copy)).catch(() => {});
+        const write = caches.open(CACHE_NAME).then(cache => cache.put(req, copy)).catch(() => {});
+        event.waitUntil?.(write);
       }
       return res;
     } catch (offline) {
@@ -109,5 +120,12 @@ self.addEventListener('fetch', event => {
 
 /** キャッシュ照会。Cache Storage が使えない端末でも、ここで止めない */
 function matchInCache(request) {
-  return caches.match(request).catch(() => undefined);
+  return caches.open(CACHE_NAME).then(cache => cache.match(request)).catch(() => undefined);
+}
+
+function cacheable(response) {
+  return response && response.status === 200 && !response.redirected &&
+    (response.type === 'basic' || response.type === 'default') &&
+    !/\b(?:no-store|private)\b/i.test(response.headers.get('Cache-Control') || '') &&
+    !response.headers.has('Set-Cookie');
 }
