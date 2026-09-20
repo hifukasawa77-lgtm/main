@@ -6655,7 +6655,18 @@ document.addEventListener('click', event => {
           'sec-desc-blog': '日々の気づき・開発メモ・失敗談などを書いています。',
           'sec-label-tools': 'Claude Tools',
           'sec-title-tools': '🤖 Claude で作ったゲーム・ツール・エージェント',
-          'sec-desc-tools': 'Claude Code を使って作ったゲーム・ツール・AIエージェントの一覧です。',
+          'sec-desc-tools': 'Claude Code を使って作ったゲーム・ツール・AIエージェントの一覧です。現在<span id="tools-count">26</span>個を公開中。',
+          'new-badge': '🆕 NEW',
+          'tfilter-all': 'すべて',
+          'tfilter-game': 'ゲーム',
+          'tfilter-ai': 'AI・エージェント',
+          'tfilter-music': '音楽・音声',
+          'tfilter-camera': 'カメラ・画像',
+          'tfilter-health': '健康・センサー',
+          'tfilter-life': '生活・家計',
+          'tfilter-security': 'セキュリティ',
+          'tfilter-network': 'ネットワーク',
+          'tfilter-dev': '開発',
           'sec-label-dashboard': 'Dashboard',
           'sec-title-dashboard': '📊 ホームダッシュボード',
           'sec-desc-dashboard': 'アクセス数・更新履歴・TODO/メモ・予定カレンダー・天気・円相場・株価・三郷市ガソリン相場・周辺交通情報をまとめて確認できます。',
@@ -6944,7 +6955,18 @@ document.addEventListener('click', event => {
           'sec-desc-blog': 'Daily thoughts, dev notes, and the occasional failure story.',
           'sec-label-tools': 'Claude Tools',
           'sec-title-tools': '🤖 Games, Tools & Agents Built with Claude',
-          'sec-desc-tools': 'A collection of games, tools, and AI agents created using Claude Code.',
+          'sec-desc-tools': 'A collection of games, tools, and AI agents created using Claude Code. <span id="tools-count">26</span> tools published so far.',
+          'new-badge': '🆕 NEW',
+          'tfilter-all': 'All',
+          'tfilter-game': 'Games',
+          'tfilter-ai': 'AI & Agents',
+          'tfilter-music': 'Music & Audio',
+          'tfilter-camera': 'Camera & Photo',
+          'tfilter-health': 'Health & Sensors',
+          'tfilter-life': 'Life & Money',
+          'tfilter-security': 'Security',
+          'tfilter-network': 'Network',
+          'tfilter-dev': 'Dev Tools',
           'sec-label-dashboard': 'Dashboard',
           'sec-title-dashboard': '📊 Home Dashboard',
           'sec-desc-dashboard': 'All in one: visits, updates, todos, calendar, weather, forex, stocks, gas prices, and local traffic.',
@@ -7262,9 +7284,82 @@ document.addEventListener('click', event => {
           btn.classList.add('active');
           const filter = btn.dataset.filter;
           cards.forEach(card => {
-            card.classList.toggle('hidden', filter !== 'all' && card.dataset.category !== filter);
+            const shouldHide = filter !== 'all' && card.dataset.category !== filter;
+            card.classList.toggle('hidden', shouldHide);
+            // IntersectionObserverでの初回reveal前にフィルターで隠すと、
+            // 後で表示に戻しても display:none 中は交差判定されず opacity:0 のまま無言で消えて見える。
+            // 表示するカードには reveal を待たず直接 visible を付けて確実に見せる。
+            if (!shouldHide) card.classList.add('visible');
           });
         });
+      });
+    })();
+
+    // ── Claudeツールのカテゴリフィルター ──
+    (function() {
+      const filterBtns = document.querySelectorAll('.tools-filter-btn');
+      const cards = document.querySelectorAll('.tool-card[data-category]');
+      filterBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          filterBtns.forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          const filter = btn.dataset.filter;
+          cards.forEach(card => {
+            const shouldHide = filter !== 'all' && card.dataset.category !== filter;
+            card.classList.toggle('hidden', shouldHide);
+            if (!shouldHide) card.classList.add('visible');
+          });
+        });
+      });
+    })();
+
+    // ── Claudeツール件数の自動カウント（ハードコード値の陳腐化を防ぐ）──
+    (function() {
+      function updateToolsCount() {
+        const count = document.querySelectorAll('.tools-grid .tool-card').length;
+        document.querySelectorAll('#tools-count').forEach(el => { el.textContent = count; });
+      }
+      updateToolsCount();
+      window.addEventListener('site-lang-change', updateToolsCount);
+    })();
+
+    // ── Claudeツールの説明文を折りたたみ、カード高さのばらつきを抑える ──
+    (function() {
+      function labels() {
+        const isJa = (localStorage.getItem('site-lang') || 'ja') !== 'en';
+        return isJa ? { more: '続きを読む ▾', less: '閉じる ▴' } : { more: 'Read more ▾', less: 'Show less ▴' };
+      }
+      function refresh() {
+        const L = labels();
+        document.querySelectorAll('.tools-grid .tool-body').forEach(body => {
+          const p = body.querySelector('p[data-i18n]');
+          if (!p) return;
+          const oldBtn = body.querySelector('.tool-more-btn');
+          if (oldBtn) oldBtn.remove();
+          p.classList.add('clamped');
+          requestAnimationFrame(() => {
+            if (p.scrollHeight <= p.clientHeight + 2) {
+              p.classList.remove('clamped');
+              return;
+            }
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'tool-more-btn';
+            btn.textContent = L.more;
+            btn.addEventListener('click', () => {
+              const stillClamped = p.classList.toggle('clamped');
+              btn.textContent = stillClamped ? L.more : L.less;
+            });
+            p.insertAdjacentElement('afterend', btn);
+          });
+        });
+      }
+      refresh();
+      window.addEventListener('site-lang-change', refresh);
+      let resizeTimer;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(refresh, 300);
       });
     })();
 
