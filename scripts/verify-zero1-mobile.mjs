@@ -1127,6 +1127,92 @@ check('108. 行き止まりにせず、押せば済む一手を置く',
 check('109. 英文ではなく、何が起きたかを日本語で言う',
   /GPUとの接続/.test(dead.body) && !/Unable to find/.test(dead.body), dead.body.slice(0, 40));
 
+// --- 起動から時間が経ってから会話中にGPUが切れた場合 --------------------------
+// ★2026-09-20 深澤報告: 3分タイマー→「おはよう」の会話中にGPUが切れ、
+//   「端末のGPUとの接続が切れました。モデルを載せ直しています…」のまま進まなくなった。
+//   reloadEngine() が state.sawProgress はリセットしていたのに state.lastProgressAt を
+//   リセットし忘れており、載せ直しの stallGuard() が「元の起動で最後に進んだ時刻」を
+//   基準に測ってしまっていた。会話が続いて起動から90秒（firstProgress）以上経っていると、
+//   載せ直しの最初の進捗が届く前に「進んでいない」と誤って打ち切られる
+//   （既存のwithEngineの合成webllmは進捗を同期的に即返すため、この経過時間の罠は
+//   再現できない。専用のモックで、載せ直し時だけ進捗を少し遅らせて再現する）
+const staleReload = await (async () => {
+  const scoped = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await scoped.addInitScript(() => {
+    Object.defineProperty(navigator, 'gpu', { configurable: true, value: {
+      requestAdapter: async () => ({ features: new Set() }),
+    }});
+    Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+    Object.defineProperty(navigator, 'storage', { configurable: true, value: { estimate: async () => ({ quota: 10.7e9, usage: 0 }) } });
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (/huggingface\.co|raw\.githubusercontent\.com/.test(url)) return Promise.resolve(new Response('{}', { status: 200 }));
+      return original(input, init);
+    };
+    // ★起動が終わってから実際に時間が経つのを、Date.now にだけ足して再現する
+    //   （setTimeout 等は素のまま＝ stallGuard の1秒ごとのtickは本物のタイミングで動く）
+    let offset = 0;
+    const realNow = Date.now.bind(Date);
+    Date.now = () => realNow() + offset;
+    window.__Z1_ARM_OFFSET = (ms) => { offset = ms; };
+    let attempts = 0;
+    let lostOnce = false;
+    window.__ZERO1_WEBLLM = {
+      get prebuiltAppConfig() {
+        const tiers = window.ZERO1_MOBILE?.MODEL_TIERS ?? [];
+        return { model_list: tiers.flatMap((t) => [t.f16, t.f32]).map((v) => ({
+          model_id: v.id, model: `https://huggingface.co/mlc-ai/${v.id}`,
+          model_lib: `https://raw.githubusercontent.com/x/${v.id}.wasm`,
+        })) };
+      },
+      CreateWebWorkerMLCEngine: (worker, id, opts) => window.__ZERO1_WEBLLM.CreateMLCEngine(id, opts),
+      CreateMLCEngine: async (id, opts) => {
+        attempts++;
+        if (attempts === 1) {
+          opts?.initProgressCallback?.({ progress: 1, text: 'done' });
+        } else {
+          // ★載せ直し。実機同様、最初の進捗が届くまで少し間がある
+          //   （stallGuardの最初のtick=1秒より後に進捗が来る形を再現する）
+          await new Promise((r) => setTimeout(r, 1500));
+          opts?.initProgressCallback?.({ progress: 1, text: 'done' });
+        }
+        return { chat: { completions: { create: async () => {
+          if (attempts === 1 && !lostOnce) {
+            lostOnce = true;
+            const lost = new Error("Failed to execute 'mapAsync' on 'GPUBuffer': A valid external Instance reference no longer exists.");
+            lost.name = 'AbortError';
+            throw lost;
+          }
+          return (async function* () { yield { choices: [{ delta: { content: 'こんにちは。' } }] }; })();
+        } } }, interruptGenerate: () => {} };
+      },
+    };
+  });
+  await scoped.route('https://cdn.jsdelivr.net/**', (route) => route.fulfill({
+    status: 200, contentType: 'text/javascript',
+    body: 'export class WebWorkerMLCEngineHandler { onmessage() {} }',
+  }));
+  await scoped.goto(`${BASE}/${PAGE}`, { waitUntil: 'domcontentloaded' });
+  await scoped.waitForFunction(() => window.ZERO1_MOBILE_READY === true, { timeout: 15_000 });
+  await scoped.locator('#btn-start').click();
+  await scoped.waitForFunction(() => !document.getElementById('chat').classList.contains('hidden'), { timeout: 20_000 });
+  // ★起動完了後、会話が続くうちに firstProgress(90秒) 以上が経った状態を再現する
+  await scoped.evaluate(() => window.__Z1_ARM_OFFSET(120_000));
+  await scoped.locator('#input').fill('おはよう');
+  await scoped.locator('#btn-send').click();
+  await scoped.waitForFunction(() => {
+    const last = document.querySelector('#msgs .msg:last-child');
+    return last && !last.classList.contains('pending') && window.ZERO1_MOBILE_STATE?.busy === false;
+  }, { timeout: 20_000 }).catch(() => {});
+  const body = await scoped.evaluate(() => document.querySelector('#msgs .msg:last-child .body')?.textContent ?? '');
+  await scoped.close();
+  return body;
+})();
+check('109b. 会話中にGPUが切れても、起動から時間が経っていたせいで載せ直しが即打ち切られない',
+  /こんにちは。/.test(staleReload) && !/進んでいません|進みませんでした/.test(staleReload),
+  staleReload.slice(0, 60));
+
 // 覚書の作法。**読んだ時点で消す**——消さないと、起動のたびに同じ質問を投げ直して
 // 同じ失敗を繰り返す輪に入り、利用者には止められない
 const resumeRules = await page.evaluate(() => {
