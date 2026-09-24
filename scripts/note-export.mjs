@@ -17,7 +17,7 @@
  *   node scripts/note-export.mjs <slug> --stdout    # 標準出力へ（そのままコピーできる）
  * 終了コード: 成功=0 / 対象なし・失敗=1
  */
-import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -79,7 +79,8 @@ export function loadArticles() {
   });
 }
 
-/** 次の水曜21:00 JST（n本目）を予約投稿日時の候補として返す。noteで最も読まれる帯に寄せてある。 */
+/** 次の水曜21:00 JST（n本目）を公開日時の候補として返す。noteで最も読まれる帯に寄せてある。
+ *  予約投稿を使わない場合は「その日に貼って公開する日」の目安として読む。 */
 function suggestSchedule(n) {
   const d = new Date();
   d.setUTCHours(12, 0, 0, 0);                       // 21:00 JST = 12:00 UTC
@@ -104,7 +105,7 @@ export function renderExport(a, idx) {
   L.push(`タイトル: ${a.meta.title}`);
   L.push(`種別    : ${paidArticle ? `有料 ${a.meta.price}円` : '無料'}`);
   L.push(`ハッシュタグ: ${(a.meta.hashtags || []).map(h => '#' + h).join(' ')}`);
-  L.push(`予約投稿の候補: ${suggestSchedule(idx)}`);
+  L.push(`公開日の候補: ${suggestSchedule(idx)}`);
   L.push(`分量    : 無料部分 ${countChars(free)}字 / 有料部分 ${countChars(paid)}字`);
   L.push('='.repeat(72));
   L.push('');
@@ -114,10 +115,11 @@ export function renderExport(a, idx) {
   if (paidArticle) {
     L.push('  3. 続けて《有料部分》を貼る');
     L.push('  4. 無料部分と有料部分の境目の行にカーソルを置き、「ここから先は有料」を挿入する');
-    L.push(`  5. 公開設定 → 価格 ${a.meta.price}円 → 予約投稿に上の日時を入れる`);
+    L.push(`  5. 公開設定 → 価格 ${a.meta.price}円 → 公開（または予約投稿に上の日時を入れる）`);
   } else {
-    L.push('  3. 公開設定 → 無料 → 予約投稿に上の日時を入れる');
+    L.push('  3. 公開設定 → 無料 → 公開（または予約投稿に上の日時を入れる）');
   }
+  L.push('  ※ 予約投稿はnoteプレミアム（月500円）のWeb版限定。無料会員はその日に公開ボタンを押す');
   L.push('  ※ 公開後、記事のURLを note/publish-log.json と記事mdのfrontmatterへ書き戻す');
   L.push('');
   L.push('-'.repeat(30) + ' 《無料部分》ここから ' + '-'.repeat(30));
@@ -152,12 +154,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(list.map((a, i) => renderExport(a, i)).join('\n\n'));
   } else {
     mkdirSync(OUTDIR, { recursive: true });
+    // 古い書き出しを消してから出す。slugを変えた記事の旧ファイルが残ると、
+    // 数字が古いままの本文をそのまま貼ってしまう（実際に ai-agent-pipeline-19 が残った）
+    if (!slug) {
+      const keep = new Set(list.map(a => `${a.meta.slug}.txt`));
+      for (const f of readdirSync(OUTDIR).filter(f => f.endsWith('.txt'))) {
+        if (!keep.has(f)) { unlinkSync(path.join(OUTDIR, f)); console.log(`  × ${f}（古い書き出しを削除）`); }
+      }
+    }
     for (const [i, a] of list.entries()) {
       const out = path.join(OUTDIR, `${a.meta.slug}.txt`);
       writeFileSync(out, renderExport(a, i) + '\n', 'utf8');
       console.log(`  → ${path.relative(ROOT, out)}  (${a.meta.price > 0 ? a.meta.price + '円' : '無料'})`);
     }
     console.log('');
-    console.log(`${list.length}本を note/export/ へ書き出した。noteの編集画面に貼って予約投稿を積む。`);
+    console.log(`${list.length}本を note/export/ へ書き出した。noteの編集画面に貼って公開（または予約投稿）する。`);
   }
 }
