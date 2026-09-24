@@ -1620,6 +1620,7 @@
 <script src="gamekit/gamekit.js"></script>
 <script src="assets/sengoku/general_lifespans.js"></script>
 <script src="assets/sengoku/general_chronicles_researched.js"></script>
+<script src="achievements/sengoku-achievements.js"></script>
 <script>
 'use strict';
 
@@ -2853,6 +2854,17 @@ window.addEventListener('touchend', endMapPan);
 const game = new GameKit.Engine(canvas, { width: W, height: H });
 const save = new GameKit.Save('sengoku');
 const SAVE_VERSION = 2;
+const SAVE_SLOT_COUNT = 3;
+function slotSaveKey(n){ return 'slot'+(Number(n)||1); }
+// 旧・単一セーブ（autosave）をスロット1へ一度だけ移行する（既存プレイヤーの進行を失わせない）
+(function migrateLegacyAutosaveToSlot1(){
+  try{
+    if (save.get(slotSaveKey(1), null) == null){
+      const legacy = save.get('autosave', null);
+      if (legacy != null) save.set(slotSaveKey(1), legacy);
+    }
+  }catch(_){}
+})();
 
 /* ===== プロシージャルBGM（Web Audio・自作／APIキー不要・CLAUDE.md準拠） =====
  * 都節音階（陰旋法）による疎らな旋律＋低ドローン。戦闘時は太鼓の鼓動を重ねる。 */
@@ -9054,6 +9066,7 @@ function buildGameState(scenarioId, playerDaimyo, difficulty){
     ricePrice: 100,
     armedForces: {}, legions:{}, merchantHouses:{},
     firedEvents: {},
+    achieveStats: {offeringCount:0, ninjaKindsSucceeded:[], hadAssassinationGekokujo:false},
     _pendingHistEvts: [],
   };
   // シナリオ開始年以前に発生した歴史イベントを既発火扱いにする
@@ -9155,6 +9168,7 @@ function normalizeGameState(state){
   state.generals  = state.generals  || {};
   state.daimyo    = state.daimyo    || {};
   if (!state.armedForces || typeof state.armedForces!=='object') state.armedForces={};
+  if (!state.achieveStats || typeof state.achieveStats!=='object') state.achieveStats={offeringCount:0, ninjaKindsSucceeded:[], hadAssassinationGekokujo:false};
   ensureRealmSystems(state);
   if (!Number.isFinite(state.rngSeq)) state.rngSeq=(Number(state.rng)>>>0)||0x6d2b79f5;
 
@@ -9798,32 +9812,72 @@ class TitleScene extends GameKit.Scene {
     BGM.setMood('title'); BGM.start();
     this.particles = new GameKit.Particles(W, H, {count:60, colors:['#e8c07a','#a78bfa','#22d3ee']});
     this.t=0;
-    this.hasSave = !!save.get('autosave', null);
+    this.step='main'; this.slotMode=null; this.pendingLoadState=null;
+    this._refreshSlots();
     // URLハッシュに共有陣容(#scn=)があれば読込候補として保持
     this.sharedState=null;
     try{ if (location.hash && location.hash.indexOf('scn=')>=0) this.sharedState=decodeShareState(location.hash); }catch(_){}
     this.buttons = this._layout();
   }
+  // 3スロット分のセーブ有無・要約を読み直す（削除・保存の直後にも呼ぶ）
+  _refreshSlots(){
+    this.slots=[];
+    for (let n=1; n<=SAVE_SLOT_COUNT; n++){
+      const st = save.get(slotSaveKey(n), null);
+      this.slots.push({n, state: (st && st.version===SAVE_VERSION) ? st : null});
+    }
+    this.hasSave = this.slots.some(s=>s.state);
+  }
+  _rebuild(){ this._refreshSlots(); this.buttons=this._layout(); }
   _layout(){
+    if (this.step==='slots') return this._layoutSlots();
     const bs=[]; const cx=W/2, cy=H/2;
-    bs.push({x:cx-360, y:cy+160, w:720, h:132, jp:'新規ゲーム', en:'New Game', sz:42, ensz:24, action:()=>game.changeScene(new ScenarioSelectScene())});
-    bs.push({x:cx-360, y:cy+314, w:720, h:132, jp:'続きから', en:'Continue', sz:42, ensz:24, on:this.hasSave, action:()=>{
-      const st = save.get('autosave', null);
-      if (st && st.version===SAVE_VERSION){ game.changeScene(new MapScene(st)); }
-    }});
+    bs.push({x:cx-360, y:cy+160, w:720, h:132, jp:'新規ゲーム', en:'New Game', sz:42, ensz:24, action:()=>{ this.step='slots'; this.slotMode='new'; this._rebuild(); }});
+    bs.push({x:cx-360, y:cy+314, w:720, h:132, jp:'続きから', en:'Continue', sz:42, ensz:24, on:this.hasSave, action:()=>{ this.step='slots'; this.slotMode='load'; this._rebuild(); }});
     // シナリオ共有（Phase 5）
-    bs.push({x:cx-360, y:cy+468, w:350, h:110, jp:'陣容を共有', en:'Share Code', sz:32, ensz:18, on:this.hasSave, action:()=>this._shareState()});
+    bs.push({x:cx-360, y:cy+468, w:350, h:110, jp:'陣容を共有', en:'Share Code', sz:32, ensz:18, on:this.hasSave, action:()=>{ this.step='slots'; this.slotMode='share'; this._rebuild(); }});
     bs.push({x:cx+10, y:cy+468, w:350, h:110, jp:'コードで再現', en:'Load Code', sz:32, ensz:18, action:()=>this._loadShared()});
     if (this.sharedState){
       bs.push({x:cx-360, y:cy+590, w:720, h:110, jp:'共有された陣容で始める', en:'Start Shared Setup', sz:34, ensz:20, accent:'rgba(120,200,160,0.7)', action:()=>{
-        save.set('autosave', this.sharedState); game.changeScene(new MapScene(this.sharedState));
+        this.pendingLoadState=this.sharedState; this.step='slots'; this.slotMode='loadcode-dest'; this._rebuild();
       }});
     }
     return bs;
   }
+  // スロット選択画面（新規/続きから/共有/コード読込先で共通利用）
+  _layoutSlots(){
+    const bs=[]; const cx=W/2, cy=H/2;
+    const cardW=1000, cardH=150, gap=32, startY=cy-260;
+    const confirmOverwrite=(n)=> (typeof window==='undefined' || !window.confirm) ? true : window.confirm('スロット'+n+'を上書きします。よろしいですか？\nOverwrite slot '+n+'?');
+    this.slots.forEach((slot,i)=>{
+      const y=startY+i*(cardH+gap), occupied=!!slot.state;
+      let on=true, action=()=>{};
+      if (this.slotMode==='new'){
+        action=()=>{ if (occupied && !confirmOverwrite(slot.n)) return; game.changeScene(new ScenarioSelectScene(slot.n)); };
+      } else if (this.slotMode==='load'){
+        on=occupied; action=()=>{ if (occupied) game.changeScene(new MapScene(slot.state)); };
+        // 削除ボタン（カード本体より先に判定させるため先に積む。データがある枠のみ表示）
+        if (occupied) bs.push({x:cx-cardW/2+cardW-150, y:y+cardH-58, w:130, h:44, jp:'削除', en:'Delete', sz:18, ensz:11, accent:'rgba(248,113,113,0.5)', action:()=>{
+          if (typeof window==='undefined' || !window.confirm || window.confirm('スロット'+slot.n+'のセーブを削除します。よろしいですか？\nDelete slot '+slot.n+'?')){ save.set(slotSaveKey(slot.n), null); this._rebuild(); }
+        }});
+      } else if (this.slotMode==='share'){
+        on=occupied; action=()=>{ if (occupied) this._shareState(slot.n); };
+      } else if (this.slotMode==='loadcode-dest'){
+        action=()=>{
+          if (occupied && !confirmOverwrite(slot.n)) return;
+          const st=this.pendingLoadState; this.pendingLoadState=null;
+          st.saveSlot=slot.n; save.set(slotSaveKey(slot.n), st);
+          game.changeScene(new MapScene(st));
+        };
+      }
+      bs.push({x:cx-cardW/2, y, w:cardW, h:cardH, _slot:slot, on, action});
+    });
+    bs.push({x:cx-220, y:startY+SAVE_SLOT_COUNT*(cardH+gap)+20, w:440, h:92, jp:'← タイトルへ戻る', en:'Back', sz:27, action:()=>{ this.step='main'; this.slotMode=null; this._rebuild(); }});
+    return bs;
+  }
   // 現在の陣容を共有コード/URLに符号化して提示（クリップボード＋URLハッシュ＋貼付用ダイアログ）
-  _shareState(){
-    const st=save.get('autosave', null);
+  _shareState(slotN){
+    const st=save.get(slotSaveKey(slotN), null);
     if(!st){ try{alert('共有できるセーブがありません / No save to share');}catch(_){}; return; }
     let url;
     try{
@@ -9834,14 +9888,13 @@ class TitleScene extends GameKit.Scene {
     }catch(e){ try{alert('共有コードの生成に失敗しました / Failed to build share code');}catch(_){}; return; }
     try{ window.prompt('この陣容コード/URLを共有できます（相手は「コードで再現」に貼付）\nShare this code / URL:', url); }catch(_){}
   }
-  // 共有コード/URLを貼り付けて陣容を再現
+  // 共有コード/URLを貼り付けて陣容を再現（保存先スロットはこの後の画面で選ぶ）
   _loadShared(){
     let inp=null; try{ inp=window.prompt('共有された陣容コードまたはURLを貼り付け / Paste shared code or URL:', ''); }catch(_){ return; }
     if(!inp) return;
     const st=decodeShareState(inp);
     if(!st){ try{alert('コードを読み込めませんでした（バージョン不一致の可能性）/ Could not load code');}catch(_){}; return; }
-    save.set('autosave', st);
-    game.changeScene(new MapScene(st));
+    this.pendingLoadState=st; this.step='slots'; this.slotMode='loadcode-dest'; this._rebuild();
   }
   update(dt, game){
     this.t+=dt; this.particles.update(dt);
@@ -9857,6 +9910,7 @@ class TitleScene extends GameKit.Scene {
     shade.addColorStop(0,'rgba(5,7,13,0.18)'); shade.addColorStop(1,'rgba(5,7,13,0.82)');
     ctx.fillStyle=shade; ctx.fillRect(0,0,W,H);
     this.particles.draw(ctx);
+    if (this.step==='slots'){ this._drawSlots(ctx); return; }
     const cx=W/2, cy=H/2;
     GameKit.UI.glassPanel(ctx, cx-880, cy-470, 1760, 520, {radius:32, fill:'rgba(8,12,22,0.70)', stroke:'rgba(232,192,122,0.48)'});
     T(ctx,'戦国風雲記', cx, cy-382, {size:196, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
@@ -9865,6 +9919,32 @@ class TitleScene extends GameKit.Scene {
     T(ctx,'A Sengoku grand-strategy of '+DATA.provinces.length+' provinces & hex battles', cx, cy-22, {size:26, color:'#7d93ab', align:'center'});
     for (const b of this.buttons) drawButton(ctx, b, this.t);
     T(ctx,'Canvas + GameKit / オリジナル戦国シミュレーション', cx, H-70, {size:26, color:'#64748b', align:'center'});
+  }
+  _drawSlots(ctx){
+    const cx=W/2;
+    const titleJP={new:'スロットを選択して開始', load:'続きから読み込むスロットを選択', share:'共有するスロットを選択', 'loadcode-dest':'保存先のスロットを選択'}[this.slotMode]||'スロットを選択';
+    const titleEN={new:'Choose a Slot to Start', load:'Choose a Slot to Continue', share:'Choose a Slot to Share', 'loadcode-dest':'Choose a Slot to Save Into'}[this.slotMode]||'Choose a Slot';
+    T(ctx, titleJP, cx, 220, {size:56, weight:'bold', color:'#e8c07a', align:'center', shadow:true});
+    T(ctx, titleEN, cx, 296, {size:26, color:'#9fb2c6', align:'center'});
+    for (const b of this.buttons){
+      if (!b._slot){ drawButton(ctx, b, this.t); continue; }
+      const slot=b._slot, st=slot.state, enabled=(b.on!==false);
+      ctx.save();
+      ctx.beginPath(); ctx.roundRect(b.x,b.y,b.w,b.h,18);
+      ctx.fillStyle = enabled ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)';
+      ctx.fill();
+      ctx.strokeStyle = enabled ? 'rgba(232,192,122,0.4)' : 'rgba(255,255,255,0.1)';
+      ctx.lineWidth=2; ctx.stroke(); ctx.restore();
+      T(ctx, 'スロット'+slot.n+' / Slot '+slot.n, b.x+36, b.y+24, {size:22, weight:'bold', color:'#a78bfa'});
+      if (st){
+        const pd=daimyoOf(st).find(d=>d.id===st.playerDaimyo);
+        const diff=DIFFICULTIES[st.difficulty];
+        T(ctx, (pd?pd.nameJP:'?')+'家　'+(st.scenarioNameJP||''), b.x+36, b.y+60, {size:30, weight:'bold', color: enabled?'#f1e6cf':'#8b93a3'});
+        T(ctx, st.year+'年 / ターン'+st.turn+(diff?(' / '+diff.jp):''), b.x+36, b.y+100, {size:20, color:'#9fb2c6'});
+      } else {
+        T(ctx, '（空きスロット） / Empty', b.x+36, b.y+66, {size:26, color:'#6b7688'});
+      }
+    }
   }
 }
 
@@ -10028,6 +10108,7 @@ function prefetchScenarioIntroArt(ids){
   step();
 }
 class ScenarioSelectScene extends GameKit.Scene {
+  constructor(slot){ super(); this.slot = Number(slot)||1; }
   enter(game){
     setCanvasViewportMode('fit');
     BGM.setMood('title'); BGM.start();
@@ -10112,7 +10193,8 @@ class ScenarioSelectScene extends GameKit.Scene {
         if (y+layout.ch < layout.viewport.y || y > layout.viewport.y+layout.viewport.h) return;
         this.buttons.push({x:layout.gx+c*(layout.cw+layout.gapX), y, w:layout.cw, h:layout.ch, daimyo:d, accent:'rgba(255,255,255,0.3)', action:()=>{
           game.audio.jingle([{f:392,d:0.1},{f:523,d:0.1},{f:659,d:0.18}]);
-          game.changeScene(new MapScene(buildGameState(this.scn.id, d.id, this.difficulty)));
+          const st=buildGameState(this.scn.id, d.id, this.difficulty); st.saveSlot=this.slot;
+          game.changeScene(new MapScene(st));
         }});
       });
       this.buttons.push({x:80, y:H-112, w:420, h:74, label:'← 難易度選択', sz:27, action:()=>{ this.step='difficulty'; this.scrollDaimyo=0; this._rebuild(); }});
@@ -10309,7 +10391,7 @@ class MapScene extends GameKit.Scene {
     this._save();
   }
   exit(){ this._hideCastleAddPanel(); this._closeCastleListPanel(); this._unbindInput(); if (typeof document!=='undefined') document.body.classList.remove('canvas-modal-open'); }
-  _save(){ this.state.version=SAVE_VERSION; save.set('autosave', this.state); }
+  _save(){ this.state.version=SAVE_VERSION; save.set(slotSaveKey(this.state.saveSlot), this.state); }
   _flash(jp, en){ this.message=jp; this.messageEN=en||''; this.messageT=2.2; }
   _stateMonth(){ const st=this.state; return Number.isFinite(st.month) ? st.month : ([3,6,9,12][st.season]||3); }
   _stateSeason(){ const m=this._stateMonth(); return Math.max(0, Math.min(3, Math.floor((m-1)/3))); }
@@ -11936,7 +12018,9 @@ class MapScene extends GameKit.Scene {
     if (st.daimyo[st.playerDaimyo].gold<cost){ this._flash('金が足りません', 'Not enough gold'); return; }
     st.daimyo[st.playerDaimyo].gold-=cost;
     prov.castleLevel++;
-    game.audio.beep(560,0.12,'triangle'); this._flash('城を強化（Lv'+prov.castleLevel+'）', 'Castle upgraded (Lv'+prov.castleLevel+')'); this._save();
+    game.audio.beep(560,0.12,'triangle'); this._flash('城を強化（Lv'+prov.castleLevel+'）', 'Castle upgraded (Lv'+prov.castleLevel+')');
+    if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('castle_upgraded', {castleLevel: prov.castleLevel});
+    this._save();
   }
   _recruit(game){
     const st=this.state, pid=this.selected, prov=st.provinces[pid];
@@ -12302,6 +12386,7 @@ class MapScene extends GameKit.Scene {
         game.audio.jingle([{f:523,d:0.09},{f:784,d:0.14}]);
         const g=DATA.genById[tgtG];
         this._flash(g.nameJP+'が寝返った！（兵'+desert+'離散）', (g.nameEN||'A general')+' defected to you!');
+        if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('ploy_resolved', {kind:'defect', success:true});
       } else {
         // 失敗: 露見して敵の結束が高まる
         tp.generals.forEach(g=>{ if(st.generals[g].alive) st.generals[g].loyalty=clamp(st.generals[g].loyalty+4,0,100); });
@@ -12315,6 +12400,7 @@ class MapScene extends GameKit.Scene {
         tp.generals.forEach(g=>{ if(st.generals[g].alive) st.generals[g].loyalty=clamp(st.generals[g].loyalty-9,0,100); });
         game.audio.beep(430,0.12,'triangle');
         this._flash('流言で敵兵 '+loss+' が動揺・離散', 'Sowed discord: '+loss+' troops lost');
+        if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('ploy_resolved', {kind:'agitate', success:true});
       } else {
         game.audio.beep(240,0.14,'sawtooth');
         this._flash('流言は効果がなかった…', 'The rumor gained no traction…');
@@ -12330,6 +12416,7 @@ class MapScene extends GameKit.Scene {
     const g=st.generals[gid]; if (!g) return;
     g.alive=true; g.daimyo=st.playerDaimyo; g.location=dstId; g.loyalty=60;
     st.captivesRecruited=(st.captivesRecruited||0)+1;
+    if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('captive_recruited', {captivesRecruited: st.captivesRecruited});
     if (prov && prov.owner===st.playerDaimyo && !prov.generals.includes(gid)) prov.generals.push(gid);
     const i=ov.data.captives.indexOf(gid); if (i>=0) ov.data.captives.splice(i,1);
     game.audio.jingle([{f:523,d:0.08},{f:784,d:0.12}]);
@@ -12521,6 +12608,22 @@ class MapScene extends GameKit.Scene {
     this._updateDaimyoAlive();
     this._refreshPacified(st);
     st.peakProvinces=Math.max(st.peakProvinces||0, ownedProvinces(st, st.playerDaimyo).length);
+    if (typeof checkAchievementsPoll==='function'){
+      const pDmyo=st.daimyo[st.playerDaimyo];
+      checkAchievementsPoll({
+        provincesOwned: ownedProvinces(st, st.playerDaimyo).length,
+        totalProvinces: DATA.provinces.length,
+        peakProvinces: st.peakProvinces||0,
+        battlesWon: st.battlesWon||0,
+        captivesRecruited: st.captivesRecruited||0,
+        kanoiCourtRank: pDmyo && pDmyo.kanoi_court ? COURT_KANOI_RANKS.findIndex(r=>r.name===pDmyo.kanoi_court) : -1,
+        kanoiShogunRank: pDmyo && pDmyo.kanoi_shogun ? SHOGUN_ROLE_RANKS.findIndex(r=>r.name===pDmyo.kanoi_shogun) : -1,
+        navalVassalCount: NAVAL_FORCES.filter(f=>getAF(st,f.id).vassalOf===st.playerDaimyo).length,
+        navalTotal: NAVAL_FORCES.length,
+        offeringCount: (st.achieveStats && st.achieveStats.offeringCount)||0,
+        ninjaKindsSucceeded: (st.achieveStats && st.achieveStats.ninjaKindsSucceeded)||[],
+      });
+    }
     // 民忠低下 & 一揆チェック
     const ikkiLog=[];
     Object.keys(st.provinces).forEach(pid=>{
@@ -12574,6 +12677,11 @@ class MapScene extends GameKit.Scene {
     if (playerGekokujo){
       this.overlay={type:'gekokujo',gid:playerGekokujo.gid,kind:playerGekokujo.kind,text:playerGekokujo.text,log:aiLog};
       game.audio.beep(220,0.2,'sawtooth');
+      if (playerGekokujo.kind==='assassination'){
+        if (!st.achieveStats) st.achieveStats={offeringCount:0, ninjaKindsSucceeded:[], hadAssassinationGekokujo:false};
+        st.achieveStats.hadAssassinationGekokujo=true;
+      }
+      if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('gekokujo_faced', {kind: playerGekokujo.kind});
     } else     if (histEvts.length > 0){
       st._pendingAiLog = aiLog;
       st._pendingHistEvts = histEvts.slice(1);
@@ -12877,13 +12985,21 @@ class MapScene extends GameKit.Scene {
     const st=this.state;
     const me=st.playerDaimyo;
     const mine=ownedProvinces(st, me).length;
-    if (mine===0){ this.overlay={type:'gameover', win:false}; return; }
-    if (mine===DATA.provinces.length){ this.overlay={type:'gameover', win:true}; return; }
+    const fireGameOverAchievement=(win, seihitsu)=>{
+      if (typeof checkAchievementsEvent!=='function') return;
+      checkAchievementsEvent('game_over', {
+        win, seihitsu, provincesOwned: mine, totalProvinces: DATA.provinces.length,
+        difficulty: st.difficulty,
+        hadAssassinationGekokujo: !!(st.achieveStats && st.achieveStats.hadAssassinationGekokujo),
+      });
+    };
+    if (mine===0){ this.overlay={type:'gameover', win:false}; fireGameOverAchievement(false); return; }
+    if (mine===DATA.provinces.length){ this.overlay={type:'gameover', win:true}; fireGameOverAchievement(true, false); return; }
     // 天下静謐（権威勝利・Phase 3）: 征夷大将軍として、全洲の8割以上が自領＋従属下にある
     if (st.daimyo[me] && st.daimyo[me].tenka){
       let controlled=mine;
       daimyoOf(st).forEach(d=>{ if(d.id!==me && st.daimyo[d.id] && st.daimyo[d.id].alive && suzerainOf(st,d.id)===me){ controlled+=ownedProvinces(st,d.id).length; } });
-      if (controlled >= Math.ceil(DATA.provinces.length*0.8)){ this.overlay={type:'gameover', win:true, seihitsu:true}; }
+      if (controlled >= Math.ceil(DATA.provinces.length*0.8)){ this.overlay={type:'gameover', win:true, seihitsu:true}; fireGameOverAchievement(true, true); }
     }
   }
 
@@ -13575,7 +13691,7 @@ class MapScene extends GameKit.Scene {
       bs.push({x:px+60, y:by, w:340, h:84, jp:'手動で防衛', en:'Defend (Hex Battle)', sz:26, ensz:16, accent:'rgba(52,211,153,0.7)', action:g=>this._resolveDefense(g,true)});
       bs.push({x:px+pw-400, y:by, w:340, h:84, jp:'自動で防衛', en:'Auto Defend', sz:26, ensz:16, accent:'rgba(251,191,36,0.7)', action:g=>this._resolveDefense(g,false)});
     } else if (ov.type==='gameover'){
-      bs.push({x:W/2-260, y:H/2+276, w:240, h:64, jp:'タイトルへ', en:'Title', sz:24, action:()=>{ save.set('autosave',null); game.changeScene(new TitleScene()); }});
+      bs.push({x:W/2-260, y:H/2+276, w:240, h:64, jp:'タイトルへ', en:'Title', sz:24, action:()=>{ save.set(slotSaveKey(this.state.saveSlot), null); game.changeScene(new TitleScene()); }});
       bs.push({x:W/2+20, y:H/2+276, w:240, h:64, jp:'続ける', en:'Keep', sz:24, action:()=>{ this.overlay=null; }});
     } else if (ov.type==='ploy'){
       const pl=this.ploy; const px=W/2-460, py=H/2-380, pw=920, ph=760;
@@ -14639,6 +14755,7 @@ class MapScene extends GameKit.Scene {
         dmyo.prestige=Math.min(300,(dmyo.prestige??5)+nextRank.prestigeGain);
         game.audio.jingle([{f:523,d:0.09},{f:698,d:0.13},{f:880,d:0.2}]);
         this._flash(nextRank.name+'に任官！（威信+'+nextRank.prestigeGain+'）','Appointed: '+nextRank.nameEN);
+        if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('court_rank_promoted', {rankName: dmyo.kanoi_court, rankIndex: COURT_KANOI_RANKS.findIndex(r=>r.name===dmyo.kanoi_court)});
       } else if (!meetsReq){
         this._flash('献上して朝廷信用を高めた（信用+5・威信+3）。任官には信用'+nextRank.courtRel+'・威信'+nextRank.prestige+'が必要','Offering made (court +5). Rank needs court '+nextRank.courtRel+'/prestige '+nextRank.prestige);
       } else {
@@ -14703,6 +14820,7 @@ class MapScene extends GameKit.Scene {
         daimyoOf(st).forEach(d=>{ if(d.id!==me) addRel(st,me,d.id,5); });
         game.audio.jingle([{f:440,d:0.09},{f:587,d:0.13},{f:698,d:0.2}]);
         this._flash(nextRole.name+'に任ぜられた！（威信+'+nextRole.prestigeGain+'）','Appointed: '+nextRole.nameEN);
+        if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('shogun_role_promoted', {roleName: dmyo.kanoi_shogun, roleIndex: SHOGUN_ROLE_RANKS.findIndex(r=>r.name===dmyo.kanoi_shogun)});
       } else if (!meetsReq){
         this._flash('幕府に献じて信用を高めた（信用+5・威信+3）。任官には信用'+nextRole.shogunRel+'・'+nextRole.provinces+'国が必要','Petition made (bakufu +5). Role needs rel '+nextRole.shogunRel+'/'+nextRole.provinces+' provinces');
       } else {
@@ -14788,6 +14906,7 @@ class MapScene extends GameKit.Scene {
       game.audio.jingle([{f:523,d:0.09},{f:698,d:0.16}]);
       const detail=naval?'沿岸戦で水軍の支援を得る':ninja?'忍者の恒久的な協力を得る':'国人衆の恒久的な協力を得る';
       this._flash(force.nameJP+'が従属。'+detail,force.nameEN+' vassalized.');
+      if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('force_action', {kind:'vassal', forceType: naval?'naval':ninja?'ninja':'kokujin'});
     } else if (kind==='sortie' && (naval||kokujin)){
       if (af.relation<60){ this._flash('友好度が不足しています（60以上必要）','Need relation 60+'); return; }
       if (af.actedTurn===st.turn){ this._flash('今季はすでに要請済みです','Already requested this turn'); return; }
@@ -14811,6 +14930,7 @@ class MapScene extends GameKit.Scene {
       dmyo.gold-=ninja.hireCost; af.hired=true; af.relation=80;
       game.audio.beep(600,0.1,'sine');
       this._flash(force.nameJP+'を雇用。忍者アクションが使用可能になった','Hired '+force.nameEN+'. Ninja actions unlocked');
+      if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('force_action', {kind:'hire', forceType:'ninja'});
     } else if (kind==='annex' && kokujin){
       if (dmyo.gold<kokujin.recruitCost){ this._flash('金が足りません','Not enough gold'); return; }
       if (af.relation<80){ this._flash('友好度が不足しています（80以上必要）','Need relation 80+'); return; }
@@ -14820,6 +14940,7 @@ class MapScene extends GameKit.Scene {
       prov.soldiers=Math.min(prov.soldiers+kokujin.soldiers, DATA.provById[kokujin.province].kokudaka*4+(prov.castleLevel||1)*600);
       af.actedTurn=st.turn; game.audio.jingle([{f:440,d:0.1},{f:587,d:0.15}]);
       this._flash(force.nameJP+'が帰属。'+kokujin.province+'に兵力+'+kokujin.soldiers,force.nameEN+' absorbed. Troops +'+kokujin.soldiers);
+      if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('force_action', {kind:'annex', forceType:'kokujin'});
     }
     this._save();
   }
@@ -14844,6 +14965,9 @@ class MapScene extends GameKit.Scene {
       game.audio.beep(528,0.1,'sine');
       this._flash(rf.nameJP+'に布施（友好度+15・威信+5）','Offering to '+rf.nameEN+' (relation +15, prestige +5)');
       if (af.relation>=60) af.allied=true;
+      if (!st.achieveStats) st.achieveStats={offeringCount:0, ninjaKindsSucceeded:[], hadAssassinationGekokujo:false};
+      st.achieveStats.offeringCount=(st.achieveStats.offeringCount||0)+1;
+      if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('force_action', {kind:'offering', forceType:'religious'});
     } else if (kind==='vassal'){
       const cost=effect.offeringCost*2;
       if (dmyo.gold<cost){ this._flash('金が足りません','Not enough gold'); return; }
@@ -14853,6 +14977,7 @@ class MapScene extends GameKit.Scene {
       dmyo.gold-=cost; af.allied=true; af.vassalOf=me; af.vassalUntil=st.turn+999; af.actedTurn=st.turn;
       game.audio.jingle([{f:523,d:0.09},{f:698,d:0.16}]);
       this._flash(rf.nameJP+'が従属。寺社の加護を得た',rf.nameEN+' vassalized. Religious support secured.');
+      if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('force_action', {kind:'vassal', forceType:'religious'});
     }
     this._save();
   }
@@ -14913,6 +15038,11 @@ class MapScene extends GameKit.Scene {
         targetProv._disruptedUntil=st.turn+1;
         this._flash(pname+'の軍勢を撹乱！ 次の敵ターンの出兵を封じた','Disrupted '+pname+'! Its next attack is canceled');
       } else { this._flash('撹乱工作が失敗した','Disrupt failed'); }
+    }
+    if (success){
+      if (!st.achieveStats) st.achieveStats={offeringCount:0, ninjaKindsSucceeded:[], hadAssassinationGekokujo:false};
+      if (!st.achieveStats.ninjaKindsSucceeded.includes(actionKind)) st.achieveStats.ninjaKindsSucceeded.push(actionKind);
+      if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('ninja_action', {kind:actionKind, success:true});
     }
     this._save();
   }
@@ -16564,7 +16694,7 @@ function applyBattleResult(st, ctx, res, attackerGenerals){
   if (playerInvolved){
     const defense = ctx.defender.daimyo===st.playerDaimyo && ctx.attacker.daimyo!==st.playerDaimyo;
     const playerWon = defense ? !res.attackerWins : res.attackerWins;
-    if (playerWon) st.battlesWon=(st.battlesWon||0)+1;
+    if (playerWon){ st.battlesWon=(st.battlesWon||0)+1; if (typeof checkAchievementsEvent==='function') checkAchievementsEvent('battle_won', {battlesWon: st.battlesWon}); }
     st.pendingResult = { win:res.attackerWins, playerWon, defense, dstId:ctx.dstId, atkSurvivors:res.atkSurvivors, defSurvivors:res.defSurvivors, generalsLost, captives:playerCaptives };
     // 論功行賞: 勝利時、参戦した自家武将に戦功(merit)を配分し、戦後に恩賞ぶるまいを促す
     if (playerWon){
@@ -17078,7 +17208,51 @@ const CASTLE_TRACED_LAYOUTS = {
     stonewall: [[11,0],[15,0],[11,1],[14,1],[9,2],[12,2],[14,2],[8,3],[9,3],[4,4],[5,4],[9,4],[4,5],[8,5],
       [10,5],[5,6],[12,6],[15,6],[16,6],[13,7],[14,7],[15,7],[16,7],[8,12],[9,12],[10,12]],
   },
-
+  siegeHamamatsu: {
+    keep: [[12,1]],
+    gate: [[12,3],[12,5],[12,8]],
+    palisade: [[6,0],[5,1],[6,2],[6,3],[7,4],[7,5],[8,6],[8,7],[16,7],[9,8],[10,8],[11,8],[13,8],[14,8],[15,8],
+      [16,8]],
+    stonewall: [[11,0],[14,0],[10,1],[14,1],[11,2],[14,2],[11,3],[13,3],[9,0],[16,0],[8,1],[16,1],[9,2],[16,2],
+      [9,3],[15,3],[10,4],[15,4],[10,5],[11,5],[13,5],[14,5]],
+  },
+  siegeHimeji: {
+    keep: [[13,2]],
+    gate: [[13,4],[13,6],[13,9]],
+    palisade: [[7,0],[6,1],[6,2],[6,3],[7,4],[7,5],[8,6],[8,7],[9,8],[9,9],[10,9],[11,9],[12,9],[14,9],[15,9],
+      [16,9]],
+    stonewall: [[12,0],[13,0],[14,0],[11,1],[14,1],[11,2],[15,2],[11,3],[14,3],[12,4],[14,4],[10,0],[16,0],
+      [9,1],[16,1],[9,2],[9,3],[16,3],[10,4],[16,4],[10,5],[15,5],[11,6],[12,6],[14,6],[15,6]],
+  },
+  siegeIwamura: {
+    keep: [[14,0]],
+    gate: [[14,2],[14,4],[14,7]],
+    palisade: [[7,0],[7,1],[8,2],[8,3],[9,4],[9,5],[10,6],[10,7],[11,7],[12,7],[13,7],[15,7],[16,7]],
+    stonewall: [[12,0],[16,0],[12,1],[15,1],[13,2],[15,2],[10,0],[10,1],[11,2],[11,3],[16,3],[12,4],[13,4],
+      [15,4],[16,4]],
+  },
+  siegeNanao: {
+    keep: [[13,2]],
+    gate: [[13,4],[13,6],[13,9]],
+    palisade: [[7,0],[6,1],[6,2],[6,3],[7,4],[7,5],[8,6],[8,7],[9,8],[9,9],[10,9],[11,9],[12,9],[14,9],[15,9],
+      [16,9]],
+    stonewall: [[12,0],[13,0],[14,0],[11,1],[14,1],[11,2],[15,2],[11,3],[14,3],[12,4],[14,4],[10,0],[16,0],
+      [9,1],[16,1],[9,2],[9,3],[16,3],[10,4],[16,4],[10,5],[15,5],[11,6],[12,6],[14,6],[15,6]],
+  },
+  siegeKannonji: {
+    keep: [[13,0]],
+    gate: [[13,2],[13,4],[13,7]],
+    palisade: [[6,0],[6,1],[7,2],[7,3],[8,4],[8,5],[9,6],[9,7],[10,7],[11,7],[12,7],[14,7],[15,7],[16,7]],
+    stonewall: [[11,0],[15,0],[11,1],[14,1],[12,2],[14,2],[9,0],[9,1],[16,1],[10,2],[16,2],[10,3],[15,3],[11,4],
+      [12,4],[14,4],[15,4]],
+  },
+  siegeYoshidaKoriyama: {
+    keep: [[13,0]],
+    gate: [[13,2],[13,4],[13,7]],
+    palisade: [[6,0],[6,1],[7,2],[7,3],[8,4],[8,5],[9,6],[9,7],[10,7],[11,7],[12,7],[14,7],[15,7],[16,7]],
+    stonewall: [[11,0],[15,0],[11,1],[14,1],[12,2],[14,2],[9,0],[9,1],[16,1],[10,2],[16,2],[10,3],[15,3],[11,4],
+      [12,4],[14,4],[15,4]],
+  },
 };
 // トレースした塁だけでは天守が囲みきれないことがある（絵の本丸石垣が細くて1マスに満たない等）。
 // そのままだと攻め手が何も壊さずに天守へ歩ける＝素通りで落城してしまうため、天守が開いている
