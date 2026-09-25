@@ -86,6 +86,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `assets/js/agent-data.js` | `node scripts/agent-evolve-check.mjs` / `node scripts/agent-dynamic-test.cjs` |
 | `marketing/` / `scripts/post-social.js` | `node scripts/verify-social-posts.mjs` |
 | `note/` | `node scripts/verify-note-articles.mjs` |
+| CLAUDE.md の「定期実行（Routine）一覧」（Routineの新設・変更・停止） | `node scripts/verify-routine-delivery.mjs` |
 | 上記以外のHTML（新規ゲーム含む） | `bash .claude/skills/dynamic-test/run.sh --changed` |
 | コミット直前（全変更共通） | `bash .claude/skills/release-check/release-check.sh` |
 

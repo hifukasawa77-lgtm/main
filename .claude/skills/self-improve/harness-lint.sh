@@ -421,6 +421,31 @@ else
   echo "  - python3なし（スキップ）"
 fi
 
+echo "== 15. Routineが成果物を出しているか（警告のみ／exit codeに影響しない）=="
+# 目的: 「起動はしている（SUCCEEDED）のに成果物ゼロ」を可視化する。
+# 2026-07以降、週次Routine5本すべてが成果物ゼロのまま2か月以上気づかれなかった。
+# 各Routineのプロンプトは「harness-lint 検査#13が痕跡マーカーの鮮度を見張っている」と
+# 書いていたが、**検査#13は別物（エージェント定義の整合）で見張り役は存在しなかった**
+# （2026-09-25 に判明。番号だけ書いて実体を作らないと、こうして誰も気づかない）。
+#
+# ここを✗ではなく△にしている理由: Routineが動くかはトリガーの保存設定（API側の `sources`）に
+# 依存し、**このリポジトリのコードでは直せない**。リポジトリ内の整合を見る harness-lint で
+# ✗にすると、コードが正しくても永久に赤いままになり、赤い検査は必ず無視されるようになる。
+# 硬い判定は専用スクリプト側が持つ。**△が出たら必ず中身を見ること**（それが唯一の網）。
+if [ -f scripts/verify-routine-delivery.mjs ] && command -v node >/dev/null 2>&1; then
+  RD=$(node scripts/verify-routine-delivery.mjs 2>&1 | grep '✗' | sed 's/^ *✗ *//')
+  if [ -z "$RD" ]; then
+    ok "Routineの成果物はすべて鮮度内（node scripts/verify-routine-delivery.mjs）"
+  else
+    while IFS= read -r l; do
+      [ -n "$l" ] && note_warn "Routine成果物なし: $l"
+    done <<< "$RD"
+    note_warn "詳しくは node scripts/verify-routine-delivery.mjs（直すか、CLAUDE.mdの表から外して停止する）"
+  fi
+else
+  note_warn "verify-routine-delivery.mjs か node が無い（Routineの成果物を確認できない）"
+fi
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then

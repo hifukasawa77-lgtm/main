@@ -538,6 +538,26 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
 | `/note-post` | 毎週水曜 06:00 | ローリングPR `claude/note-post`（note記事1本） | 禁止（深澤承認制） |
 
+**Routineは「起動した」ことしか報告しない。出したかは別に検査する。**
+
+```bash
+node scripts/verify-routine-delivery.mjs   # 表の各Routineが成果物を出しているか（痕跡マーカー＋成果物ブランチの鮮度）
+```
+
+- **2026-07以降、上表5本すべてが SUCCEEDED を返しながら成果物ゼロのまま2か月以上気づかれなかった**。
+  各Routineのプロンプトは「harness-lint 検査#13が痕跡マーカーの鮮度を見張っている」と書いていたが、
+  **検査#13は別物（エージェント定義の整合）で、見張り役は存在しなかった**（2026-09-25 判明）。
+  **番号だけ書いて実体を作らないと、誰も気づかないまま止まり続ける**
+- 原因（2026-09-25 特定）: トリガーの保存設定が `sources: []` / `outcomes: []` ＝
+  **Routineが作るセッションに git リポジトリが紐づいていない**。対話セッションには
+  `sources: [{git_repository: …}]` が入っているが、`create_trigger` には source を渡す
+  パラメータが無い。MCP経由で作ったRoutineは**リポジトリ無しのコンテナで起動する**
+- **表に載っているなら、動いている証跡があること。動かないなら表から外して停止する。**
+  検査はこの原則で判定する（「起動はしている」を成功と呼ばせないため）
+- harness-lint 検査#15 は同じ内容を**△警告**で出す（✗にしない理由は検査#15のコメント参照。
+  Routineが動くかはAPI側の設定に依存し、リポジトリのコードでは直せないため）。
+  **△が出たら必ず中身を見ること**
+
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
 - セッション開始時に `.claude/hooks/second-brain-recall.sh`（SessionStart hook）が `MOC.md`・知見クイックインデックス（`04-Knowledge/`）・直近のDaily Noteを自動でコンテキストに読み込む
