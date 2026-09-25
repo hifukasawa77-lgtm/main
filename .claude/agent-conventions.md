@@ -82,6 +82,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `zero-1-mobile.html` / `assets/js/zero1-worker.js` / `assets/js/zero1-tools.js` | `node scripts/verify-zero1-mobile.mjs` / `node scripts/verify-service-worker.mjs` |
 | `assets/js/gesture-pointer.js` | `node scripts/verify-gesture-pointer.mjs` |
 | `synth-eq.html` | `node scripts/verify-synth-eq.mjs` |
+| `receipt-ocr.html` | `node scripts/verify-receipt-ocr.mjs`（OCRの精度に手を入れたら `--ocr` も） |
 | `assets/` 配下の画像（追加・差し替え・再エンコード） | `node scripts/verify-game-assets.mjs` / `node scripts/verify-asset-format.mjs` / `node scripts/verify-known-bug-patterns.mjs` |
 | `assets/js/agent-data.js` | `node scripts/agent-evolve-check.mjs` / `node scripts/agent-dynamic-test.cjs` |
 | `marketing/` / `scripts/post-social.js` | `node scripts/verify-social-posts.mjs` |
