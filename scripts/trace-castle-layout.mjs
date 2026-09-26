@@ -66,7 +66,7 @@ for (const [key, keep] of Object.entries(KEEPS)) {
 }
 
 const html = `<!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex, follow">
 <title>攻城ヘックス 侵入可否トレース / Castle Hex Passability Trace</title>
 <style>
  body{margin:0;background:#05070d;color:#e6edf7;font-family:system-ui,"Noto Sans JP",sans-serif}
