@@ -898,6 +898,14 @@ openssl dgst -sha384 -binary package/<CDNパスと同じファイル> | openssl 
   CDN URL へ返せば、CDNへ出られない環境でもSRI検証を実地で通せる。
   1バイト改ざんしてブロックされることまで見ること（ハッシュを間違えるとページが丸ごと死ぬ）
 
+### CSPハッシュ（`release-check` 検査#11 が機械検査する）
+
+- `index.html` / `blog.html` / `blog-post.html` / `dashboard.html` / `cloudflare-worker/admin.html` の CSP は、
+  **ページ内のインライン `<script>` 全部の sha256** を列挙している。**JSON-LD（構造化データ）も数に入る**
+- そのため FAQ の文言を1文字変えただけで CSP が古くなる。ブラウザは JSON-LD を実行しないので
+  **画面は壊れず dynamic-test も素通りし、GitHub Actions の security が赤くなって初めて気づく**（2026-09-26）
+- インラインscript（JSON-LD含む）を触ったら `node scripts/security-csp.mjs --write` で再生成する
+
 - **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。
   `--depth 1 --filter=blob:none --sparse` で18MBまで落ち、触るゲームのassetsだけ後から足せる。
   手順とスクリプト: `docs/クローンを軽くする.md` / `scripts/slim-clone.ps1`

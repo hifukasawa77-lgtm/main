@@ -250,6 +250,23 @@ if [ -z "$REQ" ]; then ok "対象ファイルの変更なし"; else
   while IFS= read -r r; do [ -n "$r" ] && note_warn "要実行: $r"; done <<< "$REQ"
 fi
 
+echo "== 11. CSPハッシュの整合（インラインscript・JSON-LD を含む） =="
+# index.html 等の CSP は、ページ内のインライン <script> 全部の sha256 を列挙している。
+# **JSON-LD（構造化データ）も数に入る**ので、FAQ の文言を1文字変えただけで CSP が古くなる。
+# ブラウザは JSON-LD を実行しないため画面は壊れず、dynamic-test も素通りする——
+# 気づくのは GitHub Actions の security が赤くなってから（2026-09-26、PR #350 で実際に踏んだ）。
+# 速い（100ms未満）ので、差分の有無にかかわらず毎回回す。
+if [ -f scripts/security-csp.mjs ]; then
+  if CSP_OUT=$(node scripts/security-csp.mjs 2>&1); then
+    ok "CSPハッシュ一致（${CSP_OUT#CSP verified: }）"
+  else
+    while IFS= read -r l; do [ -n "$l" ] && note_fail "$l"; done <<< "$CSP_OUT"
+    echo "    → 直し方: node scripts/security-csp.mjs --write（HTML内のscriptを直したら毎回）"
+  fi
+else
+  note_warn "scripts/security-csp.mjs が無い（CSPハッシュの検査を実行できない）"
+fi
+
 echo ""
 echo "-- git diff --stat（参考） --"
 git diff HEAD --stat 2>/dev/null | tail -3

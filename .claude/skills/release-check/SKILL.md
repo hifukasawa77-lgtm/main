@@ -1,6 +1,6 @@
 ---
 name: release-check
-description: コミット/デプロイ前の機械チェック。.edge-test-profile等の一時プロファイル混入・console.log残り・CDNスクリプトのSRI欠落・1MB超の新規ファイル・APIキー混入・WebP方針から外れた画像を git diff ベースで検査する。「コミットして」「リリースして」「プッシュして」の前、および workflow スキルのコミット前チェックリストの機械実行に使用する。
+description: コミット/デプロイ前の機械チェック。.edge-test-profile等の一時プロファイル混入・console.log残り・CDNスクリプトのSRI欠落・1MB超の新規ファイル・APIキー混入・WebP方針から外れた画像・CSPハッシュの陳腐化を git diff ベースで検査する。「コミットして」「リリースして」「プッシュして」の前、および workflow スキルのコミット前チェックリストの機械実行に使用する。
 ---
 
 # /release-check — コミット前の機械チェック
@@ -27,6 +27,7 @@ bash .claude/skills/release-check/release-check.sh
 | 8 | トップレベル宣言の二重定義 | 変更されたHTML |
 | 9 | アセットの形式方針（原則WebP） | 追跡変更＋**未追跡**の新規画像 |
 | 10 | 変更ファイルに対応する必須チェックの提示（△警告） | `git diff HEAD` |
+| 11 | CSPハッシュの整合（インライン `<script>`・**JSON-LD含む**。古ければ `node scripts/security-csp.mjs --write`） | `scripts/security-csp.mjs` の対象5ページ（毎回） |
 
 ## 運用
 - コミット直前に必ず実行する。✗が出たら是正してから再実行 → コミット
