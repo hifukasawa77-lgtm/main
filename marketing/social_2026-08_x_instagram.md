@@ -37,7 +37,7 @@
 ・太平風雲記（南北朝の正統性争い）
 
 全部インストール不要。フレームワークも不使用です。
-https://hifukasawa77-lgtm.github.io/main/
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/
 
 #個人開発 #ブラウザゲーム #シミュレーションゲーム
 ```
@@ -49,7 +49,7 @@ https://hifukasawa77-lgtm.github.io/main/
 ヘックス戦の経路探索も、AIの思考ルーチンも、Web Audioのシンセも全部自前。
 ビルドツールもなし。HTMLファイルを開けば動きます。
 
-https://hifukasawa77-lgtm.github.io/main/
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/
 
 #JavaScript #CanvasAPI #個人開発 #gamedev
 ```
@@ -61,7 +61,7 @@ https://hifukasawa77-lgtm.github.io/main/
 企画→アセット制作→実装→品質ゲート（法務／脆弱性／日英表記／アセット）→動的テスト→採点→リリース。
 このパイプラインごとサイトで公開しました。
 
-https://hifukasawa77-lgtm.github.io/main/agents.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/agents.html
 
 #AI駆動開発 #ClaudeCode #個人開発
 ```
@@ -72,7 +72,7 @@ https://hifukasawa77-lgtm.github.io/main/agents.html
 ボードゲームだけで20本、ブラウザで無料で遊べます。
 
 アプリ入れなくていいので、通勤中の暇つぶしにどうぞ。
-https://hifukasawa77-lgtm.github.io/main/
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/
 
 #無料ゲーム #暇つぶし #将棋 #麻雀
 ```
@@ -84,9 +84,9 @@ https://hifukasawa77-lgtm.github.io/main/
 I built 37 browser games with zero frameworks — just vanilla JS and the Canvas API.
 
 Hex-grid battles, AI opponents, Web Audio synths: all hand-rolled.
-No bundler, no npm install. Open the HTML and it runs.
+No bundler, no npm install — just open the HTML.
 
-https://hifukasawa77-lgtm.github.io/main/
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/
 
 #JavaScript #CanvasAPI #gamedev #indiedev
 ```
@@ -98,7 +98,7 @@ My game studio is 22 AI agents.
 Planning → assets → code → quality gates (legal / security / i18n) → runtime tests → scoring → release.
 I published the whole pipeline:
 
-https://hifukasawa77-lgtm.github.io/main/agents.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/agents.html
 
 #AIcoding #ClaudeCode #buildinpublic
 ```
@@ -110,7 +110,7 @@ Three Kingdoms, Sengoku Japan, Genpei War, Nanboku-chō.
 
 Hex battles, diplomacy, siege warfare. No install, no account.
 
-https://hifukasawa77-lgtm.github.io/main/
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/
 
 #strategygames #browsergames #indiegame
 ```
@@ -139,7 +139,7 @@ https://hifukasawa77-lgtm.github.io/main/
 
 開発はAIエージェント22体のチーム制。企画から品質チェック、リリースまでの流れもサイトで公開しています。
 
-プロフィールのリンクから遊べます👆
+プロフィールのリンク（hideの部屋）から遊べます👆
 
 —
 37 free browser games, no install required.
@@ -159,7 +159,7 @@ Developed by a team of 22 AI agents.
 戦は数だけでは決まらない。そこを遊びの中心に据えました。
 
 ブラウザで無料。インストール不要です。
-プロフィールのリンクから👆
+プロフィールのリンク（hideの部屋）から👆
 
 —
 A historical strategy game where you fight for legitimacy, not just troops.
@@ -191,7 +191,7 @@ A historical strategy game where you fight for legitimacy, not just troops.
 | 4 | JA-4（カジュアル） | IG-3（AIチーム） |
 
 - Xは日本語3：英語1の比率。英語投稿は日本時間の深夜〜早朝（米国日中）に出す
-- Instagramはリンクが踏めないため、必ず「プロフィールのリンクから」を入れる
+- Instagramはリンクが踏めないため、必ず「プロフィールのリンク（hideの部屋）から」を入れる
 - 反応が取れた投稿は文面を変えて2ヶ月後に再利用してよい
 
 ## KPI（初回3ヶ月）

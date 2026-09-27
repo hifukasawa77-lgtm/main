@@ -15,7 +15,7 @@
 ニューヨークを舞台にしたレトロベルトスクロールアクション。スマホ横向き対応
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
 
 #個人開発 #ブラウザゲーム #アクションゲーム
 ```
@@ -27,7 +27,7 @@ https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
 Retro belt-scroll action set in New York. Mobile landscape play supported
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
 
 #indiedev #browsergames #actiongame
 ```
@@ -37,7 +37,7 @@ https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
 👊 BLACK FANG
 ニューヨークを舞台にしたレトロベルトスクロールアクション。スマホ横向き対応
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
 #ブラウザゲーム #個人開発 #アクションゲーム
 ```
 
@@ -50,7 +50,7 @@ https://hifukasawa77-lgtm.github.io/main/beat_em_up.html
 Canvas APIで作ったトップビューRPG
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
 
 #個人開発 #ブラウザゲーム #RPG
 ```
@@ -62,7 +62,7 @@ https://hifukasawa77-lgtm.github.io/main/zelda_like.html
 Top-down RPG built with Canvas API
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
 
 #indiedev #browsergames #rpg
 ```
@@ -72,7 +72,7 @@ https://hifukasawa77-lgtm.github.io/main/zelda_like.html
 🗡️ ファーレンクエスト
 Canvas APIで作ったトップビューRPG
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
 #ブラウザゲーム #個人開発 #RPG
 ```
 
@@ -85,7 +85,7 @@ https://hifukasawa77-lgtm.github.io/main/zelda_like.html
 藤井棋風AIと3段階難易度で対局
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/shogi.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -97,7 +97,7 @@ https://hifukasawa77-lgtm.github.io/main/shogi.html
 Play vs Fujii-style AI, 3 difficulties
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/shogi.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -107,7 +107,7 @@ https://hifukasawa77-lgtm.github.io/main/shogi.html
 ♟️ AI将棋
 藤井棋風AIと3段階難易度で対局
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/shogi.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -120,7 +120,7 @@ https://hifukasawa77-lgtm.github.io/main/shogi.html
 キャスリング・アンパッサン対応のチェスAI
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/chess.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/chess.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -132,7 +132,7 @@ https://hifukasawa77-lgtm.github.io/main/chess.html
 Chess AI with castling and en passant
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/chess.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/chess.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -142,7 +142,7 @@ https://hifukasawa77-lgtm.github.io/main/chess.html
 ♔ AIチェス
 キャスリング・アンパッサン対応のチェスAI
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/chess.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/chess.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -155,7 +155,7 @@ https://hifukasawa77-lgtm.github.io/main/chess.html
 本格ルール・ロン/ツモ/カン対応
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/mahjong.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -167,7 +167,7 @@ https://hifukasawa77-lgtm.github.io/main/mahjong.html
 Full rules with ron, tsumo, kan
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/mahjong.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -177,7 +177,7 @@ https://hifukasawa77-lgtm.github.io/main/mahjong.html
 🀄 AI麻雀
 本格ルール・ロン/ツモ/カン対応
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/mahjong.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -190,7 +190,7 @@ https://hifukasawa77-lgtm.github.io/main/mahjong.html
 こいこい形式の花札・役判定あり
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/hanafuda.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hanafuda.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -202,7 +202,7 @@ https://hifukasawa77-lgtm.github.io/main/hanafuda.html
 Koi-koi style hanafuda with scoring
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/hanafuda.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hanafuda.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -212,7 +212,7 @@ https://hifukasawa77-lgtm.github.io/main/hanafuda.html
 🌸 AI花札
 こいこい形式の花札・役判定あり
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/hanafuda.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hanafuda.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -225,7 +225,7 @@ https://hifukasawa77-lgtm.github.io/main/hanafuda.html
 100首のかるたゲーム・4難易度
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -237,7 +237,7 @@ https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
 100-poem karuta game, 4 difficulty levels
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -247,7 +247,7 @@ https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
 📜 百人一首かるた
 100首のかるたゲーム・4難易度
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -260,7 +260,7 @@ https://hifukasawa77-lgtm.github.io/main/hyakunin_isshu.html
 UCT-MCTS搭載 9路盤/13路盤
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/go.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/go.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -272,7 +272,7 @@ https://hifukasawa77-lgtm.github.io/main/go.html
 UCT-MCTS engine, 9x9 and 13x13
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/go.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/go.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -282,7 +282,7 @@ https://hifukasawa77-lgtm.github.io/main/go.html
 ⚫ AI囲碁
 UCT-MCTS搭載 9路盤/13路盤
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/go.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/go.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -295,7 +295,7 @@ https://hifukasawa77-lgtm.github.io/main/go.html
 ミニマックスAI搭載のオセロ
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/othello.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/othello.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -307,7 +307,7 @@ https://hifukasawa77-lgtm.github.io/main/othello.html
 Reversi with minimax AI
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/othello.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/othello.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -317,7 +317,7 @@ https://hifukasawa77-lgtm.github.io/main/othello.html
 ⚪ AIオセロ
 ミニマックスAI搭載のオセロ
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/othello.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/othello.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -330,7 +330,7 @@ https://hifukasawa77-lgtm.github.io/main/othello.html
 ボードゲーム × AI対戦
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/backgammon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/backgammon.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -342,7 +342,7 @@ https://hifukasawa77-lgtm.github.io/main/backgammon.html
 Classic board game vs AI
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/backgammon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/backgammon.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -352,7 +352,7 @@ https://hifukasawa77-lgtm.github.io/main/backgammon.html
 🎲 Backgammon AI
 ボードゲーム × AI対戦
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/backgammon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/backgammon.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -365,7 +365,7 @@ https://hifukasawa77-lgtm.github.io/main/backgammon.html
 東京23区の物件を独占して区を支配する資産すごろく
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -377,7 +377,7 @@ https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
 Monopolize Tokyo wards and control districts
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -387,7 +387,7 @@ https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
 🏙️ 街区王 - Block Baron
 東京23区の物件を独占して区を支配する資産すごろく
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -400,7 +400,7 @@ https://hifukasawa77-lgtm.github.io/main/estate-tycoon.html
 ルドー盤 × Canvas API
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/ludo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/ludo.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -412,7 +412,7 @@ https://hifukasawa77-lgtm.github.io/main/ludo.html
 Ludo board built with Canvas API
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/ludo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/ludo.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -422,7 +422,7 @@ https://hifukasawa77-lgtm.github.io/main/ludo.html
 🎯 Ludo Neon Dice
 ルドー盤 × Canvas API
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/ludo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/ludo.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -435,7 +435,7 @@ https://hifukasawa77-lgtm.github.io/main/ludo.html
 チャイニーズチェッカー × AI
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -447,7 +447,7 @@ https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
 Chinese checkers with AI
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -457,7 +457,7 @@ https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
 🟣 Chinese Checkers
 チャイニーズチェッカー × AI
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -470,7 +470,7 @@ https://hifukasawa77-lgtm.github.io/main/chinese_checkers.html
 強制ジャンプ・キング対応のチェッカーAI
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/checkers.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/checkers.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -482,7 +482,7 @@ https://hifukasawa77-lgtm.github.io/main/checkers.html
 Checkers with forced jumps and kings
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/checkers.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/checkers.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -492,7 +492,7 @@ https://hifukasawa77-lgtm.github.io/main/checkers.html
 ⛀ Checkers AI
 強制ジャンプ・キング対応のチェッカーAI
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/checkers.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/checkers.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -505,7 +505,7 @@ https://hifukasawa77-lgtm.github.io/main/checkers.html
 陣取り×ポーカー × AI対戦
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -517,7 +517,7 @@ https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
 Grid strategy meets poker vs AI
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -527,7 +527,7 @@ https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
 ♠ ノーラックポーカー
 陣取り×ポーカー × AI対戦
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -540,7 +540,7 @@ https://hifukasawa77-lgtm.github.io/main/no-luck-poker.html
 陣取りゲーム × CPU対戦
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -552,7 +552,7 @@ https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
 Territory game vs CPU
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -562,7 +562,7 @@ https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
 🟦 ドットアンドボックス
 陣取りゲーム × CPU対戦
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -575,7 +575,7 @@ https://hifukasawa77-lgtm.github.io/main/dots-and-boxes.html
 六角形マス × ヒント機能
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/hex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hex.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -587,7 +587,7 @@ https://hifukasawa77-lgtm.github.io/main/hex.html
 Hexagonal connection game with hints
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/hex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hex.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -597,7 +597,7 @@ https://hifukasawa77-lgtm.github.io/main/hex.html
 ⬡ ヘックス
 六角形マス × ヒント機能
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/hex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hex.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -610,7 +610,7 @@ https://hifukasawa77-lgtm.github.io/main/hex.html
 穴・石・セル獲得のボードゲーム
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -622,7 +622,7 @@ https://hifukasawa77-lgtm.github.io/main/conhex.html
 Board game with pegs, holes, and cells
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -632,7 +632,7 @@ https://hifukasawa77-lgtm.github.io/main/conhex.html
 🔷 ConHex
 穴・石・セル獲得のボードゲーム
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -645,7 +645,7 @@ https://hifukasawa77-lgtm.github.io/main/conhex.html
 クニツィア設計 × 宝石誘導
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -657,7 +657,7 @@ https://hifukasawa77-lgtm.github.io/main/indigo.html
 Knizia design — guide gems to the edges
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -667,7 +667,7 @@ https://hifukasawa77-lgtm.github.io/main/indigo.html
 💎 Indigo
 クニツィア設計 × 宝石誘導
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -680,7 +680,7 @@ https://hifukasawa77-lgtm.github.io/main/indigo.html
 物理シミュレーション × キャロムAI対戦
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/carrom.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/carrom.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -692,7 +692,7 @@ https://hifukasawa77-lgtm.github.io/main/carrom.html
 Physics-based carrom with AI
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/carrom.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/carrom.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -702,7 +702,7 @@ https://hifukasawa77-lgtm.github.io/main/carrom.html
 🎯 Carrom（キャロム）
 物理シミュレーション × キャロムAI対戦
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/carrom.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/carrom.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -715,7 +715,7 @@ https://hifukasawa77-lgtm.github.io/main/carrom.html
 物理陣取り × 軌跡システム
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
 
 #個人開発 #ブラウザゲーム #アクションゲーム
 ```
@@ -727,7 +727,7 @@ https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
 Physics territory game with trails
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
 
 #indiedev #browsergames #actiongame
 ```
@@ -737,7 +737,7 @@ https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
 ⚡ モーメンタム・テリトリー
 物理陣取り × 軌跡システム
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
 #ブラウザゲーム #個人開発 #アクションゲーム
 ```
 
@@ -750,7 +750,7 @@ https://hifukasawa77-lgtm.github.io/main/momentum-territory.html
 上海パズル × 144枚
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
 
 #個人開発 #ブラウザゲーム #パズルゲーム
 ```
@@ -762,7 +762,7 @@ https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
 Shanghai-style solitaire with 144 tiles
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
 
 #indiedev #browsergames #puzzlegame
 ```
@@ -772,7 +772,7 @@ https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
 🀫 麻雀ソリティア
 上海パズル × 144枚
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
 #ブラウザゲーム #個人開発 #パズルゲーム
 ```
 
@@ -785,7 +785,7 @@ https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
 物理パズル × ミッションモード
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.html
 
 #個人開発 #ブラウザゲーム #パズルゲーム
 ```
@@ -797,7 +797,7 @@ https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.
 Physics puzzle with mission mode
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.html
 
 #indiedev #browsergames #puzzlegame
 ```
@@ -807,7 +807,7 @@ https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.
 🍎 うかぶ？しずむ？
 物理パズル × ミッションモード
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.html
 #ブラウザゲーム #個人開発 #パズルゲーム
 ```
 
@@ -820,7 +820,7 @@ https://hifukasawa77-lgtm.github.io/main/浮き沈みゲーム/fruit-water-game.
 将棋 × RPGの育成・バトル融合
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
 
 #個人開発 #ブラウザゲーム #RPG
 ```
@@ -832,7 +832,7 @@ https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
 Shogi pieces + RPG leveling and battles
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
 
 #indiedev #browsergames #rpg
 ```
@@ -842,7 +842,7 @@ https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
 ⚔️ 将棋RPG Enhanced
 将棋 × RPGの育成・バトル融合
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
 #ブラウザゲーム #個人開発 #RPG
 ```
 
@@ -855,7 +855,7 @@ https://hifukasawa77-lgtm.github.io/main/shogi_rpg_local.html
 泡割り × 小人誘導パズル
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
 
 #個人開発 #ブラウザゲーム #パズルゲーム
 ```
@@ -867,7 +867,7 @@ https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
 Pop bubbles, guide tiny climbers
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
 
 #indiedev #browsergames #puzzlegame
 ```
@@ -877,7 +877,7 @@ https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
 🫧 BUBBLE RESCUE CLIMBER
 泡割り × 小人誘導パズル
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
 #ブラウザゲーム #個人開発 #パズルゲーム
 ```
 
@@ -890,7 +890,7 @@ https://hifukasawa77-lgtm.github.io/main/bubble_rescue.html
 シューティング × 7ボス × SVGスプライト
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
 
 #個人開発 #ブラウザゲーム #アクションゲーム
 ```
@@ -902,7 +902,7 @@ https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
 Side-scroll shooter, 7 bosses, SVG sprites
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
 
 #indiedev #browsergames #actiongame
 ```
@@ -912,7 +912,7 @@ https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
 🚀 GALACTIC ASSAULT
 シューティング × 7ボス × SVGスプライト
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
 #ブラウザゲーム #個人開発 #アクションゲーム
 ```
 
@@ -925,7 +925,7 @@ https://hifukasawa77-lgtm.github.io/main/galactic-assault.html
 シムシティ風 × 電力管理
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/cyber-city.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
 
 #個人開発 #ブラウザゲーム #シミュレーションゲーム
 ```
@@ -937,7 +937,7 @@ https://hifukasawa77-lgtm.github.io/main/cyber-city.html
 SimCity-style with power grid
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/cyber-city.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
 
 #indiedev #browsergames #strategygame
 ```
@@ -947,7 +947,7 @@ https://hifukasawa77-lgtm.github.io/main/cyber-city.html
 🏙️ CITY BUILDER
 シムシティ風 × 電力管理
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/cyber-city.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
 ```
 
@@ -960,7 +960,7 @@ https://hifukasawa77-lgtm.github.io/main/cyber-city.html
 8シナリオ・10勢力の三国志戦略SLG。内政・登用・外交・計略とヘックス合戦
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/sanguo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/sanguo.html
 
 #個人開発 #ブラウザゲーム #シミュレーションゲーム
 ```
@@ -972,7 +972,7 @@ https://hifukasawa77-lgtm.github.io/main/sanguo.html
 Three Kingdoms strategy sim: 8 scenarios, 10 factions, hex battles
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/sanguo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/sanguo.html
 
 #indiedev #browsergames #strategygame
 ```
@@ -982,7 +982,7 @@ https://hifukasawa77-lgtm.github.io/main/sanguo.html
 🀄 三国志・天下三分
 8シナリオ・10勢力の三国志戦略SLG。内政・登用・外交・計略とヘックス合戦
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/sanguo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/sanguo.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
 ```
 
@@ -995,7 +995,7 @@ https://hifukasawa77-lgtm.github.io/main/sanguo.html
 日本戦国の大名で天下統一を目指す戦略SLG。街道・城・攻城ヘックス戦
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/sengoku.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/sengoku.html
 
 #個人開発 #ブラウザゲーム #シミュレーションゲーム
 ```
@@ -1007,7 +1007,7 @@ https://hifukasawa77-lgtm.github.io/main/sengoku.html
 Japanese Sengoku strategy sim with roads, castles and hex sieges
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/sengoku.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/sengoku.html
 
 #indiedev #browsergames #strategygame
 ```
@@ -1017,7 +1017,7 @@ https://hifukasawa77-lgtm.github.io/main/sengoku.html
 🏯 戦国風雲記
 日本戦国の大名で天下統一を目指す戦略SLG。街道・城・攻城ヘックス戦
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/sengoku.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/sengoku.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
 ```
 
@@ -1030,7 +1030,7 @@ https://hifukasawa77-lgtm.github.io/main/sengoku.html
 治承・寿永の乱1180-1189の歴史SLG。兵力ではなく名分（院宣・官位・三種の神器）を獲る
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/genpei.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/genpei.html
 
 #個人開発 #ブラウザゲーム #シミュレーションゲーム
 ```
@@ -1042,7 +1042,7 @@ https://hifukasawa77-lgtm.github.io/main/genpei.html
 Genpei War strategy sim 1180-1189: win legitimacy, not castles
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/genpei.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/genpei.html
 
 #indiedev #browsergames #strategygame
 ```
@@ -1052,7 +1052,7 @@ https://hifukasawa77-lgtm.github.io/main/genpei.html
 🏹 源平争乱記
 治承・寿永の乱1180-1189の歴史SLG。兵力ではなく名分（院宣・官位・三種の神器）を獲る
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/genpei.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/genpei.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
 ```
 
@@ -1065,7 +1065,7 @@ https://hifukasawa77-lgtm.github.io/main/genpei.html
 元弘の乱〜南北朝合一1331-1392の歴史SLG。朝廷・恩賞・悪党で忠誠と正統性を奪い合う
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/taihei.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/taihei.html
 
 #個人開発 #ブラウザゲーム #シミュレーションゲーム
 ```
@@ -1077,7 +1077,7 @@ https://hifukasawa77-lgtm.github.io/main/taihei.html
 Nanboku-chō era strategy sim 1331-1392: contest loyalty and court legitimacy
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/taihei.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/taihei.html
 
 #indiedev #browsergames #strategygame
 ```
@@ -1087,7 +1087,7 @@ https://hifukasawa77-lgtm.github.io/main/taihei.html
 ⚖️ 太平風雲記
 元弘の乱〜南北朝合一1331-1392の歴史SLG。朝廷・恩賞・悪党で忠誠と正統性を奪い合う
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/taihei.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/taihei.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
 ```
 
@@ -1100,7 +1100,7 @@ https://hifukasawa77-lgtm.github.io/main/taihei.html
 ガチャ × 鉄道図鑑 × すごろく旅
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/train-collection.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/train-collection.html
 
 #個人開発 #ブラウザゲーム #シミュレーションゲーム
 ```
@@ -1112,7 +1112,7 @@ https://hifukasawa77-lgtm.github.io/main/train-collection.html
 Train gacha collection & sugoroku travel
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/train-collection.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/train-collection.html
 
 #indiedev #browsergames #strategygame
 ```
@@ -1122,7 +1122,7 @@ https://hifukasawa77-lgtm.github.io/main/train-collection.html
 🚆 でんしゃずかんワールド
 ガチャ × 鉄道図鑑 × すごろく旅
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/train-collection.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/train-collection.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
 ```
 
@@ -1135,7 +1135,7 @@ https://hifukasawa77-lgtm.github.io/main/train-collection.html
 7タイトル収録のトランプ集
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/card-games.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/card-games.html
 
 #個人開発 #ブラウザゲーム #カードゲーム
 ```
@@ -1147,7 +1147,7 @@ https://hifukasawa77-lgtm.github.io/main/card-games.html
 7 card game titles bundled together
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/card-games.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/card-games.html
 
 #indiedev #browsergames #cardgame
 ```
@@ -1157,7 +1157,7 @@ https://hifukasawa77-lgtm.github.io/main/card-games.html
 🃏 トランプゲーム集
 7タイトル収録のトランプ集
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/card-games.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/card-games.html
 #ブラウザゲーム #個人開発 #カードゲーム
 ```
 
@@ -1170,7 +1170,7 @@ https://hifukasawa77-lgtm.github.io/main/card-games.html
 タイピング × アーケード演出
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
 
 #個人開発 #ブラウザゲーム
 ```
@@ -1182,7 +1182,7 @@ https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
 Arcade-style typing trainer
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
 
 #indiedev #browsergames
 ```
@@ -1192,7 +1192,7 @@ https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
 ⌨️ Typing Dojo
 タイピング × アーケード演出
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
 #ブラウザゲーム #個人開発
 ```
 
@@ -1205,7 +1205,7 @@ https://hifukasawa77-lgtm.github.io/main/typing_dojo.html
 ボードゲーム × 歴史シミュレーション
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -1217,7 +1217,7 @@ https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
 Board game with historical simulation
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -1227,7 +1227,7 @@ https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
 📜 影の権力者
 ボードゲーム × 歴史シミュレーション
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -1240,7 +1240,7 @@ https://hifukasawa77-lgtm.github.io/main/fixer-of-history.html
 和風2D格闘ゲーム。盲目の剣士「月影」vs 鬼化する盗賊「紅蓮」
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/hyakki.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hyakki.html
 
 #個人開発 #ブラウザゲーム #アクションゲーム
 ```
@@ -1252,7 +1252,7 @@ https://hifukasawa77-lgtm.github.io/main/hyakki.html
 Japanese-style 2D fighting game — blind swordsman vs demon thief
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/hyakki.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hyakki.html
 
 #indiedev #browsergames #actiongame
 ```
@@ -1262,7 +1262,7 @@ https://hifukasawa77-lgtm.github.io/main/hyakki.html
 ⚔️ 百鬼演武録
 和風2D格闘ゲーム。盲目の剣士「月影」vs 鬼化する盗賊「紅蓮」
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/hyakki.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hyakki.html
 #ブラウザゲーム #個人開発 #アクションゲーム
 ```
 
@@ -1275,7 +1275,7 @@ https://hifukasawa77-lgtm.github.io/main/hyakki.html
 壁を置いて相手の進路を封鎖する戦略ボードゲーム
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-https://hifukasawa77-lgtm.github.io/main/corridor.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/corridor.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -1287,7 +1287,7 @@ https://hifukasawa77-lgtm.github.io/main/corridor.html
 Block your opponent's path with walls
 
 Free in your browser, no install required.
-https://hifukasawa77-lgtm.github.io/main/corridor.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/corridor.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -1297,6 +1297,6 @@ https://hifukasawa77-lgtm.github.io/main/corridor.html
 🧱 ウォールチェイス
 壁を置いて相手の進路を封鎖する戦略ボードゲーム
 ブラウザで無料・インストール不要。
-https://hifukasawa77-lgtm.github.io/main/corridor.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/corridor.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
