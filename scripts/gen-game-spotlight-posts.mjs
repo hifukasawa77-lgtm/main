@@ -49,9 +49,9 @@ export function buildSpotlights(GAMES) {
     const extraJa = tag ? ` #${tag.ja}` : '';
     const extraEn = tag ? ` #${tag.en}` : '';
 
-    const xJa = `${g.emoji} ${g.title.ja}\n\n${g.desc.ja}\n\nブラウザで無料・インストール不要、今すぐ遊べます。\n${url}\n\n#個人開発 #ブラウザゲーム${extraJa}`;
-    const xEn = `${g.emoji} ${g.title.en}\n\n${g.desc.en}\n\nFree in your browser, no install required.\n${url}\n\n#indiedev #browsergames${extraEn}`;
-    const bJa = `${g.emoji} ${g.title.ja}\n${g.desc.ja}\nブラウザで無料・インストール不要。\n${url}\n#ブラウザゲーム #個人開発${extraJa}`;
+    const xJa = `${g.emoji} ${g.title.ja}\n\n${g.desc.ja}\n\nブラウザで無料・インストール不要、今すぐ遊べます。\n▶ hideの部屋 ${url}\n\n#個人開発 #ブラウザゲーム${extraJa}`;
+    const xEn = `${g.emoji} ${g.title.en}\n\n${g.desc.en}\n\nFree in your browser, no install required.\n▶ hideの部屋 ${url}\n\n#indiedev #browsergames${extraEn}`;
+    const bJa = `${g.emoji} ${g.title.ja}\n${g.desc.ja}\nブラウザで無料・インストール不要。\n▶ hideの部屋 ${url}\n#ブラウザゲーム #個人開発${extraJa}`;
 
     x.push({ id: `game-${g.slug}-x-ja`, gameSlug: g.slug, text: xJa });
     x.push({ id: `game-${g.slug}-x-en`, gameSlug: g.slug, text: xEn });
