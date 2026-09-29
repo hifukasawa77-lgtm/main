@@ -945,6 +945,10 @@ openssl dgst -sha384 -binary package/<CDNパスと同じファイル> | openssl 
 
 ## コンテキスト節約のルール（必ず守ること）
 
+**作業を依頼されたら、最初に `context-saver` スキル（`.claude/skills/context-saver/SKILL.md`）の規約を適用する**。
+実装・修正・調査・レビューのどれでも、読む前に Grep で場所を特定し、Read は offset+limit、検査出力は要約だけ読む。
+補助: `bash .claude/skills/context-saver/ctx-peek.sh FILE 'PATTERN'`（該当行と推奨offsetだけ出す）。
+
 ### ファイル読み込みの基本原則
 - **Read前に必ず grep/find** で対象行番号を特定する
 - **Read には offset + limit を必ず指定**（全体読み込み禁止）
