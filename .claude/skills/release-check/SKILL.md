@@ -38,3 +38,4 @@ bash .claude/skills/release-check/release-check.sh
   100KB未満は変換の実利が薄いため対象外。除外（Instagram用JPEG／OGP／地図／sengokuアトラス）は
   スクリプト内に理由つきで定義してある。assets全体を見るには引数なしで実行する
 - チェック通過後の流れ: /dynamic-test（変更HTML）→ コミット → push → /deploy-verify
+- #10 は提示だけ。**割り出しと一括実行は `/required-checks`**（`--run`）。正本は agent-conventions §4 の表
