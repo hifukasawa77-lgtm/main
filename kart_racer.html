@@ -215,7 +215,8 @@ function loadRasterAsset(file){
 }
 const gptImages = {
   atlas: loadRasterAsset('asset-atlas-gpt-image-2.webp'),
-  track: loadRasterAsset('track-textures-gpt-image-2.webp')
+  track: loadRasterAsset('track-textures-gpt-image-2.webp'),
+  stageObstacles: loadRasterAsset('stage-obstacles-gpt-image-2_5.png')
 };
 function imageReady(img){ return !!(img && img.complete && img.naturalWidth > 0); }
 const atlasRects = {
@@ -254,6 +255,12 @@ const trackRects = {
   grass: {x:16,y:914,w:372,h:212},
   lightStreak: {x:768,y:830,w:472,h:68},
   dustStrip: {x:768,y:1014,w:472,h:102}
+};
+// GPT-image 2.5 で生成した 3 x 3 の透過スプライトシート。各都市に固有の路傍障害物を割り当てる。
+const stageObstacleRects = {
+  tokyo:{x:0,y:0,w:427,h:427}, beijing:{x:427,y:0,w:427,h:427}, moscow:{x:853,y:0,w:427,h:427},
+  delhi:{x:0,y:427,w:427,h:427}, cairo:{x:427,y:427,w:427,h:427}, rome:{x:853,y:427,w:427,h:427},
+  paris:{x:0,y:853,w:427,h:427}, 'new-york':{x:427,y:853,w:427,h:427}, nurburgring:{x:853,y:853,w:427,h:427}
 };
 function drawAsset(c, img, r, x, y, w, h, alpha){
   if (!imageReady(img) || !r) return false;
@@ -431,7 +438,11 @@ const PATH=[],PATH_DIST=[];
 let PATH_LEN=0,TOTAL_DIST=0;
 function rebuildPath(){
   PATH.length=0;PATH_DIST.length=0;
-  const pts=activeStage.points.map(([x,y])=>({x,y})),n=pts.length;
+  // 東京は楕円をやめ、直線・S字・ヘアピンをつないだ市街地レイアウトにする。
+  const stagePoints=activeStage.id==='tokyo'
+    ? [[430,210],[820,180],[1210,250],[1540,170],[1890,330],[2010,610],[1770,760],[1970,1010],[1600,1160],[1270,1030],[940,1190],[590,1060],[330,850],[510,650],[260,470]]
+    : activeStage.points;
+  const pts=stagePoints.map(([x,y])=>({x,y})),n=pts.length;
   const raw=[];
   for(let i=0;i<n;i++)for(let step=0;step<SEG_PER;step++)raw.push(catmullRom(pts[(i-1+n)%n],pts[i],pts[(i+1)%n],pts[(i+2)%n],step/SEG_PER));
   // Uniform world-space spacing keeps lap deltas and AI look-ahead consistent.
@@ -577,7 +588,8 @@ function makeProps(){
   for (let i=0;i<activeStage.propCount;i++){
     const idx=Math.floor(rng()*PATH_LEN), p=PATH[idx], nrm=pathNormal(idx);
     const side=rng()<0.5?-1:1, off=ROAD_WIDTH*0.5+44+rng()*105;
-    arr.push({ x:p.x+nrm.x*off*side, y:p.y+nrm.y*off*side, type:rng()<activeStage.treeRatio?'tree':'sign', hue:95+rng()*40, scale:0.7+rng()*0.7 });
+    const obstacleRatio=activeStage.obstacleRatio ?? (activeStage.id==='cairo'?0.76:0.82);
+    arr.push({ x:p.x+nrm.x*off*side, y:p.y+nrm.y*off*side, type:rng()<obstacleRatio?'obstacle':'sign', scale:0.7+rng()*0.7 });
   }
   return arr;
 }
@@ -1069,6 +1081,13 @@ class RaceScene extends Scene {
 
   drawProp3D(c, pp, pr){
     const s=pr.scale, cx=pr.x, baseY=pr.y;
+    if (pp.type==='obstacle'){
+      const r=stageObstacleRects[activeStage.id], size=108*s*pp.scale;
+      if (drawAsset(c,gptImages.stageObstacles,r,cx-size/2,baseY-size*.96,size,size)) return;
+      c.fillStyle=activeStage.accent;c.fillRect(cx-size*.34,baseY-size*.34,size*.68,size*.34);
+      c.fillStyle='#27313a';c.fillRect(cx-size*.22,baseY-size*.06,size*.08,size*.24);c.fillRect(cx+size*.14,baseY-size*.06,size*.08,size*.24);
+      return;
+    }
     if (pp.type==='tree'&&imageReady(pineImage)){
       const size=90*s*pp.scale;if(cx+size/2<0||cx-size/2>W||baseY-size>H)return;
       c.save();c.fillStyle='rgba(26,40,29,.15)';c.beginPath();c.ellipse(cx-size*.12,baseY,size*.44,size*.08,-.15,0,Math.PI*2);c.fill();
