@@ -247,6 +247,10 @@ node scripts/verify-service-worker.mjs   # 別オリジンの素通し／拒否�
 - 検査はブラウザ無しで走る（node:vm に偽の `self`/`caches`/`fetch` を渡してSWを実行し、
   合成した fetch イベントを流す）。**「origin という文字が在るか」の静的検査にしないこと**——
   周りを壊すと素通りする
+- **`main.css` 等の共通CSSは cache-first 経路**。中身を変えても再訪者のキャッシュがそのまま
+  返るため、**例外もエラーも出ずにCSSの変更だけが反映されない**。読み込み側の `?v=` クエリ
+  （バージョン番号）を上げてキャッシュキーを変えること。忘れやすいのは「HTMLは変えたがCSSだけ
+  触った」回（2026-09-26、トップページ改修で実際に踏んだ）
 
 ## ZERO-1 Mobile とエアタッチの必須チェック（zero-1-mobile.html / assets/js/gesture-pointer.js を触ったら必ず実行）
 
