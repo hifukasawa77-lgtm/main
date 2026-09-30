@@ -519,6 +519,31 @@ node scripts/verify-receipt-ocr.mjs --ocr   # 実物のTesseractで読む（npm�
 - **家計簿はこのブラウザの localStorage だけ**。読み書きは必ず try/catch（シークレットタブで
   `localStorage` の参照自体が例外を投げる）。品目名はOCR由来の外部文字列なので `textContent` だけで描く
 
+## 推し活ログの必須チェック（oshikatsu.html を触ったら必ず実行）
+
+```bash
+node scripts/verify-oshikatsu.mjs            # 検疫→基本フロー→予定→定期出費→ほしい物→入出力→予算→グラフ画素→テーマ→FAB→モバイル幅（73項目）
+node scripts/verify-oshikatsu.mjs --shots DIR # 画面を撮る（見た目を変えたら目視する）
+```
+
+- **このページだけは黒背景ルールの例外**。深澤の指示（2026-09-30・モックアップ画像つき）で、標準を
+  **淡いピンク×ラベンダーのパステル**にした。ダークは `data-theme="dark"` の切替で残してある
+  （旧デザイン＝黒背景＋パープル/シアンへ戻せる）。サイバーパンク調の禁止は変わらない
+- **保存キーは `oshikatsu_log_v1` のまま**。項目を足すだけで後方互換を保つ。読み込みと取り込みは
+  必ず `sanitize()` を通す——**日付が壊れた1件**で `localeCompare` が例外を投げ、一覧もダッシュボードも
+  丸ごと描かれなくなる（旧版はこれに無防備だった）。読めない保存データは上書きせず `_corrupt` へ退避
+- **Canvasの `height` 属性を読み書きしない**。`canvas.height = cssH * dpr` は属性を書き換えるので、
+  次の描画で属性を読むと **dpr>1 の端末で再描画のたびに高さが倍々に膨らむ**（例外は出ない。元の実装にあった）。
+  基準の高さは `data-h` に固定する
+- **定期出費は「生成済みの月」を `last` で覚える**。出費を消しても再生成せず、再適用しても二重計上しない
+- **ユーザー入力は `textContent` だけ**。CSVは先頭が `= + - @` の文字列を `'` で無害化（表計算の数式実行対策）
+- **推しのアイコン**: 主役は**利用者が選ぶ写真**（端末内で192pxの正方形へ縮小→データURLで保存。外部送信なし・
+  90KB上限）。初期キャラは `assets/oshikatsu/chara-*.webp`（Canva AI生成のオリジナル5体。出自は同フォルダの README）。
+  アバター値は必ず `validAvatar()` を通す（`javascript:`・SVG・外部URL・巨大データ・未知プリセットは拒否）。
+  画像が読めなければ頭文字のアバターへ戻る（壊れた画像アイコンを出さない）。**画像生成に有料API（GPT-Image等）は使わない**
+- 検査用ブリッジ `window.OSHI_DEBUG` は `window.__OSHI_TEST` のときだけ開く。関数を足したらここにも足す
+- 検査の**スクロール位置に注意**: 画面外のCanvasは `page.mouse.click` の座標が合わない（`scrollIntoViewIfNeeded` してから）
+
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
 - スターター: `gamekit/template.html` をリポジトリ直下にコピーして開始する
