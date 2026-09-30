@@ -299,6 +299,15 @@
     .avatar { border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; flex: 0 0 auto; border: 3px solid #fff; box-shadow: 0 4px 12px -4px rgba(120, 60, 160, 0.45); text-shadow: 0 1px 3px rgba(0,0,0,0.25); }
     :root[data-theme="dark"] .avatar { border-color: rgba(255, 255, 255, 0.25); }
 
+    .avatar { position: relative; overflow: hidden; }
+    .avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+    .icon-pick { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+    .icon-pick .ip-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .preset-row button { padding: 0; border: 3px solid transparent; background: none; border-radius: 50%; cursor: pointer; line-height: 0; }
+    .preset-row button[aria-pressed="true"] { border-color: var(--accent); }
+    .preset-row .avatar { border-width: 2px; }
+
     /* 推し別ランキング */
     .rank-list { list-style: none; display: flex; flex-direction: column; gap: 12px; }
     .rank-row { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; }
@@ -800,6 +809,20 @@
         <h2><span id="oshi-form-title">⭐ 推しを登録</span> <span class="en">Oshi</span></h2>
         <form id="form-oshi">
           <div class="form-grid">
+            <div class="field full"><label>アイコン / Icon</label>
+              <div class="icon-pick">
+                <div id="icon-preview" aria-hidden="true"></div>
+                <div class="ip-side">
+                  <div class="btn-row" style="margin:0">
+                    <button type="button" class="btn small" id="btn-photo">📷 写真を選ぶ / Photo</button>
+                    <button type="button" class="btn ghost small" id="btn-photo-clear">アイコンなし / None</button>
+                    <input type="file" id="file-photo" accept="image/*" hidden>
+                  </div>
+                  <div class="preset-row" id="preset-row" aria-label="初期キャラ / Preset characters"></div>
+                  <p class="note">写真はこの端末の中で小さく縮めて保存します（送信されません）。</p>
+                </div>
+              </div>
+            </div>
             <div class="field"><label for="oshi-name">名前 / Name</label><input type="text" id="oshi-name" maxlength="40" placeholder="推しの名前" required></div>
             <div class="field"><label for="oshi-cat">カテゴリ / Category</label><select id="oshi-cat"></select></div>
             <div class="field"><label for="oshi-color">テーマカラー / Color</label><input type="color" id="oshi-color" value="#8b5cf6">
@@ -956,6 +979,20 @@
       attended: { ja: '参戦済',   en: 'Attended', cls: 'st-attended' },
       lost:     { ja: '落選',     en: 'Lost',     cls: 'st-lost' }
     };
+    // 初期キャラ（オリジナル・assets/oshikatsu/chara-<key>.webp）
+    var PRESET_AVATARS = [
+      { k: 'sakura', name: 'さくら', color: '#f472b6' }, { k: 'minato', name: 'みなと', color: '#60a5fa' },
+      { k: 'haru', name: 'はる', color: '#a78bfa' }, { k: 'mio', name: 'みお', color: '#34d399' },
+      { k: 'sora', name: 'そら', color: '#fbbf24' }
+    ];
+    var AVATAR_DATA_RE = /^data:image\/(webp|jpeg|png);base64,[A-Za-z0-9+\/]+=*$/;
+    var AVATAR_MAX = 90000; // データURLの上限（文字数）。localStorage を圧迫しない大きさ
+    function presetPath(key) { return 'assets/oshikatsu/chara-' + key + '.webp'; }
+    function validAvatar(v) {
+      if (typeof v !== 'string') return '';
+      if (v.indexOf('preset:') === 0) return PRESET_AVATARS.some(function (p) { return 'preset:' + p.k === v; }) ? v : '';
+      return (v.length <= AVATAR_MAX && AVATAR_DATA_RE.test(v)) ? v : '';
+    }
     var TAB_IDS = ['dashboard', 'expenses', 'events', 'oshi', 'wishes', 'settings'];
     var PAGE_SIZE = 40;
     var BACKUP_DAYS = 30;
@@ -1030,7 +1067,7 @@
           id: oid(o.id), name: name,
           category: OSHI_CAT_KEYS.indexOf(o.category) >= 0 ? o.category : 'その他',
           color: COLOR_RE.test(o.color) ? o.color : '#8b5cf6',
-          budget: intAmt(o.budget), birthday: MD_RE.test(o.birthday) ? o.birthday : ''
+          budget: intAmt(o.budget), birthday: MD_RE.test(o.birthday) ? o.birthday : '', avatar: validAvatar(o.avatar)
         };
         oshiIds[rec.id] = 1; s.oshiList.push(rec);
       });
@@ -1153,12 +1190,18 @@
     function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
     function lighten(hex) { return 'color-mix(in srgb, ' + hex + ' 45%, #ffffff)'; }
     // 推しのアバター（画像を持たないので、テーマカラーのグラデ＋頭文字）
-    function avatar(o, size) {
-      var a = node('span', 'avatar', o ? (Array.from(o.name)[0] || '？') : '？');
-      var c = o ? o.color : '#94a3b8';
+    function avatar(o, size) { return avatarFrom(o ? o.name : '', o ? o.color : '#94a3b8', o ? o.avatar : '', size); }
+    function avatarFrom(name, color, av, size) {
+      var a = node('span', 'avatar', name ? (Array.from(name)[0] || '？') : '？');
       a.style.width = a.style.height = size + 'px'; a.style.fontSize = Math.round(size * 0.42) + 'px';
-      a.style.background = 'linear-gradient(135deg,' + c + ',' + lighten(c) + ')';
+      a.style.background = 'linear-gradient(135deg,' + color + ',' + lighten(color) + ')';
       a.setAttribute('aria-hidden', 'true');
+      var src = av ? (av.indexOf('preset:') === 0 ? presetPath(av.slice(7)) : av) : '';
+      if (src) {
+        var img = document.createElement('img'); img.alt = ''; img.decoding = 'async'; img.loading = 'lazy';
+        img.addEventListener('error', function () { if (img.parentNode) img.parentNode.removeChild(img); }); // 読めなければ頭文字に戻る
+        img.src = src; a.appendChild(img);
+      }
       return a;
     }
     // 費目・種別の丸アイコン（枠の色＝推しのテーマカラー）
@@ -1331,7 +1374,7 @@
       PRESET_COLORS.forEach(function (c) {
         var b = node('button'); b.type = 'button'; b.style.background = c;
         b.setAttribute('aria-label', '色 ' + c); b.setAttribute('aria-pressed', 'false'); b.setAttribute('data-c', c);
-        b.addEventListener('click', function () { el('oshi-color').value = c; syncSwatches(); });
+        b.addEventListener('click', function () { el('oshi-color').value = c; syncSwatches(); if (!formAvatar) renderIconPick(); });
         box.appendChild(b);
       });
     }
@@ -1343,18 +1386,71 @@
     }
     el('oshi-color').addEventListener('input', syncSwatches);
 
+    var formAvatar = '';
+    function renderIconPick() {
+      var pv = el('icon-preview'); pv.textContent = '';
+      pv.appendChild(avatarFrom(el('oshi-name').value.trim(), el('oshi-color').value, formAvatar, 72));
+      var row = el('preset-row'); row.textContent = '';
+      PRESET_AVATARS.forEach(function (p) {
+        var b = node('button'); b.type = 'button'; b.setAttribute('aria-label', '初期キャラ: ' + p.name);
+        b.setAttribute('aria-pressed', formAvatar === 'preset:' + p.k ? 'true' : 'false');
+        b.appendChild(avatarFrom(p.name, p.color, 'preset:' + p.k, 44));
+        b.addEventListener('click', function () { formAvatar = 'preset:' + p.k; renderIconPick(); });
+        row.appendChild(b);
+      });
+      row.hidden = PRESET_AVATARS.length === 0;
+    }
+    el('oshi-name').addEventListener('input', function () { if (!formAvatar) renderIconPick(); });
+    el('oshi-color').addEventListener('input', function () { if (!formAvatar) renderIconPick(); });
+    el('btn-photo').addEventListener('click', function () { el('file-photo').click(); });
+    el('btn-photo-clear').addEventListener('click', function () { formAvatar = ''; renderIconPick(); });
+    // 写真は端末内で正方形に切り抜いて縮小し、データURLで保存する（EXIFの向きも反映）
+    function loadBitmap(file) {
+      if (window.createImageBitmap) return createImageBitmap(file, { imageOrientation: 'from-image' }).catch(function () { return viaImage(file); });
+      return viaImage(file);
+    }
+    function viaImage(file) {
+      return new Promise(function (resolve, reject) {
+        var url = URL.createObjectURL(file), img = new Image();
+        img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('decode')); };
+        img.src = url;
+      });
+    }
+    function shrinkToAvatar(src, size) {
+      var w = src.width || src.naturalWidth, h = src.height || src.naturalHeight, side = Math.min(w, h);
+      var c = document.createElement('canvas'); c.width = c.height = size;
+      var x = c.getContext('2d'); x.imageSmoothingQuality = 'high';
+      x.drawImage(src, (w - side) / 2, (h - side) / 2, side, side, 0, 0, size, size);
+      var out = c.toDataURL('image/webp', 0.82);
+      if (out.indexOf('data:image/webp') !== 0) out = c.toDataURL('image/jpeg', 0.8); // webp非対応の端末
+      return out;
+    }
+    el('file-photo').addEventListener('change', function (e) {
+      var file = e.target.files && e.target.files[0], input = e.target; if (!file) return;
+      if (!/^image\//.test(file.type) || file.size > 20 * 1024 * 1024) { toast('画像ファイル（20MBまで）を選んでください'); input.value = ''; return; }
+      loadBitmap(file).then(function (bmp) {
+        var out = shrinkToAvatar(bmp, 192);
+        if (out.length > AVATAR_MAX) out = shrinkToAvatar(bmp, 128);
+        if (!validAvatar(out)) throw new Error('size');
+        formAvatar = out; renderIconPick(); toast('アイコンを設定しました 📷（保存で確定）');
+      }).catch(function () { toast('この画像は読み込めませんでした'); });
+      input.value = '';
+    });
+
     function resetOshiForm() {
-      editing.oshi = null;
+      editing.oshi = null; formAvatar = '';
       el('form-oshi').reset(); el('oshi-color').value = PRESET_COLORS[state.oshiList.length % PRESET_COLORS.length];
       el('oshi-form-title').textContent = '⭐ 推しを登録';
       el('oshi-submit').textContent = '＋ 推しを追加 / Add'; el('oshi-cancel').hidden = true;
-      syncSwatches();
+      syncSwatches(); renderIconPick();
     }
     function startEditOshi(id) {
       var o = findById(state.oshiList, id); if (!o) return;
       editing.oshi = id;
       el('oshi-name').value = o.name; el('oshi-cat').value = o.category; el('oshi-color').value = o.color;
       el('oshi-budget').value = o.budget || ''; el('oshi-bday').value = o.birthday ? '2000-' + o.birthday : '';
+      formAvatar = o.avatar || ''; renderIconPick();
       el('oshi-form-title').textContent = '✎ 推しを編集';
       el('oshi-submit').textContent = '更新 / Update'; el('oshi-cancel').hidden = false;
       syncSwatches(); el('panel-oshi-form').scrollIntoView({ behavior: 'smooth', block: 'start' }); el('oshi-name').focus();
@@ -1366,7 +1462,7 @@
       var bd = el('oshi-bday').value;
       var rec = {
         name: name.slice(0, 40), category: el('oshi-cat').value, color: el('oshi-color').value,
-        budget: intAmt(el('oshi-budget').value), birthday: DATE_RE.test(bd) ? bd.slice(5) : ''
+        budget: intAmt(el('oshi-budget').value), birthday: DATE_RE.test(bd) ? bd.slice(5) : '', avatar: validAvatar(formAvatar)
       };
       if (editing.oshi) {
         var o = findById(state.oshiList, editing.oshi); if (o) Object.assign(o, rec);
@@ -2483,8 +2579,8 @@
     el('btn-onb-oshi').addEventListener('click', function () { showTab('oshi'); el('oshi-name').focus(); });
     el('btn-onb-sample').addEventListener('click', function () {
       if (state.oshiList.length || state.expenses.length) return;
-      var a = { id: uid(), name: 'サンプル推しA', category: 'アイドル', color: '#f472b6', budget: 20000, birthday: dayOffset(12).slice(5) };
-      var b = { id: uid(), name: 'サンプル推しB', category: 'VTuber', color: '#22d3ee', budget: 0, birthday: '' };
+      var a = { id: uid(), name: 'サンプル推しA', category: 'アイドル', color: '#f472b6', budget: 20000, birthday: dayOffset(12).slice(5), avatar: 'preset:sakura' };
+      var b = { id: uid(), name: 'サンプル推しB', category: 'VTuber', color: '#60a5fa', budget: 0, birthday: '', avatar: 'preset:minato' };
       state.oshiList.push(a, b);
       var ev1 = { id: uid(), date: dayOffset(-18), oshiId: a.id, name: 'サンプル LIVE TOUR 東京公演', venue: '東京ドーム', seat: 'アリーナ A', companion: '友人', memo: '神セトリ！', status: '', rating: 5 };
       var ev2 = { id: uid(), date: dayOffset(21), oshiId: a.id, name: 'サンプル LIVE TOUR 大阪公演', venue: '大阪城ホール', seat: '', companion: '', memo: '', status: '', rating: 0 };
@@ -2554,7 +2650,7 @@
         getState: function () { return state; }, setState: function (s) { state = sanitize(s); save(); renderAll(); },
         sanitize: sanitize, effStatus: effStatus, applyRecurring: applyRecurring, buildICS: buildICS,
         csvCell: csvCell, highlightLines: highlightLines, importData: importData, daysToBirthday: daysToBirthday,
-        view: view, renderAll: renderAll, yen: yen, STORE_KEY: STORE_KEY, CORRUPT_KEY: CORRUPT_KEY
+        view: view, renderAll: renderAll, validAvatar: validAvatar, PRESET_AVATARS: PRESET_AVATARS, yen: yen, STORE_KEY: STORE_KEY, CORRUPT_KEY: CORRUPT_KEY
       };
     }
   })();

@@ -51,7 +51,13 @@ const page = await ctx.newPage();
 const errors = [], missing = [], external = [];
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
-page.on('requestfailed', (r) => { if (r.url().startsWith(BASE)) missing.push('failed ' + r.url()); else external.push(r.url()); });
+// 検査自身の reload で中断された自オリジンの取得（ERR_ABORTED）は、実体が在るときだけ除外する（無いファイルは従来どおりFAIL）
+page.on('requestfailed', (r) => {
+  if (!r.url().startsWith(BASE)) { external.push(r.url()); return; }
+  const f = path.join(ROOT, decodeURIComponent(new URL(r.url()).pathname).replace(/^\//, ''));
+  if (/ERR_ABORTED/.test(r.failure()?.errorText || '') && fs.existsSync(f)) return;
+  missing.push('failed ' + r.url());
+});
 page.on('response', (r) => { if (r.status() >= 400 && r.url().startsWith(BASE)) missing.push(`${r.status()} ${r.url()}`); });
 page.on('dialog', (d) => d.accept());
 
@@ -102,7 +108,7 @@ check('「宙に浮いた推しID」は未割当に整う', st.expenses.every((e
 console.log('\n── 3. XSS（ユーザー入力は textContent のみ）──');
 check('推し名に入れた <img onerror> が実行されない', (await page.evaluate(() => window.__xss)) === undefined);
 await tab('oshi');
-check('DOM に img 要素が生成されていない', (await page.locator('#page-oshi img, #page-dashboard img').count()) === 0);
+check('入力した文字列から img 要素が生成されていない（注入した src="x" / onerror の img が無い）', (await page.locator('img[src="x"], img[onerror]').count()) === 0);
 await page.fill('#oshi-name', '<script>window.__xss2=1</script>');
 await page.click('#oshi-submit');
 check('フォームから入れたスクリプトも実行されず文字として表示', (await page.evaluate(() => window.__xss2)) === undefined &&
@@ -225,6 +231,45 @@ check('グラフの棒をクリックすると「累計」から先月の月表�
   const hs = await hp.evaluate(() => ['chart-category', 'chart-monthly'].map((id) => document.getElementById(id).getBoundingClientRect().height));
   check('dpr2で何度再描画してもCanvasの高さが変わらない（140/240px）', Math.round(hs[0]) === 140 && Math.round(hs[1]) === 240, `高さ=${hs.map(Math.round)}`);
   await hp.close();
+}
+
+console.log('\n── 10b. アイコン（写真アップロード・初期キャラ）──');
+{
+  const ap = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const aerr = []; ap.on('pageerror', (e) => aerr.push(e.message));
+  const reqs = []; ap.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !/fonts\.(googleapis|gstatic)/.test(r.url())) reqs.push(r.url()); });
+  await ap.addInitScript(() => { window.__OSHI_TEST = true; });
+  await ap.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
+  await ap.evaluate(() => localStorage.clear()); await ap.reload({ waitUntil: 'load' });
+  await ap.click('#btn-onb-sample'); await ap.waitForTimeout(300);
+  const loaded = await ap.evaluate(() => Promise.all([...document.querySelectorAll('#oshi-strip .avatar img')].map((i) => i.complete ? i.naturalWidth : new Promise((r) => { i.onload = () => r(i.naturalWidth); i.onerror = () => r(0); }))));
+  check('サンプルの初期キャラ画像が実際に読み込まれる（naturalWidth>0）', loaded.length === 2 && loaded.every((w) => w > 0), `幅=${loaded}`);
+  await ap.click('#tab-oshi');
+  check('フォームに初期キャラの選択肢が5体出る', (await ap.locator('#preset-row button').count()) === 5);
+  await ap.click('#preset-row button:nth-child(3)'); await ap.fill('#oshi-name', '新しい推し'); await ap.click('#oshi-submit');
+  check('初期キャラを選んで保存できる', (await ap.evaluate(() => window.OSHI_DEBUG.getState().oshiList.find((o) => o.name === '新しい推し').avatar)) === 'preset:haru');
+  // 写真: 600x400 の画像を作って流し込む
+  const png = await ap.evaluate(() => { const c = document.createElement('canvas'); c.width = 600; c.height = 400; const x = c.getContext('2d'); const g = x.createLinearGradient(0, 0, 600, 400); g.addColorStop(0, '#f0f'); g.addColorStop(1, '#0ff'); x.fillStyle = g; x.fillRect(0, 0, 600, 400); return c.toDataURL('image/png').split(',')[1]; });
+  await ap.fill('#oshi-name', '写真の推し');
+  await ap.setInputFiles('#file-photo', { name: 'me.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+  await ap.waitForFunction(() => document.querySelector('#icon-preview img'), null, { timeout: 4000 }).catch(() => {});
+  check('写真を選ぶとプレビューに反映される', (await ap.locator('#icon-preview img').count()) === 1);
+  await ap.click('#oshi-submit');
+  const photo = await ap.evaluate(() => window.OSHI_DEBUG.getState().oshiList.find((o) => o.name === '写真の推し').avatar);
+  const dim = await ap.evaluate((u) => new Promise((r) => { const i = new Image(); i.onload = () => r([i.width, i.height]); i.onerror = () => r([0, 0]); i.src = u; }), photo);
+  check('写真は端末内で正方形(192px)に縮小され、データURLで保存される', /^data:image\/(webp|jpeg);base64,/.test(photo) && dim[0] === 192 && dim[1] === 192, `寸法=${dim}`);
+  check('縮小後のサイズが上限（90KB）に収まる', photo.length <= 90000, `長さ=${photo.length}`);
+  check('アップロードで外部への通信が発生しない（端末内だけで完結）', reqs.length === 0, reqs.slice(0, 2).join(' | '));
+  check('一覧とダッシュボードに写真のアバターが出る', (await ap.locator('#list-oshi img[src^="data:image"]').count()) === 1);
+  const evil = await ap.evaluate(() => { const v = window.OSHI_DEBUG.validAvatar; return [v('javascript:alert(1)'), v('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4='), v('preset:evil'), v('https://example.com/x.png'), v('data:image/png;base64,' + 'A'.repeat(95000)), v('preset:sakura')]; });
+  check('不正なアバター（javascript:・SVG・未知プリセット・外部URL・巨大データ）を拒否し、正規のプリセットだけ通す', evil.slice(0, 5).every((x) => x === '') && evil[5] === 'preset:sakura', JSON.stringify(evil.map((x) => x.slice(0, 12))));
+  // 画像が読めない端末でも頭文字に戻る（壊れた画像アイコンを出さない）
+  await ap.route('**/assets/oshikatsu/*', (r) => r.abort());
+  await ap.reload({ waitUntil: 'load' }); await ap.waitForTimeout(400);
+  const fb = await ap.evaluate(() => { const a = document.querySelector('#oshi-strip .avatar'); return a ? { img: a.querySelectorAll('img').length, text: a.textContent } : null; });
+  check('初期キャラ画像が読めないときは頭文字のアバターに戻る', fb && fb.img === 0 && fb.text.length >= 1, JSON.stringify(fb));
+  check('アイコン処理で例外が出ない', aerr.length === 0, aerr.slice(0, 2).join(' | '));
+  await ap.close();
 }
 
 console.log('\n── 11. テーマ（パステル標準／ダーク切替）──');
