@@ -10,12 +10,17 @@ Workers AI を使ったプロキシです。APIキーをブラウザへ配布せ
 
 **初回のみ、以下の1回だけの設定が必要です:**
 
-1. **CloudflareでAPIトークンを作成**
-   - https://dash.cloudflare.com/profile/api-tokens →「Create Token」→「Create Custom Token」
-   - 権限（Permissions）に以下の2つを追加:
-     - `Account` → `Workers Scripts` → `Edit`
-     - `Account` → `Workers KV Storage` → `Edit`
-   - 「Continue to summary」→「Create Token」→ 表示されたトークンをコピー
+1. **CloudflareでAPIトークンを作成**（日本語表示の画面では、表記が英語版と少し違う）
+   - ダッシュボード右上の **人型アイコン**（「サポート」の右）→ **「プロフィール」** → 左メニュー **「APIトークン」**
+     （直接開く: https://dash.cloudflare.com/profile/api-tokens ）
+   - **「トークンを作成する」** → 一覧の **「カスタムトークンを作成する」の「開始する」**
+   - トークン名: `github-deploy-ai-proxy` など分かる名前
+   - 権限（「＋ さらに追加」で2行にする。英語版は Permissions）:
+     - `アカウント` → `Workers スクリプト` → `編集`（Account → Workers Scripts → Edit）
+     - `アカウント` → `Workers KV ストレージ` → `編集`（Account → Workers KV Storage → Edit）
+   - アカウントリソース: `含める` → 自分のアカウント
+   - **「概要に進む」→「トークンを作成する」** → 表示されたトークンをコピー（**この画面は1度しか表示されない**）
+   - **トークンはチャット・スクリーンショットに載せない**。入れてよいのは次の手順の GitHub Secrets だけ
 2. **GitHubにシークレットを登録**
    - このリポジトリの Settings → Secrets and variables → Actions →「New repository secret」
    - Name: `CLOUDFLARE_API_TOKEN` / Secret: コピーしたトークン
