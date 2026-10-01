@@ -1,6 +1,6 @@
 # ZERO-1 デスクトップ版 × Obsidian Vault 連携 設計案
 
-- 状態: **段階1・2を実装済み** / 2026-10-02（`zero-1-local-ai` のブランチ `ccr-527ff935-y15vln`）。段階3以降は未着手
+- 状態: **段階1〜3を実装済み**（段階3は今日/昨日の Daily のみ）/ 2026-10-02（`zero-1-local-ai` のブランチ `ccr-527ff935-y15vln`）。段階4は未着手
 - 対象: 別リポジトリ `zero-1-local-ai`（PC版・Ollama・React/TypeScript）。**実装はそちらで行う**。
   本書はこのリポジトリ側の知見（`zero-1-mobile.html` / `assets/js/zero1-tools.js`）を移植するための仕様
 - 目的: ZERO-1 が Obsidian Vault の内容を**手元で**引いて答え、頼まれたときだけ**安全に**書き戻せるようにする
