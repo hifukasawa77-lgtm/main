@@ -423,6 +423,127 @@ console.log('\n── 10c. イベントリサーチ（Worker はモック・実�
   await bp.close();
 }
 
+console.log('\n── 10d. 聖地巡礼 ──');
+{
+  const sp = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const serrs = []; sp.on('pageerror', (e) => serrs.push(e.message));
+  const outReqs = []; sp.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !/fonts\.(googleapis|gstatic)/.test(r.url())) outReqs.push(r.url()); });
+  await sp.addInitScript(() => { window.__OSHI_TEST = true; });
+  await sp.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
+  await sp.evaluate(() => localStorage.clear());
+  await sp.reload({ waitUntil: 'load' });
+  await sp.evaluate(() => { const d = window.OSHI_DEBUG; d.setState({ oshiList: [{ id: 'o1', name: 'さくらすと', color: '#f472b6' }], events: [{ id: 'e1', date: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10), oshiId: 'o1', name: '横浜ライブ' }] }); });
+  const dbgv = (fn, ...a) => sp.evaluate(([f, args]) => (new Function('d', 'a', 'return (' + f + ')(d, ...a)'))(window.OSHI_DEBUG, args), [fn.toString(), a]);
+  const P = await dbgv((d) => d.PREFS);
+  check('タイルマップ: 47都道府県・名前も座標も重複なし・11×11の盤内', P.length === 47 && new Set(P.map((p) => p[0])).size === 47 && new Set(P.map((p) => p[1] + ',' + p[2])).size === 47 && P.every((p) => p[1] >= 0 && p[1] <= 10 && p[2] >= 0 && p[2] <= 10));
+  check('都道府県の読み取り: 東京都/京都府/大阪府/北海道/神奈川県/鹿児島県', await dbgv((d) => ['東京都渋谷区', '京都府京都市', '大阪府大阪市', '北海道札幌市', '神奈川県横浜市', '鹿児島県鹿児島市'].map(d.inferPref).join()) === '東京,京都,大阪,北海道,神奈川,鹿児島');
+  check('都道府県の読み取り: 県名が無ければ空（「ホテル京都」を京都府にしない）', await dbgv((d) => d.inferPref('ホテル京都') + d.inferPref('') + d.inferPref('渋谷')) === '');
+  check('座標: Googleマップ URL（@ / !3d!4d / ?q=）と「lat, lng」を読み取る', await dbgv((d) => [d.parseCoords('https://www.google.com/maps/place/x/@35.6586,139.7454,17z'), d.parseCoords('…!3d34.6937!4d135.5023'), d.parseCoords('https://maps.google.com/?q=35.01,135.76'), d.parseCoords(' 35.68, 139.76 ')].map((c) => c && c.lat.toFixed(2)).join()) === '35.66,34.69,35.01,35.68');
+  check('座標: 範囲外・数字でない文字列は null', await dbgv((d) => [d.parseCoords('@99.1,139.1'), d.parseCoords('@35.1,999.1'), d.parseCoords('渋谷'), d.parseCoords(null)].every((c) => c === null)));
+  check('距離: 東京→大阪は約400km', await dbgv((d) => { const k = d.haversine({ lat: 35.68, lng: 139.76 }, { lat: 34.69, lng: 135.50 }); return k > 390 && k < 410; }));
+  const ru = await dbgv((d) => d.routeUrl(Array.from({ length: 12 }, (_, i) => ({ name: '場所' + i, address: '', lat: null, lng: null }))));
+  check('ルートURL: Googleマップ・最後が目的地・経由地は最大9件・全てエンコード', ru.startsWith('https://www.google.com/maps/dir/?api=1&destination=') && ru.includes(encodeURIComponent('場所11')) && decodeURIComponent(ru.split('waypoints=')[1].split('&')[0]).split('|').length === 9 && !/[ |]/.test(ru));
+
+  await sp.click('#tab-spots');
+  check('巡礼タブにタイルマップが47枚出る', (await sp.locator('#sp-map .pref-tile').count()) === 47);
+  await sp.fill('#sp-name', 'ロケ地の神社'); await sp.fill('#sp-work', '◯◯（アニメ）'); await sp.selectOption('#sp-type', '聖地');
+  await sp.fill('#sp-address', '東京都渋谷区神南1-1'); await sp.fill('#sp-url', 'https://www.google.com/maps/place/x/@35.6586,139.7454,17z'); await sp.selectOption('#sp-event', 'e1'); await sp.click('#sp-submit');
+  let st = await dbgv((d) => d.getState().spots);
+  check('スポットを追加: 住所から都道府県、地図URLから座標、関連する参戦を保存', st.length === 1 && st[0].pref === '東京' && Math.abs(st[0].lat - 35.6586) < 1e-6 && st[0].eventId === 'e1' && st[0].status === 'want');
+  check('タイルマップの東京が「行きたいあり」（点線）になり、サマリーが更新される', (await sp.locator('#sp-map .pref-tile.want', { hasText: '東京' }).count()) === 1 && (await sp.textContent('#sp-summary')).includes('行きたい 1 か所'));
+  await sp.fill('#sp-name', 'ロケ地の神社'); await sp.fill('#sp-address', '東京都港区'); await sp.click('#sp-submit');
+  check('同じ名前・同じ県のスポットは二重登録できない', (await dbgv((d) => d.getState().spots.length)) === 1);
+  await sp.fill('#sp-name', '怪しいリンク'); await sp.fill('#sp-url', 'javascript:alert(1)'); await sp.click('#sp-submit');
+  check('javascript: のリンクは保存を拒否してメッセージを出す', (await dbgv((d) => d.getState().spots.length)) === 1 && (await sp.textContent('#toast')).includes('https://'));
+  await sp.fill('#sp-url', ''); await sp.fill('#sp-name', '<img src=x onerror=window.__sx=1>'); await sp.fill('#sp-address', '大阪府大阪市'); await sp.click('#sp-submit');
+  check('XSS: スポット名の <img onerror> は文字として表示され実行されない', (await sp.evaluate(() => window.__sx)) === undefined && (await sp.locator('img[src="x"]').count()) === 0 && (await sp.textContent('#list-spots')).includes('<img src=x'));
+  check('地図リンクは https・別タブ・noopener', await sp.evaluate(() => { const a = [...document.querySelectorAll('#list-spots a.src-link')]; return a.length >= 2 && a.every((x) => /^https:\/\/www\.google\.com\/maps\/search/.test(x.href) && x.target === '_blank' && /noopener/.test(x.rel)); }));
+  // 行った！
+  await sp.locator('#list-spots .item', { hasText: 'ロケ地の神社' }).locator('button:has-text("行った！")').click();
+  check('「行った！」でタイルが色づき（✓1）、制覇が 1/47 になる', (await sp.locator('#sp-map .pref-tile.v1', { hasText: '東京' }).count()) === 1 && (await sp.textContent('#sp-summary')).includes('制覇 1 / 47'));
+  await sp.click('.toast-btn');
+  check('「元に戻す」で行きたいへ戻る', (await dbgv((d) => d.getState().spots.find((p) => p.name === 'ロケ地の神社').status)) === 'want');
+  await sp.locator('#list-spots .item', { hasText: 'ロケ地の神社' }).locator('button:has-text("行った！")').click();
+  // 費用
+  await sp.locator('#list-spots .item', { hasText: 'ロケ地の神社' }).locator('button[aria-label*="費用"]').click();
+  check('💸で出費フォームへ（遠征・交通・メモ・巡礼スポットが入る）', await sp.isVisible('#page-expenses') && (await sp.inputValue('#exp-cat')) === '遠征・交通' && (await sp.inputValue('#exp-memo')).includes('ロケ地の神社') && (await sp.inputValue('#exp-spot')) !== '');
+  await sp.fill('#exp-amount', '3200'); await sp.click('#exp-submit');
+  check('出費が巡礼スポットに紐付き、一覧に🗺バッジが出る', (await dbgv((d) => d.getState().expenses.some((x) => x.amount === 3200 && x.spotId))) && (await sp.locator('#list-expenses .badge', { hasText: '🗺' }).count()) === 1);
+  await sp.click('#tab-spots');
+  check('スポットのカードに「この巡礼の費用 ¥3,200」が出る', (await sp.textContent('#list-spots')).includes('この巡礼の費用 ¥3,200'));
+  await sp.click('#tab-events');
+  check('参戦カードに関連する聖地巡礼（✓つき）が出る', (await sp.textContent('#list-upcoming')).includes('聖地巡礼: ロケ地の神社✓'));
+  await sp.click('#tab-dashboard');
+  check('ダッシュボードに巡礼パネル（訪問1/2・制覇）が出る', await sp.isVisible('#panel-spots-dash') && (await sp.textContent('#spd-label')).includes('訪問 1 / 2') && (await sp.textContent('#spd-pref')).includes('制覇 1 / 47'));
+  await sp.click('#tab-spots');
+  // 県で絞り込み
+  await sp.click('#sp-map .pref-tile:has-text("東京")');
+  check('県のタイルをタップするとその県だけに絞り込まれ、解除ボタンが出る', (await sp.locator('#list-spots .item').count()) === 1 && await sp.isVisible('#btn-sp-pref-clear'));
+  await sp.click('#btn-sp-pref-clear');
+  check('解除で全件に戻る', (await sp.locator('#list-spots .item').count()) === 2);
+  // ルート
+  await sp.evaluate(() => { window.__opened = []; window.open = (u, t, f) => { window.__opened.push([u, t, f]); return null; }; });
+  check('チェックが無い間はルートボタンが押せない', !(await sp.isEnabled('#btn-sp-route')));
+  await sp.locator('#list-spots .sp-sel input').nth(0).check(); await sp.locator('#list-spots .sp-sel input').nth(1).check();
+  check('2か所を選ぶとルートボタンが有効になり件数が出る', (await sp.isEnabled('#btn-sp-route')) && (await sp.textContent('#btn-sp-route')).includes('2 か所'));
+  await sp.click('#btn-sp-route');
+  const op = await sp.evaluate(() => window.__opened);
+  check('ルートはGoogleマップを noopener で別タブに開くだけ（目的地・経由地つき）', op.length === 1 && op[0][0].startsWith('https://www.google.com/maps/dir/?api=1&destination=') && /noopener/.test(op[0][2]) && op[0][1] === '_blank' && op[0][0].includes('waypoints='));
+  // 削除すると費用は残る
+  await sp.locator('#list-spots .item', { hasText: 'ロケ地の神社' }).locator('.act.del').click();
+  check('スポットを消しても出費は消えず、紐付けだけ外れる', await dbgv((d) => { const s = d.getState(); return s.spots.length === 1 && s.expenses.some((x) => x.amount === 3200 && x.spotId === ''); }));
+  await sp.click('.toast-btn');
+  check('「元に戻す」でスポットも出費の紐付けも戻る', await dbgv((d) => { const s = d.getState(); return s.spots.length === 2 && s.expenses.some((x) => x.amount === 3200 && x.spotId); }));
+  // リサーチ候補 → スポット
+  await sp.evaluate(() => window.OSHI_DEBUG.mergeResearch('o1', [{ title: '大阪府で期間限定コラボカフェ開催', date: new Date(Date.now() + 20 * 864e5).toISOString().slice(0, 10), venue: 'ポップアップカフェ梅田', kind: 'event', url: 'https://example.com/cafe', source: 'ナタリー' }], 'web') && (window.OSHI_DEBUG.renderAll()));
+  await sp.click('#tab-research');
+  await sp.locator('#list-research .item', { hasText: 'コラボカフェ' }).locator('button:has-text("巡礼スポットへ")').click();
+  const cs = await dbgv((d) => { const s = d.getState(); return { sp: s.spots.find((p) => p.name === 'ポップアップカフェ梅田'), r: s.research[0] }; });
+  check('リサーチ候補のイベントを「巡礼スポットへ」追加（種別・県・出典・開催日つき）、候補は追加済み', cs.sp && cs.sp.type === 'カフェ・コラボ' && cs.sp.pref === '大阪' && cs.sp.url === 'https://example.com/cafe' && cs.sp.memo.includes('開催') && cs.r.status === 'added');
+  // イベント削除
+  await sp.click('#tab-events'); await sp.locator('#list-upcoming .item', { hasText: '横浜ライブ' }).locator('.act.del').click();
+  check('参戦を消すと、スポットの関連付けだけ外れてスポットは残る', await dbgv((d) => { const s = d.getState(); return s.spots.find((p) => p.name === 'ロケ地の神社') && s.spots.find((p) => p.name === 'ロケ地の神社').eventId === ''; }));
+  // CSV・バックアップ
+  check('CSVの数式インジェクション対策が巡礼にも効く（先頭 = の名前）', await dbgv((d) => d.csvCell('=HYPERLINK("x")')) === `"'=HYPERLINK(""x"")"`);
+  const bk = await dbgv((d) => JSON.parse(JSON.stringify(d.getState())));
+  await dbgv((d) => { d.setState({}); });
+  await dbgv((d, b) => d.importData(b, 'merge'), bk);
+  check('バックアップのマージ取り込みでスポットとリサーチ候補が戻る', await dbgv((d) => { const s = d.getState(); return s.spots.length === 3 && s.research.length === 1; }));
+  // 悪意ある保存データ
+  const evil = await dbgv((d) => d.sanitize({ oshiList: [{ id: 'o1', name: 'A' }], spots: [
+    { id: 's1', name: 'ok', oshiId: 'GONE', type: 'hack', pref: '火星', lat: 999, lng: 10, url: 'javascript:1', prio: 99, status: 'visited', rating: 9, visitedDate: 'ぬるぽ', eventId: 'nope' },
+    { id: 's2', name: 123 }, { id: 's3', name: '   ' }, null, 5, { name: 'ok2', lat: '35.1', lng: '139.1', status: 'weird' },
+  ], expenses: [{ id: 'x', date: '2026-01-01', amount: 100, spotId: 'ghost' }] }));
+  check('保存データのスポットを検疫（範囲外の座標・不正な種別/県/URL/評価/参照を落とし、非文字列・空の名前は捨てる）', evil.spots.length === 2 && evil.spots[0].lat === null && evil.spots[0].lng === null && evil.spots[0].type === 'その他' && evil.spots[0].pref === '' && evil.spots[0].url === '' && evil.spots[0].prio === 2 && evil.spots[0].rating === 0 && evil.spots[0].oshiId === '' && evil.spots[0].eventId === '' && evil.spots[0].visitedDate === '' && evil.spots[1].lat === 35.1 && evil.spots[1].status === 'want' && evil.expenses[0].spotId === '', JSON.stringify(evil.spots[0]));
+  check('巡礼の操作で外部への通信が発生しない（地図は開くだけ）', outReqs.length === 0, outReqs.slice(0, 2).join(' | '));
+  check('巡礼の操作で例外が出ない', serrs.length === 0, serrs.slice(0, 2).join(' | '));
+  await sp.close();
+
+  // 現在地（位置情報）: 許可あり・なし
+  const gctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, geolocation: { latitude: 35.68, longitude: 139.76 }, permissions: ['geolocation'] });
+  const gp = await gctx.newPage(); const greqs = []; gp.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !/fonts\.(googleapis|gstatic)/.test(r.url())) greqs.push(r.url()); });
+  await gp.addInitScript(() => { window.__OSHI_TEST = true; });
+  await gp.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' }); await gp.evaluate(() => localStorage.clear()); await gp.reload({ waitUntil: 'load' });
+  await gp.evaluate(() => window.OSHI_DEBUG.setState({ spots: [
+    { id: 'a', name: '大阪の遠いスポット', lat: 34.69, lng: 135.50, pref: '大阪' }, { id: 'b', name: '座標なしスポット' }, { id: 'c', name: '渋谷の近いスポット', lat: 35.66, lng: 139.70, pref: '東京' }, { id: 'd', name: '横浜のスポット', lat: 35.45, lng: 139.64, pref: '神奈川' } ] }));
+  await gp.click('#tab-spots'); await gp.click('#btn-sp-near');
+  await gp.waitForFunction(() => /近い順/.test(document.getElementById('toast').textContent));
+  const order = await gp.locator('#list-spots .item-title span:first-child').allTextContents();
+  check('「現在地から近い順」: 近い→遠い→座標なしの順に並び、距離(km)が出る', order.join() === '渋谷の近いスポット,横浜のスポット,大阪の遠いスポット,座標なしスポット' && (await gp.textContent('#list-spots')).includes('現在地から約'), order.join());
+  check('位置情報は端末内の計算のみ（座標を含む通信・保存が無い）', greqs.length === 0 && !(await gp.evaluate(() => localStorage.getItem('oshikatsu_log_v1'))).includes('35.68') && !(await gp.evaluate(() => localStorage.getItem('oshikatsu_log_v1'))).includes('139.76'));
+  await gp.close(); await gctx.close();
+  // 位置情報の拒否・失敗: Playwright は許可の確認が未応答のまま残り「拒否」にならないため、エラー応答を差し込んで再現する
+  const nctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const np = await nctx.newPage(); const nerr = []; np.on('pageerror', (e) => nerr.push(e.message));
+  await np.addInitScript(() => { window.__OSHI_TEST = true; window.__geoCode = 1; navigator.geolocation.getCurrentPosition = (ok, ng) => setTimeout(() => ng({ code: window.__geoCode, message: 'x' }), 10); });
+  await np.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' }); await np.click('#tab-spots');
+  await np.click('#btn-sp-near'); await np.waitForFunction(() => /許可/.test(document.getElementById('toast').textContent), null, { timeout: 5000 });
+  check('位置情報が拒否された端末では、許可の方法を案内する（例外にしない）', /許可/.test(await np.textContent('#toast')) && nerr.length === 0);
+  await np.evaluate(() => { window.__geoCode = 2; }); await np.click('#btn-sp-near'); await np.waitForFunction(() => /取得できませんでした/.test(document.getElementById('toast').textContent), null, { timeout: 5000 });
+  check('位置情報の取得に失敗したときは、時間をおく案内を出す', /取得できませんでした/.test(await np.textContent('#toast')) && nerr.length === 0);
+  await np.close(); await nctx.close();
+}
+
 console.log('\n── 11. テーマ（パステル標準／ダーク切替）──');
 check('標準はパステル（data-theme なし）', (await page.getAttribute('html', 'data-theme')) === null);
 const bgLight = await page.evaluate(() => getComputedStyle(document.body).backgroundImage);
@@ -462,6 +583,11 @@ check('下部ナビが画面下端に張り付く', geo.navBottom === 0);
 check('FABが画面内の中央にある', geo.fabIn && geo.fabCenter < 2);
 check('下部ナビはホーム/出費/参戦/推しの4つ、ほしい物・設定はヘッダーのアイコンへ', geo.tabs && geo.hidden && geo.headerBtns);
 check('サンプルデータでヒーロー・統計カード4枚・推しストリップが出る', geo.sumCards === 4 && (await mp.textContent('#hero-num')) === '21' && (await mp.locator('#oshi-strip .oshi-mini').count()) === 2);
+await mp.evaluate(() => { const d = window.OSHI_DEBUG, st = d.getState(); st.spots = ['神奈川', '和歌山', '鹿児島', '北海道', '東京'].map((pf, i) => ({ id: 'sp' + i, name: pf + 'のスポット', pref: pf, status: i % 2 ? 'visited' : 'want', type: '聖地' })); d.setState(st); });
+await mp.click('#btn-go-spots');
+const overSp = await mp.evaluate(() => ({ over: document.documentElement.scrollWidth - window.innerWidth, tile: Math.round(document.querySelector('.pref-tile').getBoundingClientRect().width), mapR: Math.round(document.getElementById('sp-map').getBoundingClientRect().right), panelR: Math.round(document.getElementById('panel-sp-map').getBoundingClientRect().right) }));
+check('巡礼タブ（390px）: 横溢れなし・マップがパネル内に収まる（3文字の県名で列が広がらない）', overSp.over <= 0 && overSp.mapR <= overSp.panelR && overSp.tile >= 24, JSON.stringify(overSp));
+check('スマホではヘッダーの🗺から巡礼タブへ入れ、下部ナビには出ない', await mp.isVisible('#page-spots') && !(await mp.isVisible('#tab-spots')));
 await mp.click('#tab-events'); await mp.click('#tab-oshi'); await mp.click('#btn-go-settings');
 const over2 = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 check('全タブを巡っても横溢れなし', over2 <= 0 && merr.length === 0, merr.slice(0, 2).join(' | '));
