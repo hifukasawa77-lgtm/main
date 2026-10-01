@@ -16,6 +16,7 @@
  */
 import { buildSystemPrompt } from './site-knowledge.js';
 import { allowedOrigin, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
+import { researchOshi } from './oshi-research.js';
 
 // 上から順に試行（先頭が利用不可・エラーの場合は次へフォールバック）
 const MODELS = [
@@ -229,7 +230,7 @@ export default {
 
     if (!isAllowed) return errorResponse(403, 'Forbidden');
     if (request.method !== 'POST') return errorResponse(405, 'Method Not Allowed', corsHeaders(origin));
-    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts'].includes(url.pathname)) {
+    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts', '/oshi/research'].includes(url.pathname)) {
       return errorResponse(404, 'Not Found', corsHeaders(origin));
     }
     const limited = await limitRequest(request, env, corsHeaders(origin));
@@ -240,6 +241,12 @@ export default {
       body = await readJson(request, 16384);
     } catch (error) {
       return errorResponse(error.status || 400, error.status ? error.message : 'Invalid request', corsHeaders(origin));
+    }
+
+    // ── 推し活ログ: イベントリサーチ（ニュースRSS・AI不使用・キー不要）──
+    if (url.pathname === '/oshi/research') {
+      const r = await researchOshi(body);
+      return jsonResponse(r.body, origin, r.status);
     }
 
     // ── AI Video Studio エンドポイント ──

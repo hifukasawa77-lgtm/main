@@ -272,6 +272,157 @@ console.log('\n── 10b. アイコン（写真アップロード・初期キ�
   await ap.close();
 }
 
+console.log('\n── 10c. イベントリサーチ（Worker はモック・実ネットワークは使わない）──');
+{
+  const WORKER = 'https://ai-proxy.hi-fukasawa77.workers.dev';
+  const mk = async (seed, opts = {}) => {
+    const pg = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const log = { reqs: [], errs: [] };
+    pg.on('pageerror', (e) => log.errs.push(e.message));
+    await pg.addInitScript(() => { window.__OSHI_TEST = true; });
+    if (opts.blockModule) await pg.route('**/assets/js/oshi-research.js*', (r) => r.abort());
+    await pg.route(WORKER + '/**', async (route) => {
+      const req = route.request(), cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
+      if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      log.reqs.push(req.postData());
+      const h = pg._handler || ((r) => r.fulfill({ status: 200, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, results: [] }) }));
+      return h(route, cors);
+    });
+    await pg.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
+    await pg.evaluate((x) => { localStorage.clear(); if (x) localStorage.setItem('oshikatsu_log_v1', x); }, seed || null);
+    await pg.reload({ waitUntil: 'load' });
+    pg._log = log; return pg;
+  };
+  const json = (route, cors, body, status = 200) => route.fulfill({ status, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const seed = JSON.stringify({
+    oshiList: [{ id: 'o1', name: 'さくらすと', color: '#f472b6' }],
+    expenses: [{ id: 'x1', date: day(0), oshiId: 'o1', category: 'グッズ', amount: 7777, memo: '秘密のメモ' }],
+    events: [{ id: 'e1', date: day(30), oshiId: 'o1', name: '登録済みのライブ', venue: '横浜アリーナ' }],
+  });
+  const items = [
+    { title: 'さくらすと 全国ツアー追加公演', date: day(30), venue: '横浜アリーナ', kind: 'live', url: 'https://example.com/a', source: 'ORICON NEWS' },   // 登録済みの予定と同じ日・同じ会場
+    { title: 'さくらすと 大阪公演決定', date: day(40), venue: '大阪城ホール', kind: 'live', url: 'https://example.com/b', source: 'ナタリー' },
+    { title: 'さくらすと 新アルバム発売', date: day(20), venue: '', kind: 'release', url: 'https://example.com/c', source: 'ORICON NEWS' },
+    { title: 'さくらすと FC先行受付開始', date: day(10), venue: '', kind: 'ticket', url: 'https://example.com/d', source: 'FC' },
+    { title: 'さくらすと 日付の読めない記事', date: '', venue: 'Zepp Tokyo', kind: 'event', url: 'https://example.com/e', source: 'Walker' },
+    { title: '<img src=x onerror=window.__rx=1>さくらすと', date: day(50), venue: '', kind: 'bogus', url: 'javascript:alert(1)', source: '<b>悪意</b>' },
+    { title: 'さくらすと 終わった公演', date: day(-5), venue: '', kind: 'live', url: 'https://example.com/old', source: 'X' },
+  ];
+  const ok = (route, cors) => json(route, cors, { ok: true, results: [{ name: 'さくらすと', items }] });
+
+  const rp = await mk(seed); rp._handler = ok;
+  await rp.click('#tab-research');
+  check('通信の同意文（推しの名前だけを送る）が検索ボタンの近くに出ている', (await rp.textContent('#rs-privacy')).includes('推しの名前') && (await rp.textContent('#rs-privacy')).includes('記録は送りません'));
+  check('自分で探すリンクが6本・https・別タブ・noopener', await rp.evaluate(() => { const a = [...document.querySelectorAll('#rs-links a')]; return a.length === 6 && a.every((x) => x.href.startsWith('https://') && x.target === '_blank' && /noopener/.test(x.rel)); }));
+  await rp.selectOption('#rs-oshi', 'o1'); await rp.click('#btn-rs-search');
+  await rp.waitForSelector('#list-research .item', { timeout: 5000 });
+  const body0 = JSON.parse(rp._log.reqs[0]);
+  check('送信するのは推しの名前だけ（出費・メモ・金額・予定を含まない）', JSON.stringify(Object.keys(body0)) === '["names"]' && body0.names.join() === 'さくらすと' && !rp._log.reqs[0].includes('秘密のメモ') && !rp._log.reqs[0].includes('7777'));
+  const st1 = await rp.evaluate(() => window.OSHI_DEBUG.getState().research);
+  check('終わった公演は取り込まない', !st1.some((r) => r.title.includes('終わった')));
+  check('すでに予定にある公演（同じ日・同じ会場）は新着にせず追加済みで紐付く', (() => { const r = st1.find((x) => x.title.includes('追加公演')); return r && r.status === 'added' && r.eventId === 'e1'; })());
+  check('新着は5件（未対応）。タブとヘッダーにバッジが出る', (await rp.textContent('#cnt-research')) === '5' && await rp.isVisible('#cnt-research'));
+  check('XSS: 見出しの <img onerror> は文字として表示され実行されない', (await rp.evaluate(() => window.__rx)) === undefined && (await rp.locator('img[src="x"], img[onerror]').count()) === 0);
+  check('javascript: のURLは捨てられ、出典リンクは https のみ・別タブ・noopener', await rp.evaluate(() => { const a = [...document.querySelectorAll('#list-research a.src-link')]; return a.length >= 4 && a.every((x) => /^https:/.test(x.href) && x.target === '_blank' && /noopener/.test(x.rel) && /noreferrer/.test(x.rel)) && ![...document.querySelectorAll('a')].some((x) => /^javascript:/i.test(x.getAttribute('href') || '')); }));
+  check('不正な種別は「その他」に落ちる', st1.find((r) => r.title.includes('onerror')).kind === 'other');
+  check('ニュース由来の候補に「要確認」の注意書きが付く', (await rp.locator('#list-research .caution').count()) >= 5);
+  const upText = await rp.evaluate(() => { document.getElementById('tab-dashboard').click(); return document.getElementById('up-list').textContent; });
+  check('ダッシュボードの「これから」に新着候補の案内が出る', upText.includes('新しいイベント候補が 5 件'));
+  await rp.click('#tab-research');
+
+  // 予定に追加（日付あり）
+  const before = (await rp.evaluate(() => window.OSHI_DEBUG.getState().events.length));
+  await rp.locator('#list-research .item', { hasText: '大阪公演決定' }).locator('button:has-text("予定に追加")').click();
+  const ev1 = await rp.evaluate(() => { const s = window.OSHI_DEBUG.getState(); return { n: s.events.length, e: s.events.find((e) => e.name.includes('大阪公演')), r: s.research.find((r) => r.title.includes('大阪公演')) }; });
+  check('「予定に追加」で参戦予定になり、会場・出典リンクが引き継がれ、候補は追加済みになる', ev1.n === before + 1 && ev1.e && ev1.e.venue === '大阪城ホール' && ev1.e.url === 'https://example.com/b' && ev1.e.date === day(40) && ev1.r.status === 'added' && ev1.r.eventId === ev1.e.id);
+  await rp.click('.toast-btn');
+  check('「元に戻す」で予定も候補の状態も元に戻る', (await rp.evaluate(() => { const s = window.OSHI_DEBUG.getState(); return s.events.length === 1 && s.research.find((r) => r.title.includes('大阪公演')).status === 'new'; })));
+  await rp.locator('#list-research .item', { hasText: '大阪公演決定' }).locator('button:has-text("予定に追加")').click();
+  await rp.click('#tab-events');
+  check('参戦タブに追加した予定と🔗リンクが出る', (await rp.locator('#list-upcoming', { hasText: '大阪公演決定' }).count()) === 1 && (await rp.locator('#list-upcoming a.src-link').count()) >= 1);
+  check('ICSに出典URLが入る', (await rp.evaluate(() => window.OSHI_DEBUG.buildICS())).includes('URL:https://example.com/b'));
+  await rp.click('#tab-research');
+  // 発売 → ほしい物 / チケット → 応募中
+  await rp.locator('#list-research .item', { hasText: '新アルバム発売' }).locator('button:has-text("ほしい物へ")').click();
+  const w = await rp.evaluate(() => window.OSHI_DEBUG.getState().wishes);
+  check('「発売」の候補はほしい物リストへ（参戦予定にしない）。出典リンク付き', w.length === 1 && w[0].name.includes('新アルバム') && w[0].url === 'https://example.com/c' && w[0].memo.includes('発売予定'));
+  await rp.locator('#list-research .item', { hasText: 'FC先行受付' }).locator('button:has-text("応募中で追加")').click();
+  check('「チケット先行」の候補は応募中として追加される', (await rp.evaluate(() => window.OSHI_DEBUG.getState().events.find((e) => e.name.includes('FC先行')).status)) === 'applied');
+  // 日付不明 → 編集して追加
+  check('日付が読めない候補には「予定に追加」ではなく「編集して追加」だけが出る', (await rp.locator('#list-research .item', { hasText: '日付の読めない記事' }).locator('button:has-text("予定に追加")').count()) === 0);
+  await rp.locator('#list-research .item', { hasText: '日付の読めない記事' }).locator('button:has-text("編集して追加")').click();
+  check('「編集して追加」で参戦フォームに題名・会場・リンクが入り、日付は空（確認してから保存）', await rp.isVisible('#page-events') && (await rp.inputValue('#ev-name')).includes('日付の読めない記事') && (await rp.inputValue('#ev-venue')) === 'Zepp Tokyo' && (await rp.inputValue('#ev-url')) === 'https://example.com/e' && (await rp.inputValue('#ev-date')) === '');
+  await rp.fill('#ev-date', day(60)); await rp.click('#ev-submit');
+  const r5 = await rp.evaluate(() => { const s = window.OSHI_DEBUG.getState(); const r = s.research.find((x) => x.title.includes('日付の読めない')); return { st: r.status, ev: s.events.find((e) => e.id === r.eventId) }; });
+  check('フォームで保存すると候補が追加済みになり、予定と紐付く', r5.st === 'added' && r5.ev && r5.ev.url === 'https://example.com/e');
+  // 予定を消すと候補は未対応へ戻る
+  await rp.click('#tab-events');
+  await rp.locator('#list-upcoming .item', { hasText: '日付の読めない記事' }).locator('.act.del').click();
+  check('予定を削除すると、紐付いた候補は未対応に戻る（提案が消えたままにならない）', (await rp.evaluate(() => window.OSHI_DEBUG.getState().research.find((x) => x.title.includes('日付の読めない')).status)) === 'new');
+  // 無視 / 戻す
+  await rp.click('#tab-research');
+  await rp.locator('#list-research .item', { hasText: '日付の読めない記事' }).locator('button:has-text("無視")').click();
+  check('「無視」で一覧から消え、「無視した候補」の絞り込みに出る', (await rp.locator('#list-research .item', { hasText: '日付の読めない記事' }).count()) === 0 && (await rp.evaluate(() => { document.getElementById('rs-f-status').value = 'hidden'; document.getElementById('rs-f-status').dispatchEvent(new Event('change')); return document.getElementById('list-research').textContent.includes('日付の読めない記事'); })));
+  await rp.selectOption('#rs-f-status', 'new');
+  // 再検索: 重複を足さない
+  const nBefore = await rp.evaluate(() => window.OSHI_DEBUG.getState().research.length);
+  await rp.click('#btn-rs-search'); await rp.waitForFunction(() => /調べました|重複/.test(document.getElementById('rs-status').textContent), null, { timeout: 5000 });
+  check('もう一度調べても重複を足さない（同じ候補を増やさない）', (await rp.evaluate(() => window.OSHI_DEBUG.getState().research.length)) === nBefore, (await rp.textContent('#rs-status')).slice(0, 60));
+  check('検索中でない間は検索ボタンが押せる（連打ロックが残らない）', await rp.isEnabled('#btn-rs-search'));
+  // 失敗時: 理由と次の一手が残る
+  const fails = [[429, 'HTTP 429'], [502, 'HTTP 502'], [404, 'まだ有効になっていない'], [500, 'HTTP 500']];
+  let failOk = true; const failDet = [];
+  for (const [code, want] of fails) {
+    rp._handler = (route, cors) => json(route, cors, { error: 'x' }, code);
+    await rp.evaluate(() => { document.getElementById('rs-status').textContent = ''; }); await rp.click('#btn-rs-search');
+    await rp.waitForFunction(() => /HTTP|有効|通信|時間/.test(document.getElementById('rs-status').textContent), null, { timeout: 5000 });
+    const t = await rp.textContent('#rs-status'); if (!t.includes(want)) { failOk = false; failDet.push(code + ':' + t.slice(0, 40)); }
+  }
+  check('失敗（429/502/404/500）ごとに、原因と次の一手（リンク・貼り付け）が画面に残る', failOk, failDet.join(' | '));
+  rp._handler = (route) => route.abort('failed');
+  await rp.evaluate(() => { document.getElementById('rs-status').textContent = ''; }); await rp.click('#btn-rs-search');
+  await rp.waitForFunction(() => /通信できませんでした/.test(document.getElementById('rs-status').textContent), null, { timeout: 5000 });
+  check('通信不能（オフライン）でも例外を出さず、案内を出して操作可能に戻る', rp._log.errs.length === 0 && await rp.isEnabled('#btn-rs-search'), rp._log.errs.join('|'));
+  rp._handler = (route, cors) => json(route, cors, { foo: 1 });
+  await rp.evaluate(() => { document.getElementById('rs-status').textContent = ''; }); await rp.click('#btn-rs-search');
+  await rp.waitForFunction(() => document.getElementById('rs-status').textContent.length > 0 && !document.getElementById('btn-rs-search').disabled, null, { timeout: 5000 });
+  check('想定外の応答（results が無い）でも壊れない', rp._log.errs.length === 0);
+  // 貼り付け: 通信なし
+  const reqsBefore = rp._log.reqs.length;
+  await rp.fill('#rs-paste', 'さくらすと LIVE TOUR\n' + `${new Date(Date.now() + 90 * 864e5).getFullYear()}年${new Date(Date.now() + 90 * 864e5).getMonth() + 1}月${new Date(Date.now() + 90 * 864e5).getDate()}日 Zepp Nagoya\n\n2020/1/1 昔のライブ`);
+  await rp.click('#btn-rs-paste');
+  const pst = await rp.evaluate(() => window.OSHI_DEBUG.getState().research.filter((r) => r.found === 'paste'));
+  check('貼り付けから候補を取り出せる（出典は「貼り付け」・過去日付は取り込まない）・通信しない', pst.length === 1 && pst[0].venue === 'Zepp Nagoya' && rp._log.reqs.length === reqsBefore);
+  await rp.fill('#rs-paste', 'こんにちは'); await rp.click('#btn-rs-paste');
+  check('日付が無い文章は、取り込まず理由を表示する', (await rp.textContent('#rs-status')).includes('日付を読み取れませんでした'));
+  // 永続化
+  await rp.reload({ waitUntil: 'load' });
+  check('リサーチ結果は再読込しても残る', (await rp.evaluate(() => window.OSHI_DEBUG.getState().research.length)) >= 5);
+  check('リサーチ操作で例外が出ない', rp._log.errs.length === 0, rp._log.errs.slice(0, 2).join(' | '));
+  await rp.close();
+
+  // 壊れた/悪意ある保存データ
+  const evilSeed = JSON.stringify({ oshiList: [{ id: 'o1', name: 'A' }], research: [
+    { id: 'r1', oshiId: 'o1', title: 'ok', date: '2999-01-01', kind: 'live', url: 'javascript:alert(1)', status: 'new' },
+    { id: 'r2', oshiId: 'GONE', title: 'x'.repeat(5000), date: 'ぬるぽ', kind: {}, url: 'data:text/html,x', status: 'hacked', eventId: 'nope' },
+    { id: 'r3', title: '   ' }, null, 5, { title: 123 },
+  ] });
+  const ep = await mk(evilSeed);
+  const es = await ep.evaluate(() => window.OSHI_DEBUG.getState().research);
+  check('保存データの候補を検疫（危険なURL・長すぎる文字・不正な日付/状態/参照を落とし、空の候補は捨てる）', es.length === 2 && es.every((r) => r.url === '' && r.title.length <= 120 && ['new', 'added', 'hidden'].includes(r.status)) && es[1].date === '' && es[1].oshiId === '' && es[1].eventId === '', JSON.stringify(es.map((r) => [r.url, r.status, r.date])));
+  check('壊れた候補があっても起動して例外が出ない', ep._log.errs.length === 0);
+  await ep.close();
+
+  // 共用モジュールが読めなくても、保存済みの候補を失わない
+  const bp = await mk(JSON.stringify({ oshiList: [{ id: 'o1', name: 'A' }], research: [{ id: 'r1', oshiId: 'o1', title: '保存済みの候補', date: '2999-01-01', kind: 'live', url: 'https://example.com/z', status: 'new', foundAt: day(0) }] }), { blockModule: true });
+  await bp.click('#tab-settings'); await bp.fill('#budget-input', '12345'); await bp.click('#form-budget button[type="submit"]');
+  const kept = await bp.evaluate(() => JSON.parse(localStorage.getItem('oshikatsu_log_v1')).research);
+  check('共用スクリプトが読み込めない端末でも、別の操作の保存で候補が消えない（データ消失防止）', kept.length === 1 && kept[0].title === '保存済みの候補');
+  await bp.click('#tab-research'); await bp.click('#btn-rs-search');
+  check('その場合の検索は、例外ではなく案内を出す', (await bp.textContent('#rs-status')).includes('読み込めませんでした') && bp._log.errs.length === 0, bp._log.errs.join('|'));
+  await bp.close();
+}
+
 console.log('\n── 11. テーマ（パステル標準／ダーク切替）──');
 check('標準はパステル（data-theme なし）', (await page.getAttribute('html', 'data-theme')) === null);
 const bgLight = await page.evaluate(() => getComputedStyle(document.body).backgroundImage);

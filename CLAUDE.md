@@ -522,7 +522,7 @@ node scripts/verify-receipt-ocr.mjs --ocr   # 実物のTesseractで読む（npm�
 ## 推し活ログの必須チェック（oshikatsu.html を触ったら必ず実行）
 
 ```bash
-node scripts/verify-oshikatsu.mjs            # 検疫→基本フロー→予定→定期出費→ほしい物→入出力→予算→グラフ画素→テーマ→FAB→モバイル幅（73項目）
+node scripts/verify-oshikatsu.mjs            # 検疫→基本フロー→予定→定期出費→ほしい物→入出力→予算→グラフ画素→テーマ→FAB→モバイル幅（108項目・リサーチ連携を含む）
 node scripts/verify-oshikatsu.mjs --shots DIR # 画面を撮る（見た目を変えたら目視する）
 ```
 
@@ -541,6 +541,38 @@ node scripts/verify-oshikatsu.mjs --shots DIR # 画面を撮る（見た目を�
   90KB上限）。初期キャラは `assets/oshikatsu/chara-*.webp`（Canva AI生成のオリジナル5体。出自は同フォルダの README）。
   アバター値は必ず `validAvatar()` を通す（`javascript:`・SVG・外部URL・巨大データ・未知プリセットは拒否）。
   画像が読めなければ頭文字のアバターへ戻る（壊れた画像アイコンを出さない）。**画像生成に有料API（GPT-Image等）は使わない**
+### 推しのイベントリサーチ（`assets/js/oshi-research.js` ＋ Worker `/oshi/research`）
+
+```bash
+node scripts/verify-oshi-research.mjs   # 日付・種別・会場の抽出／RSS／検疫／Workerの取得先固定（65項目・ブラウザ不要）
+node scripts/verify-oshi-research.mjs --inject   # 防御を壊して ❌ が出ることを確かめる（4件）
+```
+
+- **構成**: 純粋ロジックは1ファイル `assets/js/oshi-research.js`（UMD。ブラウザの `<script>`・Workerの `import`・Nodeの検査で共用）。
+  ネット検索は Worker の `POST /oshi/research`（ニュースRSS＝Google ニュース＋Bing ニュース。**キー不要・課金なし・AI不使用**）。
+  Worker が無い／落ちているときも、**検索リンク集**と**公式ページの文章の貼り付け取り込み**（端末内だけ・通信なし）で使える
+- **取得先はホスト固定**（`ALLOWED_HOSTS`）。利用者が決められるのは**推しの名前だけ**でURLは受け取らない。
+  検索式の組み立てが書き換わっても、取得層（`fetchRss`）が許可ホスト以外へは fetch しない（二重の防御）
+- **ネットから拾った日付・会場は「推定」**。見出し・要約から正規表現で拾うだけなので、画面には必ず出典リンクと
+  「要確認」を添える。年なしの日付は基準日に最も近い年へ寄せ、**曜日が書いてあれば曜日で年を確かめる**
+  （曜日を無視すると、年またぎで予定が1年ずれる。例外は出ない）。名前が出ていない記事・終わったイベントは捨てる
+- **外部由来の文字列は `cleanItem()` を通してから使う**（画面に出す前・保存データの読み込み時の両方）。URLは http(s) のみ、
+  題名は文字列のみ（数値が「123」という題名になる穴があった）。表示は `textContent` のみ
+- **共用スクリプトが読み込めなくても、保存済みの候補を消さない**。`oshikatsu.html` は最小の代替（`ORX`）で検疫を続ける
+  （読めない端末で別の操作を保存すると、候補が空のまま上書きされる）。検査は実際にスクリプトをブロックして確かめる
+- **候補 → 既存機能への連携**: 発売→ほしい物／チケット先行→応募中／日付あり→参戦予定／日付不明→フォームで確認。
+  追加済みの候補は消えるまで印が残り、**同じ日・同じ会場は別の見出しでも同一イベント**として重複提案しない。
+  予定を消すと候補は未対応に戻る。イベント/ほしい物の `url` は ICS・CSV にも出る
+- **通信はユーザーが押したときだけ**。送るのは推しの名前だけ（出費・メモ・予定は送らない）。画面に同意文を出し、About も更新済み。
+  **失敗は理由と次の一手を画面に残す**（429/502/404・時間切れ・オフライン。`Failed to fetch` だけにしない）
+- **故障注入はモジュール内部の関数をクロージャで呼ぶと空振りする**。`OR.safeUrl = …` のように公開オブジェクトを差し替えても
+  内部の呼び出しには効かず、注入が ✅ のまま素通りしていた。ソースを書き換えたコピーを読み込んで壊すこと
+- **Worker は自動デプロイされていない**（2026-09-30 時点で `CLOUDFLARE_API_TOKEN` が未登録＝`deploy-worker.yml` が失敗）。
+  新しいルートを本番に出すには、深澤が Secret を登録して Actions から再実行する（手順: `cloudflare-worker/README.md`）。
+  それまでは、リサーチ画面は「サーバー側がまだ有効になっていない」と案内して、リンク集と貼り付けへ誘導する
+- **`assets/js/oshi-research.js` を変えたら、`oshikatsu.html` の `?v=` を上げる**（`sw.js` は cache-first。上げ忘れると再訪者に古い版が返る）
+- 実ネットワークの検査は作業環境から出来ない（`news.google.com` へ届かない）。応答の形は代表的なRSSで検査しているので、
+  本番に出したら一度、実際に「調べる」を押して確かめること
 - 検査用ブリッジ `window.OSHI_DEBUG` は `window.__OSHI_TEST` のときだけ開く。関数を足したらここにも足す
 - 検査の**スクロール位置に注意**: 画面外のCanvasは `page.mouse.click` の座標が合わない（`scrollIntoViewIfNeeded` してから）
 
