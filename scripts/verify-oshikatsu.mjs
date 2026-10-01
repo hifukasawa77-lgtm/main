@@ -272,6 +272,278 @@ console.log('\n── 10b. アイコン（写真アップロード・初期キ�
   await ap.close();
 }
 
+console.log('\n── 10c. イベントリサーチ（Worker はモック・実ネットワークは使わない）──');
+{
+  const WORKER = 'https://ai-proxy.hi-fukasawa77.workers.dev';
+  const mk = async (seed, opts = {}) => {
+    const pg = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const log = { reqs: [], errs: [] };
+    pg.on('pageerror', (e) => log.errs.push(e.message));
+    await pg.addInitScript(() => { window.__OSHI_TEST = true; });
+    if (opts.blockModule) await pg.route('**/assets/js/oshi-research.js*', (r) => r.abort());
+    await pg.route(WORKER + '/**', async (route) => {
+      const req = route.request(), cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type' };
+      if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      log.reqs.push(req.postData());
+      const h = pg._handler || ((r) => r.fulfill({ status: 200, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, results: [] }) }));
+      return h(route, cors);
+    });
+    await pg.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
+    await pg.evaluate((x) => { localStorage.clear(); if (x) localStorage.setItem('oshikatsu_log_v1', x); }, seed || null);
+    await pg.reload({ waitUntil: 'load' });
+    pg._log = log; return pg;
+  };
+  const json = (route, cors, body, status = 200) => route.fulfill({ status, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const seed = JSON.stringify({
+    oshiList: [{ id: 'o1', name: 'さくらすと', color: '#f472b6' }],
+    expenses: [{ id: 'x1', date: day(0), oshiId: 'o1', category: 'グッズ', amount: 7777, memo: '秘密のメモ' }],
+    events: [{ id: 'e1', date: day(30), oshiId: 'o1', name: '登録済みのライブ', venue: '横浜アリーナ' }],
+  });
+  const items = [
+    { title: 'さくらすと 全国ツアー追加公演', date: day(30), venue: '横浜アリーナ', kind: 'live', url: 'https://example.com/a', source: 'ORICON NEWS' },   // 登録済みの予定と同じ日・同じ会場
+    { title: 'さくらすと 大阪公演決定', date: day(40), venue: '大阪城ホール', kind: 'live', url: 'https://example.com/b', source: 'ナタリー' },
+    { title: 'さくらすと 新アルバム発売', date: day(20), venue: '', kind: 'release', url: 'https://example.com/c', source: 'ORICON NEWS' },
+    { title: 'さくらすと FC先行受付開始', date: day(10), venue: '', kind: 'ticket', url: 'https://example.com/d', source: 'FC' },
+    { title: 'さくらすと 日付の読めない記事', date: '', venue: 'Zepp Tokyo', kind: 'event', url: 'https://example.com/e', source: 'Walker' },
+    { title: '<img src=x onerror=window.__rx=1>さくらすと', date: day(50), venue: '', kind: 'bogus', url: 'javascript:alert(1)', source: '<b>悪意</b>' },
+    { title: 'さくらすと 終わった公演', date: day(-5), venue: '', kind: 'live', url: 'https://example.com/old', source: 'X' },
+  ];
+  const ok = (route, cors) => json(route, cors, { ok: true, results: [{ name: 'さくらすと', items }] });
+
+  const rp = await mk(seed); rp._handler = ok;
+  await rp.click('#tab-research');
+  check('通信の同意文（推しの名前だけを送る）が検索ボタンの近くに出ている', (await rp.textContent('#rs-privacy')).includes('推しの名前') && (await rp.textContent('#rs-privacy')).includes('記録は送りません'));
+  check('自分で探すリンクが6本・https・別タブ・noopener', await rp.evaluate(() => { const a = [...document.querySelectorAll('#rs-links a')]; return a.length === 6 && a.every((x) => x.href.startsWith('https://') && x.target === '_blank' && /noopener/.test(x.rel)); }));
+  await rp.selectOption('#rs-oshi', 'o1'); await rp.click('#btn-rs-search');
+  await rp.waitForSelector('#list-research .item', { timeout: 5000 });
+  const body0 = JSON.parse(rp._log.reqs[0]);
+  check('送信するのは推しの名前だけ（出費・メモ・金額・予定を含まない）', JSON.stringify(Object.keys(body0)) === '["names"]' && body0.names.join() === 'さくらすと' && !rp._log.reqs[0].includes('秘密のメモ') && !rp._log.reqs[0].includes('7777'));
+  const st1 = await rp.evaluate(() => window.OSHI_DEBUG.getState().research);
+  check('終わった公演は取り込まない', !st1.some((r) => r.title.includes('終わった')));
+  check('すでに予定にある公演（同じ日・同じ会場）は新着にせず追加済みで紐付く', (() => { const r = st1.find((x) => x.title.includes('追加公演')); return r && r.status === 'added' && r.eventId === 'e1'; })());
+  check('新着は5件（未対応）。タブとヘッダーにバッジが出る', (await rp.textContent('#cnt-research')) === '5' && await rp.isVisible('#cnt-research'));
+  check('XSS: 見出しの <img onerror> は文字として表示され実行されない', (await rp.evaluate(() => window.__rx)) === undefined && (await rp.locator('img[src="x"], img[onerror]').count()) === 0);
+  check('javascript: のURLは捨てられ、出典リンクは https のみ・別タブ・noopener', await rp.evaluate(() => { const a = [...document.querySelectorAll('#list-research a.src-link')]; return a.length >= 4 && a.every((x) => /^https:/.test(x.href) && x.target === '_blank' && /noopener/.test(x.rel) && /noreferrer/.test(x.rel)) && ![...document.querySelectorAll('a')].some((x) => /^javascript:/i.test(x.getAttribute('href') || '')); }));
+  check('不正な種別は「その他」に落ちる', st1.find((r) => r.title.includes('onerror')).kind === 'other');
+  check('ニュース由来の候補に「要確認」の注意書きが付く', (await rp.locator('#list-research .caution').count()) >= 5);
+  const upText = await rp.evaluate(() => { document.getElementById('tab-dashboard').click(); return document.getElementById('up-list').textContent; });
+  check('ダッシュボードの「これから」に新着候補の案内が出る', upText.includes('新しいイベント候補が 5 件'));
+  await rp.click('#tab-research');
+
+  // 予定に追加（日付あり）
+  const before = (await rp.evaluate(() => window.OSHI_DEBUG.getState().events.length));
+  await rp.locator('#list-research .item', { hasText: '大阪公演決定' }).locator('button:has-text("予定に追加")').click();
+  const ev1 = await rp.evaluate(() => { const s = window.OSHI_DEBUG.getState(); return { n: s.events.length, e: s.events.find((e) => e.name.includes('大阪公演')), r: s.research.find((r) => r.title.includes('大阪公演')) }; });
+  check('「予定に追加」で参戦予定になり、会場・出典リンクが引き継がれ、候補は追加済みになる', ev1.n === before + 1 && ev1.e && ev1.e.venue === '大阪城ホール' && ev1.e.url === 'https://example.com/b' && ev1.e.date === day(40) && ev1.r.status === 'added' && ev1.r.eventId === ev1.e.id);
+  await rp.click('.toast-btn');
+  check('「元に戻す」で予定も候補の状態も元に戻る', (await rp.evaluate(() => { const s = window.OSHI_DEBUG.getState(); return s.events.length === 1 && s.research.find((r) => r.title.includes('大阪公演')).status === 'new'; })));
+  await rp.locator('#list-research .item', { hasText: '大阪公演決定' }).locator('button:has-text("予定に追加")').click();
+  await rp.click('#tab-events');
+  check('参戦タブに追加した予定と🔗リンクが出る', (await rp.locator('#list-upcoming', { hasText: '大阪公演決定' }).count()) === 1 && (await rp.locator('#list-upcoming a.src-link').count()) >= 1);
+  check('ICSに出典URLが入る', (await rp.evaluate(() => window.OSHI_DEBUG.buildICS())).includes('URL:https://example.com/b'));
+  await rp.click('#tab-research');
+  // 発売 → ほしい物 / チケット → 応募中
+  await rp.locator('#list-research .item', { hasText: '新アルバム発売' }).locator('button:has-text("ほしい物へ")').click();
+  const w = await rp.evaluate(() => window.OSHI_DEBUG.getState().wishes);
+  check('「発売」の候補はほしい物リストへ（参戦予定にしない）。出典リンク付き', w.length === 1 && w[0].name.includes('新アルバム') && w[0].url === 'https://example.com/c' && w[0].memo.includes('発売予定'));
+  await rp.locator('#list-research .item', { hasText: 'FC先行受付' }).locator('button:has-text("応募中で追加")').click();
+  check('「チケット先行」の候補は応募中として追加される', (await rp.evaluate(() => window.OSHI_DEBUG.getState().events.find((e) => e.name.includes('FC先行')).status)) === 'applied');
+  // 日付不明 → 編集して追加
+  check('日付が読めない候補には「予定に追加」ではなく「編集して追加」だけが出る', (await rp.locator('#list-research .item', { hasText: '日付の読めない記事' }).locator('button:has-text("予定に追加")').count()) === 0);
+  await rp.locator('#list-research .item', { hasText: '日付の読めない記事' }).locator('button:has-text("編集して追加")').click();
+  check('「編集して追加」で参戦フォームに題名・会場・リンクが入り、日付は空（確認してから保存）', await rp.isVisible('#page-events') && (await rp.inputValue('#ev-name')).includes('日付の読めない記事') && (await rp.inputValue('#ev-venue')) === 'Zepp Tokyo' && (await rp.inputValue('#ev-url')) === 'https://example.com/e' && (await rp.inputValue('#ev-date')) === '');
+  await rp.fill('#ev-date', day(60)); await rp.click('#ev-submit');
+  const r5 = await rp.evaluate(() => { const s = window.OSHI_DEBUG.getState(); const r = s.research.find((x) => x.title.includes('日付の読めない')); return { st: r.status, ev: s.events.find((e) => e.id === r.eventId) }; });
+  check('フォームで保存すると候補が追加済みになり、予定と紐付く', r5.st === 'added' && r5.ev && r5.ev.url === 'https://example.com/e');
+  // 予定を消すと候補は未対応へ戻る
+  await rp.click('#tab-events');
+  await rp.locator('#list-upcoming .item', { hasText: '日付の読めない記事' }).locator('.act.del').click();
+  check('予定を削除すると、紐付いた候補は未対応に戻る（提案が消えたままにならない）', (await rp.evaluate(() => window.OSHI_DEBUG.getState().research.find((x) => x.title.includes('日付の読めない')).status)) === 'new');
+  // 無視 / 戻す
+  await rp.click('#tab-research');
+  await rp.locator('#list-research .item', { hasText: '日付の読めない記事' }).locator('button:has-text("無視")').click();
+  check('「無視」で一覧から消え、「無視した候補」の絞り込みに出る', (await rp.locator('#list-research .item', { hasText: '日付の読めない記事' }).count()) === 0 && (await rp.evaluate(() => { document.getElementById('rs-f-status').value = 'hidden'; document.getElementById('rs-f-status').dispatchEvent(new Event('change')); return document.getElementById('list-research').textContent.includes('日付の読めない記事'); })));
+  await rp.selectOption('#rs-f-status', 'new');
+  // 再検索: 重複を足さない
+  const nBefore = await rp.evaluate(() => window.OSHI_DEBUG.getState().research.length);
+  await rp.click('#btn-rs-search'); await rp.waitForFunction(() => /調べました|重複/.test(document.getElementById('rs-status').textContent), null, { timeout: 5000 });
+  check('もう一度調べても重複を足さない（同じ候補を増やさない）', (await rp.evaluate(() => window.OSHI_DEBUG.getState().research.length)) === nBefore, (await rp.textContent('#rs-status')).slice(0, 60));
+  check('検索中でない間は検索ボタンが押せる（連打ロックが残らない）', await rp.isEnabled('#btn-rs-search'));
+  // 失敗時: 理由と次の一手が残る
+  const fails = [[429, 'HTTP 429'], [502, 'HTTP 502'], [404, 'まだ有効になっていない'], [500, 'HTTP 500']];
+  let failOk = true; const failDet = [];
+  for (const [code, want] of fails) {
+    rp._handler = (route, cors) => json(route, cors, { error: 'x' }, code);
+    await rp.evaluate(() => { document.getElementById('rs-status').textContent = ''; }); await rp.click('#btn-rs-search');
+    await rp.waitForFunction(() => /HTTP|有効|通信|時間/.test(document.getElementById('rs-status').textContent), null, { timeout: 5000 });
+    const t = await rp.textContent('#rs-status'); if (!t.includes(want)) { failOk = false; failDet.push(code + ':' + t.slice(0, 40)); }
+  }
+  check('失敗（429/502/404/500）ごとに、原因と次の一手（リンク・貼り付け）が画面に残る', failOk, failDet.join(' | '));
+  rp._handler = (route) => route.abort('failed');
+  await rp.evaluate(() => { document.getElementById('rs-status').textContent = ''; }); await rp.click('#btn-rs-search');
+  await rp.waitForFunction(() => /通信できませんでした/.test(document.getElementById('rs-status').textContent), null, { timeout: 5000 });
+  check('通信不能（オフライン）でも例外を出さず、案内を出して操作可能に戻る', rp._log.errs.length === 0 && await rp.isEnabled('#btn-rs-search'), rp._log.errs.join('|'));
+  rp._handler = (route, cors) => json(route, cors, { foo: 1 });
+  await rp.evaluate(() => { document.getElementById('rs-status').textContent = ''; }); await rp.click('#btn-rs-search');
+  await rp.waitForFunction(() => document.getElementById('rs-status').textContent.length > 0 && !document.getElementById('btn-rs-search').disabled, null, { timeout: 5000 });
+  check('想定外の応答（results が無い）でも壊れない', rp._log.errs.length === 0);
+  // 貼り付け: 通信なし
+  const reqsBefore = rp._log.reqs.length;
+  await rp.fill('#rs-paste', 'さくらすと LIVE TOUR\n' + `${new Date(Date.now() + 90 * 864e5).getFullYear()}年${new Date(Date.now() + 90 * 864e5).getMonth() + 1}月${new Date(Date.now() + 90 * 864e5).getDate()}日 Zepp Nagoya\n\n2020/1/1 昔のライブ`);
+  await rp.click('#btn-rs-paste');
+  const pst = await rp.evaluate(() => window.OSHI_DEBUG.getState().research.filter((r) => r.found === 'paste'));
+  check('貼り付けから候補を取り出せる（出典は「貼り付け」・過去日付は取り込まない）・通信しない', pst.length === 1 && pst[0].venue === 'Zepp Nagoya' && rp._log.reqs.length === reqsBefore);
+  await rp.fill('#rs-paste', 'こんにちは'); await rp.click('#btn-rs-paste');
+  check('日付が無い文章は、取り込まず理由を表示する', (await rp.textContent('#rs-status')).includes('日付を読み取れませんでした'));
+  // 永続化
+  await rp.reload({ waitUntil: 'load' });
+  check('リサーチ結果は再読込しても残る', (await rp.evaluate(() => window.OSHI_DEBUG.getState().research.length)) >= 5);
+  check('リサーチ操作で例外が出ない', rp._log.errs.length === 0, rp._log.errs.slice(0, 2).join(' | '));
+  await rp.close();
+
+  // 壊れた/悪意ある保存データ
+  const evilSeed = JSON.stringify({ oshiList: [{ id: 'o1', name: 'A' }], research: [
+    { id: 'r1', oshiId: 'o1', title: 'ok', date: '2999-01-01', kind: 'live', url: 'javascript:alert(1)', status: 'new' },
+    { id: 'r2', oshiId: 'GONE', title: 'x'.repeat(5000), date: 'ぬるぽ', kind: {}, url: 'data:text/html,x', status: 'hacked', eventId: 'nope' },
+    { id: 'r3', title: '   ' }, null, 5, { title: 123 },
+  ] });
+  const ep = await mk(evilSeed);
+  const es = await ep.evaluate(() => window.OSHI_DEBUG.getState().research);
+  check('保存データの候補を検疫（危険なURL・長すぎる文字・不正な日付/状態/参照を落とし、空の候補は捨てる）', es.length === 2 && es.every((r) => r.url === '' && r.title.length <= 120 && ['new', 'added', 'hidden'].includes(r.status)) && es[1].date === '' && es[1].oshiId === '' && es[1].eventId === '', JSON.stringify(es.map((r) => [r.url, r.status, r.date])));
+  check('壊れた候補があっても起動して例外が出ない', ep._log.errs.length === 0);
+  await ep.close();
+
+  // 共用モジュールが読めなくても、保存済みの候補を失わない
+  const bp = await mk(JSON.stringify({ oshiList: [{ id: 'o1', name: 'A' }], research: [{ id: 'r1', oshiId: 'o1', title: '保存済みの候補', date: '2999-01-01', kind: 'live', url: 'https://example.com/z', status: 'new', foundAt: day(0) }] }), { blockModule: true });
+  await bp.click('#tab-settings'); await bp.fill('#budget-input', '12345'); await bp.click('#form-budget button[type="submit"]');
+  const kept = await bp.evaluate(() => JSON.parse(localStorage.getItem('oshikatsu_log_v1')).research);
+  check('共用スクリプトが読み込めない端末でも、別の操作の保存で候補が消えない（データ消失防止）', kept.length === 1 && kept[0].title === '保存済みの候補');
+  await bp.click('#tab-research'); await bp.click('#btn-rs-search');
+  check('その場合の検索は、例外ではなく案内を出す', (await bp.textContent('#rs-status')).includes('読み込めませんでした') && bp._log.errs.length === 0, bp._log.errs.join('|'));
+  await bp.close();
+}
+
+console.log('\n── 10d. 聖地巡礼 ──');
+{
+  const sp = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const serrs = []; sp.on('pageerror', (e) => serrs.push(e.message));
+  const outReqs = []; sp.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !/fonts\.(googleapis|gstatic)/.test(r.url())) outReqs.push(r.url()); });
+  await sp.addInitScript(() => { window.__OSHI_TEST = true; });
+  await sp.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
+  await sp.evaluate(() => localStorage.clear());
+  await sp.reload({ waitUntil: 'load' });
+  await sp.evaluate(() => { const d = window.OSHI_DEBUG; d.setState({ oshiList: [{ id: 'o1', name: 'さくらすと', color: '#f472b6' }], events: [{ id: 'e1', date: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10), oshiId: 'o1', name: '横浜ライブ' }] }); });
+  const dbgv = (fn, ...a) => sp.evaluate(([f, args]) => (new Function('d', 'a', 'return (' + f + ')(d, ...a)'))(window.OSHI_DEBUG, args), [fn.toString(), a]);
+  const P = await dbgv((d) => d.PREFS);
+  check('タイルマップ: 47都道府県・名前も座標も重複なし・11×11の盤内', P.length === 47 && new Set(P.map((p) => p[0])).size === 47 && new Set(P.map((p) => p[1] + ',' + p[2])).size === 47 && P.every((p) => p[1] >= 0 && p[1] <= 10 && p[2] >= 0 && p[2] <= 10));
+  check('都道府県の読み取り: 東京都/京都府/大阪府/北海道/神奈川県/鹿児島県', await dbgv((d) => ['東京都渋谷区', '京都府京都市', '大阪府大阪市', '北海道札幌市', '神奈川県横浜市', '鹿児島県鹿児島市'].map(d.inferPref).join()) === '東京,京都,大阪,北海道,神奈川,鹿児島');
+  check('都道府県の読み取り: 県名が無ければ空（「ホテル京都」を京都府にしない）', await dbgv((d) => d.inferPref('ホテル京都') + d.inferPref('') + d.inferPref('渋谷')) === '');
+  check('座標: Googleマップ URL（@ / !3d!4d / ?q=）と「lat, lng」を読み取る', await dbgv((d) => [d.parseCoords('https://www.google.com/maps/place/x/@35.6586,139.7454,17z'), d.parseCoords('…!3d34.6937!4d135.5023'), d.parseCoords('https://maps.google.com/?q=35.01,135.76'), d.parseCoords(' 35.68, 139.76 ')].map((c) => c && c.lat.toFixed(2)).join()) === '35.66,34.69,35.01,35.68');
+  check('座標: 範囲外・数字でない文字列は null', await dbgv((d) => [d.parseCoords('@99.1,139.1'), d.parseCoords('@35.1,999.1'), d.parseCoords('渋谷'), d.parseCoords(null)].every((c) => c === null)));
+  check('距離: 東京→大阪は約400km', await dbgv((d) => { const k = d.haversine({ lat: 35.68, lng: 139.76 }, { lat: 34.69, lng: 135.50 }); return k > 390 && k < 410; }));
+  const ru = await dbgv((d) => d.routeUrl(Array.from({ length: 12 }, (_, i) => ({ name: '場所' + i, address: '', lat: null, lng: null }))));
+  check('ルートURL: Googleマップ・最後が目的地・経由地は最大9件・全てエンコード', ru.startsWith('https://www.google.com/maps/dir/?api=1&destination=') && ru.includes(encodeURIComponent('場所11')) && decodeURIComponent(ru.split('waypoints=')[1].split('&')[0]).split('|').length === 9 && !/[ |]/.test(ru));
+
+  await sp.click('#tab-spots');
+  check('巡礼タブにタイルマップが47枚出る', (await sp.locator('#sp-map .pref-tile').count()) === 47);
+  await sp.fill('#sp-name', 'ロケ地の神社'); await sp.fill('#sp-work', '◯◯（アニメ）'); await sp.selectOption('#sp-type', '聖地');
+  await sp.fill('#sp-address', '東京都渋谷区神南1-1'); await sp.fill('#sp-url', 'https://www.google.com/maps/place/x/@35.6586,139.7454,17z'); await sp.selectOption('#sp-event', 'e1'); await sp.click('#sp-submit');
+  let st = await dbgv((d) => d.getState().spots);
+  check('スポットを追加: 住所から都道府県、地図URLから座標、関連する参戦を保存', st.length === 1 && st[0].pref === '東京' && Math.abs(st[0].lat - 35.6586) < 1e-6 && st[0].eventId === 'e1' && st[0].status === 'want');
+  check('タイルマップの東京が「行きたいあり」（点線）になり、サマリーが更新される', (await sp.locator('#sp-map .pref-tile.want', { hasText: '東京' }).count()) === 1 && (await sp.textContent('#sp-summary')).includes('行きたい 1 か所'));
+  await sp.fill('#sp-name', 'ロケ地の神社'); await sp.fill('#sp-address', '東京都港区'); await sp.click('#sp-submit');
+  check('同じ名前・同じ県のスポットは二重登録できない', (await dbgv((d) => d.getState().spots.length)) === 1);
+  await sp.fill('#sp-name', '怪しいリンク'); await sp.fill('#sp-url', 'javascript:alert(1)'); await sp.click('#sp-submit');
+  check('javascript: のリンクは保存を拒否してメッセージを出す', (await dbgv((d) => d.getState().spots.length)) === 1 && (await sp.textContent('#toast')).includes('https://'));
+  await sp.fill('#sp-url', ''); await sp.fill('#sp-name', '<img src=x onerror=window.__sx=1>'); await sp.fill('#sp-address', '大阪府大阪市'); await sp.click('#sp-submit');
+  check('XSS: スポット名の <img onerror> は文字として表示され実行されない', (await sp.evaluate(() => window.__sx)) === undefined && (await sp.locator('img[src="x"]').count()) === 0 && (await sp.textContent('#list-spots')).includes('<img src=x'));
+  check('地図リンクは https・別タブ・noopener', await sp.evaluate(() => { const a = [...document.querySelectorAll('#list-spots a.src-link')]; return a.length >= 2 && a.every((x) => /^https:\/\/www\.google\.com\/maps\/search/.test(x.href) && x.target === '_blank' && /noopener/.test(x.rel)); }));
+  // 行った！
+  await sp.locator('#list-spots .item', { hasText: 'ロケ地の神社' }).locator('button:has-text("行った！")').click();
+  check('「行った！」でタイルが色づき（✓1）、制覇が 1/47 になる', (await sp.locator('#sp-map .pref-tile.v1', { hasText: '東京' }).count()) === 1 && (await sp.textContent('#sp-summary')).includes('制覇 1 / 47'));
+  await sp.click('.toast-btn');
+  check('「元に戻す」で行きたいへ戻る', (await dbgv((d) => d.getState().spots.find((p) => p.name === 'ロケ地の神社').status)) === 'want');
+  await sp.locator('#list-spots .item', { hasText: 'ロケ地の神社' }).locator('button:has-text("行った！")').click();
+  // 費用
+  await sp.locator('#list-spots .item', { hasText: 'ロケ地の神社' }).locator('button[aria-label*="費用"]').click();
+  check('💸で出費フォームへ（遠征・交通・メモ・巡礼スポットが入る）', await sp.isVisible('#page-expenses') && (await sp.inputValue('#exp-cat')) === '遠征・交通' && (await sp.inputValue('#exp-memo')).includes('ロケ地の神社') && (await sp.inputValue('#exp-spot')) !== '');
+  await sp.fill('#exp-amount', '3200'); await sp.click('#exp-submit');
+  check('出費が巡礼スポットに紐付き、一覧に🗺バッジが出る', (await dbgv((d) => d.getState().expenses.some((x) => x.amount === 3200 && x.spotId))) && (await sp.locator('#list-expenses .badge', { hasText: '🗺' }).count()) === 1);
+  await sp.click('#tab-spots');
+  check('スポットのカードに「この巡礼の費用 ¥3,200」が出る', (await sp.textContent('#list-spots')).includes('この巡礼の費用 ¥3,200'));
+  await sp.click('#tab-events');
+  check('参戦カードに関連する聖地巡礼（✓つき）が出る', (await sp.textContent('#list-upcoming')).includes('聖地巡礼: ロケ地の神社✓'));
+  await sp.click('#tab-dashboard');
+  check('ダッシュボードに巡礼パネル（訪問1/2・制覇）が出る', await sp.isVisible('#panel-spots-dash') && (await sp.textContent('#spd-label')).includes('訪問 1 / 2') && (await sp.textContent('#spd-pref')).includes('制覇 1 / 47'));
+  await sp.click('#tab-spots');
+  // 県で絞り込み
+  await sp.click('#sp-map .pref-tile:has-text("東京")');
+  check('県のタイルをタップするとその県だけに絞り込まれ、解除ボタンが出る', (await sp.locator('#list-spots .item').count()) === 1 && await sp.isVisible('#btn-sp-pref-clear'));
+  await sp.click('#btn-sp-pref-clear');
+  check('解除で全件に戻る', (await sp.locator('#list-spots .item').count()) === 2);
+  // ルート
+  await sp.evaluate(() => { window.__opened = []; window.open = (u, t, f) => { window.__opened.push([u, t, f]); return null; }; });
+  check('チェックが無い間はルートボタンが押せない', !(await sp.isEnabled('#btn-sp-route')));
+  await sp.locator('#list-spots .sp-sel input').nth(0).check(); await sp.locator('#list-spots .sp-sel input').nth(1).check();
+  check('2か所を選ぶとルートボタンが有効になり件数が出る', (await sp.isEnabled('#btn-sp-route')) && (await sp.textContent('#btn-sp-route')).includes('2 か所'));
+  await sp.click('#btn-sp-route');
+  const op = await sp.evaluate(() => window.__opened);
+  check('ルートはGoogleマップを noopener で別タブに開くだけ（目的地・経由地つき）', op.length === 1 && op[0][0].startsWith('https://www.google.com/maps/dir/?api=1&destination=') && /noopener/.test(op[0][2]) && op[0][1] === '_blank' && op[0][0].includes('waypoints='));
+  // 削除すると費用は残る
+  await sp.locator('#list-spots .item', { hasText: 'ロケ地の神社' }).locator('.act.del').click();
+  check('スポットを消しても出費は消えず、紐付けだけ外れる', await dbgv((d) => { const s = d.getState(); return s.spots.length === 1 && s.expenses.some((x) => x.amount === 3200 && x.spotId === ''); }));
+  await sp.click('.toast-btn');
+  check('「元に戻す」でスポットも出費の紐付けも戻る', await dbgv((d) => { const s = d.getState(); return s.spots.length === 2 && s.expenses.some((x) => x.amount === 3200 && x.spotId); }));
+  // リサーチ候補 → スポット
+  await sp.evaluate(() => window.OSHI_DEBUG.mergeResearch('o1', [{ title: '大阪府で期間限定コラボカフェ開催', date: new Date(Date.now() + 20 * 864e5).toISOString().slice(0, 10), venue: 'ポップアップカフェ梅田', kind: 'event', url: 'https://example.com/cafe', source: 'ナタリー' }], 'web') && (window.OSHI_DEBUG.renderAll()));
+  await sp.click('#tab-research');
+  await sp.locator('#list-research .item', { hasText: 'コラボカフェ' }).locator('button:has-text("巡礼スポットへ")').click();
+  const cs = await dbgv((d) => { const s = d.getState(); return { sp: s.spots.find((p) => p.name === 'ポップアップカフェ梅田'), r: s.research[0] }; });
+  check('リサーチ候補のイベントを「巡礼スポットへ」追加（種別・県・出典・開催日つき）、候補は追加済み', cs.sp && cs.sp.type === 'カフェ・コラボ' && cs.sp.pref === '大阪' && cs.sp.url === 'https://example.com/cafe' && cs.sp.memo.includes('開催') && cs.r.status === 'added');
+  // イベント削除
+  await sp.click('#tab-events'); await sp.locator('#list-upcoming .item', { hasText: '横浜ライブ' }).locator('.act.del').click();
+  check('参戦を消すと、スポットの関連付けだけ外れてスポットは残る', await dbgv((d) => { const s = d.getState(); return s.spots.find((p) => p.name === 'ロケ地の神社') && s.spots.find((p) => p.name === 'ロケ地の神社').eventId === ''; }));
+  // CSV・バックアップ
+  check('CSVの数式インジェクション対策が巡礼にも効く（先頭 = の名前）', await dbgv((d) => d.csvCell('=HYPERLINK("x")')) === `"'=HYPERLINK(""x"")"`);
+  const bk = await dbgv((d) => JSON.parse(JSON.stringify(d.getState())));
+  await dbgv((d) => { d.setState({}); });
+  await dbgv((d, b) => d.importData(b, 'merge'), bk);
+  check('バックアップのマージ取り込みでスポットとリサーチ候補が戻る', await dbgv((d) => { const s = d.getState(); return s.spots.length === 3 && s.research.length === 1; }));
+  // 悪意ある保存データ
+  const evil = await dbgv((d) => d.sanitize({ oshiList: [{ id: 'o1', name: 'A' }], spots: [
+    { id: 's1', name: 'ok', oshiId: 'GONE', type: 'hack', pref: '火星', lat: 999, lng: 10, url: 'javascript:1', prio: 99, status: 'visited', rating: 9, visitedDate: 'ぬるぽ', eventId: 'nope' },
+    { id: 's2', name: 123 }, { id: 's3', name: '   ' }, null, 5, { name: 'ok2', lat: '35.1', lng: '139.1', status: 'weird' },
+  ], expenses: [{ id: 'x', date: '2026-01-01', amount: 100, spotId: 'ghost' }] }));
+  check('保存データのスポットを検疫（範囲外の座標・不正な種別/県/URL/評価/参照を落とし、非文字列・空の名前は捨てる）', evil.spots.length === 2 && evil.spots[0].lat === null && evil.spots[0].lng === null && evil.spots[0].type === 'その他' && evil.spots[0].pref === '' && evil.spots[0].url === '' && evil.spots[0].prio === 2 && evil.spots[0].rating === 0 && evil.spots[0].oshiId === '' && evil.spots[0].eventId === '' && evil.spots[0].visitedDate === '' && evil.spots[1].lat === 35.1 && evil.spots[1].status === 'want' && evil.expenses[0].spotId === '', JSON.stringify(evil.spots[0]));
+  check('巡礼の操作で外部への通信が発生しない（地図は開くだけ）', outReqs.length === 0, outReqs.slice(0, 2).join(' | '));
+  check('巡礼の操作で例外が出ない', serrs.length === 0, serrs.slice(0, 2).join(' | '));
+  await sp.close();
+
+  // 現在地（位置情報）: 許可あり・なし
+  const gctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, geolocation: { latitude: 35.68, longitude: 139.76 }, permissions: ['geolocation'] });
+  const gp = await gctx.newPage(); const greqs = []; gp.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !/fonts\.(googleapis|gstatic)/.test(r.url())) greqs.push(r.url()); });
+  await gp.addInitScript(() => { window.__OSHI_TEST = true; });
+  await gp.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' }); await gp.evaluate(() => localStorage.clear()); await gp.reload({ waitUntil: 'load' });
+  await gp.evaluate(() => window.OSHI_DEBUG.setState({ spots: [
+    { id: 'a', name: '大阪の遠いスポット', lat: 34.69, lng: 135.50, pref: '大阪' }, { id: 'b', name: '座標なしスポット' }, { id: 'c', name: '渋谷の近いスポット', lat: 35.66, lng: 139.70, pref: '東京' }, { id: 'd', name: '横浜のスポット', lat: 35.45, lng: 139.64, pref: '神奈川' } ] }));
+  await gp.click('#tab-spots'); await gp.click('#btn-sp-near');
+  await gp.waitForFunction(() => /近い順/.test(document.getElementById('toast').textContent));
+  const order = await gp.locator('#list-spots .item-title span:first-child').allTextContents();
+  check('「現在地から近い順」: 近い→遠い→座標なしの順に並び、距離(km)が出る', order.join() === '渋谷の近いスポット,横浜のスポット,大阪の遠いスポット,座標なしスポット' && (await gp.textContent('#list-spots')).includes('現在地から約'), order.join());
+  check('位置情報は端末内の計算のみ（座標を含む通信・保存が無い）', greqs.length === 0 && !(await gp.evaluate(() => localStorage.getItem('oshikatsu_log_v1'))).includes('35.68') && !(await gp.evaluate(() => localStorage.getItem('oshikatsu_log_v1'))).includes('139.76'));
+  await gp.close(); await gctx.close();
+  // 位置情報の拒否・失敗: Playwright は許可の確認が未応答のまま残り「拒否」にならないため、エラー応答を差し込んで再現する
+  const nctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const np = await nctx.newPage(); const nerr = []; np.on('pageerror', (e) => nerr.push(e.message));
+  await np.addInitScript(() => { window.__OSHI_TEST = true; window.__geoCode = 1; navigator.geolocation.getCurrentPosition = (ok, ng) => setTimeout(() => ng({ code: window.__geoCode, message: 'x' }), 10); });
+  await np.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' }); await np.click('#tab-spots');
+  await np.click('#btn-sp-near'); await np.waitForFunction(() => /許可/.test(document.getElementById('toast').textContent), null, { timeout: 5000 });
+  check('位置情報が拒否された端末では、許可の方法を案内する（例外にしない）', /許可/.test(await np.textContent('#toast')) && nerr.length === 0);
+  await np.evaluate(() => { window.__geoCode = 2; }); await np.click('#btn-sp-near'); await np.waitForFunction(() => /取得できませんでした/.test(document.getElementById('toast').textContent), null, { timeout: 5000 });
+  check('位置情報の取得に失敗したときは、時間をおく案内を出す', /取得できませんでした/.test(await np.textContent('#toast')) && nerr.length === 0);
+  await np.close(); await nctx.close();
+}
+
 console.log('\n── 11. テーマ（パステル標準／ダーク切替）──');
 check('標準はパステル（data-theme なし）', (await page.getAttribute('html', 'data-theme')) === null);
 const bgLight = await page.evaluate(() => getComputedStyle(document.body).backgroundImage);
@@ -311,6 +583,11 @@ check('下部ナビが画面下端に張り付く', geo.navBottom === 0);
 check('FABが画面内の中央にある', geo.fabIn && geo.fabCenter < 2);
 check('下部ナビはホーム/出費/参戦/推しの4つ、ほしい物・設定はヘッダーのアイコンへ', geo.tabs && geo.hidden && geo.headerBtns);
 check('サンプルデータでヒーロー・統計カード4枚・推しストリップが出る', geo.sumCards === 4 && (await mp.textContent('#hero-num')) === '21' && (await mp.locator('#oshi-strip .oshi-mini').count()) === 2);
+await mp.evaluate(() => { const d = window.OSHI_DEBUG, st = d.getState(); st.spots = ['神奈川', '和歌山', '鹿児島', '北海道', '東京'].map((pf, i) => ({ id: 'sp' + i, name: pf + 'のスポット', pref: pf, status: i % 2 ? 'visited' : 'want', type: '聖地' })); d.setState(st); });
+await mp.click('#btn-go-spots');
+const overSp = await mp.evaluate(() => ({ over: document.documentElement.scrollWidth - window.innerWidth, tile: Math.round(document.querySelector('.pref-tile').getBoundingClientRect().width), mapR: Math.round(document.getElementById('sp-map').getBoundingClientRect().right), panelR: Math.round(document.getElementById('panel-sp-map').getBoundingClientRect().right) }));
+check('巡礼タブ（390px）: 横溢れなし・マップがパネル内に収まる（3文字の県名で列が広がらない）', overSp.over <= 0 && overSp.mapR <= overSp.panelR && overSp.tile >= 24, JSON.stringify(overSp));
+check('スマホではヘッダーの🗺から巡礼タブへ入れ、下部ナビには出ない', await mp.isVisible('#page-spots') && !(await mp.isVisible('#tab-spots')));
 await mp.click('#tab-events'); await mp.click('#tab-oshi'); await mp.click('#btn-go-settings');
 const over2 = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 check('全タブを巡っても横溢れなし', over2 <= 0 && merr.length === 0, merr.slice(0, 2).join(' | '));
