@@ -24,7 +24,10 @@ Workers AI を使ったプロキシです。APIキーをブラウザへ配布せ
 2. **GitHubにシークレットを登録**
    - このリポジトリの Settings → Secrets and variables → Actions →「New repository secret」
    - Name: `CLOUDFLARE_API_TOKEN` / Secret: コピーしたトークン
-   - （トークンが複数のCloudflareアカウントに属する場合のみ `CLOUDFLARE_ACCOUNT_ID` も追加）
+   - **もう1つ、`CLOUDFLARE_ACCOUNT_ID` も必ず登録する**（Name: `CLOUDFLARE_ACCOUNT_ID` / Secret: アカウントID）
+     - カスタムトークンはアカウントを自動で探す権限を持たないため、**空だと「A request to the Cloudflare API failed.」とだけ出て
+       KV namespace の手順で止まる**（2026-10-01 に踏んだ。エラーの詳細が出ないので原因に気づきにくい）
+     - アカウントIDは、Cloudflare ダッシュボードのアドレスバー `https://dash.cloudflare.com/` の直後にある**英数字32文字**
 3. **ワークフローを実行**
    - リポジトリの Actions タブ →「Deploy Cloudflare Worker (ai-proxy)」→「Run workflow」
    - 末尾の Smoke test が `OK` になれば本番反映完了
