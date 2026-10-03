@@ -66,6 +66,6 @@ button('歌詞書き出し',()=>{if(!song){notify('AIで曲を生成すると、
 button('MIDI書き出し',()=>{download(new Blob([VocalCore.midi(notes,bpm)],{type:'audio/midi'}),'vocalis-melody.mid');notify('テンポと音符をMIDIで書き出しました');});
 button('歌声デモ',async()=>{stop();const epoch=playbackEpoch;try{const c=await audio();if(epoch!==playbackEpoch)return;const base=playback.voice==='male'?55:67;const demo=[['き',0,0,1],['み',2,1,1],['と',4,2,1],['あ',5,3,1],['る',4,4,1],['く',0,5,3]];demo.forEach(([lyric,interval,start,duration])=>scheduled.push(VocalCore.createVoice(c,master,{pitch:base+interval,lyric},c.currentTime+.06+start*.6,duration*.6,playback.voice,settings)));playing=true;$('#play').textContent='■';notify('簡易合成歌声のデモを試聴しています。編集中の曲は保持しています。');demoTimer=setTimeout(stop,5000);}catch(e){notify('音声を開始できませんでした：'+e.message);}});
 window.addEventListener('vocal-character-change',e=>{stop();checkpoint();playback.voice=e.detail.voice;voiceType.value=playback.voice;render();save();});
-window.addEventListener('vocal-character-ready',()=>render());
+window.addEventListener('vocal-character-ready',e=>{playback.voice=e.detail.voice;voiceType.value=playback.voice;render();save();});
 try{const raw=localStorage.getItem(KEY);if(raw)apply(raw);}catch{}render();save();
 })();
