@@ -17,6 +17,7 @@
 import { buildSystemPrompt } from './site-knowledge.js';
 import { allowedOrigin, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
 import { researchOshi } from './oshi-research.js';
+import { handleVocalSong, handleVocalPortrait } from './vocalis-ai.js';
 
 // 上から順に試行（先頭が利用不可・エラーの場合は次へフォールバック）
 const MODELS = [
@@ -228,9 +229,13 @@ export default {
       return handleStats(env, isAllowed ? origin : '');
     }
 
+    if (request.method === 'GET' && url.pathname === '/vocal/usage') {
+      if (!isAllowed) return errorResponse(403, 'Forbidden');
+      return getVocalUsage(request, env, origin);
+    }
     if (!isAllowed) return errorResponse(403, 'Forbidden');
     if (request.method !== 'POST') return errorResponse(405, 'Method Not Allowed', corsHeaders(origin));
-    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts', '/oshi/research'].includes(url.pathname)) {
+    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts', '/oshi/research', '/vocal/song', '/vocal/portrait', '/vocal/budget'].includes(url.pathname)) {
       return errorResponse(404, 'Not Found', corsHeaders(origin));
     }
     const limited = await limitRequest(request, env, corsHeaders(origin));
@@ -241,6 +246,41 @@ export default {
       body = await readJson(request, 16384);
     } catch (error) {
       return errorResponse(error.status || 400, error.status ? error.message : 'Invalid request', corsHeaders(origin));
+    }
+
+
+    if (url.pathname === '/vocal/budget') {
+      const adminPin = env.VOCALIS_ADMIN_PIN;
+      if (!env.VOCALIS_BUDGET) return jsonResponse({ error: 'VOCALIS budget service is unavailable.' }, origin, 503);
+      if (!adminPin) return jsonResponse({ error: 'VOCALIS_ADMIN_PIN is not configured.' }, origin, 503);
+      if (!secureEqual(request.headers.get('X-Vocalis-Admin') || '', adminPin)) return jsonResponse({ error: '管理者コードが正しくありません。' }, origin, 401);
+      const ceiling = Number(body.ceilingUsd);
+      if (![0.10, 0.25, 0.50, 1, 2, 5].includes(ceiling)) return jsonResponse({ error: '上限額は指定された候補から選択してください。' }, origin, 400);
+      const id = env.VOCALIS_BUDGET.idFromName('vocalis-global');
+      const response = await env.VOCALIS_BUDGET.get(id).fetch('https://budget/configure', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ceilingUsd: ceiling }),
+      });
+      return jsonResponse(await response.json(), origin, response.status);
+    }
+
+    if (url.pathname === '/vocal/song' || url.pathname === '/vocal/portrait') {
+      const operation = url.pathname === '/vocal/song' ? 'song' : 'portrait';
+      const valid = operation === 'song'
+        ? (typeof body.theme === 'string' && body.theme.trim().length > 0 && body.theme.length <= 500 && Number.isFinite(body.minutes) && body.minutes >= 0.5 && body.minutes <= 10 && ['male', 'female'].includes(body.voice) && ['J-POP', 'バラード', 'ロック', 'エレクトロ'].includes(body.genre))
+        : (body.profile && typeof body.profile.name === 'string' && body.profile.name.trim().length > 0 && body.profile.name.length <= 40 && ['male', 'female'].includes(body.profile.voice) && typeof body.profile.appearance === 'string' && body.profile.appearance.length <= 1000 && ['アニメ', '3D', 'イラスト'].includes(body.profile.style));
+      if (!valid) return jsonResponse({ error: '入力内容を確認してください。' }, origin, 400);
+      const pin = env.VOCALIS_ACCESS_PIN;
+      if (!pin) return jsonResponse({ error: 'VOCALIS_ACCESS_PIN is not configured; generation is disabled.' }, origin, 503);
+      if (!secureEqual(request.headers.get('X-Vocalis-Code') || '', pin)) return jsonResponse({ error: 'アクセスコードが正しくありません。' }, origin, 401);
+      if (!env.VOCALIS_BUDGET) return jsonResponse({ error: 'VOCALIS budget service is unavailable.' }, origin, 503);
+      const ceiling = Number(env.VOCALIS_MONTHLY_BUDGET_USD) || 0.50;
+      const reservation = await reserveVocalisBudget(env.VOCALIS_BUDGET, operation, ceiling);
+      if (!reservation.ok) return jsonResponse({ error: '今月のVOCALIS AI利用上限に達しました。来月まで生成を停止します。', usage: reservation.usage }, origin, 429);
+      const result = operation === 'song' ? await handleVocalSong(env, body) : await handleVocalPortrait(env, body);
+      const { usage, ...payload } = result.body || {};
+      const actual = result.status >= 400 ? reservation.reservedUsd : (usage?.estimatedUsd || reservation.reservedUsd);
+      const settled = await settleVocalisBudget(env.VOCALIS_BUDGET, reservation.id, actual);
+      return jsonResponse({ ...(payload || {}), usage: settled }, origin, result.status);
     }
 
     // ── 推し活ログ: イベントリサーチ（ニュースRSS・AI不使用・キー不要）──
@@ -379,4 +419,93 @@ function adminCorsHeaders() {
     'Access-Control-Allow-Methods': 'GET, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Token',
   };
+}
+
+async function getVocalUsage(request, env, origin) {
+  const pin = env.VOCALIS_ACCESS_PIN;
+  if (!pin) return jsonResponse({ error: 'VOCALIS_ACCESS_PIN is not configured; generation is disabled.' }, origin, 503);
+  if (!secureEqual(request.headers.get('X-Vocalis-Code') || '', pin)) return jsonResponse({ error: 'アクセスコードが正しくありません。' }, origin, 401);
+  if (!env.VOCALIS_BUDGET) return jsonResponse({ error: 'VOCALIS budget service is unavailable.' }, origin, 503);
+  const limited = await limitRequest(request, env, corsHeaders(origin));
+  if (limited) return limited;
+  const id = env.VOCALIS_BUDGET.idFromName('vocalis-global');
+  const response = await env.VOCALIS_BUDGET.get(id).fetch('https://budget/state');
+  return jsonResponse(await response.json(), origin);
+}
+
+function secureEqual(a, b) {
+  let diff = a.length ^ b.length;
+  const size = Math.max(a.length, b.length);
+  for (let i = 0; i < size; i++) diff |= (a.charCodeAt(i % (a.length || 1)) || 0) ^ (b.charCodeAt(i % (b.length || 1)) || 0);
+  return diff === 0;
+}
+
+async function reserveVocalisBudget(namespace, operation, ceiling) {
+  const id = namespace.idFromName('vocalis-global');
+  const response = await namespace.get(id).fetch('https://budget/reserve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation, ceiling }),
+  });
+  return response.json();
+}
+
+async function settleVocalisBudget(namespace, reservationId, actualUsd) {
+  const id = namespace.idFromName('vocalis-global');
+  const response = await namespace.get(id).fetch('https://budget/settle', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reservationId, actualUsd }),
+  });
+  return response.json();
+}
+
+export class VocalisBudget {
+  constructor(state, env) { this.state = state; this.env = env;  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === '/state' && request.method === 'GET') return Response.json(await this.read());
+    if (url.pathname === '/reserve' && request.method === 'POST') return this.reserve(await request.json());
+    if (url.pathname === '/configure' && request.method === 'POST') return this.configure(await request.json());
+    if (url.pathname === '/settle' && request.method === 'POST') return this.settle(await request.json());
+    return new Response('Not Found', { status: 404 });
+  }
+  month() { return new Date().toISOString().slice(0, 7); }
+  async configuredCeiling() { return Number(await this.state.storage.get('ceilingUsd')) || Number(this.env.VOCALIS_MONTHLY_BUDGET_USD) || 0.50; }
+  async read() {
+    let value = await this.state.storage.get('usage') || { month: this.month(), spentUsd: 0, reservedUsd: 0, songs: 0, portraits: 0 };
+    if (value.month !== this.month()) value = { month: this.month(), spentUsd: 0, reservedUsd: 0, songs: 0, portraits: 0 };
+    return { ...value, ceilingUsd: await this.configuredCeiling() };
+  }
+  async configure(body) {
+    const ceilingUsd = Number(body.ceilingUsd);
+    if (![0.10, 0.25, 0.50, 1, 2, 5].includes(ceilingUsd)) return Response.json({ error: 'invalid ceiling' }, { status: 400 });
+    await this.state.storage.put('ceilingUsd', ceilingUsd);
+    return Response.json({ ...(await this.read()), saved: true });
+  }
+  async reserve(body) {
+    const operation = ['song', 'portrait'].includes(body.operation) ? body.operation : null;
+    if (!operation) return Response.json({ ok: false, error: 'invalid operation' }, { status: 400 });
+    const id = crypto.randomUUID(), reserve = operation === 'song' ? 0.02 : 0.01;
+    const ceiling = await this.configuredCeiling();
+    const result = await this.state.storage.transaction(async tx => {
+      let value = await tx.get('usage') || { month: this.month(), spentUsd: 0, reservedUsd: 0, songs: 0, portraits: 0 };
+      if (value.month !== this.month()) value = { month: this.month(), spentUsd: 0, reservedUsd: 0, songs: 0, portraits: 0 };
+      if (value.spentUsd + value.reservedUsd + reserve > ceiling + 1e-9) return { ok: false, usage: { ...value, ceilingUsd: ceiling } };
+      value.reservedUsd += reserve; value[operation === 'song' ? 'songs' : 'portraits'] += 1;
+      await tx.put('usage', value);
+      return { ok: true, usage: { ...value, ceilingUsd: ceiling } };
+    });
+    if (result.ok) await this.state.storage.put('reservation:' + id, { month: result.usage.month, reserve, operation });
+    return Response.json({ ...result, ...(result.ok ? { id, reservedUsd: reserve } : {}) });
+  }
+  async settle(body) {
+    const pending = await this.state.storage.get('reservation:' + body.reservationId);
+    if (!pending) return Response.json(await this.read());
+    await this.state.storage.delete('reservation:' + body.reservationId);
+    const actual = Math.max(0, Math.min(pending.reserve, Number(body.actualUsd) || 0));
+    const value = await this.state.storage.transaction(async tx => {
+      let usage = await tx.get('usage') || { month: this.month(), spentUsd: 0, reservedUsd: 0, songs: 0, portraits: 0 };
+      if (usage.month !== pending.month) return usage;
+      usage.reservedUsd = Math.max(0, usage.reservedUsd - pending.reserve); usage.spentUsd += actual;
+      await tx.put('usage', usage); return usage;
+    });
+    return Response.json({ ...value, ceilingUsd: await this.configuredCeiling() });
+  }
 }
