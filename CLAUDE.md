@@ -638,7 +638,7 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 
 | スキル | スケジュール（JST） | 成果物 | mainへの直接push |
 |---|---|---|---|
-| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve` | 禁止（深澤承認制） |
+| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve-2026-09-30`（旧`claude/agent-evolve`はPR #272と共にclose。理由は下記） | 禁止（深澤承認制） |
 | `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
@@ -663,6 +663,14 @@ node scripts/verify-routine-delivery.mjs   # 表の各Routineが成果物を出�
 - harness-lint 検査#15 は同じ内容を**△警告**で出す（✗にしない理由は検査#15のコメント参照。
   Routineが動くかはAPI側の設定に依存し、リポジトリのコードでは直せないため）。
   **△が出たら必ず中身を見ること**
+- **原因2（2026-09-30 特定）: 固定ブランチ名が「`origin/main`と共通祖先を持たない（unrelated
+  histories）」状態になることがある**。`claude/agent-evolve`は2026-07-22時点の旧mainから分岐した
+  まま2ヶ月以上放置され、リポジトリ本体側の履歴操作（詳細未特定）で`origin/main`との共通祖先を
+  失っていた。通常pushもfast-forwardマージも効かず、`force-with-lease`はauto-modeの破壊的git操作
+  ガードに正しく拒否される。**直し方は強制上書きではない**: `git checkout -B claude/<skill>-<日付>
+  origin/main`で新しいブランチ名から作り直し、新PRを起票して旧PR（本件はPR #272）はcloseする。
+  この表の「成果物」欄は実際に使われているブランチ名（日付suffix付き）を正として常に更新すること
+  （古い名前のまま載せると、検査#15がその死んだブランチを見張り続けて△が消えない）
 
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
