@@ -310,15 +310,49 @@ console.log('\n── 3. 画面: 取り込み→自動読取→検算→家計�
 
   // 再読込しても残る
   await page.reload();
+  await page.click('#nav-ledger');
+  // テストレシートは2026年9月。実行月に依存せず保存月の履歴を確認する。
+  const monthOffset = await page.evaluate(() => {
+    const now = new Date(); return (now.getFullYear() - 2026) * 12 + now.getMonth() - 8;
+  });
+  for (let i = 0; i < Math.abs(monthOffset); i++) await page.click(monthOffset > 0 ? '#m-prev' : '#m-next');
   const kept = await page.evaluate(() => document.querySelectorAll('#entries .entry').length);
   check('再読込後も家計簿が残る', kept === 1);
 
-  // 削除
+  // 削除（再読込後は読み取りタブで起動）
+  await page.click('#nav-ledger');
   await page.click('#entries .entry summary');
   await page.click('#entries .entry .chip.danger');
   await page.waitForTimeout(100);
   const del = await page.evaluate(() => JSON.parse(localStorage.getItem('receiptOCR.ledger.v1')).length);
   check('削除できる', del === 0);
+  check('例外0件', errors.length === 0, errors.slice(0, 2).join(' | '));
+  await page.close();
+}
+
+/* ───────────────────────── 3b. スマホ・文字取り込み・グラフ ───────────────────────── */
+console.log('\n── 3b. スマホ・文字取り込み・グラフ ─────');
+{
+  const { page, errors } = await newPage();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('.text-import summary').click();
+  await page.fill('#ocr-input', RAW_A);
+  await page.click('#parse-text');
+  check('文字の貼り付けから8明細・支払合計を抽出',
+    await page.locator('#rows tr').count() === 8 && await page.locator('#sum-total').textContent() === '¥2,175');
+  check('スマホで明細がカード配置になる', await page.locator('#rows tr').first().evaluate(e => getComputedStyle(e).display === 'grid'));
+  check('スマホでページの横はみ出しがない', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.click('#save-ledger');
+  check('保存後に家計簿タブへ切り替え', await page.evaluate(() => document.body.dataset.view === 'ledger'));
+  check('グラフが実際の支出カテゴリーを表示', await page.locator('#category-chart').evaluate(e => e.style.background.includes('conic-gradient') && /肉類/.test(e.getAttribute('aria-label'))));
+  const budget = page.locator('#budget'); await budget.fill('3000'); await budget.dispatchEvent('change');
+  check('予算3000円の残り825円を表示', await page.locator('#st-budget').textContent() === '¥825');
+  await page.click('#m-next');
+  check('記録のない月ではグラフと履歴が空になる', await page.locator('#chart-count').textContent() === '0' && await page.locator('#entries .entry').count() === 0);
+  await page.click('#nav-scan');
+  check('読み取りタブへ戻れる', await page.locator('#capture-card').isVisible());
+  await page.fill('#ocr-input', '品目だけ'); await page.click('#parse-text');
+  check('価格なしの文字は保存可能な明細にしない', /識別できません/.test(await page.locator('#text-status').textContent()));
   check('例外0件', errors.length === 0, errors.slice(0, 2).join(' | '));
   await page.close();
 }
