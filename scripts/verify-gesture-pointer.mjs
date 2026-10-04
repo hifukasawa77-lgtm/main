@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { run, hold, ramp, stats, VIEW as SIM_VIEW } from './lib/airtouch-sim.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PAGE = 'zero-1-mobile.html';
@@ -598,16 +599,22 @@ const brush = await page.evaluate(async ([base]) => {
   {
     const engine = new M.GestureEngine();
     const driver = new M.PointerDriver({ doc: document });
-    const at = (pinch, t) => {
+    // ★構えを数フレーム保ってから読む。ピンチ比はノイズ除去の平滑を通るので、
+    //   1フレームで飛ばした直後は段階的にしか追従しない（実際の手は構えを保つ）
+    let clock = 0;
+    const at = (pinch, frames = 12) => {
       const cam = toCam(AX, AY);
-      const frame = engine.update(window.makeHand(cam.nx, cam.ny, pinch), t, view);
-      driver.apply(frame);
+      let frame;
+      for (let i = 0; i < frames; i++) {
+        frame = engine.update(window.makeHand(cam.nx, cam.ny, pinch), clock, view);
+        driver.apply(frame);
+        clock += 33;
+      }
       return { progress: frame.progress, css: driver.cursor.style.getPropertyValue('--airtouch-progress') };
     };
-    at(0.95, 0);
-    out.progressOpen = at(0.95, 40);
-    out.progressHalf = at(0.50, 80);
-    out.progressFull = at(0.20, 120);
+    out.progressOpen = at(0.95);
+    out.progressHalf = at(0.50);
+    out.progressFull = at(0.20);
     driver.destroy();
   }
 
@@ -890,6 +897,119 @@ check('79. 切り替えた内容が、出したままの一覧にその場で反
 check('80. 表示の位置を切り替えられる／一覧を閉じられる', tuning.dock === true && tuning.helpOff === true);
 check('81. 調整を始めると設定シートを閉じて画面の案内へ渡す',
   tuning.calibrating === true && tuning.sheetClosed === true);
+
+/* ------------------------------------------------------------------ *
+ * 精度（82〜90）— ノイズ入りの合成した手で、判定層の「当たり」を数字で守る
+ *
+ * 旧検査の合成の手は「親指が閉じる量の65%を担う」前提で、これは位置の混合比
+ * （人差し指0.65：親指0.35）と打ち消し合い、**つまんでもずれない結果が必ず出る形**だった。
+ * ここでは担当割合（share）を人ごとに振る。ベンチ本体は scripts/bench-airtouch-accuracy.mjs。
+ * 仮定（ノイズ量・30fps・画面1440×900）は scripts/lib/airtouch-sim.mjs の冒頭に書いてある。
+ * ------------------------------------------------------------------ */
+{
+  const N = 40;
+  const clickScenario = () => [...hold(0.95, 20), ...ramp(0.95, 0.25, 5), ...hold(0.25, 12), ...ramp(0.25, 0.95, 5), ...hold(0.95, 8)];
+  const downOf = (log) => { for (const f of log) for (const e of f.events) if (e.type === 'down') return e; return null; };
+  const clickErrors = (share, options) => {
+    const errs = []; let missed = 0;
+    for (let s = 0; s < N; s++) {
+      const { log } = run(clickScenario(), { seed: 100 + s, share, options });
+      const rest = log.slice(10, 20);
+      const rx = rest.reduce((a, f) => a + f.x, 0) / rest.length;
+      const ry = rest.reduce((a, f) => a + f.y, 0) / rest.length;
+      const d = downOf(log);
+      if (d) errs.push(Math.hypot(d.x - rx, d.y - ry)); else missed += 1;
+    }
+    return { ...stats(errs), missed };
+  };
+  const shares = [0.2, 0.5, 0.8];
+  const acc = (options) => Object.fromEntries(shares.map((sh) => [sh, clickErrors(sh, options)]));
+  const base = acc({});
+  const worstP95 = Math.max(...shares.map((sh) => base[sh].p95));
+  const means = shares.map((sh) => base[sh].mean);
+
+  // 82. つまんだ位置がずれない（手は動かしていない。ずれは「つまむ動作」と計測ノイズだけ）
+  check('82. つまんでもクリック位置がずれない（人差し指の担当割合 0.2〜0.8 のどれでも95%点が15px以内）',
+    worstP95 <= 15, `95%点 ${worstP95.toFixed(1)}px / 平均 ${means.map((v) => v.toFixed(1)).join(', ')}px`);
+  // 83. つまみ方の個人差で結果が変わらない（旧: 担当割合で 2px〜65px とばらついた）
+  check('83. つまみ方の個人差でずれ幅が変わらない（平均の差が4px以内）',
+    Math.max(...means) - Math.min(...means) <= 4, `差 ${(Math.max(...means) - Math.min(...means)).toFixed(1)}px`);
+  // 84. 明確につまんだら必ず押下になる／開いたままなら押下にならない
+  let falseDown = 0;
+  for (let s = 0; s < N; s++) {
+    const { log } = run(hold(0.78, 300), { seed: 700 + s, share: 0.5 });
+    for (const f of log) for (const e of f.events) if (e.type === 'down') falseDown += 1;
+  }
+  check('84. 明確なつまみは取りこぼさず、開いたままの手では押下にならない',
+    shares.every((sh) => base[sh].missed === 0) && falseDown === 0, `取りこぼし ${shares.map((sh) => base[sh].missed).join('/')} ・誤押下 ${falseDown}`);
+
+  // 85. 荒いノイズ（逆光・動く手）でも押している最中に離した判定が混ざらない（ドラッグが切れない）
+  let chatter = 0;
+  const HARSH = { sigma: 0.006, sigmaZ: 0.03 };
+  for (let s = 0; s < N; s++) {
+    const { log } = run([...hold(0.95, 10), ...ramp(0.95, 0.25, 5), ...hold(0.25, 60)], { seed: 2300 + s, share: 0.5, ...HARSH });
+    for (const f of log) for (const e of f.events) if (e.type === 'up') chatter += 1;
+  }
+  check('85. 荒いノイズ下でも、押している最中に押下が途切れない（60フレームあたり0.8回未満・旧3.35回）',
+    chatter / N < 0.8, `${(chatter / N).toFixed(2)} 回`);
+
+  // 86. 押下の遅れが大きくない（精度のために反応を犠牲にしていない）
+  const lat = [];
+  for (let s = 0; s < N; s++) {
+    const frames = [...hold(0.95, 20), ...ramp(0.95, 0.25, 5), ...hold(0.25, 12)];
+    const { log } = run(frames, { seed: 1500 + s, share: 0.5 });
+    const d = log.findIndex((f) => f.events.some((e) => e.type === 'down'));
+    const cross = frames.findIndex((f) => f.pinch <= 0.42);
+    if (d >= 0) lat.push(d - cross);
+  }
+  const latMean = lat.reduce((a, v) => a + v, 0) / (lat.length || 1);
+  check('86. 押下の遅れが1.5フレーム（約50ms）以内（精度のために反応を犠牲にしていない）',
+    lat.length === N && latMean <= 1.5, `${latMean.toFixed(2)} フレーム`);
+
+  // 87. 押したまま手を動かすと、ポインターは手に付いてくる（固定がドラッグを凍らせていない）
+  const follow = [];
+  for (let s = 0; s < N; s++) {
+    const pre = [...hold(0.95, 15), ...ramp(0.95, 0.25, 4), ...hold(0.25, 6)];
+    const mv = Array.from({ length: 20 }, (_, k) => ({ pinch: 0.25, nx: 0.5 - (0.1 * (k + 1)) / 20 }));
+    const { log } = run([...pre, ...mv, ...hold(0.25, 8, { nx: 0.4 })], { seed: 70 + s, share: 0.5 });
+    follow.push(Math.abs(log[log.length - 1].x - log[pre.length - 1].x));
+  }
+  const expected = (0.1 / 0.68) * SIM_VIEW.width;
+  const fmean = follow.reduce((a, v) => a + v, 0) / follow.length;
+  check('87. 押したまま手を動かすと、ポインターが手の動きどおりに付いてくる（固定がドラッグを凍らせない）',
+    Math.abs(fmean - expected) <= expected * 0.12, `${fmean.toFixed(0)}px / 期待 ${expected.toFixed(0)}px`);
+
+  // 88. 指の構えが途中で変わっても、離したときにポインターが跳ばない（戻りを滑らかにしている）
+  let worstJump = 0;
+  for (let s = 0; s < N; s++) {
+    const shift = { x: 0, y: 0.4 };
+    const pre = [...hold(0.95, 15), ...ramp(0.95, 0.25, 3)];
+    const held = Array.from({ length: 8 }, () => ({ pinch: 0.25, tipShift: shift }));
+    const rel = [...ramp(0.25, 0.95, 3), ...hold(0.95, 20)].map((f) => ({ ...f, tipShift: shift }));
+    const { log } = run([...pre, ...held, ...rel], { seed: 90 + s, share: 0.5 });
+    for (let i = pre.length + held.length; i < log.length; i++) {
+      worstJump = Math.max(worstJump, Math.hypot(log[i].x - log[i - 1].x, log[i].y - log[i - 1].y));
+    }
+  }
+  check('88. 指の構えが変わっても、離した瞬間にポインターが跳ばない（1フレーム30px以内・旧46px）',
+    worstJump <= 30, `${worstJump.toFixed(1)}px/フレーム`);
+
+  // 89. 手を見失ったら固定も解ける（次に手が出たとき、前回の基準を引きずらない）
+  {
+    const M2 = await import(new URL('../assets/js/gesture-pointer.js', import.meta.url).href);
+    const engine = new M2.GestureEngine();
+    const r = (await import('./lib/airtouch-sim.mjs'));
+    const feed = (pinch, t, shift = null) => engine.update(r.makeHand({ nx: 0.5, ny: 0.5, pinch, share: 0.8, tipShift: shift }), t, SIM_VIEW);
+    let t = 0;
+    for (let i = 0; i < 15; i++, t += 33) feed(0.95, t);
+    for (let i = 0; i < 6; i++, t += 33) feed(0.3, t);
+    const latchedBefore = engine._latched;
+    for (let i = 0; i < 20; i++, t += 33) engine.update(null, t, SIM_VIEW);
+    check('89. 手を見失ったら固定も解ける（前回の基準を引きずらない）',
+      latchedBefore === true && engine._latched === false && engine._restOffset === null && engine.visible === false,
+      `見失う前 ${latchedBefore} / 後 ${engine._latched}`);
+  }
+}
 
 const shots = path.join(ROOT, 'test-screenshots');
 fs.mkdirSync(shots, { recursive: true });

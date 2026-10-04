@@ -73,6 +73,23 @@ export const DEFAULTS = Object.freeze({
   dCutoff: 1.0,
   // 推定は毎フレーム走らせない（電池）。間のフレームは直前の結果を使い、フィルタが繋ぐ
   detectIntervalMs: 33,
+  /* --- 精度（2026-10-04）: つまむ動作そのものでポインターがずれるのを抑える --- */
+  // つまみ始め（ピンチ比が pinchUp + この値を下回った）から、ポインターを
+  // 「指の付け根（動かない点）＋つまむ前の指先との差」に固定する。
+  // 指先と親指の混合点は、**どちらがどれだけ閉じるかが人によって違う**ので、つまむだけで
+  // 数十px動く（人差し指が閉じる量の担当が 0.8 の人で約65px・合成実測）。
+  latchMargin: 0.10,
+  // 固定を解く（指先の追従へ戻す）ピンチ比。latchMargin より大きくして、境目の往復を防ぐ
+  unlatchMargin: 0.22,
+  // 固定を解いたあと、指先の追従へ滑らかに戻す時間（ms）。即座に戻すとポインターが跳ぶ
+  latchBlendMs: 160,
+  // ピンチ比は奥行き（z）のノイズを拾って毎フレーム揺れ、押している最中に離した判定が混ざる。
+  // ポインターと同じ 1€ フィルタで均す（止まっているほど強く・速く閉じるときは遅れない）。
+  // ★中央値フィルタは使わない: 急につまむと、単調に下がる列の中央値は常に1フレーム遅れる
+  pinchMinCutoff: 2.5,
+  pinchBeta: 1.2,
+  // 固定の基準にする「つまみ始める前の指先との差」を何フレーム前から取るか（30fps で 約0.1〜0.2秒前）
+  latchLookback: 6,
 });
 
 /** 手のランドマーク番号（MediaPipe HandLandmarker の並び） */
@@ -397,6 +414,12 @@ export class GestureEngine {
     this._stillAt = null;
     this._stillX = 0; this._stillY = 0;
     this._dwellFired = false;
+    // 精度: つまみ始めの固定（latch）と、ピンチ比・手の大きさの平滑
+    this._latched = false;
+    this._restOffset = null;      // 固定中に使う「指先の混合点 − 指の付け根」（手の大きさで割った値）
+    this._offHist = [];           // 開いている間の同じ差の履歴（固定の基準は少し前の値を使う）
+    this._blend = 1;              // 固定を解いたあとの戻り具合 0→1
+    this._fp = new OneEuroFilter({ minCutoff: this.options.pinchMinCutoff, beta: this.options.pinchBeta, dCutoff: this.options.dCutoff });
   }
 
   /**
@@ -421,13 +444,17 @@ export class GestureEngine {
         this.visible = false;
         this.progress = 0; this.dwell = 0; this.secondary = false;
         this._stillAt = null; this._dwellFired = false;
+        this._latched = false; this._restOffset = null; this._offHist = []; this._blend = 1;
+        this._fp.reset();
         this.fx.reset(); this.fy.reset();
         events.push({ type: 'disappear' });
       }
       return this.snapshot(events);
     }
 
-    const point = pointerAnchor(hand.landmarks);
+    // ★ピンチ比とポインター位置は「つまみ始めの固定」と一体で決める（先にピンチ比を平滑する）
+    const stable = this._stabilise(hand.landmarks, now);
+    const point = stable.point;
     const screen = mapToScreen(point.x, point.y, {
       width: viewport.width, height: viewport.height,
       activeBox: opts.activeBox, mirror: opts.mirror,
@@ -451,7 +478,7 @@ export class GestureEngine {
     this.vy = this.vy * 0.7 + (dy / dt) * 0.3;
     this.x = px; this.y = py; this._lastT = now;
     this._lastSeen = now;
-    this.pinch = pinchRatio(hand.landmarks);
+    this.pinch = stable.pinch;
     // 「あと少しで押せる」を見せるための連続値。押した瞬間だけ変わる表示では、
     // 空振りしたときに何が足りないのか利用者に分からない
     this.progress = pinchProgress(this.pinch, opts.pinchDown, opts.pinchUp);
@@ -506,6 +533,60 @@ export class GestureEngine {
     // vx/vy を move にも載せる。作用層のスクロール加速が「今どれだけ速いか」を知るため
     events.push({ type: 'move', x: px, y: py, dx, dy, vx: this.vx, vy: this.vy, pressed: this.pressed });
     return this.snapshot(events);
+  }
+
+  /**
+   * ピンチ比とポインター位置を、つまむ動作で乱れないように整える。
+   *
+   * ①ピンチ比を 1€ フィルタで均す。z のノイズが1フレームだけ比を押し下げ、押している最中に
+   *   「離した」判定が混ざるのを防ぐ（荒いノイズ下で途切れが約10分の1・合成実測）。
+   *   手の大きさ（handScale）の平滑は試したが、外しても数字が変わらなかったので入れていない。
+   * ②つまみ始めたらポインターを固定する。**指先と親指の混合点は、つまむ動作そのもので動く**
+   *   （どちらがどれだけ閉じるかは人による）。指の付け根は動かないので、
+   *   「つまむ前の指先との差」を覚えておき、つまんでいる間は 付け根＋その差 を使う。
+   *   基準は「つまみ始める少し前」の差（latchLookback）。始まりの数フレームで混ざったずれを
+   *   取り込むと、固定しても約5倍ずれる（合成実測）。
+   *   戻すときは latchBlendMs かけて指先の追従へ滑らかに戻す（即座だと跳ぶ）。
+   */
+  _stabilise(landmarks, now) {
+    const opts = this.options;
+    const scale = Math.max(handScale(landmarks), 1e-6);
+
+    const raw = dist3(landmarks[LM.THUMB_TIP], landmarks[LM.INDEX_TIP]) / scale;
+    const pinch = this._fp.filter(raw, now / 1000);
+
+    const tip = pointerAnchor(landmarks);
+    const k = {
+      x: (landmarks[LM.INDEX_MCP].x + landmarks[LM.MIDDLE_MCP].x) / 2,
+      y: (landmarks[LM.INDEX_MCP].y + landmarks[LM.MIDDLE_MCP].y) / 2,
+    };
+    const live = { x: (tip.x - k.x) / scale, y: (tip.y - k.y) / scale };
+
+    // 固定の判断は「平滑する前の比」で行う（平滑後だと始まりに気づくのが遅れ、
+    // つまみ始めの数フレームで混ざったずれを基準に取り込んでしまう）
+    const dtMs = this.visible ? Math.max(now - this._lastT, 0) : 0;
+    if (!this._latched && (raw < opts.pinchUp + opts.latchMargin || this.pressed)) {
+      this._latched = true; this._blend = 0;
+      // 基準は「少し前」の差。履歴の古い側の平均（ノイズを均す）。無ければ今の値
+      const h = this._offHist;
+      const old = h.slice(0, Math.max(1, Math.min(3, h.length)));
+      this._restOffset = old.length
+        ? { x: old.reduce((m, v) => m + v.x, 0) / old.length, y: old.reduce((m, v) => m + v.y, 0) / old.length }
+        : { ...live };
+      this._offHist = [];
+    } else if (this._latched && !this.pressed && raw >= opts.pinchUp + opts.unlatchMargin) {
+      this._latched = false;
+    }
+    if (!this._latched) {
+      this._offHist.push(live);
+      if (this._offHist.length > opts.latchLookback) this._offHist.shift();
+      this._blend = opts.latchBlendMs > 0 ? Math.min(1, this._blend + dtMs / opts.latchBlendMs) : 1;
+    }
+    const rest = this._restOffset ?? live;
+    const w = this._latched ? 0 : this._blend;
+    const ox = rest.x + (live.x - rest.x) * w;
+    const oy = rest.y + (live.y - rest.y) * w;
+    return { pinch, point: { x: k.x + ox * scale, y: k.y + oy * scale } };
   }
 
   snapshot(events) {
