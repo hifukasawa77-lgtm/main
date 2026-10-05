@@ -39,7 +39,7 @@ class Image {
 }
 const storage=new Map();
 let raf;
-const sandbox={console,Math:Object.create(Math),Date,Image,performance:{now:()=>1000},
+const sandbox={console,assert,Math:Object.create(Math),Date,Image,performance:{now:()=>1000},
     document:{getElementById:element,createElement:element},window:{addEventListener(){}},navigator:{},
     requestAnimationFrame(fn){raf=fn},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)}};
 vm.createContext(sandbox);
@@ -64,6 +64,7 @@ const run=code=>vm.runInContext(code,sandbox);
         for(const actor of [...(room.enemies||[]),...(room.npcs||[])]) for(let f=1;f<=4;f++){actor.animFrame=f;actor.draw();}
     }`);
     console.log('PASS all 625 rooms and actor animation frames render without missing/non-finite images');
+    assert(run('terrainLayerCache.size<=32'),'HD room cache must stay bounded');
     for(const tile of [0,3,4,5,6]) assert.equal(run(`isSolid(${tile})`),false);
     for(const tile of [1,2,20,21,22,23,24,25,26,27,28,40,41,42,43,999]) assert.equal(run(`isSolid(${tile})`),true);
     run(`startNewGame(); const passageRoom=getRoom(currentRoomX,currentRoomY);
@@ -81,9 +82,57 @@ const run=code=>vm.runInContext(code,sandbox);
     run('const wing={animFrame:1,animTimer:0};const wings=new Set();for(let i=0;i<30;i++){advanceWalk(wing,0,true);wings.add(wing.animFrame);}');
     assert.equal(run('wings.size'),4);
     console.log('PASS four-frame gait, stopped idle, continuous wing/spirit animation');
+    run(`{
+        Math.random=()=>0.9;
+        const travel=(dx,dy,index)=>{
+            const anchor=getRoomKey(currentRoomX,currentRoomY);
+            startTransition(dx,dy);
+            for(let n=0;n<70&&isTransitioning;n++) updateTransition();
+            assert(!isTransitioning);assert.equal(dungeonRoomIndex,index);
+            assert.equal(getRoomKey(currentRoomX,currentRoomY),anchor,'Dungeon travel cannot change field coordinates');
+            assert(!checkCollision(player.x,player.y,player.w,player.h),'Arrival must be on walkable ground');
+        };
+        for(const key of Object.keys(SACRED_STONE_BOSSES)){
+            startNewGame();[currentRoomX,currentRoomY]=key.split(',').map(Number);
+            const field=getWorldRoom(currentRoomX,currentRoomY);
+            assert(field.dungeonEntrance);assert(!field.enemies.some(e=>e.isBoss));
+            player.x=7*TILE+2;player.y=7*TILE;player.dir='up';keyPress.Space=true;player.update();
+            assert(activeDungeon);assert.equal(activeDungeon.key,key);assert.equal(dungeonRoomIndex,0);
+            for(let index=0;index<DUNGEON_ROOMS.length;index++){
+                const room=getDungeonRoom(index);
+                assert.equal(room.enemies.filter(e=>e.isBoss).length,index===DUNGEON_BOSS_ROOM?1:0);
+                drawRoom(room,0,0);
+                room.enemies.forEach(e=>{for(let f=1;f<=4;f++){e.animFrame=f;e.draw();}});
+                const reachable=new Set(['7,8']),queue=[[7,8]];
+                while(queue.length){const [c,r]=queue.shift();for(const [dc,dr] of [[0,1],[0,-1],[1,0],[-1,0]]){
+                    const nc=c+dc,nr=r+dr,id=nc+','+nr;
+                    if(nc<0||nr<0||nc>=SCREEN_COLS||nr>=SCREEN_ROWS||reachable.has(id)||isSolid(room.tiles[nr][nc]))continue;
+                    reachable.add(id);queue.push([nc,nr]);
+                }}
+                for(const direction of Object.keys(DUNGEON_ROOMS[index].exits)){
+                    const destination=direction==='up'?'7,0':direction==='down'?'7,10':direction==='left'?'0,5':'15,5';
+                    assert(reachable.has(destination),'Disconnected door '+key+' '+index+' '+direction);
+                }
+            }
+            travel(0,-1,1);travel(-1,0,5);travel(1,0,1);travel(1,0,6);travel(-1,0,1);
+            travel(0,-1,2);travel(0,-1,3);
+            coins=123;const saved=createSaveData();leaveDungeon();assert.equal(activeDungeon,null);
+            assert(applySaveData(saved));assert.equal(activeDungeon.key,key);assert.equal(dungeonRoomIndex,3);assert.equal(coins,123);
+            travel(0,-1,4);
+            const boss=getRoom(currentRoomX,currentRoomY).enemies.find(e=>e.isBoss);
+            assert.equal(boss.type,SACRED_STONE_BOSSES[key].type);boss.health=0;updatePlaying();
+            assert(clearedDungeonRooms[key+':4']);
+            if(SACRED_STONE_BOSSES[key].final)assert.equal(gameState,'ENDING');
+            else {assert(sacredStones[SACRED_STONE_BOSSES[key].stone]);assert.equal(gameState,'DIALOGUE');}
+            leaveDungeon();enterDungeon();assert.equal(getDungeonRoom(4).enemies.length,0,'Defeated boss must stay defeated');
+            const clearedSave=createSaveData();leaveDungeon();applySaveData(clearedSave);assert.equal(getDungeonRoom(4).enemies.length,0,'Cleared boss survives save/load');
+            dungeonRoomIndex=0;startTransition(0,1);assert.equal(activeDungeon,null);assert.equal(gameState,'PLAYING');
+        }
+    }`);
+    console.log('PASS all 8 dungeons / 56 rooms: entrance interaction, connected doors, side branches, deepest boss, exit, saved floor and cleared boss');
     run('player.update=()=>{};Math.random=()=>0.9;');
     for(const weapon of ['sword','arrow','fire','bomb']){
-        run(`startNewGame();currentRoomX=10;currentRoomY=-8;const r${weapon}=getRoom(10,-8);const b${weapon}=r${weapon}.enemies[0];b${weapon}.x=100;b${weapon}.y=80;b${weapon}.health=1;b${weapon}.update=()=>{};player.x=170;player.y=130;player.invincibleTimer=100;r${weapon}.tiles=Array.from({length:SCREEN_ROWS},()=>Array(SCREEN_COLS).fill(0));`);
+        run(`startNewGame();currentRoomX=10;currentRoomY=-8;enterDungeon();dungeonRoomIndex=DUNGEON_BOSS_ROOM;const r${weapon}=getRoom(10,-8);const b${weapon}=r${weapon}.enemies[0];b${weapon}.x=100;b${weapon}.y=80;b${weapon}.health=1;b${weapon}.update=()=>{};player.x=170;player.y=130;player.invincibleTimer=100;r${weapon}.tiles=Array.from({length:SCREEN_ROWS},()=>Array(SCREEN_COLS).fill(0));`);
         if(weapon==='sword')run('player.isAttacking=true;player.swordHitbox={x:100,y:80,w:32,h:32};');
         else if(weapon==='bomb')run('const bomb=new Bomb(100,80);bomb.timer=1;playerProjectiles.push(bomb);');
         else run(`playerProjectiles.push(new PlayerProjectile(100,80,0,0,'${weapon}'));`);
@@ -92,6 +141,8 @@ const run=code=>vm.runInContext(code,sandbox);
     }
     run('startNewGame();sacredStones["Emerald Stone"]=true;writeSaveSlot(1);applySaveData(readSaveSlot(1));');
     assert.equal(run('sacredStones["Emerald Stone"]'),true);assert.equal(run('gameState'),'PLAYING');
+    run('const legacy=createSaveData();legacy.version=1;delete legacy.dungeon;delete legacy.clearedDungeonRooms;applySaveData(legacy);');
+    assert.equal(run('activeDungeon'),null);assert.equal(run('gameState'),'PLAYING');
     console.log('PASS four weapon victories, ending/title return, save/load regression');
     console.log('ALL HD CHECKS PASSED (generated pixels + actual game logic; Canvas calls instrumented)');
 })().catch(error=>{console.error(error);process.exitCode=1}).finally(()=>fs.rmSync(scratch,{recursive:true,force:true}));
