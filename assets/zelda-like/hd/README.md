@@ -15,7 +15,7 @@ Artwork was generated with the available image-generation tool. The tool does no
 
 ## Rendering and movement
 
-The game keeps its 256×240 logical coordinates and uses a 768×720 backing canvas. Sprite buffers retain three pixels per logical unit. All atlas slices use measured row boundaries and shared row scale so walk poses do not change size between frames. Movement animation advances by actual distance travelled. Blocked characters stop walking; flying and magical creatures keep their movement cycles. Idle breathing and attack lean add subtle secondary motion. A fixed 60 Hz simulation keeps speed consistent on different refresh-rate displays. The terrain cache keeps at most 32 HD room buffers.
+The game keeps its 256×240 logical coordinates and uses a 768×720 backing canvas. Sprite buffers retain three pixels per logical unit. All atlas slices use measured row boundaries and shared row scale so walk poses do not change size between frames. Castle rows also use measured unequal column boundaries to keep neighboring gates and towers out of each sprite. Movement animation advances by actual distance travelled. Blocked characters stop walking; flying and magical creatures keep their movement cycles. Idle breathing and attack lean add subtle secondary motion. A fixed 60 Hz simulation keeps speed consistent on different refresh-rate displays. The terrain cache keeps at most 32 HD room buffers.
 
 ## Passage rules
 
@@ -29,7 +29,7 @@ The game keeps its 256×240 logical coordinates and uses a 768×720 backing canv
 | Bushes | Blocked until cut with the sword |
 | Open castle gate | Central passage stays walkable |
 
-`TILE_RULES` is the collision authority. Castle artwork is clipped to corresponding solid or walkable tiles so art does not cover a traversable corridor. NPC and enemy spawn positions are moved to the nearest footprint-sized free location if their initial location is obstructed.
+`TILE_RULES` is the collision authority. `getCastleObjects` supplies both complete building placements and tile collision footprints. Towers flank the central road; walls leave actual gate openings. Castle buildings are drawn in full, using their measured artwork bounds, without clipping against road tiles or duplicating miniature wall sprites underneath. Buildings fit within each screen and never overlap. Gardens stay beside roads. Smoothing cannot close overworld approach corridors. NPC and enemy spawn positions are moved to the nearest footprint-sized free location if their initial location is obstructed.
 
 ## Eight dungeons
 
