@@ -86,6 +86,8 @@ const run=code=>vm.runInContext(code,sandbox);
         Math.random=()=>0.9;
         const travel=(dx,dy,index)=>{
             const anchor=getRoomKey(currentRoomX,currentRoomY);
+            player.x=dx<0?-1:dx>0?SCREEN_COLS*TILE-player.w+1:7*TILE;
+            player.y=dy<0?-1:dy>0?SCREEN_ROWS*TILE-player.h+1:5*TILE;
             startTransition(dx,dy);
             for(let n=0;n<70&&isTransitioning;n++) updateTransition();
             assert(!isTransitioning);assert.equal(dungeonRoomIndex,index);
@@ -130,6 +132,41 @@ const run=code=>vm.runInContext(code,sandbox);
         }
     }`);
     console.log('PASS all 8 dungeons / 56 rooms: entrance interaction, connected doors, side branches, deepest boss, exit, saved floor and cleared boss');
+    run(`{
+        startNewGame();keys.KeyW=false;keyPress.Space=false;
+        coins=321;inventory.keys=4;player.health=5;
+        const castle=getRoom(currentRoomX,currentRoomY);
+        player.x=4*TILE;player.y=3*TILE;assert(checkCollision(player.x,player.y,player.w,player.h));
+        player.update();assert(!checkCollision(player.x,player.y,player.w,player.h));
+        assert.equal(coins,321);assert.equal(inventory.keys,4);assert.equal(player.health,5);
+        const saved=createSaveData();saved.player.x=4*TILE;saved.player.y=3*TILE;
+        assert(applySaveData(saved));assert(!checkCollision(player.x,player.y,player.w,player.h));
+        assert.equal(coins,321);assert.equal(inventory.keys,4);
+        for(let ry=START_ROOM_Y-2;ry<=START_ROOM_Y+2;ry++)for(let rx=START_ROOM_X-2;rx<=START_ROOM_X+2;rx++){
+            if(!isCastleRoom(rx,ry))continue;
+            currentRoomX=rx;currentRoomY=ry;
+            const tiles=getRoom(rx,ry).tiles;
+            for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1]]){
+                for(let lane=0;lane<(dx?SCREEN_ROWS:SCREEN_COLS);lane++){
+                    player.x=dx<0?-1:dx>0?SCREEN_COLS*TILE-player.w+1:lane*TILE;
+                    player.y=dy<0?-1:dy>0?SCREEN_ROWS*TILE-player.h+1:lane*TILE;
+                    const sourceBlocked=checkCollision(player.x,player.y,player.w,player.h);
+                    const edgeTile=dx?tiles[lane][dx<0?0:SCREEN_COLS-1]:tiles[dy<0?0:SCREEN_ROWS-1][lane];
+                    if(isSolid(edgeTile))assert(sourceBlocked,'Boundary wall must block partial exit');
+                    if(sourceBlocked)continue;
+                    startTransition(dx,dy);
+                    for(let n=0;n<70&&isTransitioning;n++)updateTransition();
+                    assert(!checkCollision(player.x,player.y,player.w,player.h),'Castle boundary arrival or rejection must be safe');
+                    currentRoomX=rx;currentRoomY=ry;
+                }
+            }
+        }
+        startNewGame();const tiles=getRoom(currentRoomX,currentRoomY).tiles;
+        tiles[8][5]=1;
+        assert(checkCollision(5*TILE-12+0.5,8*TILE,12,12),'Fractional overlap must block');
+        assert(!checkCollision(5*TILE-12,8*TILE,12,12),'Touching edge must remain free');
+    }`);
+    console.log('PASS castle boundaries in all four directions, fractional collision, automatic trapped-player recovery and trapped save recovery without progress loss');
     run('player.update=()=>{};Math.random=()=>0.9;');
     for(const weapon of ['sword','arrow','fire','bomb']){
         run(`startNewGame();currentRoomX=10;currentRoomY=-8;enterDungeon();dungeonRoomIndex=DUNGEON_BOSS_ROOM;const r${weapon}=getRoom(10,-8);const b${weapon}=r${weapon}.enemies[0];b${weapon}.x=100;b${weapon}.y=80;b${weapon}.health=1;b${weapon}.update=()=>{};player.x=170;player.y=130;player.invincibleTimer=100;r${weapon}.tiles=Array.from({length:SCREEN_ROWS},()=>Array(SCREEN_COLS).fill(0));`);
