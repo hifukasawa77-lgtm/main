@@ -64,6 +64,36 @@ const run=code=>vm.runInContext(code,sandbox);
         for(const actor of [...(room.enemies||[]),...(room.npcs||[])]) for(let f=1;f<=4;f++){actor.animFrame=f;actor.draw();}
     }`);
     console.log('PASS all 625 rooms and actor animation frames render without missing/non-finite images');
+    run(`{
+        for(let y=WORLD_MIN;y<=WORLD_MAX;y++)for(let x=WORLD_MIN;x<=WORLD_MAX;x++){
+            const room=getWorldRoom(x,y),tiles=room.tiles;
+            const reachable=new Set(['8,8']),queue=[[8,8]];
+            assert(!isSolid(tiles[8][8]),'Room approach must be clear');
+            while(queue.length){const [c,r]=queue.shift();for(const [dc,dr] of [[0,1],[0,-1],[1,0],[-1,0]]){
+                const nc=c+dc,nr=r+dr,id=nc+','+nr;
+                if(nc<0||nr<0||nc>=SCREEN_COLS||nr>=SCREEN_ROWS||reachable.has(id)||isSolid(tiles[nr][nc]))continue;
+                reachable.add(id);queue.push([nc,nr]);
+            }}
+            for(let r=0;r<SCREEN_ROWS;r++)for(let c=0;c<SCREEN_COLS;c++){
+                if((r===0||r===SCREEN_ROWS-1||c===0||c===SCREEN_COLS-1)&&!isSolid(tiles[r][c]))
+                    assert(reachable.has(c+','+r),'Object placement disconnects exit '+x+','+y+' '+c+','+r);
+            }
+            if(isCastleRoom(x,y)){
+                const occupied=new Set();
+                for(const object of getCastleObjects(x,y)){
+                    assert(object.c>=0&&object.r>=0&&object.c+object.w<=SCREEN_COLS&&object.r+object.h<=SCREEN_ROWS,'Complete building must fit screen');
+                    for(let r=object.r;r<object.r+object.h;r++)for(let c=object.c;c<object.c+object.w;c++){
+                        const id=c+','+r;assert(!occupied.has(id),'Castle objects overlap');occupied.add(id);
+                        assert(isSolid(tiles[r][c]),'Complete building footprint must block passage');
+                    }
+                }
+                for(let r=0;r<SCREEN_ROWS;r++)for(let c=0;c<SCREEN_COLS;c++)if(tiles[r][c]===1)
+                    assert(occupied.has(c+','+r),'No orphan miniature wall objects');
+            }
+        }
+    }`);
+    if(process.env.FAHREN_PLACEMENT_PREVIEW)fs.writeFileSync(process.env.FAHREN_PLACEMENT_PREVIEW,run('JSON.stringify({tiles:getWorldRoom(START_ROOM_X,START_ROOM_Y).tiles,objects:getCastleObjects(START_ROOM_X,START_ROOM_Y)})'));
+    console.log('PASS all 625 room exits connected; castle buildings fit screens without overlap, clipped corridors or orphan walls');
     assert(run('terrainLayerCache.size<=32'),'HD room cache must stay bounded');
     for(const tile of [0,3,4,5,6]) assert.equal(run(`isSolid(${tile})`),false);
     for(const tile of [1,2,20,21,22,23,24,25,26,27,28,40,41,42,43,999]) assert.equal(run(`isSolid(${tile})`),true);
