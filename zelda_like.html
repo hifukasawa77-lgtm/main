@@ -1456,8 +1456,8 @@
         function placeActorOnWalkableTile(actor, tiles) {
             const freeAt = (x, y) => {
                 const left = Math.floor(x / TILE), top = Math.floor(y / TILE);
-                const right = Math.floor((x + actor.w - 1) / TILE);
-                const bottom = Math.floor((y + actor.h - 1) / TILE);
+                const right = Math.ceil((x + actor.w) / TILE) - 1;
+                const bottom = Math.ceil((y + actor.h) / TILE) - 1;
                 for (let r = top; r <= bottom; r++) for (let c = left; c <= right; c++) {
                     if (isSolid(tiles[r]?.[c])) return false;
                 }
@@ -1476,14 +1476,18 @@
         function checkCollision(x, y, w, h) {
             const room = getRoom(currentRoomX, currentRoomY);
             if (!room) return true;
-            const leftCol = Math.floor(x / TILE);
-            const rightCol = Math.floor((x + w - 1) / TILE);
-            const topRow = Math.floor(y / TILE);
-            const bottomRow = Math.floor((y + h - 1) / TILE);
-            if (leftCol < 0 || rightCol >= SCREEN_COLS || topRow < 0 || bottomRow >= SCREEN_ROWS) return false;
+            return collidesWithTiles(room.tiles, x, y, w, h);
+        }
+
+        function collidesWithTiles(tiles, x, y, w, h) {
+            // Leaving a screen must still check the part overlapping its walls.
+            const leftCol = Math.max(0, Math.floor(x / TILE));
+            const rightCol = Math.min(SCREEN_COLS - 1, Math.ceil((x + w) / TILE) - 1);
+            const topRow = Math.max(0, Math.floor(y / TILE));
+            const bottomRow = Math.min(SCREEN_ROWS - 1, Math.ceil((y + h) / TILE) - 1);
             for (let r = topRow; r <= bottomRow; r++) {
                 for (let c = leftCol; c <= rightCol; c++) {
-                    if (isSolid(room.tiles[r][c])) return true;
+                    if (isSolid(tiles[r][c])) return true;
                 }
             }
             return false;
@@ -1510,6 +1514,9 @@
 
             update() {
                 if (isTransitioning) return;
+                if (checkCollision(this.x, this.y, this.w, this.h)) {
+                    placeActorOnWalkableTile(this, getRoom(currentRoomX, currentRoomY).tiles);
+                }
                 if (this.invincibleTimer > 0) this.invincibleTimer--;
 
                 if (this.x < 0) {
@@ -1528,6 +1535,7 @@
                     if (currentRoomY < WORLD_MAX) startTransition(0, 1);
                     else this.y = SCREEN_ROWS * TILE - this.h;
                 }
+                if (isTransitioning) return;
                 
                 if (this.isAttacking) {
                     this.attackTimer--;
@@ -2486,9 +2494,19 @@
                 }
                 nextDungeonRoomIndex=target;
             }
+            const destination = activeDungeon ? getDungeonRoom(nextDungeonRoomIndex) : getWorldRoom(currentRoomX + dx, currentRoomY + dy);
+            const arrivalX = dx === 1 ? 2 : dx === -1 ? SCREEN_COLS*TILE-player.w-2 : player.x;
+            const arrivalY = dy === 1 ? 2 : dy === -1 ? SCREEN_ROWS*TILE-player.h-2 : player.y;
+            if (collidesWithTiles(destination.tiles, arrivalX, arrivalY, player.w, player.h)) {
+                player.x=Math.max(0,Math.min(player.x,SCREEN_COLS*TILE-player.w));
+                player.y=Math.max(0,Math.min(player.y,SCREEN_ROWS*TILE-player.h));
+                placeActorOnWalkableTile(player, getRoom(currentRoomX,currentRoomY).tiles);
+                nextDungeonRoomIndex=null;
+                return;
+            }
             isTransitioning = true;
             transDirX = dx; transDirY = dy; transProgress = 0;
-            nextRoomData = activeDungeon ? getDungeonRoom(nextDungeonRoomIndex) : getWorldRoom(currentRoomX + dx, currentRoomY + dy);
+            nextRoomData = destination;
             projectiles = []; playerProjectiles = []; hazards = []; items = [];
         }
 
@@ -2505,10 +2523,7 @@
                 isTransitioning = false; transOffset = {x:0, y:0};
                 if (transDirX === 1) player.x = 2; else if (transDirX === -1) player.x = SCREEN_COLS * TILE - player.w - 2;
                 if (transDirY === 1) player.y = 2; else if (transDirY === -1) player.y = SCREEN_ROWS * TILE - player.h - 2;
-                if (checkCollision(player.x, player.y, player.w, player.h)) {
-                    if (transDirX !== 0) player.y = 5 * TILE;
-                    if (transDirY !== 0) player.x = 7 * TILE;
-                }
+                placeActorOnWalkableTile(player, getRoom(currentRoomX,currentRoomY).tiles);
             } else {
                 transOffset.x = -transDirX * transProgress; transOffset.y = -transDirY * transProgress;
             }
