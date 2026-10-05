@@ -53,6 +53,14 @@ window.FahrenVisuals = (() => {
         'items.svg':[0,.25684,.5,.75,1]
     };
     sheets.forEach(sheet => { sheet.rowCuts = rowCuts[sheet.file]; });
+    // The castle sheet has unequal object widths, especially its two gates.
+    const columnCuts = {
+        'castle.svg':[
+            [0,414/1536,798/1536,1060/1536,1280/1536,1],
+            [0,317/1536,715/1536,1005/1536,1300/1536,1],
+            [0,365/1536,707/1536,1000/1536,1260/1536,1]
+        ]
+    };
 
     function imageAt(path) {
         return new Promise((resolve,reject) => {
@@ -88,7 +96,8 @@ window.FahrenVisuals = (() => {
         context.imageSmoothingQuality='high';
         const width=rect.w*scale*SCALE,height=rect.h*scale*SCALE;
         context.drawImage(image,rect.x,rect.y,rect.w,rect.h,(surface.width-width)/2,surface.height-height-SCALE,width,height);
-        return {image:surface,width:size,height:size};
+        return {image:surface,width:size,height:size,
+            contentBounds:{x:(surface.width-width)/2,y:surface.height-height-SCALE,w:width,h:height}};
     }
 
     async function loadSheet(spec, sprites) {
@@ -97,7 +106,12 @@ window.FahrenVisuals = (() => {
         for(let row=0;row<spec.rows;row++) {
             const y=(spec.rowCuts?.[row] ?? row/spec.rows)*image.naturalHeight;
             const bottom=(spec.rowCuts?.[row+1] ?? (row+1)/spec.rows)*image.naturalHeight;
-            const rects=Array.from({length:spec.cols},(_,col)=>bounds(image,col*w,y,w,bottom-y,spec.terrain));
+            const cuts=columnCuts[spec.file]?.[row];
+            const rects=Array.from({length:spec.cols},(_,col)=>{
+                const left=cuts?cuts[col]*image.naturalWidth:col*w;
+                const right=cuts?cuts[col+1]*image.naturalWidth:(col+1)*w;
+                return bounds(image,left,y,right-left,bottom-y,spec.terrain);
+            });
             const sharedScale=spec.groups ? Math.min((spec.size-2)/Math.max(...rects.map(r=>r.w)),(spec.size-2)/Math.max(...rects.map(r=>r.h))) : null;
             for(let col=0;col<spec.cols;col++) {
                 const name=spec.groups ? spec.groups[row]+'_'+(col+1) : spec.names[row*spec.cols+col];
@@ -129,6 +143,12 @@ window.FahrenVisuals = (() => {
         if(!sprite) return;
         context.drawImage(sprite.image||sprite,x,y,w??sprite.width,h??sprite.height);
     }
-    return {load,draw,sheets};
+    function drawObject(context,sprite,x,y,w,h) {
+        if(!sprite)return;
+        const bounds=sprite.contentBounds;
+        if(bounds)context.drawImage(sprite.image,bounds.x,bounds.y,bounds.w,bounds.h,x,y,w,h);
+        else draw(context,sprite,x,y,w,h);
+    }
+    return {load,draw,drawObject,sheets};
 })();
 const FahrenVisuals = window.FahrenVisuals;
