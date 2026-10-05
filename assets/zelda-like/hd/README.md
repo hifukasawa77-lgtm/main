@@ -15,7 +15,7 @@ Artwork was generated with the available image-generation tool. The tool does no
 
 ## Rendering and movement
 
-The game keeps its 256×240 logical coordinates and uses a 768×720 backing canvas. Sprite buffers retain three pixels per logical unit. All atlas slices use measured row boundaries and shared row scale so walk poses do not change size between frames. Movement animation advances by actual distance travelled. Blocked characters stop walking; flying and magical creatures keep their movement cycles. Idle breathing and attack lean add subtle secondary motion. A fixed 60 Hz simulation keeps speed consistent on different refresh-rate displays.
+The game keeps its 256×240 logical coordinates and uses a 768×720 backing canvas. Sprite buffers retain three pixels per logical unit. All atlas slices use measured row boundaries and shared row scale so walk poses do not change size between frames. Movement animation advances by actual distance travelled. Blocked characters stop walking; flying and magical creatures keep their movement cycles. Idle breathing and attack lean add subtle secondary motion. A fixed 60 Hz simulation keeps speed consistent on different refresh-rate displays. The terrain cache keeps at most 32 HD room buffers.
 
 ## Passage rules
 
@@ -31,8 +31,14 @@ The game keeps its 256×240 logical coordinates and uses a 768×720 backing canv
 
 `TILE_RULES` is the collision authority. Castle artwork is clipped to corresponding solid or walkable tiles so art does not cover a traversable corridor. NPC and enemy spawn positions are moved to the nearest footprint-sized free location if their initial location is obstructed.
 
+## Eight dungeons
+
+The eight original boss locations are dungeon entrances. Bosses do not spawn on the overworld. Each dungeon has seven rooms: entrance → corridor → great hall → inner passage → deepest boss room; west and east side rooms branch off the corridor. All eight bosses occupy the deepest room, including Gran in D8, 黒冠の魔王城. Entrances use Space/Z or mobile/gamepad A. Leaving the entrance room through its southern doorway returns to the same field location.
+
+Room scrolling keeps overworld coordinates fixed while inside a dungeon. The HUD changes to a seven-room dungeon map. Save version 2 records the dungeon, room and cleared rooms; version 1 overworld saves continue to load. Cleared bosses remain cleared across leaving/re-entering and save/load. The standalone `world-map.svg`/`world-map.json` mark dungeon entrances, with the boss described as being at the deepest room.
+
 ## Verification
 
 Run `node scripts/verify-fahren-hd.cjs` (Node and Python with Pillow required).
 
-The actual generated RGBA pixels were decoded and loaded through `graphics.js` with an instrumented Canvas API. Verification covered all 232 slices, all character animation keys, rendering all 625 rooms, solid/passable movement, bush cutting, distance-based animation, continued wing cycles, four weapon types triggering the final ending, and existing save/load behavior. This verifies game logic and asset data; it does not substitute for visual testing in an unrestricted browser.
+The actual generated RGBA pixels were decoded and loaded through `graphics.js` with an instrumented Canvas API. Verification covered all 232 slices, all character animation keys, rendering all 625 field rooms and 56 dungeon rooms, connected doors, side branches, entrance interaction, deepest-room-only bosses, exit, dungeon save/load and cleared-boss persistence, solid/passable movement, bush cutting, distance-based animation, continued wing cycles, four weapon types triggering the final ending, and existing save/load behavior. This verifies game logic and asset data; it does not substitute for visual testing in an unrestricted browser.
