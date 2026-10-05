@@ -293,7 +293,7 @@
         }
 
         function scheduleAudio() {
-            if(!isAudioInitialized || gameState === 'TITLE' || gameState === 'GAMEOVER') return;
+            if(!isAudioInitialized || gameState === 'TITLE' || gameState === 'GAMEOVER' || gameState === 'ENDING') return;
             let lookahead = audioCtx.currentTime + 0.5;
             
             while(melodyTime < lookahead) {
@@ -1179,7 +1179,7 @@
         const UI_OFFSET = 4 * TILE + 16; // Extended UI for items
 
         // --- STATE MANAGEMENT ---
-        let gameState = 'TITLE'; // TITLE, PLAYING, DIALOGUE, SHOP, MENU, MAP_MENU, SAVE_MENU, LOAD_MENU, GAMEOVER
+        let gameState = 'TITLE'; // TITLE, PLAYING, DIALOGUE, SHOP, MENU, MAP_MENU, SAVE_MENU, LOAD_MENU, GAMEOVER, ENDING
         let dialogueText = [];
         let dialogueIndex = 0;
         let shopType = ''; 
@@ -2263,6 +2263,18 @@
             playSFX('talk');
         }
 
+        let endingFrame = 0;
+
+        function completeQuest() {
+            gameState = 'ENDING';
+            endingFrame = 0;
+            projectiles = []; playerProjectiles = []; items = []; hazards = [];
+            player.isAttacking = false;
+            player.swordHitbox = null;
+            Object.keys(keyPress).forEach(code => delete keyPress[code]);
+            playSFX('buy');
+        }
+
         function collectSacredStone(bossDef) {
             if (!bossDef || bossDef.final || sacredStones[bossDef.stone]) return;
             sacredStones[bossDef.stone] = true;
@@ -2772,24 +2784,30 @@
             if (currentRoom.enemies) {
                 for (let i = currentRoom.enemies.length - 1; i >= 0; i--) {
                     const e = currentRoom.enemies[i];
-                    e.update();
+                    if (e.health > 0) e.update();
                     if (player.isAttacking && player.swordHitbox && e.roomX === currentRoomX && e.roomY === currentRoomY) {
                         if (e.knockbackTimer === 0 && !e.isInvincible && checkAABB(player.swordHitbox, e)) {
                             e.takeDamage(player.x, player.y); playSFX('hit');
                             spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#d82800', 8, 2, 2.5, 14);
                             spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#f89800', 5, 1.5, 2, 10);
                             triggerShake(2, 6);
-                            if (e.health <= 0) {
-                                spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#f8f8f8', 10, 2.5, 3, 18);
-                                spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#fcd8a8', 8, 2, 2, 16);
-                                currentRoom.enemies.splice(i, 1);
-                                if (e.isBoss && currentRoom.boss) {
-                                    collectSacredStone(currentRoom.boss);
-                                } else if (Math.random() < 0.5) {
-                                    items.push(new Item(e.x, e.y, Math.random() < 0.5 ? 'heart' : 'coin'));
-                                }
-                            }
                         }
+                    }
+                    // Resolve defeats from swords, arrows, fire and bombs in one place.
+                    if (e.health <= 0) {
+                        spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#f8f8f8', 10, 2.5, 3, 18);
+                        spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#fcd8a8', 8, 2, 2, 16);
+                        currentRoom.enemies.splice(i, 1);
+                        if (e.isBoss && currentRoom.boss) {
+                            if (currentRoom.boss.final) {
+                                completeQuest();
+                                return;
+                            }
+                            collectSacredStone(currentRoom.boss);
+                        } else if (Math.random() < 0.5) {
+                            items.push(new Item(e.x, e.y, Math.random() < 0.5 ? 'heart' : 'coin'));
+                        }
+                        continue;
                     }
                     if (e.roomX === currentRoomX && e.roomY === currentRoomY && !e.isInvincible && checkAABB(player, e)) {
                         player.takeDamage();
@@ -3192,7 +3210,34 @@
             ctx.textAlign = 'left';
         }
 
+        function drawEnding() {
+            drawGame();
+            ctx.fillStyle = 'rgba(0,0,0,0.88)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#fcd8a8'; ctx.font = 'bold 19px monospace';
+            ctx.fillText('QUEST CLEAR', canvas.width / 2, 46);
+            ctx.fillStyle = '#fff'; ctx.font = '11px monospace';
+            ctx.fillText('魔王グランを倒した！', canvas.width / 2, 78);
+            ctx.fillText('ファーレン王国に平和が戻った。', canvas.width / 2, 100);
+            ctx.fillText('人間、エルフ、ドワーフの人々は', canvas.width / 2, 124);
+            ctx.fillText('勇者の帰還を祝い、', canvas.width / 2, 142);
+            ctx.fillText('その冒険を語り継いでいく。', canvas.width / 2, 160);
+            ctx.fillStyle = '#fcd8a8'; ctx.font = '9px monospace';
+            ctx.fillText('聖石 / Sacred Stones: ' + Object.keys(sacredStones).length + '/7', canvas.width / 2, 184);
+            if (endingFrame >= 60) {
+                ctx.fillStyle = '#fff'; ctx.font = '8px monospace';
+                ctx.fillText('SPACE / Z / ENTER / A: タイトルへ', canvas.width / 2, 218);
+            }
+            ctx.textAlign = 'left';
+        }
+
         function startNewGame() {
+            Object.keys(worldMap).forEach(key => delete worldMap[key]);
+            projectiles = []; playerProjectiles = []; items = []; hazards = [];
+            particles.length = 0;
+            isTransitioning = false; nextRoomData = null; transOffset = { x: 0, y: 0 };
+            endingFrame = 0;
             player.reset(120, 120);
             currentRoomX = START_ROOM_X;
             currentRoomY = START_ROOM_Y;
@@ -3217,6 +3262,13 @@
                 } else if (isJustPressed('KeyL')) {
                     openTitleLoadMenu();
                 }
+            } else if (gameState === 'ENDING') {
+                endingFrame++;
+                const confirmed = isConfirmPressed();
+                if (endingFrame >= 60 && confirmed) {
+                    gameState = 'TITLE';
+                    Object.keys(keyPress).forEach(code => delete keyPress[code]);
+                }
             } else if (gameState === 'GAMEOVER') {
                 if (isJustPressed('Space') || isJustPressed('Enter') || isJustPressed('NumpadEnter')) {
                     startNewGame();
@@ -3240,6 +3292,7 @@
         function draw() {
             if (gameState === 'TITLE') drawTitle();
             else if (gameState === 'GAMEOVER') drawGameOver();
+            else if (gameState === 'ENDING') drawEnding();
             else if (gameState === 'LOAD_MENU' && saveMenuBackState === 'TITLE') {
                 drawTitle();
                 drawSaveSlotOverlay(true);
