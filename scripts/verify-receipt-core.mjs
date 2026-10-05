@@ -21,10 +21,10 @@ function element() {
 const nodes = new Map();
 const $ = id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
 $('st-budget-bar').appendChild(element());
-const ctx = vm.createContext({ console, $, document: { createElement: element },
-  localStorage: { getItem: k => values.get(k) ?? null, setItem: (k, v) => values.set(k, v) } });
+const ctx = vm.createContext({ console, $, document: { createElement: element, createElementNS: element },
+  secureStorage: { getItem: k => values.get(k) ?? null, setItem: (k, v) => values.set(k, v) } });
 const categories = source.slice(source.indexOf('    var CATS ='), source.indexOf('    function loadImage('));
-vm.runInContext(categories + '\n' + ['itemsSum','monthTotals','shiftMonth','pad2','loadLedger','validEntry','renderLedger','el','evaluate'].map(fn).join('\n') + `
+vm.runInContext(categories + '\n' + ['itemsSum','monthTotals','shiftMonth','pad2','loadLedger','validEntry','renderLedger','renderSpendingCharts','categoryIcon','el','evaluate'].map(fn).join('\n') + `
 var LEDGER_KEY='receiptOCR.ledger.v1', BUDGET_KEY='receiptOCR.budget.v1', ledgerMonth='2026-09';
 var yen=function(n){return (n<0?'−¥':'¥')+Math.abs(n||0).toLocaleString('ja-JP');};
 function entryView(e){return e;}
@@ -45,12 +45,12 @@ test('合計なしでも支払いと釣銭から算出', `detectTotal('※パン
 test('価格なしでは明細を作らない', 'parseReceipt("品目だけ").items.length===0');
 test('シンプルな貼り付け文字の抽出', `evaluate(toLines('○○スーパー\\n2026年10月4日\\n牛乳 ¥238\\n食パン ¥158\\n合計 ¥396')).ok`);
 test('カテゴリー自動分類', 'classify("牛乳")==="乳製品・卵" && classify("食パン")==="パン・米・麺"');
-vm.runInContext(`var p=evaluate(toLines(RAW_A)); var entry={id:'test',date:'2026-09-20',store:'テスト',items:p.items.map(i=>({...i,cat:i.cat||classify(i.name)})),tax:p.totals.taxOut}; localStorage.setItem(LEDGER_KEY,JSON.stringify([entry])); localStorage.setItem(BUDGET_KEY,'3000'); renderLedger();`, ctx);
+vm.runInContext(`var p=evaluate(toLines(RAW_A)); var entry={id:'test',date:'2026-09-20',store:'テスト',items:p.items.map(i=>({...i,cat:i.cat||classify(i.name)})),tax:p.totals.taxOut}; secureStorage.setItem(LEDGER_KEY,JSON.stringify([entry])); secureStorage.setItem(BUDGET_KEY,'3000'); renderLedger();`, ctx);
 test('家計簿の月別支出を表示', `$('st-total').textContent==='¥2,175' && $('st-count').textContent===1`);
 test('予算の残りを表示', `$('st-budget').textContent==='¥825'`);
 test('保存済みの品目からグラフを描画', `$('category-chart').style.background.startsWith('conic-gradient(') && $('category-chart').attributes['aria-label'].includes('肉類')`);
 test('カテゴリー別合計と支払額の一致', 'Object.values(monthTotals(loadLedger(),ledgerMonth).cats).reduce((a,b)=>a+b,0)===2175');
 vm.runInContext("ledgerMonth='2026-10';renderLedger()", ctx);
-test('記録のない月はグラフを空にする', `$('chart-count').textContent===0 && $('category-chart').style.background==='var(--chart-empty)' && $('st-total').textContent==='¥0'`);
+test('記録のない月はグラフを空にする', `$('chart-count').textContent==='¥0' && $('category-chart').style.background==='var(--chart-empty)' && $('st-total').textContent==='¥0'`);
 test('年をまたぐ月移動', 'shiftMonth("2026-12",1)==="2027-01" && shiftMonth("2026-01",-1)==="2025-12"');
 console.log(`PASS ${checks} checks + full JavaScript syntax`);
