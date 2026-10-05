@@ -141,9 +141,12 @@
     <h1>ファーレンクエスト</h1>
     
     <div id="game-container">
-        <canvas id="gameCanvas" width="256" height="240"></canvas>
+        <canvas id="gameCanvas" width="768" height="720"></canvas>
     </div>
 
+    <p id="visual-status" style="font-size:12px;color:#e6cfa1;margin:6px 12px;text-align:center">HD画像を読み込み中 / Loading HD graphics…</p>
+    <a href="assets/zelda-like/hd/world-map.svg" target="_blank" rel="noopener" style="color:#e6cfa1;font-size:13px;margin:6px">全体マップを開く / Open World Map</a>
+    <p style="font-size:12px;color:#d7d2c5;margin:6px 12px;text-align:center">通過可：道・橋・広場・花・小石・浅い泥 ｜ 通過不可：壁・木・岩・建物・深水・柵<br>Walk: paths, bridges, flat decoration ｜ Blocked: walls, trees, rocks, buildings, deep water<br>茂みは剣で刈ると通れます / Cut bushes with your sword</p>
     <div class="instructions">
         <p>移動 / Move: <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | 剣・会話 / Sword・Talk: <kbd>Space</kbd> or <kbd>Z</kbd> | アイテム / Item: <kbd>Shift</kbd> or <kbd>X</kbd> | メニュー / Menu: <kbd>Enter</kbd></p>
         <p>アイテム切替 / Select: <kbd>1</kbd> 爆弾 <kbd>2</kbd> 弓矢 <kbd>3</kbd> ろうそく <kbd>4</kbd> 回復薬</p>
@@ -168,9 +171,12 @@
         </div>
     </div>
 
+    <script src="assets/zelda-like/hd/graphics.js"></script>
     <script>
         const canvas = document.getElementById('gameCanvas');
+        const VIEW_WIDTH = 256, VIEW_HEIGHT = 240, RENDER_SCALE = 3;
         const ctx = canvas.getContext('2d');
+        ctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
         ctx.imageSmoothingEnabled = true;
 
         // ==========================================
@@ -738,417 +744,48 @@
         }
 
         // --- GPT IMAGE 2 HERO SPRITESHEET ---
-        function applyAIGraphics() {
-            function sliceHeroSheet(imgSrc, size) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 3;
-                        const rows = 4;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const rowByDir = { down: 0, left: 1, right: 2, up: 3 };
-                        const colByFrame = { idle: 1, step: 0 };
-                        const output = {};
-
-                        const frames = [];
-                        Object.entries(rowByDir).forEach(([dir, row]) => {
-                            Object.entries(colByFrame).forEach(([frameName, col]) => {
-                                const crop = document.createElement('canvas');
-                                crop.width = cellW;
-                                crop.height = cellH;
-                                const cctx = crop.getContext('2d');
-                                cctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, cellW, cellH);
-
-                                const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
-                                const data = imageData.data;
-                                let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
-                                for (let y = 0; y < crop.height; y++) {
-                                    for (let x = 0; x < crop.width; x++) {
-                                        const alpha = data[(y * crop.width + x) * 4 + 3];
-                                        if (alpha > 12) {
-                                            minX = Math.min(minX, x);
-                                            minY = Math.min(minY, y);
-                                            maxX = Math.max(maxX, x);
-                                            maxY = Math.max(maxY, y);
-                                        }
-                                    }
-                                }
-                                frames.push({ dir, frameName, crop, minX, minY, maxX, maxY });
-                            });
-                        });
-
-                        const validFrames = frames.filter(frame => frame.maxX > frame.minX && frame.maxY > frame.minY);
-                        const maxFrameW = Math.max(...validFrames.map(frame => frame.maxX - frame.minX + 1));
-                        const maxFrameH = Math.max(...validFrames.map(frame => frame.maxY - frame.minY + 1));
-                        const sharedScale = Math.min((size - 2) / maxFrameW, (size - 2) / maxFrameH);
-
-                        frames.forEach(frameInfo => {
-                            const frame = document.createElement('canvas');
-                            frame.width = size;
-                            frame.height = size;
-                            const fctx = frame.getContext('2d');
-                            fctx.imageSmoothingEnabled = true;
-
-                            if (frameInfo.maxX > frameInfo.minX && frameInfo.maxY > frameInfo.minY) {
-                                const srcW = frameInfo.maxX - frameInfo.minX + 1;
-                                const srcH = frameInfo.maxY - frameInfo.minY + 1;
-                                const dstW = Math.max(1, Math.round(srcW * sharedScale));
-                                const dstH = Math.max(1, Math.round(srcH * sharedScale));
-                                const dstX = Math.floor((size - dstW) / 2);
-                                const dstY = Math.max(0, size - dstH - 1);
-                                fctx.drawImage(frameInfo.crop, frameInfo.minX, frameInfo.minY, srcW, srcH, dstX, dstY, dstW, dstH);
-                            }
-                            output[`${frameInfo.dir}_${frameInfo.frameName}`] = frame;
-                        });
-
-                        function mirrorFrame(frame) {
-                            const mirrored = document.createElement('canvas');
-                            mirrored.width = frame.width;
-                            mirrored.height = frame.height;
-                            const mctx = mirrored.getContext('2d');
-                            mctx.translate(frame.width, 0);
-                            mctx.scale(-1, 1);
-                            mctx.drawImage(frame, 0, 0);
-                            return mirrored;
-                        }
-                        output.right_idle = mirrorFrame(output.left_idle);
-                        output.right_step = mirrorFrame(output.left_step);
-
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function sliceEnemySheet(imgSrc, size, customFrameMap) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 2;
-                        const frameMap = customFrameMap || [
-                            ['stone_shooter_1', 'stone_shooter_2'],
-                            ['goblin_warrior_1', 'goblin_warrior_2'],
-                            ['bat_1', 'bat_2'],
-                            ['spider_1', 'spider_2'],
-                            ['worm_hidden', 'worm_emerge']
-                        ];
-                        const rows = frameMap.length;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const output = {};
-
-                        frameMap.forEach((rowFrames, row) => {
-                            rowFrames.forEach((name, col) => {
-                                const crop = document.createElement('canvas');
-                                crop.width = cellW;
-                                crop.height = cellH;
-                                const cctx = crop.getContext('2d');
-                                cctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, cellW, cellH);
-
-                                const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
-                                const data = imageData.data;
-                                let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
-                                for (let y = 0; y < crop.height; y++) {
-                                    for (let x = 0; x < crop.width; x++) {
-                                        const alpha = data[(y * crop.width + x) * 4 + 3];
-                                        if (alpha > 12) {
-                                            minX = Math.min(minX, x);
-                                            minY = Math.min(minY, y);
-                                            maxX = Math.max(maxX, x);
-                                            maxY = Math.max(maxY, y);
-                                        }
-                                    }
-                                }
-
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-
-                                if (maxX > minX && maxY > minY) {
-                                    const srcW = maxX - minX + 1;
-                                    const srcH = maxY - minY + 1;
-                                    const scale = Math.min((size - 1) / srcW, (size - 1) / srcH);
-                                    const dstW = Math.max(1, Math.round(srcW * scale));
-                                    const dstH = Math.max(1, Math.round(srcH * scale));
-                                    const dstX = Math.floor((size - dstW) / 2);
-                                    const dstY = Math.max(0, size - dstH - 1);
-                                    fctx.drawImage(crop, minX, minY, srcW, srcH, dstX, dstY, dstW, dstH);
-                                }
-                                output[name] = frame;
-                            });
-                        });
-
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function sliceNpcSheet(imgSrc, size) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 2;
-                        const rows = 5;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const frameMap = [
-                            ['npc_man_1', 'npc_man_2'],
-                            ['npc_woman_1', 'npc_woman_2'],
-                            ['merchant', 'merchant_2'],
-                            ['npc_dog_1', 'npc_dog_2'],
-                            ['npc_chicken_1', 'npc_chicken_2']
-                        ];
-                        const output = {};
-
-                        frameMap.forEach((rowFrames, row) => {
-                            rowFrames.forEach((name, col) => {
-                                const crop = document.createElement('canvas');
-                                crop.width = cellW;
-                                crop.height = cellH;
-                                const cctx = crop.getContext('2d');
-                                cctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, cellW, cellH);
-
-                                const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
-                                const data = imageData.data;
-                                let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
-                                for (let y = 0; y < crop.height; y++) {
-                                    for (let x = 0; x < crop.width; x++) {
-                                        const alpha = data[(y * crop.width + x) * 4 + 3];
-                                        if (alpha > 12) {
-                                            minX = Math.min(minX, x);
-                                            minY = Math.min(minY, y);
-                                            maxX = Math.max(maxX, x);
-                                            maxY = Math.max(maxY, y);
-                                        }
-                                    }
-                                }
-
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-
-                                if (maxX > minX && maxY > minY) {
-                                    const srcW = maxX - minX + 1;
-                                    const srcH = maxY - minY + 1;
-                                    const scale = Math.min((size - 1) / srcW, (size - 1) / srcH);
-                                    const dstW = Math.max(1, Math.round(srcW * scale));
-                                    const dstH = Math.max(1, Math.round(srcH * scale));
-                                    const dstX = Math.floor((size - dstW) / 2);
-                                    const dstY = Math.max(0, size - dstH - 1);
-                                    fctx.drawImage(crop, minX, minY, srcW, srcH, dstX, dstY, dstW, dstH);
-                                }
-                                output[name] = frame;
-                            });
-                        });
-
-                        output.npc_dog = output.npc_dog_1;
-                        output.npc_chicken = output.npc_chicken_1;
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function sliceObjectSheet(imgSrc, size) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 5;
-                        const rows = 5;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const frameMap = [
-                            ['house_rtl', 'house_rtm', 'house_rtr', 'house_wl', 'house_door'],
-                            ['house_rbl', 'house_rbm', 'house_rbr', 'house_wr', 'mailbox'],
-                            ['fence_h', 'fence_v', 'bush', 'wall_grassland', 'obs_grassland'],
-                            ['wall_desert', 'obs_desert', 'wall_volcano', 'obs_volcano', 'wall_snow'],
-                            ['obs_snow', 'wall_mountain', 'obs_mountain', 'wall_swamp', 'obs_swamp']
-                        ];
-                        const output = {};
-
-                        frameMap.forEach((rowFrames, row) => {
-                            rowFrames.forEach((name, col) => {
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-                                fctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, size, size);
-                                output[name] = frame;
-                            });
-                        });
-
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function sliceTerrainSheet(imgSrc, size) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 3;
-                        const rows = 3;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const inset = 2;
-                        const frameMap = [
-                            ['terrain_grassland', 'terrain_desert', 'terrain_mountain'],
-                            ['terrain_wetland', 'terrain_poison_swamp', 'terrain_river'],
-                            ['terrain_wood_bridge', 'terrain_stone_bridge', 'terrain_snowfield']
-                        ];
-                        const output = {};
-
-                        frameMap.forEach((rowFrames, row) => {
-                            rowFrames.forEach((name, col) => {
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-                                // GPT Image 2 の3x3シートから対象セルを切り出す。
-                                // セル境界の細い線が出ないよう、上下左右を少し内側から取得する。
-                                fctx.drawImage(
-                                    img,
-                                    col * cellW + inset,
-                                    row * cellH + inset,
-                                    cellW - inset * 2,
-                                    cellH - inset * 2,
-                                    0,
-                                    0,
-                                    size,
-                                    size
-                                );
-                                output[name] = frame;
-                            });
-                        });
-
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function loadSingleObject(imgSrc, width, height) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const crop = document.createElement('canvas');
-                        crop.width = img.width;
-                        crop.height = img.height;
-                        const cctx = crop.getContext('2d');
-                        cctx.drawImage(img, 0, 0);
-
-                        const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
-                        const data = imageData.data;
-                        let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
-                        for (let y = 0; y < crop.height; y++) {
-                            for (let x = 0; x < crop.width; x++) {
-                                const alpha = data[(y * crop.width + x) * 4 + 3];
-                                if (alpha > 12) {
-                                    minX = Math.min(minX, x);
-                                    minY = Math.min(minY, y);
-                                    maxX = Math.max(maxX, x);
-                                    maxY = Math.max(maxY, y);
-                                }
-                            }
-                        }
-
-                        const frame = document.createElement('canvas');
-                        frame.width = width;
-                        frame.height = height;
-                        const fctx = frame.getContext('2d');
-                        fctx.imageSmoothingEnabled = true;
-                        if (maxX > minX && maxY > minY) {
-                            const srcW = maxX - minX + 1;
-                            const srcH = maxY - minY + 1;
-                            fctx.drawImage(crop, minX, minY, srcW, srcH, 0, 0, width, height);
-                        }
-                        resolve(frame);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            sliceHeroSheet('assets/zelda-like/player/gpt-image-2-hero-sheet-v3.webp', 24).then(frames => {
-                ['down', 'up', 'left', 'right'].forEach(dir => {
-                    sprites[`hero_${dir}_1`] = frames[`${dir}_idle`];
-                    sprites[`hero_${dir}_2`] = frames[`${dir}_step`];
-                });
-            });
-            sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-sheet-v2.webp', 24).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-pack-a-v1.webp', 24, [
-                ['slime_1', 'slime_2'],
-                ['boar_1', 'boar_2'],
-                ['goblin_spear_1', 'goblin_spear_2'],
-                ['forest_wisp_1', 'forest_wisp_2'],
-                ['leaf_beetle_1', 'leaf_beetle_2'],
-                ['river_toad_1', 'river_toad_2']
-            ]).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-pack-b-v1.webp', 24, [
-                ['desert_scarab_1', 'desert_scarab_2'],
-                ['sand_bandit_1', 'sand_bandit_2'],
-                ['cactus_mimic_1', 'cactus_mimic_2'],
-                ['scorpion_1', 'scorpion_2'],
-                ['dust_skull_1', 'dust_skull_2'],
-                ['dune_serpent_1', 'dune_serpent_2']
-            ]).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-pack-c-v1.webp', 24, [
-                ['lava_sprite_1', 'lava_sprite_2'],
-                ['magma_hound_1', 'magma_hound_2'],
-                ['ash_gargoyle_1', 'ash_gargoyle_2'],
-                ['crystal_golem_1', 'crystal_golem_2'],
-                ['swamp_leech_1', 'swamp_leech_2'],
-                ['bog_witch_1', 'bog_witch_2']
-            ]).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceEnemySheet('assets/zelda-like/bosses/gpt-image-2-boss-sheet-v1.webp', 48, [
-                ['boss_forest_1', 'boss_forest_2'],
-                ['boss_desert_1', 'boss_desert_2'],
-                ['boss_lake_1', 'boss_lake_2'],
-                ['boss_swamp_1', 'boss_swamp_2'],
-                ['boss_mountain_1', 'boss_mountain_2'],
-                ['boss_volcano_1', 'boss_volcano_2'],
-                ['boss_sanctuary_1', 'boss_sanctuary_2'],
-                ['boss_gran_1', 'boss_gran_2']
-            ]).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceNpcSheet('assets/zelda-like/npcs/gpt-image-2-npc-sheet-v3.webp', 24).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceObjectSheet('assets/zelda-like/objects/gpt-image-2-object-sheet.webp', 16).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceTerrainSheet('assets/zelda-like/terrain/gpt-image-2-terrain-sheet.webp', 16).then(frames => {
-                Object.assign(sprites, frames);
-                sprites.ground_town = frames.terrain_stone_bridge;
-                sprites.ground_swamp = frames.terrain_wetland;
-                sprites.mud_swamp = frames.terrain_poison_swamp;
-                terrainGraphicsVersion++;
-            });
-            loadSingleObject('assets/zelda-like/objects/gpt-image-2-house-full.webp', 48, 48).then(frame => {
-                sprites.house_full = frame;
-            });
-            loadSingleObject('assets/zelda-like/objects/gpt-image-2-town-wall.webp', 16, 16).then(frame => {
-                sprites.wall_town = frame;
-            });
+        function drawSprite(sprite, x, y, w, h) {
+            FahrenVisuals.draw(ctx, sprite, x, y, w, h);
         }
-        applyAIGraphics();
+        let graphicsReady = false;
+        FahrenVisuals.load(sprites).then(() => {
+            terrainGraphicsVersion++;
+            graphicsReady = true;
+            document.getElementById('visual-status').textContent = 'HDグラフィック / HD Graphics';
+        }).catch(error => {
+            console.error('HD assets failed to load', error);
+            document.getElementById('visual-status').textContent = '画像の読み込みに失敗しました。再読み込みしてください。';
+        });
+
+        function advanceWalk(entity, distance, continuous = false) {
+            if (distance > 0.01 || continuous) {
+                entity.animTimer += continuous ? 0.7 : distance;
+                const stride = entity.isBoss ? 3 : entity.baseSpeed >= 1 ? 8 : 3;
+                while (entity.animTimer >= stride) {
+                    entity.animTimer -= stride;
+                    entity.animFrame = entity.animFrame % 4 + 1;
+                }
+            } else {
+                entity.animFrame = 1;
+                entity.animTimer = 0;
+            }
+        }
+
+        function drawCharacter(sprite, x, y, entity) {
+            if (!sprite) return;
+            const phase = performance.now() / 700 + entity.x * 0.07;
+            const breathing = 1 + Math.sin(phase) * 0.008;
+            ctx.save();
+            ctx.translate(x + sprite.width / 2, y + sprite.height);
+            ctx.scale(1, breathing);
+            if (entity.isAttacking) {
+                const swing = Math.sin((12 - entity.attackTimer) / 12 * Math.PI) * 0.12;
+                ctx.rotate(entity.dir === 'left' ? -swing : swing);
+            }
+            drawSprite(sprite, -sprite.width / 2, -sprite.height);
+            ctx.restore();
+        }
+
 
         const fahrenWorldMapImage = new Image();
         let fahrenWorldMapReady = false;
@@ -1165,12 +802,6 @@
         };
         fahrenDungeonMapImage.src = 'assets/zelda-like/world-map-fahren-25x25-dungeons.webp';
 
-        const castleObjectsImage = new Image();
-        let castleObjectsReady = false;
-        castleObjectsImage.onload = () => {
-            castleObjectsReady = true;
-        };
-        castleObjectsImage.src = 'assets/zelda-like/objects/gpt-image-2-castle-objects-v1.webp';
 
         // --- CONSTANTS ---
         const TILE = 16;
@@ -1668,14 +1299,26 @@
                     npcs.push(new NPC((4+Math.random()*8)*TILE, (4+Math.random()*4)*TILE, rx, ry, Math.random() < 0.5 ? 'man':'woman', 'こんにちは！'));
                     if (Math.random() < 0.5) npcs.push(new NPC((2+Math.random()*12)*TILE, (2+Math.random()*8)*TILE, rx, ry, 'chicken', 'ココッ！'));
                 }
+                npcs.forEach(npc => placeActorOnWalkableTile(npc, tiles));
                 return { biome: biome, worldX: rx, worldY: ry, tiles: tiles, npcs: npcs };
+            }
+
+            // Flat decoration is explicitly walkable and never blocks a corridor.
+            for (let r = 1; r < SCREEN_ROWS - 1; r++) {
+                for (let c = 1; c < SCREEN_COLS - 1; c++) {
+                    if (tiles[r][c] === 0 && biome !== 'lake' && biome !== 'swamp' && Math.random() < 0.09) {
+                        tiles[r][c] = biome === 'grassland' || biome === 'forest' ? 5 : 6;
+                    }
+                }
             }
 
             // Spawn Enemies for other biomes
             let enemyList = [];
             const bossDef = getBossDefinition(rx, ry);
             if (bossDef) {
-                enemyList.push(new Enemy(7 * TILE, 4 * TILE, rx, ry, bossDef.type));
+                const boss = new Enemy(7 * TILE, 4 * TILE, rx, ry, bossDef.type);
+                placeActorOnWalkableTile(boss, tiles);
+                enemyList.push(boss);
                 return { biome: biome, worldX: rx, worldY: ry, tiles: tiles, enemies: enemyList, boss: bossDef };
             }
 
@@ -1683,7 +1326,9 @@
             for(let i=0; i<numEnemies; i++) {
                 let ex = (2 + Math.floor(Math.random() * 12)) * TILE;
                 let ey = (2 + Math.floor(Math.random() * 7)) * TILE;
-                enemyList.push(new Enemy(ex, ey, rx, ry, pickEnemyTypeForBiome(biome)));
+                const enemy = new Enemy(ex, ey, rx, ry, pickEnemyTypeForBiome(biome));
+                placeActorOnWalkableTile(enemy, tiles);
+                enemyList.push(enemy);
             }
 
             return { biome: biome, worldX: rx, worldY: ry, tiles: tiles, enemies: enemyList };
@@ -1702,8 +1347,45 @@
         let nextRoomData = null;
         let transDirX = 0, transDirY = 0, transProgress = 0;
 
+        const TILE_RULES = Object.freeze({
+            0: { name: '地面 / Ground', solid: false },
+            1: { name: '壁・木 / Wall or tree', solid: true },
+            2: { name: '岩・深水 / Rock or deep water', solid: true },
+            3: { name: '道・橋 / Path or bridge', solid: false },
+            4: { name: '浅い泥 / Shallow mud', solid: false },
+            5: { name: '花 / Flowers', solid: false, sprite: 'flowers' },
+            6: { name: '小石・草 / Pebbles and grass', solid: false, sprite: 'pebbles' },
+            27: { name: '閉じた家の扉 / Closed house door', solid: true },
+            40: { name: '横柵 / Fence', solid: true, sprite: 'fence_h' },
+            41: { name: '縦柵 / Fence', solid: true, sprite: 'fence_v' },
+            42: { name: '郵便箱 / Mailbox', solid: true, sprite: 'mailbox' },
+            43: { name: '刈れる茂み / Cuttable bush', solid: true, sprite: 'bush', cuttable: true }
+        });
+
         function isSolid(tileId) {
-            return tileId === 1 || tileId === 2 || (tileId >= 20 && tileId <= 28) || (tileId >= 40 && tileId <= 43) || tileId === undefined;
+            if (TILE_RULES[tileId]) return TILE_RULES[tileId].solid;
+            if (tileId >= 20 && tileId <= 28) return true;
+            return true; // Unknown or out-of-bounds tiles are never walkable.
+        }
+
+        function placeActorOnWalkableTile(actor, tiles) {
+            const freeAt = (x, y) => {
+                const left = Math.floor(x / TILE), top = Math.floor(y / TILE);
+                const right = Math.floor((x + actor.w - 1) / TILE);
+                const bottom = Math.floor((y + actor.h - 1) / TILE);
+                for (let r = top; r <= bottom; r++) for (let c = left; c <= right; c++) {
+                    if (isSolid(tiles[r]?.[c])) return false;
+                }
+                return true;
+            };
+            if (freeAt(actor.x, actor.y)) return;
+            const candidates = [];
+            for (let r = 1; r < SCREEN_ROWS - 1; r++) for (let c = 1; c < SCREEN_COLS - 1; c++) {
+                const x = c * TILE, y = r * TILE;
+                if (freeAt(x, y)) candidates.push({x, y, distance: Math.hypot(x - actor.x, y - actor.y)});
+            }
+            candidates.sort((a, b) => a.distance - b.distance);
+            if (candidates.length) { actor.x = candidates[0].x; actor.y = candidates[0].y; }
         }
 
         function checkCollision(x, y, w, h) {
@@ -1825,24 +1507,17 @@
                     }
                 }
 
-                let dx = 0, dy = 0, isMoving = false;
-                if (keys['KeyW'] || keys['ArrowUp']) { dy = -speed; this.dir = 'up'; isMoving = true; }
-                else if (keys['KeyS'] || keys['ArrowDown']) { dy = speed; this.dir = 'down'; isMoving = true; }
-                else if (keys['KeyA'] || keys['ArrowLeft']) { dx = -speed; this.dir = 'left'; isMoving = true; }
-                else if (keys['KeyD'] || keys['ArrowRight']) { dx = speed; this.dir = 'right'; isMoving = true; }
+                let dx = 0, dy = 0;
+                if (keys['KeyW'] || keys['ArrowUp']) { dy = -speed; this.dir = 'up'; }
+                else if (keys['KeyS'] || keys['ArrowDown']) { dy = speed; this.dir = 'down'; }
+                else if (keys['KeyA'] || keys['ArrowLeft']) { dx = -speed; this.dir = 'left'; }
+                else if (keys['KeyD'] || keys['ArrowRight']) { dx = speed; this.dir = 'right'; }
 
+                const oldX = this.x, oldY = this.y;
                 if (dx !== 0 && !checkCollision(this.x + dx, this.y, this.w, this.h)) this.x += dx;
                 if (dy !== 0 && !checkCollision(this.x, this.y + dy, this.w, this.h)) this.y += dy;
 
-                if (isMoving) {
-                    this.animTimer++;
-                    if (this.animTimer > (speed < 1 ? 16 : 8)) {
-                        this.animTimer = 0;
-                        this.animFrame = this.animFrame === 1 ? 2 : 1;
-                    }
-                } else {
-                    this.animFrame = 1;
-                }
+                advanceWalk(this, Math.hypot(this.x - oldX, this.y - oldY));
             }
 
             useItem() {
@@ -1876,7 +1551,7 @@
 
             draw() {
                 if (this.invincibleTimer > 0 && Math.floor(Date.now() / 100) % 2 === 0) return;
-                const sprite = sprites[`hero_${this.dir}_${this.animFrame}`];
+                const sprite = sprites[`hero_${this.dir}_${this.animFrame}`] || sprites[`hero_${this.dir}_1`];
                 const drawX = Math.round(this.x + transOffset.x + this.w / 2 - sprite.width / 2);
                 const drawY = Math.round(this.y + transOffset.y + UI_OFFSET + this.h - sprite.height + 4);
                 
@@ -1886,13 +1561,13 @@
                     if (this.dir === 'down') sY += 14;
                     if (this.dir === 'left') sX -= 14;
                     if (this.dir === 'right') sX += 14;
-                    ctx.drawImage(sprites['sword_' + this.dir], sX, sY);
+                    drawSprite(sprites['sword_' + this.dir], sX, sY);
                 }
                 
                 ctx.save();
                 if(equipment.armorLevel === 1) ctx.filter = 'hue-rotate(90deg)'; // Greenish/Different
                 if(equipment.armorLevel === 2) ctx.filter = 'hue-rotate(180deg)'; // Reddish
-                ctx.drawImage(sprite, drawX, drawY);
+                drawCharacter(sprite, drawX, drawY, this);
                 ctx.restore();
             }
 
@@ -1934,6 +1609,7 @@
             update() {
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY || isTransitioning) return;
                 
+                const oldX = this.x, oldY = this.y;
                 if (this.type !== 'merchant') {
                     if (this.timer <= 0) {
                         this.timer = 60 + Math.random() * 100;
@@ -1949,19 +1625,13 @@
                     if (!checkCollision(this.x + this.dx, this.y, this.w, this.h)) this.x += this.dx;
                     if (!checkCollision(this.x, this.y + this.dy, this.w, this.h)) this.y += this.dy;
                     
-                    if (this.dx !== 0 || this.dy !== 0) {
-                        this.animTimer++;
-                        if (this.animTimer > 15) {
-                            this.animTimer = 0;
-                            this.animFrame = this.animFrame === 1 ? 2 : 1;
-                        }
-                    }
                 }
+                advanceWalk(this, Math.hypot(this.x - oldX, this.y - oldY));
             }
             draw() {
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY) return;
                 let sprName = `npc_${this.type}_${this.animFrame}`;
-                if (this.type === 'merchant') sprName = 'merchant';
+                if (this.type === 'merchant') sprName = `merchant_${this.animFrame}`;
                 // Fallback for simple sprites
                 if (!sprites[sprName]) sprName = `npc_${this.type}`; // like dog or chicken without anim frames if not defined properly, but we will define them.
                 if (!sprites[sprName]) sprName = 'npc_man_1'; // ultimate fallback
@@ -1970,7 +1640,7 @@
                 if (!spr) return;
                 const drawX = Math.round(this.x + transOffset.x + this.w / 2 - spr.width / 2);
                 const drawY = Math.round(this.y + transOffset.y + UI_OFFSET + this.h - spr.height + 4);
-                ctx.drawImage(spr, drawX, drawY);
+                drawCharacter(spr, drawX, drawY, this);
             }
         }
 
@@ -2002,9 +1672,9 @@
             }
             draw() {
                 if(this.timer > 0) {
-                    if(this.timer % 10 < 5) ctx.drawImage(sprites['ico_bomb'], Math.round(this.x + transOffset.x), Math.round(this.y + transOffset.y + UI_OFFSET));
+                    if(this.timer % 10 < 5) drawSprite(sprites['ico_bomb'], Math.round(this.x + transOffset.x), Math.round(this.y + transOffset.y + UI_OFFSET));
                 } else {
-                    ctx.drawImage(sprites['bomb_flash'], Math.round(this.x + transOffset.x - 16), Math.round(this.y + transOffset.y + UI_OFFSET - 16), 48, 48);
+                    drawSprite(sprites['bomb_flash'], Math.round(this.x + transOffset.x - 16), Math.round(this.y + transOffset.y + UI_OFFSET - 16), 48, 48);
                 }
             }
         }
@@ -2040,7 +1710,7 @@
                     if(this.dx < 0) sprName = 'proj_arrow_left';
                     if(this.dx > 0) sprName = 'proj_arrow_right';
                 }
-                ctx.drawImage(sprites[sprName], Math.round(this.x + transOffset.x - 4), Math.round(this.y + transOffset.y + UI_OFFSET - 4));
+                drawSprite(sprites[sprName], Math.round(this.x + transOffset.x - 4), Math.round(this.y + transOffset.y + UI_OFFSET - 4));
             }
         }
 
@@ -2059,7 +1729,7 @@
                 }
             }
             draw() {
-                ctx.drawImage(sprites['rock_proj'], Math.round(this.x + transOffset.x - 4), Math.round(this.y + transOffset.y + UI_OFFSET - 4));
+                drawSprite(sprites['rock_proj'], Math.round(this.x + transOffset.x - 4), Math.round(this.y + transOffset.y + UI_OFFSET - 4));
             }
         }
 
@@ -2076,7 +1746,7 @@
                 if(this.y > SCREEN_ROWS * TILE) this.active = false;
             }
             draw() {
-                ctx.drawImage(sprites['falling_rock'], Math.round(this.x + transOffset.x - 2), Math.round(this.y + transOffset.y + UI_OFFSET - 2));
+                drawSprite(sprites['falling_rock'], Math.round(this.x + transOffset.x - 2), Math.round(this.y + transOffset.y + UI_OFFSET - 2));
             }
         }
 
@@ -2115,6 +1785,7 @@
                     return;
                 }
 
+                const oldX = this.x, oldY = this.y;
                 let speed = this.baseSpeed;
                 this.timer--;
 
@@ -2196,26 +1867,18 @@
                 if (this.y < 0) this.y = 0;
                 if (this.y > SCREEN_ROWS*TILE - this.h) this.y = SCREEN_ROWS*TILE - this.h;
 
-                if (this.dx !== 0 || this.dy !== 0 || this.behavior === 'jumper' || this.behavior === 'burrower') {
-                    this.animTimer++;
-                    if (this.animTimer > 15) {
-                        this.animTimer = 0;
-                        this.animFrame = this.animFrame === 1 ? 2 : 1;
-                    }
-                }
+                const continuous = this.behavior === 'flyer' || this.behavior === 'burrower' ||
+                    ['slime', 'forest_wisp', 'dust_skull', 'lava_sprite'].includes(this.type);
+                advanceWalk(this, Math.hypot(this.x - oldX, this.y - oldY), continuous);
             }
-            
+
             draw() {
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY) return;
                 if (this.knockbackTimer > 0 && Math.floor(Date.now()/50)%2===0) return;
                 
                 let sprName = `${this.type}_${this.animFrame}`;
-                if (this.behavior === 'jumper' && this.state === 'jump') sprName = `${this.type}_2`;
-                if (this.behavior === 'jumper' && this.state === 'wait') sprName = `${this.type}_1`;
-                if (this.type === 'worm' && this.state === 'hidden') sprName = 'worm_hidden';
-                if (this.type === 'worm' && this.state === 'emerge') sprName = 'worm_emerge';
-                if (this.type !== 'worm' && this.behavior === 'burrower' && this.state === 'hidden') sprName = `${this.type}_1`;
-                if (this.type !== 'worm' && this.behavior === 'burrower' && this.state === 'emerge') sprName = `${this.type}_2`;
+                if (this.type === 'worm' && this.state === 'hidden') sprName = `worm_hidden_${this.animFrame}`;
+                if (this.type === 'worm' && this.state === 'emerge') sprName = `worm_emerge_${this.animFrame}`;
                 
                 let drawY = this.y;
                 if (this.behavior === 'jumper' && this.state === 'jump') {
@@ -2227,7 +1890,7 @@
                 if (!spr) return;
                 const drawX = Math.round(this.x + transOffset.x + this.w / 2 - spr.width / 2);
                 const sy = Math.round(drawY + transOffset.y + UI_OFFSET + this.h - spr.height + 4);
-                ctx.drawImage(spr, drawX, sy);
+                drawCharacter(spr, drawX, sy, this);
             }
             
             takeDamage(px, py) {
@@ -2249,7 +1912,7 @@
             }
             draw() {
                 if (!this.active) return;
-                ctx.drawImage(sprites[this.type], Math.round(this.x + transOffset.x), Math.round(this.y + transOffset.y + UI_OFFSET));
+                drawSprite(sprites[this.type], Math.round(this.x + transOffset.x), Math.round(this.y + transOffset.y + UI_OFFSET));
             }
         }
 
@@ -2427,7 +2090,7 @@
         }
 
         // --- ROOM RENDERING ---
-        const terrainLayerCache = new WeakMap();
+        const terrainLayerCache = new Map();
 
         function getBaseTerrainSprite(biome) {
             if (biome === 'forest') return sprites.terrain_grassland;
@@ -2450,7 +2113,7 @@
 
         function drawTerrainSprite(layerCtx, sprite, c, r) {
             if (!sprite) return;
-            layerCtx.drawImage(sprite, c * TILE, r * TILE);
+            FahrenVisuals.draw(layerCtx, sprite, c * TILE, r * TILE, TILE, TILE);
         }
 
         function hasFahrenWorldMapBase(roomData) {
@@ -2481,16 +2144,17 @@
             layerCtx.save();
             layerCtx.imageSmoothingEnabled = true;
             layerCtx.globalAlpha = 0.16;
-            layerCtx.drawImage(fahrenWorldMapImage, sx, sy, sw, sh, 0, 0, layerCtx.canvas.width, layerCtx.canvas.height);
+            layerCtx.drawImage(fahrenWorldMapImage, sx, sy, sw, sh, 0, 0, SCREEN_COLS * TILE, SCREEN_ROWS * TILE);
             layerCtx.restore();
             return true;
         }
 
         function buildTerrainLayer(roomData) {
             const layer = document.createElement('canvas');
-            layer.width = SCREEN_COLS * TILE;
-            layer.height = SCREEN_ROWS * TILE;
+            layer.width = SCREEN_COLS * TILE * RENDER_SCALE;
+            layer.height = SCREEN_ROWS * TILE * RENDER_SCALE;
             const layerCtx = layer.getContext('2d');
+            layerCtx.scale(RENDER_SCALE, RENDER_SCALE);
             const biome = roomData.biome;
 
             if (biome === 'grassland' && window.grassPattern) {
@@ -2498,7 +2162,7 @@
             } else {
                 layerCtx.fillStyle = BIOME_BG[biome];
             }
-            layerCtx.fillRect(0, 0, layer.width, layer.height);
+            layerCtx.fillRect(0, 0, SCREEN_COLS * TILE, SCREEN_ROWS * TILE);
 
             const hasWorldMapBase = drawFahrenWorldMapSlice(layerCtx, roomData);
 
@@ -2535,19 +2199,24 @@
 
         function getTerrainLayer(roomData) {
             const cached = terrainLayerCache.get(roomData);
-            if (cached && cached.version === terrainGraphicsVersion) return cached.canvas;
+            if (cached && cached.version === terrainGraphicsVersion) {
+                terrainLayerCache.delete(roomData);
+                terrainLayerCache.set(roomData, cached);
+                return cached.canvas;
+            }
 
             const canvas = buildTerrainLayer(roomData);
             terrainLayerCache.set(roomData, {
                 canvas,
                 version: terrainGraphicsVersion
             });
+            if (terrainLayerCache.size > 32) terrainLayerCache.delete(terrainLayerCache.keys().next().value);
             return canvas;
         }
 
         function drawTownWallTile(x, y) {
             if (sprites.wall_town) {
-                ctx.drawImage(sprites.wall_town, x, y, TILE, TILE);
+                drawSprite(sprites.wall_town, x, y, TILE, TILE);
                 return;
             }
             ctx.fillStyle = '#4f565c';
@@ -2567,37 +2236,29 @@
             ctx.stroke();
         }
 
-        const CASTLE_OBJECT_RECTS = {
-            gateClosed: [36, 42, 398, 312],
-            gateOpen: [490, 44, 370, 310],
-            towerLarge: [920, 28, 210, 330],
-            towerTall: [1150, 75, 150, 285],
-            towerSmall: [1340, 160, 130, 190],
-            wallBanner: [40, 405, 235, 140],
-            wallWide: [490, 405, 240, 140],
-            wallBroken: [940, 410, 260, 150],
-            battlement: [42, 600, 185, 110],
-            stairs: [1080, 592, 120, 110],
-            plaza: [560, 760, 165, 155],
-            stoneTile: [760, 760, 160, 155],
-            drawbridge: [965, 748, 290, 190],
-            bridgeNarrow: [1280, 750, 150, 190],
-            bannerTall: [44, 748, 120, 220]
-        };
-
+        const WALKABLE_CASTLE_OBJECTS = new Set(['stairs', 'plaza', 'stoneTile', 'drawbridge', 'bridgeNarrow']);
+        let castleRenderRoom = null;
+        let castleRenderOffset = { x: 0, y: 0 };
         function drawCastleObject(name, dx, dy, dw, dh) {
-            if (!castleObjectsReady) return;
-            const rect = CASTLE_OBJECT_RECTS[name];
-            if (!rect) return;
-            ctx.drawImage(
-                castleObjectsImage,
-                rect[0], rect[1], rect[2], rect[3],
-                Math.round(dx), Math.round(dy), Math.round(dw), Math.round(dh)
-            );
+            const sprite = sprites['castle_' + name];
+            if (!sprite) return;
+            ctx.save();
+            if (castleRenderRoom) {
+                // Keep the open doorway and all connected paths visibly unobstructed.
+                const walkable = WALKABLE_CASTLE_OBJECTS.has(name);
+                ctx.beginPath();
+                castleRenderRoom.tiles.forEach((row, r) => row.forEach((tile, c) => {
+                    if (isSolid(tile) !== walkable) ctx.rect(castleRenderOffset.x + c * TILE, castleRenderOffset.y + r * TILE + UI_OFFSET, TILE, TILE);
+                }));
+                ctx.clip();
+            }
+            drawSprite(sprite, Math.round(dx), Math.round(dy), Math.round(dw), Math.round(dh));
+            ctx.restore();
         }
 
         function drawCastleDecor(roomData, offsetX, offsetY) {
             if (!isCastleRoom(roomData.worldX, roomData.worldY)) return;
+            castleRenderRoom = roomData; castleRenderOffset = { x: offsetX, y: offsetY };
             const dx = roomData.worldX - START_ROOM_X;
             const dy = roomData.worldY - START_ROOM_Y;
             const baseX = offsetX;
@@ -2608,7 +2269,7 @@
                 drawCastleObject('wallWide', baseX + 80, baseY + 2, 96, 52);
                 drawCastleObject('wallWide', baseX + 168, baseY + 2, 96, 52);
                 if (dx === -2 || dx === 2) drawCastleObject('towerTall', baseX + 84, baseY + 4, 80, 112);
-                if (dx === 0) drawCastleObject('gateClosed', baseX + 50, baseY - 2, 156, 112);
+                if (dx === 0) drawCastleObject('gateOpen', baseX + 50, baseY - 2, 156, 112);
             } else if (dy === -1) {
                 drawCastleObject('wallBanner', baseX - 4, baseY + 6, 90, 54);
                 drawCastleObject('wallWide', baseX + 82, baseY + 6, 92, 54);
@@ -2635,9 +2296,9 @@
                 drawCastleObject('stoneTile', baseX + 142, baseY + 20, 76, 70);
                 if (dx === -2 || dx === 2) drawCastleObject('battlement', baseX + 40, baseY + 88, 92, 54);
             } else if (dy === 2) {
-                drawCastleObject('wallWide', baseX - 8, baseY + 10, 96, 54);
-                drawCastleObject('wallWide', baseX + 80, baseY + 10, 96, 54);
-                drawCastleObject('wallWide', baseX + 168, baseY + 10, 96, 54);
+                drawCastleObject('wallWide', baseX - 8, baseY + 128, 96, 48);
+                drawCastleObject('wallWide', baseX + 80, baseY + 128, 96, 48);
+                drawCastleObject('wallWide', baseX + 168, baseY + 128, 96, 48);
                 if (dx === 0) drawCastleObject('drawbridge', baseX + 66, baseY + 78, 132, 84);
                 if (dx === -2 || dx === 2) drawCastleObject('towerSmall', baseX + 92, baseY + 28, 72, 96);
             }
@@ -2647,29 +2308,33 @@
             if (!roomData) return;
             const biome = roomData.biome;
             const objectBiome = getObjectSpriteBiome(biome);
-            ctx.drawImage(getTerrainLayer(roomData), offsetX, offsetY + UI_OFFSET);
+            ctx.drawImage(getTerrainLayer(roomData), offsetX, offsetY + UI_OFFSET, SCREEN_COLS * TILE, SCREEN_ROWS * TILE);
 
             for (let r = 0; r < SCREEN_ROWS; r++) {
                 for (let c = 0; c < SCREEN_COLS; c++) {
                     const tile = roomData.tiles[r][c];
+                    if (TILE_RULES[tile] && TILE_RULES[tile].sprite) {
+                        drawSprite(sprites[TILE_RULES[tile].sprite], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET, TILE, TILE);
+                        continue;
+                    }
                     if (biome === 'town') {
                         if (tile === 1) {
                             drawTownWallTile(offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                             continue;
                         }
                         if (tile >= 21 && tile <= 28) continue;
-                        if (tile === 40) ctx.drawImage(sprites['fence_h'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
-                        if (tile === 41) ctx.drawImage(sprites['fence_v'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
-                        if (tile === 42) ctx.drawImage(sprites['mailbox'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
-                        if (tile === 43) ctx.drawImage(sprites['bush'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                        if (tile === 40) drawSprite(sprites['fence_h'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                        if (tile === 41) drawSprite(sprites['fence_v'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                        if (tile === 42) drawSprite(sprites['mailbox'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                        if (tile === 43) drawSprite(sprites['bush'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                         if (tile === 20) {
                             if (sprites.house_full) {
-                                ctx.drawImage(sprites.house_full, offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET, TILE * 3, TILE * 3);
+                                drawSprite(sprites.house_full, offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET, TILE * 3, TILE * 3);
                             } else {
                                 const houseSprites = ['house_rtl','house_rtm','house_rtr','house_rbl','house_rbm','house_rbr','house_wl','house_door','house_wr'];
                                 for (let hi = 0; hi < 9; hi++) {
                                     const spr = sprites[houseSprites[hi]];
-                                    if (spr) ctx.drawImage(spr, offsetX + (c + hi % 3) * TILE, offsetY + (r + Math.floor(hi / 3)) * TILE + UI_OFFSET);
+                                    if (spr) drawSprite(spr, offsetX + (c + hi % 3) * TILE, offsetY + (r + Math.floor(hi / 3)) * TILE + UI_OFFSET);
                                 }
                             }
                         }
@@ -2678,7 +2343,8 @@
                     
                     if (tile === 0 || tile === 4 || tile >= 3) continue;
                     let sprName = tile === 1 ? 'wall_' + objectBiome : 'obs_' + objectBiome;
-                    if(sprites[sprName]) ctx.drawImage(sprites[sprName], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                    if (tile === 2 && (biome === 'lake' || biome === 'swamp')) sprName = 'terrain_river';
+                    if(sprites[sprName]) drawSprite(sprites[sprName], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                 }
             }
             drawCastleDecor(roomData, offsetX, offsetY);
@@ -2773,7 +2439,7 @@
                 let tileX = Math.floor((player.swordHitbox.x + player.swordHitbox.w/2) / TILE);
                 let tileY = Math.floor((player.swordHitbox.y + player.swordHitbox.h/2) / TILE);
                 if (tileX >= 0 && tileX < SCREEN_COLS && tileY >= 0 && tileY < SCREEN_ROWS) {
-                    if (currentRoom.tiles[tileY][tileX] === 43) {
+                    if (TILE_RULES[currentRoom.tiles[tileY][tileX]]?.cuttable) {
                         currentRoom.tiles[tileY][tileX] = 0; // turn into grass
                         playSFX('hit');
                         if (Math.random() < 0.2) items.push(new Item(tileX * TILE, tileY * TILE, Math.random() < 0.5 ? 'heart' : 'coin'));
@@ -2985,10 +2651,10 @@
             const uiGrad = ctx.createLinearGradient(0,0,0,UI_OFFSET);
             uiGrad.addColorStop(0,'#1a1a2e'); uiGrad.addColorStop(1,'#000');
             ctx.fillStyle = uiGrad;
-            ctx.fillRect(0, 0, canvas.width, UI_OFFSET);
+            ctx.fillRect(0, 0, VIEW_WIDTH, UI_OFFSET);
             // Gold border
             ctx.fillStyle = '#d8a038';
-            ctx.fillRect(0, UI_OFFSET-2, canvas.width, 2);
+            ctx.fillRect(0, UI_OFFSET-2, VIEW_WIDTH, 2);
             
             const biome = getRoom(currentRoomX, currentRoomY).biome;
             ctx.font = '8px monospace';
@@ -2998,7 +2664,7 @@
             ctx.fillText(`[${currentRoomX},${-currentRoomY}]`, 4, 20);
 
             // Coins with glow
-            ctx.drawImage(sprites['coin'], 4, 22);
+            drawSprite(sprites['coin'], 4, 22);
             ctx.fillStyle = '#b8f818';
             ctx.fillText('x' + coins, 20, 32);
             ctx.fillStyle = '#fcd8a8';
@@ -3014,18 +2680,18 @@
             for (let i = 0; i < player.maxHealth / 2; i++) {
                 const hx = 170 + (i%4)*16, hy = 12 + Math.floor(i/4)*16;
                 let val = player.health - (i * 2);
-                if (val >= 2) ctx.drawImage(sprites['heart'], hx, hy);
-                else if (val === 1) ctx.drawImage(sprites['heart_half'], hx, hy);
-                else ctx.drawImage(sprites['heart_empty'], hx, hy);
+                if (val >= 2) drawSprite(sprites['heart'], hx, hy);
+                else if (val === 1) drawSprite(sprites['heart_half'], hx, hy);
+                else drawSprite(sprites['heart_empty'], hx, hy);
             }
 
             // Equipment bar
             ctx.font = '8px monospace';
             let ex = 170, ey = 46;
-            if(equipment.shield){ctx.drawImage(sprites['ico_shield'],ex,ey);ex+=16;}
-            if(equipment.armorLevel===1){ctx.drawImage(sprites['ico_clothes'],ex,ey);ex+=16;}
-            if(equipment.armorLevel===2){ctx.drawImage(sprites['ico_armor'],ex,ey);ex+=16;}
-            if(inventory.keys>0){ctx.drawImage(sprites['ico_key'],ex,ey);ctx.fillStyle='#fff';ctx.fillText('x'+inventory.keys,ex+14,ey+10);}
+            if(equipment.shield){drawSprite(sprites['ico_shield'],ex,ey);ex+=16;}
+            if(equipment.armorLevel===1){drawSprite(sprites['ico_clothes'],ex,ey);ex+=16;}
+            if(equipment.armorLevel===2){drawSprite(sprites['ico_armor'],ex,ey);ex+=16;}
+            if(inventory.keys>0){drawSprite(sprites['ico_key'],ex,ey);ctx.fillStyle='#fff';ctx.fillText('x'+inventory.keys,ex+14,ey+10);}
 
             const room = getRoom(currentRoomX, currentRoomY);
             const boss = room && room.enemies ? room.enemies.find(e => e.isBoss) : null;
@@ -3046,7 +2712,7 @@
             const shake = getShakeOffset();
             ctx.save();
             if (shake.x || shake.y) ctx.translate(Math.round(shake.x), Math.round(shake.y));
-            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
 
             if (isTransitioning) {
                 drawRoom(getRoom(currentRoomX, currentRoomY), transOffset.x, transOffset.y);
@@ -3072,16 +2738,16 @@
             drawUI();
 
             if (gameState === 'DIALOGUE') {
-                ctx.fillStyle = '#000'; ctx.fillRect(16, canvas.height - 48, canvas.width - 32, 40);
-                ctx.strokeStyle = '#fff'; ctx.strokeRect(16, canvas.height - 48, canvas.width - 32, 40);
+                ctx.fillStyle = '#000'; ctx.fillRect(16, VIEW_HEIGHT - 48, VIEW_WIDTH - 32, 40);
+                ctx.strokeStyle = '#fff'; ctx.strokeRect(16, VIEW_HEIGHT - 48, VIEW_WIDTH - 32, 40);
                 ctx.fillStyle = '#fff'; ctx.font = '12px monospace';
-                ctx.fillText(dialogueText[dialogueIndex], 24, canvas.height - 24);
-                ctx.fillText("▼", canvas.width - 36, canvas.height - 16);
+                ctx.fillText(dialogueText[dialogueIndex], 24, VIEW_HEIGHT - 24);
+                ctx.fillText("▼", VIEW_WIDTH - 36, VIEW_HEIGHT - 16);
             }
 
             if (gameState === 'SHOP') {
-                ctx.fillStyle = '#000'; ctx.fillRect(16, 80, canvas.width - 32, 120);
-                ctx.strokeStyle = '#fff'; ctx.strokeRect(16, 80, canvas.width - 32, 120);
+                ctx.fillStyle = '#000'; ctx.fillRect(16, 80, VIEW_WIDTH - 32, 120);
+                ctx.strokeStyle = '#fff'; ctx.strokeRect(16, 80, VIEW_WIDTH - 32, 120);
                 ctx.fillStyle = '#fcd8a8'; ctx.font = '12px monospace';
                 ctx.fillText("いらっしゃい！ なにを かう？ (Xでやめる)", 24, 100);
                 
@@ -3152,15 +2818,15 @@
             titleFrame++;
             const titleMapImage = fahrenDungeonMapReady ? fahrenDungeonMapImage : fahrenWorldMapImage;
             if (fahrenDungeonMapReady || fahrenWorldMapReady) {
-                ctx.drawImage(titleMapImage, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(titleMapImage, 0, 0, VIEW_WIDTH, VIEW_HEIGHT);
                 ctx.fillStyle = 'rgba(3, 3, 16, 0.56)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
             } else {
-                const grad = ctx.createLinearGradient(0,0,0,canvas.height);
+                const grad = ctx.createLinearGradient(0,0,0,VIEW_HEIGHT);
                 grad.addColorStop(0, '#050520');
                 grad.addColorStop(1, '#0a0a40');
                 ctx.fillStyle = grad;
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
             }
             // Stars
             stars.forEach(st => {
@@ -3183,56 +2849,57 @@
             // Title glow
             ctx.shadowColor = '#fc9838'; ctx.shadowBlur = 8;
             ctx.fillStyle = '#fc9838'; ctx.font = 'bold 18px monospace'; ctx.textAlign = 'center';
-            ctx.fillText('ファーレンクエスト', canvas.width/2, 74);
+            ctx.fillText('ファーレンクエスト', VIEW_WIDTH/2, 74);
             ctx.shadowBlur = 0;
             ctx.fillStyle = '#fcd8a8'; ctx.font = '10px monospace';
-            ctx.fillText('25x25 フィールド探索RPG', canvas.width/2, 92);
+            ctx.fillText('25x25 フィールド探索RPG', VIEW_WIDTH/2, 92);
             // Blink
             if (Math.floor(titleFrame/30)%2===0) {
                 ctx.fillStyle = '#ffffff';
-                ctx.fillText('PRESS SPACE / ENTER TO START', canvas.width/2, 138);
+                ctx.fillText('PRESS SPACE / ENTER TO START', VIEW_WIDTH/2, 138);
             }
             ctx.fillStyle = '#888'; ctx.font = '8px monospace';
-            ctx.fillText('Human / Elf / Dwarf Realm', canvas.width/2, 178);
-            ctx.fillText('ENTER: START / PAUSE   L: LOAD MENU', canvas.width/2, 190);
-            ctx.fillText('WASD:\u79fb\u52d5  Space/Z:\u3051\u3093  X:\u30a2\u30a4\u30c6\u30e0', canvas.width/2, 200);
-            ctx.fillText('1:\u7206\u5f3e 2:\u5f13\u77e2 3:\u8001\u71ed 4:\u56de\u5fa9\u85ac', canvas.width/2, 212);
+            ctx.fillText('Human / Elf / Dwarf Realm', VIEW_WIDTH/2, 178);
+            ctx.fillText('ENTER: START / PAUSE   L: LOAD MENU', VIEW_WIDTH/2, 190);
+            ctx.fillText('WASD:\u79fb\u52d5  Space/Z:\u3051\u3093  X:\u30a2\u30a4\u30c6\u30e0', VIEW_WIDTH/2, 200);
+            ctx.fillText('1:\u7206\u5f3e 2:\u5f13\u77e2 3:\u8001\u71ed 4:\u56de\u5fa9\u85ac', VIEW_WIDTH/2, 212);
             ctx.textAlign = 'left';
         }
 
         function drawGameOver() {
             drawGame();
-            ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
             ctx.fillStyle = '#d82800'; ctx.font = '20px monospace'; ctx.textAlign = 'center';
-            ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2);
+            ctx.fillText('GAME OVER', VIEW_WIDTH/2, VIEW_HEIGHT/2);
             ctx.fillStyle = '#fff'; ctx.font = '12px monospace';
-            ctx.fillText("PRESS SPACE TO RESTART", canvas.width/2, canvas.height/2 + 30);
+            ctx.fillText("PRESS SPACE TO RESTART", VIEW_WIDTH/2, VIEW_HEIGHT/2 + 30);
             ctx.textAlign = 'left';
         }
 
         function drawEnding() {
             drawGame();
             ctx.fillStyle = 'rgba(0,0,0,0.88)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
             ctx.textAlign = 'center';
             ctx.fillStyle = '#fcd8a8'; ctx.font = 'bold 19px monospace';
-            ctx.fillText('QUEST CLEAR', canvas.width / 2, 46);
+            ctx.fillText('QUEST CLEAR', VIEW_WIDTH / 2, 46);
             ctx.fillStyle = '#fff'; ctx.font = '11px monospace';
-            ctx.fillText('魔王グランを倒した！', canvas.width / 2, 78);
-            ctx.fillText('ファーレン王国に平和が戻った。', canvas.width / 2, 100);
-            ctx.fillText('人間、エルフ、ドワーフの人々は', canvas.width / 2, 124);
-            ctx.fillText('勇者の帰還を祝い、', canvas.width / 2, 142);
-            ctx.fillText('その冒険を語り継いでいく。', canvas.width / 2, 160);
+            ctx.fillText('魔王グランを倒した！', VIEW_WIDTH / 2, 78);
+            ctx.fillText('ファーレン王国に平和が戻った。', VIEW_WIDTH / 2, 100);
+            ctx.fillText('人間、エルフ、ドワーフの人々は', VIEW_WIDTH / 2, 124);
+            ctx.fillText('勇者の帰還を祝い、', VIEW_WIDTH / 2, 142);
+            ctx.fillText('その冒険を語り継いでいく。', VIEW_WIDTH / 2, 160);
             ctx.fillStyle = '#fcd8a8'; ctx.font = '9px monospace';
-            ctx.fillText('聖石 / Sacred Stones: ' + Object.keys(sacredStones).length + '/7', canvas.width / 2, 184);
+            ctx.fillText('聖石 / Sacred Stones: ' + Object.keys(sacredStones).length + '/7', VIEW_WIDTH / 2, 184);
             if (endingFrame >= 60) {
                 ctx.fillStyle = '#fff'; ctx.font = '8px monospace';
-                ctx.fillText('SPACE / Z / ENTER / A: タイトルへ', canvas.width / 2, 218);
+                ctx.fillText('SPACE / Z / ENTER / A: タイトルへ', VIEW_WIDTH / 2, 218);
             }
             ctx.textAlign = 'left';
         }
 
         function startNewGame() {
+            if (!graphicsReady) return;
             Object.keys(worldMap).forEach(key => delete worldMap[key]);
             projectiles = []; playerProjectiles = []; items = []; hazards = [];
             particles.length = 0;
@@ -3246,6 +2913,7 @@
         }
 
         function openTitleLoadMenu() {
+            if (!graphicsReady) return;
             saveCursor = 0;
             saveMenuBackState = 'TITLE';
             menuMessage = '';
@@ -3330,13 +2998,20 @@
             });
         })();
 
-        function loop() {
-            pollGamepad();
-            update(); draw();
+        let lastFrameTime = null, frameAccumulator = 0;
+        function loop(now) {
+            if (lastFrameTime === null) lastFrameTime = now;
+            frameAccumulator += Math.min(now - lastFrameTime, 100);
+            lastFrameTime = now;
+            while (frameAccumulator >= 1000 / 60) {
+                pollGamepad();
+                update();
+                frameAccumulator -= 1000 / 60;
+            }
+            draw();
             requestAnimationFrame(loop);
         }
-
-        loop();
+        requestAnimationFrame(loop);
     </script>
 </body>
 </html>
