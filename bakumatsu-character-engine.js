@@ -1,6 +1,8 @@
 (function (root) {
   'use strict';
   const D = root.BakumatsuCharacterData || (typeof require === 'function' && require('./bakumatsu-character-data.js'));
+  const B=root.BakumatsuBattle || (typeof require==='function' && require('./bakumatsu-battle.js'));
+  const deadline=s=>s.history?.enabled?1870:1869;
   const clamp=(v,lo=0,hi=100)=>Math.max(lo,Math.min(hi,v));
   const copy=x=>JSON.parse(JSON.stringify(x));
   const relationKey=(a,b)=>[a,b].sort().join(':');
@@ -16,6 +18,7 @@
     const scenario=D.scenarios.find(x=>x.id===scenarioId),hero=D.heroes.find(x=>x.id===heroId);
     if(!scenario || !hero || !['easy','normal','hard'].includes(difficulty)) throw Error('開始条件が不正です。');
     const s={schemaVersion:1,mode:'character',scenarioId,difficulty,settings:{timer:difficulty!=='easy',spirit:true},date:{year:scenario.year,month:scenario.month,day:scenario.day,phase:0},protagonistId:heroId,activePersonId:heroId,initialIdeology:hero.ideology,peopleById:{},domainsById:{},relationships:{},audiences:{emperor:false,shogun:false},campaigns:{aizu:false,choshu:false},logs:[],status:'playing',result:'',pendingCounter:null,lastCounterDate:'',duel:null};
+    B.init(s,Boolean(scenario.history));
     const base={hp:100,money:difficulty==='easy'?260:difficulty==='hard'?120:180,resistance:100,alive:true,kind:'political'};
     for (const h of D.heroes) {s.peopleById[h.id]={...base,...copy(h)};if(h.id==='ryoma' && scenarioId==='bunkyu')s.peopleById[h.id].rank=0;}
     for (const [i,d] of D.domains.entries()) {
@@ -52,9 +55,9 @@
     const p=protagonist(s);
     if(!p.alive || p.hp<=0) {s.status='lost';s.result='主人公が倒れ、維新への道は途絶えた。';}
     else if(p.ideology!==s.initialIdeology) {s.status='lost';s.result='主人公の国体思想が転向した。';}
-    else if(s.date.year>=1869) {s.status='lost';s.result='1869年1月1日の期限を迎えた。';}
-    else if(requirements(s).every(x=>x.ok)) {s.status='won';s.result=`${s.initialIdeology}の大義に基づく明治維新を達成！`;}
-    if(s.status!=='playing'){s.pendingCounter=null;s.duel=null;log(s,s.result);}
+    else if(s.date.year>=deadline(s)) {s.status='lost';s.result=`${deadline(s)}年1月1日の期限を迎えた。`;}
+    else if(!s.battle && requirements(s).every(x=>x.ok)) {s.status='won';s.result=`${s.initialIdeology}の大義に基づく明治維新を達成！`;}
+    if(s.status!=='playing'){s.pendingCounter=null;s.duel=null;s.battle=null;log(s,s.result);}
   }
   function tick(s,count) {
     for(let n=0;n<count && s.status==='playing';n++) {
@@ -65,7 +68,7 @@
         if(s.date.day>days){s.date.day=1;s.date.month++;if(s.date.month===13){s.date.month=1;s.date.year++;}}
       }
       // 日付境界では期限・死亡・転向のみを確定。勝利は行動の全枠消費後。
-      if(s.date.year>=1869 || !protagonist(s).alive || protagonist(s).hp<=0 || protagonist(s).ideology!==s.initialIdeology)checkEnding(s);
+      if(s.date.year>=deadline(s) || !protagonist(s).alive || protagonist(s).hp<=0 || protagonist(s).ideology!==s.initialIdeology)checkEnding(s);
     }
   }
   function route(from,to,method='walk') {
@@ -91,6 +94,24 @@
     const p=active(s),type=command.type;
     if(s.pendingCounter && !['counter','settings'].includes(type))return error('逆説得への応答を選んでください。');
     if(s.duel && !['strike','flee','settings'].includes(type))return error('剣戟を決着させてください。');
+    if(s.battle && (type==='battlePractice'||!type.startsWith('battle') && type!=='settings'))return error('合戦を決着させてください。');
+    if(type.startsWith('battle')&&type!=='battlePractice'){
+      if(type==='battleFinish'){
+        const b=s.battle;if(!b || b.phase!=='result')return error('合戦はまだ決着していません。');
+        const won=b.outcome==='victory',survivors=b.units.filter(u=>u.team==='player').reduce((n,u)=>n+u.hp,0);
+        if(!b.practice){const source=s.domainsById[b.source];if(source)source.troops=Math.max(0,source.troops-(Math.min(3600,Math.max(600,b.initialTroops))-survivors)-(b.outcome==='retreat'?Math.round(survivors*.1):0));
+          if(b.eventId)s.history.results[b.eventId]=b.outcome;
+          if(won&&b.target){const t=s.domainsById[b.target];t.ideology=s.initialIdeology;s.peopleById[t.leaderId].ideology=s.initialIdeology;t.troops=Math.max(500,t.troops-1000);if(['aizu','choshu'].includes(t.id))s.campaigns[t.id]=true;}
+          if(won&&b.eventId==='aizu-war'&&b.side===0)s.campaigns.aizu=true;
+          p.military=clamp(p.military+(won?3:1));
+        }
+        const message=b.name+'：'+({victory:'勝利',defeat:'敗北',retreat:'撤退',peace:'交渉成立'})[b.outcome];s.battle=null;log(s,message);tick(s,b.practice?0:1);checkEnding(s);B.trigger(s);return {ok:true,message,slots:b.practice?0:1};
+      }
+      return B.act(s.battle,command,rng);
+    }
+    if(type==='historySettings'){if(typeof command.enabled!=='boolean'||typeof command.mobilized!=='boolean'||!command.causes||Object.keys(B.causes).some(k=>typeof command.causes[k]!=='boolean'))return error('参陣設定が不正です。');s.history.enabled=command.enabled;s.history.mobilized=command.mobilized;s.history.causes=Object.fromEntries(Object.keys(B.causes).map(k=>[k,command.causes[k]]));checkEnding(s);B.trigger(s);return {ok:true,message:'歴史イベントの参陣・契機を設定しました。',slots:0};}
+    if(type==='battlePractice'){const e=B.events.find(e=>e.id===command.event);if(!e)return error('演習の合戦を選んでください。');s.battle=B.create({name:e.name+'（演習）',eventId:e.id,source:p.domainId,terrain:e.terrain,phase:e.id==='first-choshu'?'negotiation':'briefing',troops:2400,practice:true,date:B.stamp(s.date)});return {ok:true,message:'演習を開始。実際の年月・兵力・歴史結果は変わりません。',slots:0};}
+    if(type==='historyWait'){if(!s.history.enabled||!s.history.mobilized)return error('歴史イベントを有効にし、参陣してください。');const day=B.stamp(s.date),e=B.events.find(e=>e.date>day&&e.location===p.locationId&&e.sides.some(ids=>ids.includes(p.domainId))&&s.history.causes[e.cause]&&!s.history.results[e.id]);if(!e)return error('この拠点で待てる未発生イベントはありません。');const days=(Date.parse(e.date+'T00:00:00Z')-Date.UTC(s.date.year,s.date.month-1,s.date.day))/86400000;tick(s,days*4-s.date.phase);B.trigger(s);return {ok:true,message:e.name+'の時期まで現地待機した。',slots:days*4};}
     let slots=0,message='';
     if(type==='settings') {s.settings.timer=Boolean(command.timer);s.settings.spirit=Boolean(command.spirit);return {ok:true,message:'操作設定を変更しました。'};}
     if(type==='move') {
@@ -148,14 +169,7 @@
       if(!d || !t || d.id===t.id || !authority(s,d.id))return error('藩政権を持つ出陣元と異なる目標藩が必要です。');
       if((D.capitals[d.id]||d.id)!==p.locationId)return error('出陣元の城下へ移動してください。');
       if(d.troops<1000 || p.money<40)return error('遠征には兵1000以上・40両必要です。');
-      const distance=route(p.locationId,D.capitals[t.id]||t.id).length;
-      const attack=d.troops/100+d.training*.6+d.modernization*.6+p.military*.5-distance*4;
-      const defense=t.troops/100+t.training*.5+t.modernization*.5;
-      const won=attack+ rng()*30>=defense;
-      p.money-=40;d.troops=Math.max(0,d.troops-(won?400:800));t.troops=Math.max(500,t.troops-(won?1000:300));
-      if(won){t.ideology=s.initialIdeology;s.peopleById[t.leaderId].ideology=s.initialIdeology;if(t.id==='aizu'||t.id==='choshu')s.campaigns[t.id]=true;message=`${t.name}の征伐に成功。藩論を${s.initialIdeology}へ変更。`;}
-      else message=`${t.name}への遠征は失敗。訓練・近代化・兵力を高めて再挑戦しよう。`;
-      slots=Math.max(1,distance);
+      p.money-=40;s.battle=B.create({name:t.name+'への遠征',source:d.id,target:t.id,troops:d.troops,enemyTroops:t.troops,training:d.training,modernization:d.modernization,terrain:'fort',date:B.stamp(s.date)});message=t.name+'への遠征。合戦画面で部隊を指揮してください。';
     } else if(type==='audience') {
       if(!['emperor','shogun'].includes(command.with))return error('面会先が不正です。');
       if(unified(s)!==11)return error('全11勢力の思想統一が必要です。');
@@ -185,17 +199,17 @@
     log(s,message);tick(s,slots);checkEnding(s);
     // 操作していた同志が死亡・転向した場合は主人公へ戻す。
     if(s.status==='playing' && (!active(s).alive || active(s).ideology!==s.initialIdeology)){s.activePersonId=s.protagonistId;log(s,'同志が操作対象から離れたため、主人公へ戻った。');}
-    return {ok:true,message,slots};
+    B.trigger(s);return {ok:true,message,slots};
   }
   function validate(value) {
     // 記録は任意のJSONを信用せず、値域と全参照を確認してから採用する。
     if(!value || value.schemaVersion!==1 || value.mode!=='character')throw Error('志士編の対応する記録ではありません。');
-    const s=copy(value),scenario=D.scenarios.find(x=>x.id===s.scenarioId);
+    const s=copy(value);B.validate(s);const scenario=D.scenarios.find(x=>x.id===s.scenarioId);
     if(!scenario || !D.heroes.some(h=>h.id===s.protagonistId) || !['easy','normal','hard'].includes(s.difficulty) || !D.ideologies.includes(s.initialIdeology))throw Error('開始設定が不正です。');
     const fresh=create(s.scenarioId,s.protagonistId,s.difficulty),pids=Object.keys(fresh.peopleById),dids=Object.keys(fresh.domainsById);
     const numeric=(n,min,max)=>Number.isFinite(n)&&Number.isInteger(n)&&n>=min&&n<=max;
     const d=s.date;
-    if(!d || !numeric(d.year,scenario.year,1869) || !numeric(d.month,1,12) || !numeric(d.day,1,new Date(Date.UTC(d.year,d.month,0)).getUTCDate()) || !numeric(d.phase,0,3) || Date.UTC(d.year,d.month-1,d.day)<Date.UTC(scenario.year,scenario.month-1,scenario.day) || (d.year===1869 && (d.month!==1 || d.day!==1)))throw Error('記録の日付が不正です。');
+    if(!d || !numeric(d.year,scenario.year,deadline(s)) || !numeric(d.month,1,12) || !numeric(d.day,1,new Date(Date.UTC(d.year,d.month,0)).getUTCDate()) || !numeric(d.phase,0,3) || Date.UTC(d.year,d.month-1,d.day)<Date.UTC(scenario.year,scenario.month-1,scenario.day) || (d.year===deadline(s) && (d.month!==1 || d.day!==1)))throw Error('記録の日付が不正です。');
     if(!s.peopleById || Object.keys(s.peopleById).length!==pids.length || !s.domainsById || Object.keys(s.domainsById).length!==dids.length)throw Error('人物・藩データが不足しています。');
     for(const id of pids){const p=s.peopleById[id],template=fresh.peopleById[id];if(!p || p.id!==id || p.domainId!==template.domainId || !D.places.some(x=>x.id===p.locationId) || !D.ideologies.includes(p.ideology) || !D.foreignPolicies.includes(p.foreignPolicy) || p.rank!==template.rank || typeof p.alive!=='boolean' || (p.alive && p.hp===0))throw Error('人物参照が不正です。');for(const key of ['hp','resistance','progressiveness','sword','military','learning','charm'])if(!numeric(p[key],0,100))throw Error('人物能力が不正です。');if(!numeric(p.money,0,99999))throw Error('所持金が不正です。');s.peopleById[id]={...template,...Object.fromEntries(['locationId','ideology','foreignPolicy','progressiveness','hp','money','sword','military','learning','charm','resistance','alive'].map(k=>[k,p[k]]))};}
     for(const id of dids){const v=s.domainsById[id],template=fresh.domainsById[id];if(!v || v.id!==id || v.leaderId!==template.leaderId || !D.ideologies.includes(v.ideology) || !D.foreignPolicies.includes(v.foreignPolicy) || !numeric(v.troops,0,99999) || !numeric(v.training,0,100)|| !numeric(v.modernization,0,100))throw Error('藩の参照・能力が不正です。');s.domainsById[id]={...template,...Object.fromEntries(['ideology','foreignPolicy','troops','training','modernization'].map(k=>[k,v[k]]))};}
