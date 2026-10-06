@@ -141,13 +141,7 @@
     <h1>ファーレンクエスト</h1>
     
     <div id="game-container">
-        <canvas id="gameCanvas" width="256" height="240"></canvas>
-    </div>
-
-    <div class="instructions">
-        <p>移動 / Move: <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | 剣・会話 / Sword・Talk: <kbd>Space</kbd> or <kbd>Z</kbd> | アイテム / Item: <kbd>Shift</kbd> or <kbd>X</kbd> | メニュー / Menu: <kbd>Enter</kbd></p>
-        <p>アイテム切替 / Select: <kbd>1</kbd> 爆弾 <kbd>2</kbd> 弓矢 <kbd>3</kbd> ろうそく <kbd>4</kbd> 回復薬</p>
-        <p style="color: #fcd8a8;">25×25画面のフィールドを探索するトップビューRPGです。</p>
+        <canvas id="gameCanvas" width="768" height="720"></canvas>
     </div>
 
     <div id="mobile-controls">
@@ -168,9 +162,22 @@
         </div>
     </div>
 
+    <p id="visual-status" style="font-size:12px;color:#e6cfa1;margin:6px 12px;text-align:center">HD画像を読み込み中 / Loading HD graphics…</p>
+    <a href="assets/zelda-like/hd/world-map.svg" target="_blank" rel="noopener" style="color:#e6cfa1;font-size:13px;margin:6px">全体マップを開く / Open World Map</a>
+    <p style="font-size:12px;color:#d7d2c5;margin:6px 12px;text-align:center">D1〜D8の入口で Space / Z / A：ダンジョンへ入る<br>各7部屋。ボスは最深部。入口の部屋を下へ進むと脱出できます。<br>Enter at dungeon gates; bosses wait in the deepest room. Exit south from the entrance room.</p>
+    <p style="font-size:12px;color:#d7d2c5;margin:6px 12px;text-align:center">通過可：道・橋・広場・花・小石・浅い泥 ｜ 通過不可：壁・木・岩・建物・深水・柵<br>Walk: paths, bridges, flat decoration ｜ Blocked: walls, trees, rocks, buildings, deep water<br>茂みは剣で刈ると通れます / Cut bushes with your sword</p>
+    <div class="instructions">
+        <p>移動 / Move: <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | 剣・会話 / Sword・Talk: <kbd>Space</kbd> or <kbd>Z</kbd> | アイテム / Item: <kbd>Shift</kbd> or <kbd>X</kbd> | メニュー / Menu: <kbd>Enter</kbd></p>
+        <p>アイテム切替 / Select: <kbd>1</kbd> 爆弾 <kbd>2</kbd> 弓矢 <kbd>3</kbd> ろうそく <kbd>4</kbd> 回復薬</p>
+        <p style="color: #fcd8a8;">25×25画面のフィールドを探索するトップビューRPGです。</p>
+    </div>
+
+    <script src="assets/zelda-like/hd/graphics.js?v=20261005-placement1"></script>
     <script>
         const canvas = document.getElementById('gameCanvas');
+        const VIEW_WIDTH = 256, VIEW_HEIGHT = 240, RENDER_SCALE = 3;
         const ctx = canvas.getContext('2d');
+        ctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
         ctx.imageSmoothingEnabled = true;
 
         // ==========================================
@@ -293,7 +300,7 @@
         }
 
         function scheduleAudio() {
-            if(!isAudioInitialized || gameState === 'TITLE' || gameState === 'GAMEOVER') return;
+            if(!isAudioInitialized || gameState === 'TITLE' || gameState === 'GAMEOVER' || gameState === 'ENDING') return;
             let lookahead = audioCtx.currentTime + 0.5;
             
             while(melodyTime < lookahead) {
@@ -738,417 +745,48 @@
         }
 
         // --- GPT IMAGE 2 HERO SPRITESHEET ---
-        function applyAIGraphics() {
-            function sliceHeroSheet(imgSrc, size) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 3;
-                        const rows = 4;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const rowByDir = { down: 0, left: 1, right: 2, up: 3 };
-                        const colByFrame = { idle: 1, step: 0 };
-                        const output = {};
-
-                        const frames = [];
-                        Object.entries(rowByDir).forEach(([dir, row]) => {
-                            Object.entries(colByFrame).forEach(([frameName, col]) => {
-                                const crop = document.createElement('canvas');
-                                crop.width = cellW;
-                                crop.height = cellH;
-                                const cctx = crop.getContext('2d');
-                                cctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, cellW, cellH);
-
-                                const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
-                                const data = imageData.data;
-                                let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
-                                for (let y = 0; y < crop.height; y++) {
-                                    for (let x = 0; x < crop.width; x++) {
-                                        const alpha = data[(y * crop.width + x) * 4 + 3];
-                                        if (alpha > 12) {
-                                            minX = Math.min(minX, x);
-                                            minY = Math.min(minY, y);
-                                            maxX = Math.max(maxX, x);
-                                            maxY = Math.max(maxY, y);
-                                        }
-                                    }
-                                }
-                                frames.push({ dir, frameName, crop, minX, minY, maxX, maxY });
-                            });
-                        });
-
-                        const validFrames = frames.filter(frame => frame.maxX > frame.minX && frame.maxY > frame.minY);
-                        const maxFrameW = Math.max(...validFrames.map(frame => frame.maxX - frame.minX + 1));
-                        const maxFrameH = Math.max(...validFrames.map(frame => frame.maxY - frame.minY + 1));
-                        const sharedScale = Math.min((size - 2) / maxFrameW, (size - 2) / maxFrameH);
-
-                        frames.forEach(frameInfo => {
-                            const frame = document.createElement('canvas');
-                            frame.width = size;
-                            frame.height = size;
-                            const fctx = frame.getContext('2d');
-                            fctx.imageSmoothingEnabled = true;
-
-                            if (frameInfo.maxX > frameInfo.minX && frameInfo.maxY > frameInfo.minY) {
-                                const srcW = frameInfo.maxX - frameInfo.minX + 1;
-                                const srcH = frameInfo.maxY - frameInfo.minY + 1;
-                                const dstW = Math.max(1, Math.round(srcW * sharedScale));
-                                const dstH = Math.max(1, Math.round(srcH * sharedScale));
-                                const dstX = Math.floor((size - dstW) / 2);
-                                const dstY = Math.max(0, size - dstH - 1);
-                                fctx.drawImage(frameInfo.crop, frameInfo.minX, frameInfo.minY, srcW, srcH, dstX, dstY, dstW, dstH);
-                            }
-                            output[`${frameInfo.dir}_${frameInfo.frameName}`] = frame;
-                        });
-
-                        function mirrorFrame(frame) {
-                            const mirrored = document.createElement('canvas');
-                            mirrored.width = frame.width;
-                            mirrored.height = frame.height;
-                            const mctx = mirrored.getContext('2d');
-                            mctx.translate(frame.width, 0);
-                            mctx.scale(-1, 1);
-                            mctx.drawImage(frame, 0, 0);
-                            return mirrored;
-                        }
-                        output.right_idle = mirrorFrame(output.left_idle);
-                        output.right_step = mirrorFrame(output.left_step);
-
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function sliceEnemySheet(imgSrc, size, customFrameMap) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 2;
-                        const frameMap = customFrameMap || [
-                            ['stone_shooter_1', 'stone_shooter_2'],
-                            ['goblin_warrior_1', 'goblin_warrior_2'],
-                            ['bat_1', 'bat_2'],
-                            ['spider_1', 'spider_2'],
-                            ['worm_hidden', 'worm_emerge']
-                        ];
-                        const rows = frameMap.length;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const output = {};
-
-                        frameMap.forEach((rowFrames, row) => {
-                            rowFrames.forEach((name, col) => {
-                                const crop = document.createElement('canvas');
-                                crop.width = cellW;
-                                crop.height = cellH;
-                                const cctx = crop.getContext('2d');
-                                cctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, cellW, cellH);
-
-                                const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
-                                const data = imageData.data;
-                                let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
-                                for (let y = 0; y < crop.height; y++) {
-                                    for (let x = 0; x < crop.width; x++) {
-                                        const alpha = data[(y * crop.width + x) * 4 + 3];
-                                        if (alpha > 12) {
-                                            minX = Math.min(minX, x);
-                                            minY = Math.min(minY, y);
-                                            maxX = Math.max(maxX, x);
-                                            maxY = Math.max(maxY, y);
-                                        }
-                                    }
-                                }
-
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-
-                                if (maxX > minX && maxY > minY) {
-                                    const srcW = maxX - minX + 1;
-                                    const srcH = maxY - minY + 1;
-                                    const scale = Math.min((size - 1) / srcW, (size - 1) / srcH);
-                                    const dstW = Math.max(1, Math.round(srcW * scale));
-                                    const dstH = Math.max(1, Math.round(srcH * scale));
-                                    const dstX = Math.floor((size - dstW) / 2);
-                                    const dstY = Math.max(0, size - dstH - 1);
-                                    fctx.drawImage(crop, minX, minY, srcW, srcH, dstX, dstY, dstW, dstH);
-                                }
-                                output[name] = frame;
-                            });
-                        });
-
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function sliceNpcSheet(imgSrc, size) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 2;
-                        const rows = 5;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const frameMap = [
-                            ['npc_man_1', 'npc_man_2'],
-                            ['npc_woman_1', 'npc_woman_2'],
-                            ['merchant', 'merchant_2'],
-                            ['npc_dog_1', 'npc_dog_2'],
-                            ['npc_chicken_1', 'npc_chicken_2']
-                        ];
-                        const output = {};
-
-                        frameMap.forEach((rowFrames, row) => {
-                            rowFrames.forEach((name, col) => {
-                                const crop = document.createElement('canvas');
-                                crop.width = cellW;
-                                crop.height = cellH;
-                                const cctx = crop.getContext('2d');
-                                cctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, cellW, cellH);
-
-                                const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
-                                const data = imageData.data;
-                                let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
-                                for (let y = 0; y < crop.height; y++) {
-                                    for (let x = 0; x < crop.width; x++) {
-                                        const alpha = data[(y * crop.width + x) * 4 + 3];
-                                        if (alpha > 12) {
-                                            minX = Math.min(minX, x);
-                                            minY = Math.min(minY, y);
-                                            maxX = Math.max(maxX, x);
-                                            maxY = Math.max(maxY, y);
-                                        }
-                                    }
-                                }
-
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-
-                                if (maxX > minX && maxY > minY) {
-                                    const srcW = maxX - minX + 1;
-                                    const srcH = maxY - minY + 1;
-                                    const scale = Math.min((size - 1) / srcW, (size - 1) / srcH);
-                                    const dstW = Math.max(1, Math.round(srcW * scale));
-                                    const dstH = Math.max(1, Math.round(srcH * scale));
-                                    const dstX = Math.floor((size - dstW) / 2);
-                                    const dstY = Math.max(0, size - dstH - 1);
-                                    fctx.drawImage(crop, minX, minY, srcW, srcH, dstX, dstY, dstW, dstH);
-                                }
-                                output[name] = frame;
-                            });
-                        });
-
-                        output.npc_dog = output.npc_dog_1;
-                        output.npc_chicken = output.npc_chicken_1;
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function sliceObjectSheet(imgSrc, size) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 5;
-                        const rows = 5;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const frameMap = [
-                            ['house_rtl', 'house_rtm', 'house_rtr', 'house_wl', 'house_door'],
-                            ['house_rbl', 'house_rbm', 'house_rbr', 'house_wr', 'mailbox'],
-                            ['fence_h', 'fence_v', 'bush', 'wall_grassland', 'obs_grassland'],
-                            ['wall_desert', 'obs_desert', 'wall_volcano', 'obs_volcano', 'wall_snow'],
-                            ['obs_snow', 'wall_mountain', 'obs_mountain', 'wall_swamp', 'obs_swamp']
-                        ];
-                        const output = {};
-
-                        frameMap.forEach((rowFrames, row) => {
-                            rowFrames.forEach((name, col) => {
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-                                fctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, size, size);
-                                output[name] = frame;
-                            });
-                        });
-
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function sliceTerrainSheet(imgSrc, size) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const cols = 3;
-                        const rows = 3;
-                        const cellW = img.width / cols;
-                        const cellH = img.height / rows;
-                        const inset = 2;
-                        const frameMap = [
-                            ['terrain_grassland', 'terrain_desert', 'terrain_mountain'],
-                            ['terrain_wetland', 'terrain_poison_swamp', 'terrain_river'],
-                            ['terrain_wood_bridge', 'terrain_stone_bridge', 'terrain_snowfield']
-                        ];
-                        const output = {};
-
-                        frameMap.forEach((rowFrames, row) => {
-                            rowFrames.forEach((name, col) => {
-                                const frame = document.createElement('canvas');
-                                frame.width = size;
-                                frame.height = size;
-                                const fctx = frame.getContext('2d');
-                                fctx.imageSmoothingEnabled = true;
-                                // GPT Image 2 の3x3シートから対象セルを切り出す。
-                                // セル境界の細い線が出ないよう、上下左右を少し内側から取得する。
-                                fctx.drawImage(
-                                    img,
-                                    col * cellW + inset,
-                                    row * cellH + inset,
-                                    cellW - inset * 2,
-                                    cellH - inset * 2,
-                                    0,
-                                    0,
-                                    size,
-                                    size
-                                );
-                                output[name] = frame;
-                            });
-                        });
-
-                        resolve(output);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            function loadSingleObject(imgSrc, width, height) {
-                return new Promise(resolve => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const crop = document.createElement('canvas');
-                        crop.width = img.width;
-                        crop.height = img.height;
-                        const cctx = crop.getContext('2d');
-                        cctx.drawImage(img, 0, 0);
-
-                        const imageData = cctx.getImageData(0, 0, crop.width, crop.height);
-                        const data = imageData.data;
-                        let minX = crop.width, minY = crop.height, maxX = 0, maxY = 0;
-                        for (let y = 0; y < crop.height; y++) {
-                            for (let x = 0; x < crop.width; x++) {
-                                const alpha = data[(y * crop.width + x) * 4 + 3];
-                                if (alpha > 12) {
-                                    minX = Math.min(minX, x);
-                                    minY = Math.min(minY, y);
-                                    maxX = Math.max(maxX, x);
-                                    maxY = Math.max(maxY, y);
-                                }
-                            }
-                        }
-
-                        const frame = document.createElement('canvas');
-                        frame.width = width;
-                        frame.height = height;
-                        const fctx = frame.getContext('2d');
-                        fctx.imageSmoothingEnabled = true;
-                        if (maxX > minX && maxY > minY) {
-                            const srcW = maxX - minX + 1;
-                            const srcH = maxY - minY + 1;
-                            fctx.drawImage(crop, minX, minY, srcW, srcH, 0, 0, width, height);
-                        }
-                        resolve(frame);
-                    };
-                    img.src = imgSrc;
-                });
-            }
-
-            sliceHeroSheet('assets/zelda-like/player/gpt-image-2-hero-sheet-v3.webp', 24).then(frames => {
-                ['down', 'up', 'left', 'right'].forEach(dir => {
-                    sprites[`hero_${dir}_1`] = frames[`${dir}_idle`];
-                    sprites[`hero_${dir}_2`] = frames[`${dir}_step`];
-                });
-            });
-            sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-sheet-v2.webp', 24).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-pack-a-v1.webp', 24, [
-                ['slime_1', 'slime_2'],
-                ['boar_1', 'boar_2'],
-                ['goblin_spear_1', 'goblin_spear_2'],
-                ['forest_wisp_1', 'forest_wisp_2'],
-                ['leaf_beetle_1', 'leaf_beetle_2'],
-                ['river_toad_1', 'river_toad_2']
-            ]).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-pack-b-v1.webp', 24, [
-                ['desert_scarab_1', 'desert_scarab_2'],
-                ['sand_bandit_1', 'sand_bandit_2'],
-                ['cactus_mimic_1', 'cactus_mimic_2'],
-                ['scorpion_1', 'scorpion_2'],
-                ['dust_skull_1', 'dust_skull_2'],
-                ['dune_serpent_1', 'dune_serpent_2']
-            ]).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceEnemySheet('assets/zelda-like/enemies/gpt-image-2-enemy-pack-c-v1.webp', 24, [
-                ['lava_sprite_1', 'lava_sprite_2'],
-                ['magma_hound_1', 'magma_hound_2'],
-                ['ash_gargoyle_1', 'ash_gargoyle_2'],
-                ['crystal_golem_1', 'crystal_golem_2'],
-                ['swamp_leech_1', 'swamp_leech_2'],
-                ['bog_witch_1', 'bog_witch_2']
-            ]).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceEnemySheet('assets/zelda-like/bosses/gpt-image-2-boss-sheet-v1.webp', 48, [
-                ['boss_forest_1', 'boss_forest_2'],
-                ['boss_desert_1', 'boss_desert_2'],
-                ['boss_lake_1', 'boss_lake_2'],
-                ['boss_swamp_1', 'boss_swamp_2'],
-                ['boss_mountain_1', 'boss_mountain_2'],
-                ['boss_volcano_1', 'boss_volcano_2'],
-                ['boss_sanctuary_1', 'boss_sanctuary_2'],
-                ['boss_gran_1', 'boss_gran_2']
-            ]).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceNpcSheet('assets/zelda-like/npcs/gpt-image-2-npc-sheet-v3.webp', 24).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceObjectSheet('assets/zelda-like/objects/gpt-image-2-object-sheet.webp', 16).then(frames => {
-                Object.assign(sprites, frames);
-            });
-            sliceTerrainSheet('assets/zelda-like/terrain/gpt-image-2-terrain-sheet.webp', 16).then(frames => {
-                Object.assign(sprites, frames);
-                sprites.ground_town = frames.terrain_stone_bridge;
-                sprites.ground_swamp = frames.terrain_wetland;
-                sprites.mud_swamp = frames.terrain_poison_swamp;
-                terrainGraphicsVersion++;
-            });
-            loadSingleObject('assets/zelda-like/objects/gpt-image-2-house-full.webp', 48, 48).then(frame => {
-                sprites.house_full = frame;
-            });
-            loadSingleObject('assets/zelda-like/objects/gpt-image-2-town-wall.webp', 16, 16).then(frame => {
-                sprites.wall_town = frame;
-            });
+        function drawSprite(sprite, x, y, w, h) {
+            FahrenVisuals.draw(ctx, sprite, x, y, w, h);
         }
-        applyAIGraphics();
+        let graphicsReady = false;
+        FahrenVisuals.load(sprites).then(() => {
+            terrainGraphicsVersion++;
+            graphicsReady = true;
+            document.getElementById('visual-status').textContent = 'HDグラフィック / HD Graphics';
+        }).catch(error => {
+            console.error('HD assets failed to load', error);
+            document.getElementById('visual-status').textContent = '画像の読み込みに失敗しました。再読み込みしてください。';
+        });
+
+        function advanceWalk(entity, distance, continuous = false) {
+            if (distance > 0.01 || continuous) {
+                entity.animTimer += continuous ? 0.7 : distance;
+                const stride = entity.isBoss ? 3 : entity.baseSpeed >= 1 ? 8 : 3;
+                while (entity.animTimer >= stride) {
+                    entity.animTimer -= stride;
+                    entity.animFrame = entity.animFrame % 4 + 1;
+                }
+            } else {
+                entity.animFrame = 1;
+                entity.animTimer = 0;
+            }
+        }
+
+        function drawCharacter(sprite, x, y, entity) {
+            if (!sprite) return;
+            const phase = performance.now() / 700 + entity.x * 0.07;
+            const breathing = 1 + Math.sin(phase) * 0.008;
+            ctx.save();
+            ctx.translate(x + sprite.width / 2, y + sprite.height);
+            ctx.scale(1, breathing);
+            if (entity.isAttacking) {
+                const swing = Math.sin((12 - entity.attackTimer) / 12 * Math.PI) * 0.12;
+                ctx.rotate(entity.dir === 'left' ? -swing : swing);
+            }
+            drawSprite(sprite, -sprite.width / 2, -sprite.height);
+            ctx.restore();
+        }
+
 
         const fahrenWorldMapImage = new Image();
         let fahrenWorldMapReady = false;
@@ -1165,12 +803,6 @@
         };
         fahrenDungeonMapImage.src = 'assets/zelda-like/world-map-fahren-25x25-dungeons.webp';
 
-        const castleObjectsImage = new Image();
-        let castleObjectsReady = false;
-        castleObjectsImage.onload = () => {
-            castleObjectsReady = true;
-        };
-        castleObjectsImage.src = 'assets/zelda-like/objects/gpt-image-2-castle-objects-v1.webp';
 
         // --- CONSTANTS ---
         const TILE = 16;
@@ -1179,7 +811,7 @@
         const UI_OFFSET = 4 * TILE + 16; // Extended UI for items
 
         // --- STATE MANAGEMENT ---
-        let gameState = 'TITLE'; // TITLE, PLAYING, DIALOGUE, SHOP, MENU, MAP_MENU, SAVE_MENU, LOAD_MENU, GAMEOVER
+        let gameState = 'TITLE'; // TITLE, PLAYING, DIALOGUE, SHOP, MENU, MAP_MENU, SAVE_MENU, LOAD_MENU, GAMEOVER, ENDING
         let dialogueText = [];
         let dialogueIndex = 0;
         let shopType = ''; 
@@ -1354,7 +986,7 @@
             '5,9': { type: 'boss_mountain', stone: 'Silver Stone', title: 'Mountain Guardian', dungeonId: 'D5', dungeonName: '鉄峰の地下庫', bossName: '岩鎧王ガルド' },
             '10,-10': { type: 'boss_volcano', stone: 'Crimson Stone', title: 'Volcano Guardian', dungeonId: 'D6', dungeonName: '焔冠の城塞', bossName: '溶翼王イグノヴァ' },
             '10,0': { type: 'boss_sanctuary', stone: 'Opal Stone', title: 'Sanctuary Guardian', dungeonId: 'D7', dungeonName: '白翼の洞窟', bossName: '堕天騎士セラフィス' },
-            '10,-8': { type: 'boss_gran', stone: 'Final Gate', title: 'Demon King Gran', final: true }
+            '10,-8': { type: 'boss_gran', stone: 'Final Gate', title: 'Demon King Gran', dungeonId: 'D8', dungeonName: '黒冠の魔王城', bossName: '魔王グラン', final: true }
         };
 
         function pickEnemyTypeForBiome(biome) {
@@ -1428,79 +1060,45 @@
             return getWorldCode(rx, ry) === 'C';
         }
 
+        // One placement plan supplies both complete artwork and its collision footprint.
+        function getCastleObjects(rx, ry) {
+            const dx=rx-START_ROOM_X, dy=ry-START_ROOM_Y, objects=[];
+            const add=(name,c,r,w,h)=>objects.push({name,c,r,w,h});
+            const horizontal=(row,gate)=>{
+                if(gate){add('wallWide',0,row,6,2);add('wallWide',10,row,6,2);}
+                else for(let c=0;c<16;c+=4)add('wallWide',c,row,4,2);
+            };
+            if(dy===-2)horizontal(0,dx===0);
+            if(dy===2)horizontal(9,dx===0);
+            if(Math.abs(dx)===2){
+                const c=dx<0?0:14, first=dy===-2?2:0, last=dy===2?9:11;
+                for(let r=first;r<last;){
+                    if(dy===0&&r>=4&&r<=6){r=7;continue;}
+                    const end=dy===0&&r<4?Math.min(4,last):last;
+                    const h=Math.min(3,end-r);
+                    add('wallWide',c,r,2,h);r+=h;
+                }
+            }
+            if(dx===0&&dy===0){
+                // Towers flank a complete four-tile road; no gate is cut in half.
+                add('towerTall',3,1,3,6);add('towerTall',10,1,3,6);
+                add('wallBanner',0,2,3,2);add('wallBanner',13,2,3,2);
+            }else if(dy===0&&Math.abs(dx)===1){
+                add('towerSmall',2,1,3,3);add('towerSmall',11,1,3,3);
+            }else if(Math.abs(dx)===1&&Math.abs(dy)===1){
+                add('towerSmall',3,1,2,3);add('towerSmall',11,1,2,3);
+            }
+            return objects;
+        }
+
         function createCastleTiles(rx, ry) {
-            const dx = rx - START_ROOM_X;
-            const dy = ry - START_ROOM_Y;
-            const tiles = [];
-            const setSolidRect = (left, top, right, bottom) => {
-                for (let r = Math.max(0, top); r <= Math.min(SCREEN_ROWS - 1, bottom); r++) {
-                    for (let c = Math.max(0, left); c <= Math.min(SCREEN_COLS - 1, right); c++) {
-                        tiles[r][c] = 1;
-                    }
-                }
-            };
-            const setRoadRect = (left, top, right, bottom) => {
-                for (let r = Math.max(0, top); r <= Math.min(SCREEN_ROWS - 1, bottom); r++) {
-                    for (let c = Math.max(0, left); c <= Math.min(SCREEN_COLS - 1, right); c++) {
-                        tiles[r][c] = 3;
-                    }
-                }
-            };
-
-            for (let r = 0; r < SCREEN_ROWS; r++) {
-                const row = [];
-                for (let c = 0; c < SCREEN_COLS; c++) {
-                    const mainRoad = c >= 6 && c <= 9;
-                    const crossRoad = r >= 4 && r <= 6;
-                    let tile = mainRoad || crossRoad ? 3 : 0;
-
-                    const northWall = dy === -2 && r <= 1 && !(dx === 0 && c >= 7 && c <= 8);
-                    const southWall = dy === 2 && r >= SCREEN_ROWS - 2 && !(dx === 0 && c >= 7 && c <= 8);
-                    const westWall = dx === -2 && c <= 1 && !(dy === 0 && r >= 4 && r <= 6);
-                    const eastWall = dx === 2 && c >= SCREEN_COLS - 2 && !(dy === 0 && r >= 4 && r <= 6);
-
-                    if (northWall || southWall || westWall || eastWall) tile = 1;
-                    if ((dx === -2 || dx === 2) && (dy === -2 || dy === 2)) {
-                        if ((r <= 3 || r >= 7) && (c <= 3 || c >= 12)) tile = 1;
-                    }
-                    if (dx === 0 && dy === 0 && r >= 2 && r <= 3 && c >= 5 && c <= 10) tile = 1;
-                    if (dx === 0 && dy === 2 && r >= 7 && c >= 5 && c <= 10) tile = 3;
-                    if (tile === 0 && ((r === 2 && c === 3) || (r === 8 && c === 12))) tile = 43;
-                    row.push(tile);
-                }
-                tiles.push(row);
+            const tiles=Array.from({length:SCREEN_ROWS},(_,r)=>
+                Array.from({length:SCREEN_COLS},(_,c)=>c>=6&&c<=9||r>=4&&r<=6?3:0));
+            for(const object of getCastleObjects(rx,ry)){
+                for(let r=object.r;r<object.r+object.h;r++)for(let c=object.c;c<object.c+object.w;c++)tiles[r][c]=1;
             }
-
-            if (dy === -2) {
-                setSolidRect(0, 0, 15, 3); // wallWide height=52px (y=2〜54) → row3(y=48-63)まで solid
-                if (dx === 0) setRoadRect(7, 0, 8, 3);
-            }
-            if (dy === 2) {
-                setSolidRect(0, 8, 15, 10);
-                if (dx === 0) setRoadRect(6, 7, 9, 10);
-            }
-            if (dx === -2) {
-                setSolidRect(0, 0, 5, 10); // wallWide width=92px (x=-10〜82) → col5(x=80-95)まで solid
-                if (dy === 0) setRoadRect(0, 4, 5, 6);
-            }
-            if (dx === 2) {
-                setSolidRect(10, 0, 15, 10); // 右壁 wallWide x=174〜255 → col10(x=160-175)から solid
-                if (dy === 0) setRoadRect(10, 4, 15, 6);
-            }
-
-            if (dy === 0) {
-                if (dx === 0) {
-                    setSolidRect(3, 1, 12, 6);
-                    setRoadRect(7, 1, 8, 10);
-                } else if (Math.abs(dx) === 2) {
-                    setSolidRect(5, 1, 10, 7);
-                    setRoadRect(6, 8, 9, 10);
-                } else {
-                    setSolidRect(0, 1, 15, 4);
-                    setRoadRect(6, 5, 9, 10);
-                }
-            }
-
+            // Gardens stay beside roads and outside the building footprints.
+            for(const [c,r] of [[3,8],[12,8]])if(tiles[r][c]===0)tiles[r][c]=43;
             return tiles;
         }
 
@@ -1640,6 +1238,15 @@
                 }
             }
             
+            if (biome !== 'town') {
+                // Preserve routes after smoothing and keep ornaments off the entrances.
+                for(let r=1;r<SCREEN_ROWS-1;r++)for(let c=1;c<SCREEN_COLS-1;c++){
+                    if(c>=7&&c<=8||r>=4&&r<=6){
+                        if(isSolid(tiles[r][c]))tiles[r][c]=biome==='swamp'?4:0;
+                    }
+                }
+            }
+
             if (biome === 'town') {
                 // Spawn NPCs
                 let npcs = [];
@@ -1668,28 +1275,42 @@
                     npcs.push(new NPC((4+Math.random()*8)*TILE, (4+Math.random()*4)*TILE, rx, ry, Math.random() < 0.5 ? 'man':'woman', 'こんにちは！'));
                     if (Math.random() < 0.5) npcs.push(new NPC((2+Math.random()*12)*TILE, (2+Math.random()*8)*TILE, rx, ry, 'chicken', 'ココッ！'));
                 }
+                npcs.forEach(npc => placeActorOnWalkableTile(npc, tiles));
                 return { biome: biome, worldX: rx, worldY: ry, tiles: tiles, npcs: npcs };
+            }
+
+            // Flat decoration is explicitly walkable and never blocks a corridor.
+            for (let r = 1; r < SCREEN_ROWS - 1; r++) {
+                for (let c = 1; c < SCREEN_COLS - 1; c++) {
+                    if (tiles[r][c] === 0 && biome !== 'lake' && biome !== 'swamp' && Math.random() < 0.09) {
+                        tiles[r][c] = biome === 'grassland' || biome === 'forest' ? 5 : 6;
+                    }
+                }
             }
 
             // Spawn Enemies for other biomes
             let enemyList = [];
             const bossDef = getBossDefinition(rx, ry);
             if (bossDef) {
-                enemyList.push(new Enemy(7 * TILE, 4 * TILE, rx, ry, bossDef.type));
-                return { biome: biome, worldX: rx, worldY: ry, tiles: tiles, enemies: enemyList, boss: bossDef };
+                // These eight field locations contain entrances, never the boss itself.
+                for (let r = 3; r <= 8; r++) for (let c = 6; c <= 9; c++) tiles[r][c] = 3;
+                return { biome, worldX: rx, worldY: ry, tiles, enemies: [], dungeonEntrance: bossDef,
+                    entrance: {x: 7 * TILE, y: 5 * TILE, w: 2 * TILE, h: 2 * TILE} };
             }
 
             let numEnemies = Math.floor(Math.random() * 6) + 3; 
             for(let i=0; i<numEnemies; i++) {
                 let ex = (2 + Math.floor(Math.random() * 12)) * TILE;
                 let ey = (2 + Math.floor(Math.random() * 7)) * TILE;
-                enemyList.push(new Enemy(ex, ey, rx, ry, pickEnemyTypeForBiome(biome)));
+                const enemy = new Enemy(ex, ey, rx, ry, pickEnemyTypeForBiome(biome));
+                placeActorOnWalkableTile(enemy, tiles);
+                enemyList.push(enemy);
             }
 
             return { biome: biome, worldX: rx, worldY: ry, tiles: tiles, enemies: enemyList };
         }
 
-        function getRoom(x, y) {
+        function getWorldRoom(x, y) {
             const key = getRoomKey(x, y);
             if (!worldMap[key]) {
                 worldMap[key] = generateRoom(x, y);
@@ -1697,26 +1318,151 @@
             return worldMap[key];
         }
 
+        let activeDungeon = null;
+        let dungeonRoomIndex = 0, nextDungeonRoomIndex = null;
+        let clearedDungeonRooms = {};
+        const dungeonRoomCache = new Map();
+        const DUNGEON_BOSS_ROOM = 4;
+        const DUNGEON_ROOMS = [
+            {name:'入口', x:1, y:4, exits:{up:1, down:'outside'}},
+            {name:'回廊', x:1, y:3, exits:{up:2, down:0, left:5, right:6}},
+            {name:'大広間', x:1, y:2, exits:{up:3, down:1}},
+            {name:'奥の通路', x:1, y:1, exits:{up:4, down:2}},
+            {name:'最深部', x:1, y:0, exits:{down:3}},
+            {name:'西の間', x:0, y:3, exits:{right:1}},
+            {name:'東の間', x:2, y:3, exits:{left:1}}
+        ];
+        const DUNGEON_THEMES = {
+            D1:'#76a86b',D2:'#d2ab60',D3:'#5ca7cc',D4:'#976ba5',
+            D5:'#91a5b0',D6:'#c76545',D7:'#c6b7de',D8:'#955068'
+        };
+
+        function getRoom(x, y) {
+            return activeDungeon ? getDungeonRoom(dungeonRoomIndex) : getWorldRoom(x, y);
+        }
+
+        function getDungeonRoom(index) {
+            const key = activeDungeon.key + ':' + index;
+            if (dungeonRoomCache.has(key)) return dungeonRoomCache.get(key);
+            const layout = DUNGEON_ROOMS[index];
+            const tiles = Array.from({length:SCREEN_ROWS}, (_, r) =>
+                Array.from({length:SCREEN_COLS}, (_, c) =>
+                    r === 0 || r === SCREEN_ROWS - 1 || c === 0 || c === SCREEN_COLS - 1 ? 1 : 3));
+            for (const direction of Object.keys(layout.exits)) {
+                if (direction === 'up' || direction === 'down') {
+                    const r = direction === 'up' ? 0 : SCREEN_ROWS - 1;
+                    tiles[r][7] = tiles[r][8] = 3;
+                } else {
+                    const c = direction === 'left' ? 0 : SCREEN_COLS - 1;
+                    for (let r = 4; r <= 6; r++) tiles[r][c] = 3;
+                }
+            }
+            if (index !== 0 && index !== DUNGEON_BOSS_ROOM) {
+                for (const [c,r] of [[3,3],[12,3],[3,7],[12,7]]) tiles[r][c] = 2;
+                if (index === 2) for (let r=4;r<=5;r++) for(let c=7;c<=8;c++) tiles[r][c]=1;
+            }
+            const definition = activeDungeon.definition;
+            const enemies = [];
+            const alreadyCleared = clearedDungeonRooms[key] ||
+                (index === DUNGEON_BOSS_ROOM && !definition.final && sacredStones[definition.stone]);
+            if (!alreadyCleared && index === DUNGEON_BOSS_ROOM) {
+                const boss = new Enemy(7*TILE,4*TILE,currentRoomX,currentRoomY,definition.type);
+                placeActorOnWalkableTile(boss,tiles); enemies.push(boss);
+            } else if (!alreadyCleared && index !== 0) {
+                for (let n=0;n<(index===3?4:3);n++) {
+                    const enemy=new Enemy((3+n*3)*TILE,5*TILE,currentRoomX,currentRoomY,pickEnemyTypeForBiome(activeDungeon.biome));
+                    placeActorOnWalkableTile(enemy,tiles);enemies.push(enemy);
+                }
+            }
+            const room={biome:activeDungeon.biome,tiles,enemies,dungeon:true,dungeonKey:activeDungeon.key,
+                dungeonIndex:index,dungeonName:definition.dungeonName,worldX:currentRoomX,worldY:currentRoomY,
+                boss:index===DUNGEON_BOSS_ROOM?definition:null};
+            dungeonRoomCache.set(key,room);
+            return room;
+        }
+
+        function clearSceneEffects() {
+            projectiles=[];playerProjectiles=[];items=[];hazards=[];particles.length=0;
+            isTransitioning=false;nextRoomData=null;nextDungeonRoomIndex=null;transOffset={x:0,y:0};
+            player.isAttacking=false;player.swordHitbox=null;
+        }
+
+        function enterDungeon() {
+            const room=getWorldRoom(currentRoomX,currentRoomY);
+            if (!room.dungeonEntrance) return false;
+            activeDungeon={key:getRoomKey(currentRoomX,currentRoomY),definition:room.dungeonEntrance,biome:room.biome};
+            dungeonRoomIndex=0;clearSceneEffects();
+            player.x=7*TILE+2;player.y=8*TILE;player.dir='up';player.invincibleTimer=45;
+            gameState='PLAYING';playSFX('talk');return true;
+        }
+
+        function leaveDungeon() {
+            activeDungeon=null;dungeonRoomIndex=0;clearSceneEffects();
+            player.x=7*TILE+2;player.y=8*TILE;player.dir='down';player.invincibleTimer=45;
+            gameState='PLAYING';playSFX('talk');
+        }
+
         let currentRoomX = START_ROOM_X; let currentRoomY = START_ROOM_Y;
         let isTransitioning = false; let transOffset = { x: 0, y: 0 };
         let nextRoomData = null;
         let transDirX = 0, transDirY = 0, transProgress = 0;
 
+        const TILE_RULES = Object.freeze({
+            0: { name: '地面 / Ground', solid: false },
+            1: { name: '壁・木 / Wall or tree', solid: true },
+            2: { name: '岩・深水 / Rock or deep water', solid: true },
+            3: { name: '道・橋 / Path or bridge', solid: false },
+            4: { name: '浅い泥 / Shallow mud', solid: false },
+            5: { name: '花 / Flowers', solid: false, sprite: 'flowers' },
+            6: { name: '小石・草 / Pebbles and grass', solid: false, sprite: 'pebbles' },
+            27: { name: '閉じた家の扉 / Closed house door', solid: true },
+            40: { name: '横柵 / Fence', solid: true, sprite: 'fence_h' },
+            41: { name: '縦柵 / Fence', solid: true, sprite: 'fence_v' },
+            42: { name: '郵便箱 / Mailbox', solid: true, sprite: 'mailbox' },
+            43: { name: '刈れる茂み / Cuttable bush', solid: true, sprite: 'bush', cuttable: true }
+        });
+
         function isSolid(tileId) {
-            return tileId === 1 || tileId === 2 || (tileId >= 20 && tileId <= 28) || (tileId >= 40 && tileId <= 43) || tileId === undefined;
+            if (TILE_RULES[tileId]) return TILE_RULES[tileId].solid;
+            if (tileId >= 20 && tileId <= 28) return true;
+            return true; // Unknown or out-of-bounds tiles are never walkable.
+        }
+
+        function placeActorOnWalkableTile(actor, tiles) {
+            const freeAt = (x, y) => {
+                const left = Math.floor(x / TILE), top = Math.floor(y / TILE);
+                const right = Math.ceil((x + actor.w) / TILE) - 1;
+                const bottom = Math.ceil((y + actor.h) / TILE) - 1;
+                for (let r = top; r <= bottom; r++) for (let c = left; c <= right; c++) {
+                    if (isSolid(tiles[r]?.[c])) return false;
+                }
+                return true;
+            };
+            if (freeAt(actor.x, actor.y)) return;
+            const candidates = [];
+            for (let r = 1; r < SCREEN_ROWS - 1; r++) for (let c = 1; c < SCREEN_COLS - 1; c++) {
+                const x = c * TILE, y = r * TILE;
+                if (freeAt(x, y)) candidates.push({x, y, distance: Math.hypot(x - actor.x, y - actor.y)});
+            }
+            candidates.sort((a, b) => a.distance - b.distance);
+            if (candidates.length) { actor.x = candidates[0].x; actor.y = candidates[0].y; }
         }
 
         function checkCollision(x, y, w, h) {
             const room = getRoom(currentRoomX, currentRoomY);
             if (!room) return true;
-            const leftCol = Math.floor(x / TILE);
-            const rightCol = Math.floor((x + w - 1) / TILE);
-            const topRow = Math.floor(y / TILE);
-            const bottomRow = Math.floor((y + h - 1) / TILE);
-            if (leftCol < 0 || rightCol >= SCREEN_COLS || topRow < 0 || bottomRow >= SCREEN_ROWS) return false;
+            return collidesWithTiles(room.tiles, x, y, w, h);
+        }
+
+        function collidesWithTiles(tiles, x, y, w, h) {
+            // Leaving a screen must still check the part overlapping its walls.
+            const leftCol = Math.max(0, Math.floor(x / TILE));
+            const rightCol = Math.min(SCREEN_COLS - 1, Math.ceil((x + w) / TILE) - 1);
+            const topRow = Math.max(0, Math.floor(y / TILE));
+            const bottomRow = Math.min(SCREEN_ROWS - 1, Math.ceil((y + h) / TILE) - 1);
             for (let r = topRow; r <= bottomRow; r++) {
                 for (let c = leftCol; c <= rightCol; c++) {
-                    if (isSolid(room.tiles[r][c])) return true;
+                    if (isSolid(tiles[r][c])) return true;
                 }
             }
             return false;
@@ -1743,6 +1489,9 @@
 
             update() {
                 if (isTransitioning) return;
+                if (checkCollision(this.x, this.y, this.w, this.h)) {
+                    placeActorOnWalkableTile(this, getRoom(currentRoomX, currentRoomY).tiles);
+                }
                 if (this.invincibleTimer > 0) this.invincibleTimer--;
 
                 if (this.x < 0) {
@@ -1761,6 +1510,7 @@
                     if (currentRoomY < WORLD_MAX) startTransition(0, 1);
                     else this.y = SCREEN_ROWS * TILE - this.h;
                 }
+                if (isTransitioning) return;
                 
                 if (this.isAttacking) {
                     this.attackTimer--;
@@ -1782,6 +1532,10 @@
                     let talkRect = {x:talkHx, y:talkHy, w:16, h:16};
                     
                     const room = getRoom(currentRoomX, currentRoomY);
+                    if (room.dungeonEntrance && checkAABB(talkRect, room.entrance)) {
+                        enterDungeon();
+                        return;
+                    }
                     if(room.npcs) {
                         for(let npc of room.npcs) {
                             if(checkAABB(talkRect, npc)) {
@@ -1825,24 +1579,17 @@
                     }
                 }
 
-                let dx = 0, dy = 0, isMoving = false;
-                if (keys['KeyW'] || keys['ArrowUp']) { dy = -speed; this.dir = 'up'; isMoving = true; }
-                else if (keys['KeyS'] || keys['ArrowDown']) { dy = speed; this.dir = 'down'; isMoving = true; }
-                else if (keys['KeyA'] || keys['ArrowLeft']) { dx = -speed; this.dir = 'left'; isMoving = true; }
-                else if (keys['KeyD'] || keys['ArrowRight']) { dx = speed; this.dir = 'right'; isMoving = true; }
+                let dx = 0, dy = 0;
+                if (keys['KeyW'] || keys['ArrowUp']) { dy = -speed; this.dir = 'up'; }
+                else if (keys['KeyS'] || keys['ArrowDown']) { dy = speed; this.dir = 'down'; }
+                else if (keys['KeyA'] || keys['ArrowLeft']) { dx = -speed; this.dir = 'left'; }
+                else if (keys['KeyD'] || keys['ArrowRight']) { dx = speed; this.dir = 'right'; }
 
+                const oldX = this.x, oldY = this.y;
                 if (dx !== 0 && !checkCollision(this.x + dx, this.y, this.w, this.h)) this.x += dx;
                 if (dy !== 0 && !checkCollision(this.x, this.y + dy, this.w, this.h)) this.y += dy;
 
-                if (isMoving) {
-                    this.animTimer++;
-                    if (this.animTimer > (speed < 1 ? 16 : 8)) {
-                        this.animTimer = 0;
-                        this.animFrame = this.animFrame === 1 ? 2 : 1;
-                    }
-                } else {
-                    this.animFrame = 1;
-                }
+                advanceWalk(this, Math.hypot(this.x - oldX, this.y - oldY));
             }
 
             useItem() {
@@ -1876,7 +1623,7 @@
 
             draw() {
                 if (this.invincibleTimer > 0 && Math.floor(Date.now() / 100) % 2 === 0) return;
-                const sprite = sprites[`hero_${this.dir}_${this.animFrame}`];
+                const sprite = sprites[`hero_${this.dir}_${this.animFrame}`] || sprites[`hero_${this.dir}_1`];
                 const drawX = Math.round(this.x + transOffset.x + this.w / 2 - sprite.width / 2);
                 const drawY = Math.round(this.y + transOffset.y + UI_OFFSET + this.h - sprite.height + 4);
                 
@@ -1886,13 +1633,13 @@
                     if (this.dir === 'down') sY += 14;
                     if (this.dir === 'left') sX -= 14;
                     if (this.dir === 'right') sX += 14;
-                    ctx.drawImage(sprites['sword_' + this.dir], sX, sY);
+                    drawSprite(sprites['sword_' + this.dir], sX, sY);
                 }
                 
                 ctx.save();
                 if(equipment.armorLevel === 1) ctx.filter = 'hue-rotate(90deg)'; // Greenish/Different
                 if(equipment.armorLevel === 2) ctx.filter = 'hue-rotate(180deg)'; // Reddish
-                ctx.drawImage(sprite, drawX, drawY);
+                drawCharacter(sprite, drawX, drawY, this);
                 ctx.restore();
             }
 
@@ -1934,6 +1681,7 @@
             update() {
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY || isTransitioning) return;
                 
+                const oldX = this.x, oldY = this.y;
                 if (this.type !== 'merchant') {
                     if (this.timer <= 0) {
                         this.timer = 60 + Math.random() * 100;
@@ -1949,19 +1697,13 @@
                     if (!checkCollision(this.x + this.dx, this.y, this.w, this.h)) this.x += this.dx;
                     if (!checkCollision(this.x, this.y + this.dy, this.w, this.h)) this.y += this.dy;
                     
-                    if (this.dx !== 0 || this.dy !== 0) {
-                        this.animTimer++;
-                        if (this.animTimer > 15) {
-                            this.animTimer = 0;
-                            this.animFrame = this.animFrame === 1 ? 2 : 1;
-                        }
-                    }
                 }
+                advanceWalk(this, Math.hypot(this.x - oldX, this.y - oldY));
             }
             draw() {
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY) return;
                 let sprName = `npc_${this.type}_${this.animFrame}`;
-                if (this.type === 'merchant') sprName = 'merchant';
+                if (this.type === 'merchant') sprName = `merchant_${this.animFrame}`;
                 // Fallback for simple sprites
                 if (!sprites[sprName]) sprName = `npc_${this.type}`; // like dog or chicken without anim frames if not defined properly, but we will define them.
                 if (!sprites[sprName]) sprName = 'npc_man_1'; // ultimate fallback
@@ -1970,7 +1712,7 @@
                 if (!spr) return;
                 const drawX = Math.round(this.x + transOffset.x + this.w / 2 - spr.width / 2);
                 const drawY = Math.round(this.y + transOffset.y + UI_OFFSET + this.h - spr.height + 4);
-                ctx.drawImage(spr, drawX, drawY);
+                drawCharacter(spr, drawX, drawY, this);
             }
         }
 
@@ -2002,9 +1744,9 @@
             }
             draw() {
                 if(this.timer > 0) {
-                    if(this.timer % 10 < 5) ctx.drawImage(sprites['ico_bomb'], Math.round(this.x + transOffset.x), Math.round(this.y + transOffset.y + UI_OFFSET));
+                    if(this.timer % 10 < 5) drawSprite(sprites['ico_bomb'], Math.round(this.x + transOffset.x), Math.round(this.y + transOffset.y + UI_OFFSET));
                 } else {
-                    ctx.drawImage(sprites['bomb_flash'], Math.round(this.x + transOffset.x - 16), Math.round(this.y + transOffset.y + UI_OFFSET - 16), 48, 48);
+                    drawSprite(sprites['bomb_flash'], Math.round(this.x + transOffset.x - 16), Math.round(this.y + transOffset.y + UI_OFFSET - 16), 48, 48);
                 }
             }
         }
@@ -2040,7 +1782,7 @@
                     if(this.dx < 0) sprName = 'proj_arrow_left';
                     if(this.dx > 0) sprName = 'proj_arrow_right';
                 }
-                ctx.drawImage(sprites[sprName], Math.round(this.x + transOffset.x - 4), Math.round(this.y + transOffset.y + UI_OFFSET - 4));
+                drawSprite(sprites[sprName], Math.round(this.x + transOffset.x - 4), Math.round(this.y + transOffset.y + UI_OFFSET - 4));
             }
         }
 
@@ -2059,7 +1801,7 @@
                 }
             }
             draw() {
-                ctx.drawImage(sprites['rock_proj'], Math.round(this.x + transOffset.x - 4), Math.round(this.y + transOffset.y + UI_OFFSET - 4));
+                drawSprite(sprites['rock_proj'], Math.round(this.x + transOffset.x - 4), Math.round(this.y + transOffset.y + UI_OFFSET - 4));
             }
         }
 
@@ -2076,7 +1818,7 @@
                 if(this.y > SCREEN_ROWS * TILE) this.active = false;
             }
             draw() {
-                ctx.drawImage(sprites['falling_rock'], Math.round(this.x + transOffset.x - 2), Math.round(this.y + transOffset.y + UI_OFFSET - 2));
+                drawSprite(sprites['falling_rock'], Math.round(this.x + transOffset.x - 2), Math.round(this.y + transOffset.y + UI_OFFSET - 2));
             }
         }
 
@@ -2115,6 +1857,7 @@
                     return;
                 }
 
+                const oldX = this.x, oldY = this.y;
                 let speed = this.baseSpeed;
                 this.timer--;
 
@@ -2196,26 +1939,18 @@
                 if (this.y < 0) this.y = 0;
                 if (this.y > SCREEN_ROWS*TILE - this.h) this.y = SCREEN_ROWS*TILE - this.h;
 
-                if (this.dx !== 0 || this.dy !== 0 || this.behavior === 'jumper' || this.behavior === 'burrower') {
-                    this.animTimer++;
-                    if (this.animTimer > 15) {
-                        this.animTimer = 0;
-                        this.animFrame = this.animFrame === 1 ? 2 : 1;
-                    }
-                }
+                const continuous = this.behavior === 'flyer' || this.behavior === 'burrower' ||
+                    ['slime', 'forest_wisp', 'dust_skull', 'lava_sprite'].includes(this.type);
+                advanceWalk(this, Math.hypot(this.x - oldX, this.y - oldY), continuous);
             }
-            
+
             draw() {
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY) return;
                 if (this.knockbackTimer > 0 && Math.floor(Date.now()/50)%2===0) return;
                 
                 let sprName = `${this.type}_${this.animFrame}`;
-                if (this.behavior === 'jumper' && this.state === 'jump') sprName = `${this.type}_2`;
-                if (this.behavior === 'jumper' && this.state === 'wait') sprName = `${this.type}_1`;
-                if (this.type === 'worm' && this.state === 'hidden') sprName = 'worm_hidden';
-                if (this.type === 'worm' && this.state === 'emerge') sprName = 'worm_emerge';
-                if (this.type !== 'worm' && this.behavior === 'burrower' && this.state === 'hidden') sprName = `${this.type}_1`;
-                if (this.type !== 'worm' && this.behavior === 'burrower' && this.state === 'emerge') sprName = `${this.type}_2`;
+                if (this.type === 'worm' && this.state === 'hidden') sprName = `worm_hidden_${this.animFrame}`;
+                if (this.type === 'worm' && this.state === 'emerge') sprName = `worm_emerge_${this.animFrame}`;
                 
                 let drawY = this.y;
                 if (this.behavior === 'jumper' && this.state === 'jump') {
@@ -2227,7 +1962,7 @@
                 if (!spr) return;
                 const drawX = Math.round(this.x + transOffset.x + this.w / 2 - spr.width / 2);
                 const sy = Math.round(drawY + transOffset.y + UI_OFFSET + this.h - spr.height + 4);
-                ctx.drawImage(spr, drawX, sy);
+                drawCharacter(spr, drawX, sy, this);
             }
             
             takeDamage(px, py) {
@@ -2249,7 +1984,7 @@
             }
             draw() {
                 if (!this.active) return;
-                ctx.drawImage(sprites[this.type], Math.round(this.x + transOffset.x), Math.round(this.y + transOffset.y + UI_OFFSET));
+                drawSprite(sprites[this.type], Math.round(this.x + transOffset.x), Math.round(this.y + transOffset.y + UI_OFFSET));
             }
         }
 
@@ -2261,6 +1996,18 @@
             dialogueText = lines;
             dialogueIndex = 0;
             playSFX('talk');
+        }
+
+        let endingFrame = 0;
+
+        function completeQuest() {
+            gameState = 'ENDING';
+            endingFrame = 0;
+            projectiles = []; playerProjectiles = []; items = []; hazards = [];
+            player.isAttacking = false;
+            player.swordHitbox = null;
+            Object.keys(keyPress).forEach(code => delete keyPress[code]);
+            playSFX('buy');
         }
 
         function collectSacredStone(bossDef) {
@@ -2282,7 +2029,7 @@
 
         function createSaveData() {
             return {
-                version: 1,
+                version: 2,
                 savedAt: new Date().toISOString(),
                 player: {
                     x: Math.round(player.x),
@@ -2292,6 +2039,8 @@
                     dir: player.dir
                 },
                 room: { x: currentRoomX, y: currentRoomY },
+                dungeon: activeDungeon ? {key:activeDungeon.key,roomIndex:dungeonRoomIndex} : null,
+                clearedDungeonRooms: {...clearedDungeonRooms},
                 coins,
                 inventory: { ...inventory },
                 equipment: { ...equipment },
@@ -2333,9 +2082,17 @@
             equipment = { shield: false, bow: false, armorLevel: 0, candle: false, ...(data.equipment || {}) };
             activeItem = data.activeItem || 'none';
             sacredStones = { ...(data.sacredStones || {}) };
+            clearedDungeonRooms = {...(data.clearedDungeonRooms || {})};
+            activeDungeon=null;dungeonRoomIndex=0;dungeonRoomCache.clear();terrainLayerCache.clear();
             Object.keys(worldMap).forEach(key => delete worldMap[key]);
+            const definition=getBossDefinition(currentRoomX,currentRoomY);
+            if (data.dungeon && definition && data.dungeon.key===getRoomKey(currentRoomX,currentRoomY)) {
+                activeDungeon={key:data.dungeon.key,definition,biome:getBiome(currentRoomX,currentRoomY)};
+                dungeonRoomIndex=Number.isInteger(data.dungeon.roomIndex) ? Math.max(0,Math.min(data.dungeon.roomIndex,DUNGEON_ROOMS.length-1)) : 0;
+            }
+            placeActorOnWalkableTile(player,getRoom(currentRoomX,currentRoomY).tiles);
             projectiles = []; playerProjectiles = []; items = []; hazards = [];
-            isTransitioning = false; nextRoomData = null; transOffset = { x: 0, y: 0 };
+            isTransitioning = false; nextRoomData = null; nextDungeonRoomIndex = null; transOffset = { x: 0, y: 0 };
             gameState = 'PLAYING';
             menuMessage = 'ロードしました';
             playSFX('item');
@@ -2415,7 +2172,7 @@
         }
 
         // --- ROOM RENDERING ---
-        const terrainLayerCache = new WeakMap();
+        const terrainLayerCache = new Map();
 
         function getBaseTerrainSprite(biome) {
             if (biome === 'forest') return sprites.terrain_grassland;
@@ -2438,11 +2195,11 @@
 
         function drawTerrainSprite(layerCtx, sprite, c, r) {
             if (!sprite) return;
-            layerCtx.drawImage(sprite, c * TILE, r * TILE);
+            FahrenVisuals.draw(layerCtx, sprite, c * TILE, r * TILE, TILE, TILE);
         }
 
         function hasFahrenWorldMapBase(roomData) {
-            return fahrenWorldMapReady &&
+            return !roomData.dungeon && fahrenWorldMapReady &&
                 fahrenWorldMapImage.naturalWidth &&
                 roomData.worldX !== undefined &&
                 roomData.worldY !== undefined &&
@@ -2469,16 +2226,17 @@
             layerCtx.save();
             layerCtx.imageSmoothingEnabled = true;
             layerCtx.globalAlpha = 0.16;
-            layerCtx.drawImage(fahrenWorldMapImage, sx, sy, sw, sh, 0, 0, layerCtx.canvas.width, layerCtx.canvas.height);
+            layerCtx.drawImage(fahrenWorldMapImage, sx, sy, sw, sh, 0, 0, SCREEN_COLS * TILE, SCREEN_ROWS * TILE);
             layerCtx.restore();
             return true;
         }
 
         function buildTerrainLayer(roomData) {
             const layer = document.createElement('canvas');
-            layer.width = SCREEN_COLS * TILE;
-            layer.height = SCREEN_ROWS * TILE;
+            layer.width = SCREEN_COLS * TILE * RENDER_SCALE;
+            layer.height = SCREEN_ROWS * TILE * RENDER_SCALE;
             const layerCtx = layer.getContext('2d');
+            layerCtx.scale(RENDER_SCALE, RENDER_SCALE);
             const biome = roomData.biome;
 
             if (biome === 'grassland' && window.grassPattern) {
@@ -2486,11 +2244,11 @@
             } else {
                 layerCtx.fillStyle = BIOME_BG[biome];
             }
-            layerCtx.fillRect(0, 0, layer.width, layer.height);
+            layerCtx.fillRect(0, 0, SCREEN_COLS * TILE, SCREEN_ROWS * TILE);
 
             const hasWorldMapBase = drawFahrenWorldMapSlice(layerCtx, roomData);
 
-            const baseTerrain = getBaseTerrainSprite(biome);
+            const baseTerrain = roomData.dungeon ? sprites.terrain_stone_bridge : getBaseTerrainSprite(biome);
             if (baseTerrain) {
                 layerCtx.globalAlpha = hasWorldMapBase ? 0.92 : 1;
                 for (let r = 0; r < SCREEN_ROWS; r++) {
@@ -2499,6 +2257,14 @@
                     }
                 }
                 layerCtx.globalAlpha = 1;
+            }
+
+            if (roomData.dungeon) {
+                const definition=SACRED_STONE_BOSSES[roomData.dungeonKey];
+                layerCtx.fillStyle=DUNGEON_THEMES[definition.dungeonId];
+                layerCtx.globalAlpha=0.22;
+                layerCtx.fillRect(0,0,SCREEN_COLS*TILE,SCREEN_ROWS*TILE);
+                layerCtx.globalAlpha=1;
             }
 
             for (let r = 0; r < SCREEN_ROWS; r++) {
@@ -2523,19 +2289,24 @@
 
         function getTerrainLayer(roomData) {
             const cached = terrainLayerCache.get(roomData);
-            if (cached && cached.version === terrainGraphicsVersion) return cached.canvas;
+            if (cached && cached.version === terrainGraphicsVersion) {
+                terrainLayerCache.delete(roomData);
+                terrainLayerCache.set(roomData, cached);
+                return cached.canvas;
+            }
 
             const canvas = buildTerrainLayer(roomData);
             terrainLayerCache.set(roomData, {
                 canvas,
                 version: terrainGraphicsVersion
             });
+            if (terrainLayerCache.size > 32) terrainLayerCache.delete(terrainLayerCache.keys().next().value);
             return canvas;
         }
 
         function drawTownWallTile(x, y) {
             if (sprites.wall_town) {
-                ctx.drawImage(sprites.wall_town, x, y, TILE, TILE);
+                drawSprite(sprites.wall_town, x, y, TILE, TILE);
                 return;
             }
             ctx.fillStyle = '#4f565c';
@@ -2555,79 +2326,11 @@
             ctx.stroke();
         }
 
-        const CASTLE_OBJECT_RECTS = {
-            gateClosed: [36, 42, 398, 312],
-            gateOpen: [490, 44, 370, 310],
-            towerLarge: [920, 28, 210, 330],
-            towerTall: [1150, 75, 150, 285],
-            towerSmall: [1340, 160, 130, 190],
-            wallBanner: [40, 405, 235, 140],
-            wallWide: [490, 405, 240, 140],
-            wallBroken: [940, 410, 260, 150],
-            battlement: [42, 600, 185, 110],
-            stairs: [1080, 592, 120, 110],
-            plaza: [560, 760, 165, 155],
-            stoneTile: [760, 760, 160, 155],
-            drawbridge: [965, 748, 290, 190],
-            bridgeNarrow: [1280, 750, 150, 190],
-            bannerTall: [44, 748, 120, 220]
-        };
-
-        function drawCastleObject(name, dx, dy, dw, dh) {
-            if (!castleObjectsReady) return;
-            const rect = CASTLE_OBJECT_RECTS[name];
-            if (!rect) return;
-            ctx.drawImage(
-                castleObjectsImage,
-                rect[0], rect[1], rect[2], rect[3],
-                Math.round(dx), Math.round(dy), Math.round(dw), Math.round(dh)
-            );
-        }
-
         function drawCastleDecor(roomData, offsetX, offsetY) {
             if (!isCastleRoom(roomData.worldX, roomData.worldY)) return;
-            const dx = roomData.worldX - START_ROOM_X;
-            const dy = roomData.worldY - START_ROOM_Y;
-            const baseX = offsetX;
-            const baseY = offsetY + UI_OFFSET;
-
-            if (dy === -2) {
-                drawCastleObject('wallWide', baseX - 8, baseY + 2, 96, 52);
-                drawCastleObject('wallWide', baseX + 80, baseY + 2, 96, 52);
-                drawCastleObject('wallWide', baseX + 168, baseY + 2, 96, 52);
-                if (dx === -2 || dx === 2) drawCastleObject('towerTall', baseX + 84, baseY + 4, 80, 112);
-                if (dx === 0) drawCastleObject('gateClosed', baseX + 50, baseY - 2, 156, 112);
-            } else if (dy === -1) {
-                drawCastleObject('wallBanner', baseX - 4, baseY + 6, 90, 54);
-                drawCastleObject('wallWide', baseX + 82, baseY + 6, 92, 54);
-                drawCastleObject('wallWide', baseX + 170, baseY + 6, 92, 54);
-                if (dx === 0) drawCastleObject('plaza', baseX + 88, baseY + 72, 72, 64);
-            } else if (dy === 0) {
-                if (dx === 0) {
-                    drawCastleObject('wallWide', baseX - 18, baseY + 18, 78, 44);
-                    drawCastleObject('wallWide', baseX + 196, baseY + 18, 78, 44);
-                    drawCastleObject('gateOpen', baseX + 52, baseY + 0, 152, 112);
-                    drawCastleObject('bannerTall', baseX + 18, baseY + 36, 42, 78);
-                    drawCastleObject('bannerTall', baseX + 196, baseY + 36, 42, 78);
-                } else if (dx === -2 || dx === 2) {
-                    drawCastleObject('wallWide', baseX - 10, baseY + 22, 92, 54);
-                    drawCastleObject('wallWide', baseX + 174, baseY + 22, 92, 54);
-                    drawCastleObject('towerLarge', baseX + 78, baseY + 22, 96, 136);
-                } else {
-                    drawCastleObject('wallWide', baseX - 8, baseY + 22, 96, 54);
-                    drawCastleObject('wallWide', baseX + 80, baseY + 22, 96, 54);
-                    drawCastleObject('wallWide', baseX + 168, baseY + 22, 96, 54);
-                }
-            } else if (dy === 1) {
-                drawCastleObject('plaza', baseX + 38, baseY + 18, 76, 70);
-                drawCastleObject('stoneTile', baseX + 142, baseY + 20, 76, 70);
-                if (dx === -2 || dx === 2) drawCastleObject('battlement', baseX + 40, baseY + 88, 92, 54);
-            } else if (dy === 2) {
-                drawCastleObject('wallWide', baseX - 8, baseY + 10, 96, 54);
-                drawCastleObject('wallWide', baseX + 80, baseY + 10, 96, 54);
-                drawCastleObject('wallWide', baseX + 168, baseY + 10, 96, 54);
-                if (dx === 0) drawCastleObject('drawbridge', baseX + 66, baseY + 78, 132, 84);
-                if (dx === -2 || dx === 2) drawCastleObject('towerSmall', baseX + 92, baseY + 28, 72, 96);
+            for(const object of getCastleObjects(roomData.worldX,roomData.worldY)){
+                FahrenVisuals.drawObject(ctx,sprites['castle_'+object.name],offsetX+object.c*TILE,
+                    offsetY+UI_OFFSET+object.r*TILE,object.w*TILE,object.h*TILE);
             }
         }
 
@@ -2635,29 +2338,34 @@
             if (!roomData) return;
             const biome = roomData.biome;
             const objectBiome = getObjectSpriteBiome(biome);
-            ctx.drawImage(getTerrainLayer(roomData), offsetX, offsetY + UI_OFFSET);
+            ctx.drawImage(getTerrainLayer(roomData), offsetX, offsetY + UI_OFFSET, SCREEN_COLS * TILE, SCREEN_ROWS * TILE);
 
             for (let r = 0; r < SCREEN_ROWS; r++) {
                 for (let c = 0; c < SCREEN_COLS; c++) {
                     const tile = roomData.tiles[r][c];
+                    if (TILE_RULES[tile] && TILE_RULES[tile].sprite) {
+                        drawSprite(sprites[TILE_RULES[tile].sprite], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET, TILE, TILE);
+                        continue;
+                    }
                     if (biome === 'town') {
                         if (tile === 1) {
+                            if (isCastleRoom(roomData.worldX,roomData.worldY)) continue;
                             drawTownWallTile(offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                             continue;
                         }
                         if (tile >= 21 && tile <= 28) continue;
-                        if (tile === 40) ctx.drawImage(sprites['fence_h'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
-                        if (tile === 41) ctx.drawImage(sprites['fence_v'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
-                        if (tile === 42) ctx.drawImage(sprites['mailbox'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
-                        if (tile === 43) ctx.drawImage(sprites['bush'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                        if (tile === 40) drawSprite(sprites['fence_h'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                        if (tile === 41) drawSprite(sprites['fence_v'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                        if (tile === 42) drawSprite(sprites['mailbox'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                        if (tile === 43) drawSprite(sprites['bush'], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                         if (tile === 20) {
                             if (sprites.house_full) {
-                                ctx.drawImage(sprites.house_full, offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET, TILE * 3, TILE * 3);
+                                drawSprite(sprites.house_full, offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET, TILE * 3, TILE * 3);
                             } else {
                                 const houseSprites = ['house_rtl','house_rtm','house_rtr','house_rbl','house_rbm','house_rbr','house_wl','house_door','house_wr'];
                                 for (let hi = 0; hi < 9; hi++) {
                                     const spr = sprites[houseSprites[hi]];
-                                    if (spr) ctx.drawImage(spr, offsetX + (c + hi % 3) * TILE, offsetY + (r + Math.floor(hi / 3)) * TILE + UI_OFFSET);
+                                    if (spr) drawSprite(spr, offsetX + (c + hi % 3) * TILE, offsetY + (r + Math.floor(hi / 3)) * TILE + UI_OFFSET);
                                 }
                             }
                         }
@@ -2665,18 +2373,57 @@
                     }
                     
                     if (tile === 0 || tile === 4 || tile >= 3) continue;
-                    let sprName = tile === 1 ? 'wall_' + objectBiome : 'obs_' + objectBiome;
-                    if(sprites[sprName]) ctx.drawImage(sprites[sprName], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
+                    let sprName = roomData.dungeon ? (tile===1?'wall_town':'obs_mountain') : (tile === 1 ? 'wall_' + objectBiome : 'obs_' + objectBiome);
+                    if (tile === 2 && (biome === 'lake' || biome === 'swamp')) sprName = 'terrain_river';
+                    if(sprites[sprName]) drawSprite(sprites[sprName], offsetX + c * TILE, offsetY + r * TILE + UI_OFFSET);
                 }
             }
             drawCastleDecor(roomData, offsetX, offsetY);
+            if (roomData.dungeonEntrance) {
+                ctx.save();
+                drawSprite(sprites.castle_gateOpen,offsetX+6.5*TILE,offsetY+4*TILE+UI_OFFSET,3*TILE,3*TILE);
+                ctx.fillStyle='#101814';ctx.fillRect(offsetX+4*TILE,offsetY+7*TILE+UI_OFFSET,8*TILE,24);
+                ctx.textAlign='center';ctx.font='8px monospace';ctx.fillStyle='#eedbb4';
+                ctx.fillText(roomData.dungeonEntrance.dungeonId+' '+roomData.dungeonEntrance.dungeonName,offsetX+8*TILE,offsetY+7*TILE+UI_OFFSET+9);
+                ctx.fillText('SPACE / Z / A: 入る / Enter',offsetX+8*TILE,offsetY+7*TILE+UI_OFFSET+20);
+                ctx.restore();
+            }
+            if (roomData.dungeon) {
+                ctx.save();ctx.fillStyle='rgba(0,0,0,.8)';
+                ctx.fillRect(offsetX,offsetY+VIEW_HEIGHT-14,VIEW_WIDTH,14);
+                ctx.font='8px monospace';ctx.textAlign='center';ctx.fillStyle='#eedbb4';
+                const definition=SACRED_STONE_BOSSES[roomData.dungeonKey];
+                ctx.fillText(definition.dungeonId+' '+definition.dungeonName+' / '+DUNGEON_ROOMS[roomData.dungeonIndex].name,offsetX+VIEW_WIDTH/2,offsetY+VIEW_HEIGHT-4);
+                ctx.restore();
+            }
         }
 
         function startTransition(dx, dy) {
+            if (activeDungeon) {
+                const direction = dx < 0 ? 'left' : dx > 0 ? 'right' : dy < 0 ? 'up' : 'down';
+                const target = DUNGEON_ROOMS[dungeonRoomIndex].exits[direction];
+                if (target === 'outside') { leaveDungeon(); return; }
+                if (target === undefined) {
+                    player.x=Math.max(0,Math.min(player.x,SCREEN_COLS*TILE-player.w));
+                    player.y=Math.max(0,Math.min(player.y,SCREEN_ROWS*TILE-player.h));
+                    return;
+                }
+                nextDungeonRoomIndex=target;
+            }
+            const destination = activeDungeon ? getDungeonRoom(nextDungeonRoomIndex) : getWorldRoom(currentRoomX + dx, currentRoomY + dy);
+            const arrivalX = dx === 1 ? 2 : dx === -1 ? SCREEN_COLS*TILE-player.w-2 : player.x;
+            const arrivalY = dy === 1 ? 2 : dy === -1 ? SCREEN_ROWS*TILE-player.h-2 : player.y;
+            if (collidesWithTiles(destination.tiles, arrivalX, arrivalY, player.w, player.h)) {
+                player.x=Math.max(0,Math.min(player.x,SCREEN_COLS*TILE-player.w));
+                player.y=Math.max(0,Math.min(player.y,SCREEN_ROWS*TILE-player.h));
+                placeActorOnWalkableTile(player, getRoom(currentRoomX,currentRoomY).tiles);
+                nextDungeonRoomIndex=null;
+                return;
+            }
             isTransitioning = true;
             transDirX = dx; transDirY = dy; transProgress = 0;
-            nextRoomData = getRoom(currentRoomX + dx, currentRoomY + dy);
-            projectiles = []; playerProjectiles = []; hazards = [];
+            nextRoomData = destination;
+            projectiles = []; playerProjectiles = []; hazards = []; items = [];
         }
 
         function updateTransition() {
@@ -2687,14 +2434,12 @@
 
             const maxDist = transDirX !== 0 ? SCREEN_COLS * TILE : SCREEN_ROWS * TILE;
             if (transProgress >= maxDist) {
-                currentRoomX += transDirX; currentRoomY += transDirY;
+                if (activeDungeon) { dungeonRoomIndex=nextDungeonRoomIndex;nextDungeonRoomIndex=null; }
+                else { currentRoomX += transDirX; currentRoomY += transDirY; }
                 isTransitioning = false; transOffset = {x:0, y:0};
                 if (transDirX === 1) player.x = 2; else if (transDirX === -1) player.x = SCREEN_COLS * TILE - player.w - 2;
                 if (transDirY === 1) player.y = 2; else if (transDirY === -1) player.y = SCREEN_ROWS * TILE - player.h - 2;
-                if (checkCollision(player.x, player.y, player.w, player.h)) {
-                    if (transDirX !== 0) player.y = 5 * TILE;
-                    if (transDirY !== 0) player.x = 7 * TILE;
-                }
+                placeActorOnWalkableTile(player, getRoom(currentRoomX,currentRoomY).tiles);
             } else {
                 transOffset.x = -transDirX * transProgress; transOffset.y = -transDirY * transProgress;
             }
@@ -2761,7 +2506,7 @@
                 let tileX = Math.floor((player.swordHitbox.x + player.swordHitbox.w/2) / TILE);
                 let tileY = Math.floor((player.swordHitbox.y + player.swordHitbox.h/2) / TILE);
                 if (tileX >= 0 && tileX < SCREEN_COLS && tileY >= 0 && tileY < SCREEN_ROWS) {
-                    if (currentRoom.tiles[tileY][tileX] === 43) {
+                    if (TILE_RULES[currentRoom.tiles[tileY][tileX]]?.cuttable) {
                         currentRoom.tiles[tileY][tileX] = 0; // turn into grass
                         playSFX('hit');
                         if (Math.random() < 0.2) items.push(new Item(tileX * TILE, tileY * TILE, Math.random() < 0.5 ? 'heart' : 'coin'));
@@ -2772,24 +2517,33 @@
             if (currentRoom.enemies) {
                 for (let i = currentRoom.enemies.length - 1; i >= 0; i--) {
                     const e = currentRoom.enemies[i];
-                    e.update();
+                    if (e.health > 0) e.update();
                     if (player.isAttacking && player.swordHitbox && e.roomX === currentRoomX && e.roomY === currentRoomY) {
                         if (e.knockbackTimer === 0 && !e.isInvincible && checkAABB(player.swordHitbox, e)) {
                             e.takeDamage(player.x, player.y); playSFX('hit');
                             spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#d82800', 8, 2, 2.5, 14);
                             spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#f89800', 5, 1.5, 2, 10);
                             triggerShake(2, 6);
-                            if (e.health <= 0) {
-                                spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#f8f8f8', 10, 2.5, 3, 18);
-                                spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#fcd8a8', 8, 2, 2, 16);
-                                currentRoom.enemies.splice(i, 1);
-                                if (e.isBoss && currentRoom.boss) {
-                                    collectSacredStone(currentRoom.boss);
-                                } else if (Math.random() < 0.5) {
-                                    items.push(new Item(e.x, e.y, Math.random() < 0.5 ? 'heart' : 'coin'));
-                                }
-                            }
                         }
+                    }
+                    // Resolve defeats from swords, arrows, fire and bombs in one place.
+                    if (e.health <= 0) {
+                        spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#f8f8f8', 10, 2.5, 3, 18);
+                        spawnParticles(e.x+7, e.y+7+UI_OFFSET, '#fcd8a8', 8, 2, 2, 16);
+                        currentRoom.enemies.splice(i, 1);
+                        if (currentRoom.dungeon && currentRoom.enemies.length===0) {
+                            clearedDungeonRooms[currentRoom.dungeonKey+':'+currentRoom.dungeonIndex]=true;
+                        }
+                        if (e.isBoss && currentRoom.boss) {
+                            if (currentRoom.boss.final) {
+                                completeQuest();
+                                return;
+                            }
+                            collectSacredStone(currentRoom.boss);
+                        } else if (Math.random() < 0.5) {
+                            items.push(new Item(e.x, e.y, Math.random() < 0.5 ? 'heart' : 'coin'));
+                        }
+                        continue;
                     }
                     if (e.roomX === currentRoomX && e.roomY === currentRoomY && !e.isInvincible && checkAABB(player, e)) {
                         player.takeDamage();
@@ -2907,7 +2661,31 @@
             mountain: '山岳'
         };
 
+        function drawDungeonMinimap(x, y, w, h) {
+            ctx.save();ctx.fillStyle='#141a22';ctx.fillRect(x,y,w,h);
+            const cw=w/3,ch=h/5;
+            const center=room=>({x:x+(room.x+.5)*cw,y:y+(room.y+.5)*ch});
+            ctx.strokeStyle='#687585';ctx.lineWidth=1;
+            DUNGEON_ROOMS.forEach(room=>{
+                const from=center(room);
+                for(const target of Object.values(room.exits)) {
+                    if(!Number.isInteger(target)) continue;
+                    const to=center(DUNGEON_ROOMS[target]);
+                    ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);ctx.stroke();
+                }
+            });
+            DUNGEON_ROOMS.forEach((room,index)=>{
+                const pos=center(room),cleared=clearedDungeonRooms[activeDungeon.key+':'+index];
+                ctx.fillStyle=index===DUNGEON_BOSS_ROOM?(cleared?'#bea15e':'#ab4a52'):'#536071';
+                ctx.fillRect(pos.x-9,pos.y-4,18,8);
+                if(index===dungeonRoomIndex){ctx.strokeStyle='#fff';ctx.strokeRect(pos.x-9.5,pos.y-4.5,19,9);}
+                if(index===DUNGEON_BOSS_ROOM||index===0){ctx.font='6px monospace';ctx.textAlign='center';ctx.fillStyle='#fff';ctx.fillText(index===0?'E':'B',pos.x,pos.y+2);}
+            });
+            ctx.restore();
+        }
+
         function drawFieldMinimap(x, y, w, h) {
+            if(activeDungeon){drawDungeonMinimap(x,y,w,h);return;}
             ctx.fillStyle = '#0d0d20';
             ctx.fillRect(x, y, w, h);
             ctx.strokeStyle = '#d8a038';
@@ -2967,20 +2745,21 @@
             const uiGrad = ctx.createLinearGradient(0,0,0,UI_OFFSET);
             uiGrad.addColorStop(0,'#1a1a2e'); uiGrad.addColorStop(1,'#000');
             ctx.fillStyle = uiGrad;
-            ctx.fillRect(0, 0, canvas.width, UI_OFFSET);
+            ctx.fillRect(0, 0, VIEW_WIDTH, UI_OFFSET);
             // Gold border
             ctx.fillStyle = '#d8a038';
-            ctx.fillRect(0, UI_OFFSET-2, canvas.width, 2);
+            ctx.fillRect(0, UI_OFFSET-2, VIEW_WIDTH, 2);
             
-            const biome = getRoom(currentRoomX, currentRoomY).biome;
+            const currentRoom = getRoom(currentRoomX, currentRoomY);
+            const biome = currentRoom.biome;
             ctx.font = '8px monospace';
             ctx.fillStyle = BIOME_BG[biome];
-            ctx.fillText(`\u25b6 ${BIOME_NAMES[biome]}`, 4, 10);
+            ctx.fillText(activeDungeon ? `${activeDungeon.definition.dungeonId} ${DUNGEON_ROOMS[dungeonRoomIndex].name}` : `\u25b6 ${BIOME_NAMES[biome]}`, 4, 10);
             ctx.fillStyle = '#888';
-            ctx.fillText(`[${currentRoomX},${-currentRoomY}]`, 4, 20);
+            ctx.fillText(activeDungeon ? 'Dungeon / 地下' : `[${currentRoomX},${currentRoomY}]`, 4, 20);
 
             // Coins with glow
-            ctx.drawImage(sprites['coin'], 4, 22);
+            drawSprite(sprites['coin'], 4, 22);
             ctx.fillStyle = '#b8f818';
             ctx.fillText('x' + coins, 20, 32);
             ctx.fillStyle = '#fcd8a8';
@@ -2996,18 +2775,18 @@
             for (let i = 0; i < player.maxHealth / 2; i++) {
                 const hx = 170 + (i%4)*16, hy = 12 + Math.floor(i/4)*16;
                 let val = player.health - (i * 2);
-                if (val >= 2) ctx.drawImage(sprites['heart'], hx, hy);
-                else if (val === 1) ctx.drawImage(sprites['heart_half'], hx, hy);
-                else ctx.drawImage(sprites['heart_empty'], hx, hy);
+                if (val >= 2) drawSprite(sprites['heart'], hx, hy);
+                else if (val === 1) drawSprite(sprites['heart_half'], hx, hy);
+                else drawSprite(sprites['heart_empty'], hx, hy);
             }
 
             // Equipment bar
             ctx.font = '8px monospace';
             let ex = 170, ey = 46;
-            if(equipment.shield){ctx.drawImage(sprites['ico_shield'],ex,ey);ex+=16;}
-            if(equipment.armorLevel===1){ctx.drawImage(sprites['ico_clothes'],ex,ey);ex+=16;}
-            if(equipment.armorLevel===2){ctx.drawImage(sprites['ico_armor'],ex,ey);ex+=16;}
-            if(inventory.keys>0){ctx.drawImage(sprites['ico_key'],ex,ey);ctx.fillStyle='#fff';ctx.fillText('x'+inventory.keys,ex+14,ey+10);}
+            if(equipment.shield){drawSprite(sprites['ico_shield'],ex,ey);ex+=16;}
+            if(equipment.armorLevel===1){drawSprite(sprites['ico_clothes'],ex,ey);ex+=16;}
+            if(equipment.armorLevel===2){drawSprite(sprites['ico_armor'],ex,ey);ex+=16;}
+            if(inventory.keys>0){drawSprite(sprites['ico_key'],ex,ey);ctx.fillStyle='#fff';ctx.fillText('x'+inventory.keys,ex+14,ey+10);}
 
             const room = getRoom(currentRoomX, currentRoomY);
             const boss = room && room.enemies ? room.enemies.find(e => e.isBoss) : null;
@@ -3028,7 +2807,7 @@
             const shake = getShakeOffset();
             ctx.save();
             if (shake.x || shake.y) ctx.translate(Math.round(shake.x), Math.round(shake.y));
-            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
 
             if (isTransitioning) {
                 drawRoom(getRoom(currentRoomX, currentRoomY), transOffset.x, transOffset.y);
@@ -3054,16 +2833,16 @@
             drawUI();
 
             if (gameState === 'DIALOGUE') {
-                ctx.fillStyle = '#000'; ctx.fillRect(16, canvas.height - 48, canvas.width - 32, 40);
-                ctx.strokeStyle = '#fff'; ctx.strokeRect(16, canvas.height - 48, canvas.width - 32, 40);
+                ctx.fillStyle = '#000'; ctx.fillRect(16, VIEW_HEIGHT - 48, VIEW_WIDTH - 32, 40);
+                ctx.strokeStyle = '#fff'; ctx.strokeRect(16, VIEW_HEIGHT - 48, VIEW_WIDTH - 32, 40);
                 ctx.fillStyle = '#fff'; ctx.font = '12px monospace';
-                ctx.fillText(dialogueText[dialogueIndex], 24, canvas.height - 24);
-                ctx.fillText("▼", canvas.width - 36, canvas.height - 16);
+                ctx.fillText(dialogueText[dialogueIndex], 24, VIEW_HEIGHT - 24);
+                ctx.fillText("▼", VIEW_WIDTH - 36, VIEW_HEIGHT - 16);
             }
 
             if (gameState === 'SHOP') {
-                ctx.fillStyle = '#000'; ctx.fillRect(16, 80, canvas.width - 32, 120);
-                ctx.strokeStyle = '#fff'; ctx.strokeRect(16, 80, canvas.width - 32, 120);
+                ctx.fillStyle = '#000'; ctx.fillRect(16, 80, VIEW_WIDTH - 32, 120);
+                ctx.strokeStyle = '#fff'; ctx.strokeRect(16, 80, VIEW_WIDTH - 32, 120);
                 ctx.fillStyle = '#fcd8a8'; ctx.font = '12px monospace';
                 ctx.fillText("いらっしゃい！ なにを かう？ (Xでやめる)", 24, 100);
                 
@@ -3134,15 +2913,15 @@
             titleFrame++;
             const titleMapImage = fahrenDungeonMapReady ? fahrenDungeonMapImage : fahrenWorldMapImage;
             if (fahrenDungeonMapReady || fahrenWorldMapReady) {
-                ctx.drawImage(titleMapImage, 0, 0, canvas.width, canvas.height);
+                ctx.drawImage(titleMapImage, 0, 0, VIEW_WIDTH, VIEW_HEIGHT);
                 ctx.fillStyle = 'rgba(3, 3, 16, 0.56)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
             } else {
-                const grad = ctx.createLinearGradient(0,0,0,canvas.height);
+                const grad = ctx.createLinearGradient(0,0,0,VIEW_HEIGHT);
                 grad.addColorStop(0, '#050520');
                 grad.addColorStop(1, '#0a0a40');
                 ctx.fillStyle = grad;
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
             }
             // Stars
             stars.forEach(st => {
@@ -3165,34 +2944,64 @@
             // Title glow
             ctx.shadowColor = '#fc9838'; ctx.shadowBlur = 8;
             ctx.fillStyle = '#fc9838'; ctx.font = 'bold 18px monospace'; ctx.textAlign = 'center';
-            ctx.fillText('ファーレンクエスト', canvas.width/2, 74);
+            ctx.fillText('ファーレンクエスト', VIEW_WIDTH/2, 74);
             ctx.shadowBlur = 0;
             ctx.fillStyle = '#fcd8a8'; ctx.font = '10px monospace';
-            ctx.fillText('25x25 フィールド探索RPG', canvas.width/2, 92);
+            ctx.fillText('25x25 フィールド探索RPG', VIEW_WIDTH/2, 92);
             // Blink
             if (Math.floor(titleFrame/30)%2===0) {
                 ctx.fillStyle = '#ffffff';
-                ctx.fillText('PRESS SPACE / ENTER TO START', canvas.width/2, 138);
+                ctx.fillText('PRESS SPACE / ENTER TO START', VIEW_WIDTH/2, 138);
             }
             ctx.fillStyle = '#888'; ctx.font = '8px monospace';
-            ctx.fillText('Human / Elf / Dwarf Realm', canvas.width/2, 178);
-            ctx.fillText('ENTER: START / PAUSE   L: LOAD MENU', canvas.width/2, 190);
-            ctx.fillText('WASD:\u79fb\u52d5  Space/Z:\u3051\u3093  X:\u30a2\u30a4\u30c6\u30e0', canvas.width/2, 200);
-            ctx.fillText('1:\u7206\u5f3e 2:\u5f13\u77e2 3:\u8001\u71ed 4:\u56de\u5fa9\u85ac', canvas.width/2, 212);
+            ctx.fillText('Human / Elf / Dwarf Realm', VIEW_WIDTH/2, 178);
+            ctx.fillText('ENTER: START / PAUSE   L: LOAD MENU', VIEW_WIDTH/2, 190);
+            ctx.fillText('WASD:\u79fb\u52d5  Space/Z:\u3051\u3093  X:\u30a2\u30a4\u30c6\u30e0', VIEW_WIDTH/2, 200);
+            ctx.fillText('1:\u7206\u5f3e 2:\u5f13\u77e2 3:\u8001\u71ed 4:\u56de\u5fa9\u85ac', VIEW_WIDTH/2, 212);
             ctx.textAlign = 'left';
         }
 
         function drawGameOver() {
             drawGame();
-            ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
             ctx.fillStyle = '#d82800'; ctx.font = '20px monospace'; ctx.textAlign = 'center';
-            ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2);
+            ctx.fillText('GAME OVER', VIEW_WIDTH/2, VIEW_HEIGHT/2);
             ctx.fillStyle = '#fff'; ctx.font = '12px monospace';
-            ctx.fillText("PRESS SPACE TO RESTART", canvas.width/2, canvas.height/2 + 30);
+            ctx.fillText("PRESS SPACE TO RESTART", VIEW_WIDTH/2, VIEW_HEIGHT/2 + 30);
+            ctx.textAlign = 'left';
+        }
+
+        function drawEnding() {
+            drawGame();
+            ctx.fillStyle = 'rgba(0,0,0,0.88)';
+            ctx.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#fcd8a8'; ctx.font = 'bold 19px monospace';
+            ctx.fillText('QUEST CLEAR', VIEW_WIDTH / 2, 46);
+            ctx.fillStyle = '#fff'; ctx.font = '11px monospace';
+            ctx.fillText('魔王グランを倒した！', VIEW_WIDTH / 2, 78);
+            ctx.fillText('ファーレン王国に平和が戻った。', VIEW_WIDTH / 2, 100);
+            ctx.fillText('人間、エルフ、ドワーフの人々は', VIEW_WIDTH / 2, 124);
+            ctx.fillText('勇者の帰還を祝い、', VIEW_WIDTH / 2, 142);
+            ctx.fillText('その冒険を語り継いでいく。', VIEW_WIDTH / 2, 160);
+            ctx.fillStyle = '#fcd8a8'; ctx.font = '9px monospace';
+            ctx.fillText('聖石 / Sacred Stones: ' + Object.keys(sacredStones).length + '/7', VIEW_WIDTH / 2, 184);
+            if (endingFrame >= 60) {
+                ctx.fillStyle = '#fff'; ctx.font = '8px monospace';
+                ctx.fillText('SPACE / Z / ENTER / A: タイトルへ', VIEW_WIDTH / 2, 218);
+            }
             ctx.textAlign = 'left';
         }
 
         function startNewGame() {
+            if (!graphicsReady) return;
+            activeDungeon=null;dungeonRoomIndex=0;nextDungeonRoomIndex=null;clearedDungeonRooms={};
+            dungeonRoomCache.clear();terrainLayerCache.clear();
+            Object.keys(worldMap).forEach(key => delete worldMap[key]);
+            projectiles = []; playerProjectiles = []; items = []; hazards = [];
+            particles.length = 0;
+            isTransitioning = false; nextRoomData = null; transOffset = { x: 0, y: 0 };
+            endingFrame = 0;
             player.reset(120, 120);
             currentRoomX = START_ROOM_X;
             currentRoomY = START_ROOM_Y;
@@ -3201,6 +3010,7 @@
         }
 
         function openTitleLoadMenu() {
+            if (!graphicsReady) return;
             saveCursor = 0;
             saveMenuBackState = 'TITLE';
             menuMessage = '';
@@ -3216,6 +3026,13 @@
                     startNewGame();
                 } else if (isJustPressed('KeyL')) {
                     openTitleLoadMenu();
+                }
+            } else if (gameState === 'ENDING') {
+                endingFrame++;
+                const confirmed = isConfirmPressed();
+                if (endingFrame >= 60 && confirmed) {
+                    gameState = 'TITLE';
+                    Object.keys(keyPress).forEach(code => delete keyPress[code]);
                 }
             } else if (gameState === 'GAMEOVER') {
                 if (isJustPressed('Space') || isJustPressed('Enter') || isJustPressed('NumpadEnter')) {
@@ -3240,6 +3057,7 @@
         function draw() {
             if (gameState === 'TITLE') drawTitle();
             else if (gameState === 'GAMEOVER') drawGameOver();
+            else if (gameState === 'ENDING') drawEnding();
             else if (gameState === 'LOAD_MENU' && saveMenuBackState === 'TITLE') {
                 drawTitle();
                 drawSaveSlotOverlay(true);
@@ -3277,13 +3095,20 @@
             });
         })();
 
-        function loop() {
-            pollGamepad();
-            update(); draw();
+        let lastFrameTime = null, frameAccumulator = 0;
+        function loop(now) {
+            if (lastFrameTime === null) lastFrameTime = now;
+            frameAccumulator += Math.min(now - lastFrameTime, 100);
+            lastFrameTime = now;
+            while (frameAccumulator >= 1000 / 60) {
+                pollGamepad();
+                update();
+                frameAccumulator -= 1000 / 60;
+            }
+            draw();
             requestAnimationFrame(loop);
         }
-
-        loop();
+        requestAnimationFrame(loop);
     </script>
 </body>
 </html>

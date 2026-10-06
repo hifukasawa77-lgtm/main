@@ -28,6 +28,19 @@ Workers AI を使ったプロキシです。APIキーをブラウザへ配布せ
 
 ---
 
+## エンドポイント: 推し活ログのイベントリサーチ（`POST /oshi/research`）
+
+`oshikatsu.html` のリサーチ機能が使う。**AI・キー・課金は不要**で、ニュースRSS（Google ニュース＋Bing ニュース）を取得して
+推しの最新イベント候補を返す。
+
+- 入力: `{"names": ["推しの名前", ...]}`（最大3人。URL は受け取らない）
+- 取得先は `assets/js/oshi-research.js` の `ALLOWED_HOSTS`（`news.google.com` / `www.bing.com`）に固定（SSRF対策）
+- 返すのは見出し・日付(推定)・会場(推定)・出典URLだけ。記事本文は持ち帰らない
+- 取得結果はエッジに3時間キャッシュ。既存と同じ Origin 制限・レート制限（30回/分）が掛かる
+- 検査: `node scripts/verify-oshi-research.mjs`（ブラウザ不要）
+
+---
+
 ## 手動セットアップ手順（ダッシュボードから行う場合）
 
 ### Step 1: Cloudflareアカウント作成（無料）

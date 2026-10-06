@@ -14,10 +14,12 @@ if [ $# -gt 0 ]; then TARGETS="$(printf '%s\n' "$@")"; else
     -not -name 'admin*.html' | sed 's|^\./||' | sort)
 fi
 
-printf '%s\n' "$TARGETS" | python3 - <<'PY'
+# 注意: `printf | python3 - <<PY` は heredoc が stdin を潰し常に0ページ計測になる（2026-09-27 判明）。
+# 対象は環境変数で渡す
+PERF_TARGETS="$TARGETS" python3 - <<'PY'
 import os, re, sys
 
-targets = [l.strip() for l in sys.stdin if l.strip() and os.path.isfile(l.strip())]
+targets = [l.strip() for l in os.environ.get('PERF_TARGETS', '').splitlines() if l.strip() and os.path.isfile(l.strip())]
 WARN, LIMIT = 500*1024, 1024*1024
 fail = False
 rows = []
@@ -45,6 +47,8 @@ for total, f, n in rows:
     print(f"{total/1024:>8.0f}KB  {n:>6}  {mark} {f}")
 print()
 over = sum(1 for t, _, _ in rows if t > LIMIT)
+if not rows:
+    print("==> perf-audit: 0ページ計測（対象が空。スクリプト故障の可能性） ❌"); sys.exit(2)
 print(f"==> perf-audit: {len(rows)}ページ計測、1MB超過 {over} 件" + ("（/asset-optimize で削減） ❌" if fail else " ✅"))
 sys.exit(1 if fail else 0)
 PY
