@@ -177,7 +177,9 @@ function sfx(k) {
 const FPROG = [[48, 55, 60, 64], [45, 52, 57, 60], [41, 48, 53, 57], [43, 50, 55, 59]];
 const BPROG = [[45, 52, 57, 60], [45, 52, 57, 60], [41, 48, 53, 57], [43, 50, 55, 59]];
 function schedBGM() {
-  if (!AC || AC.state !== 'running' || muted) return;
+  if (!AC) return;
+  if (muted || !OPT.bgm) { bgmNext = AC.currentTime + .1; return; }
+  if (AC.state !== 'running') return;
   while (bgmNext < AC.currentTime + .3) {
     const s = bgmStep, t = bgmNext - AC.currentTime, bat = bgmMode === 'battle', prog = bat ? BPROG : FPROG, ch = prog[Math.floor(s / 8) % 4], i = s % 8;
     if (bat) { if (i % 2 === 0) tone(mtof(ch[0] - 12), .16, 'sawtooth', .06, null, t); tone(mtof(ch[(i * 3) % 4] + 12), .1, 'square', .03, null, t); if (i % 4 === 2) noise(.04, .03, t); }
@@ -396,7 +398,10 @@ const held = {};
 let DLG = null, MENU = null, TR = 0, B = null, timers = [], anims = [], waiters = [], fxParts = [], popups = [];
 let gtime = 0, camX = 0, camY = 0, titleMenuOpen = false, overlayTitle = 0;
 const DEMO = { want: null };
-const SAVEKEY = 'lumina_tamer_v1';
+const SAVEKEY = 'lumina_tamer_v1', OPTKEY = 'lumina_tamer_opts';
+const OPT = { text: 1, anim: true, bgm: true };
+try { const o = JSON.parse(localStorage.getItem(OPTKEY)); if (o) { if ([0, 1, 2].includes(o.text)) OPT.text = o.text; if (typeof o.anim === 'boolean') OPT.anim = o.anim; if (typeof o.bgm === 'boolean') OPT.bgm = o.bgm; } } catch (e) { /* 保存領域なし・壊れた値は既定へ */ }
+const saveOpts = () => { try { localStorage.setItem(OPTKEY, JSON.stringify(OPT)); } catch (e) { /* 保存できなくても続行 */ } };
 
 function newState() {
   return { map: 'out', x: 28, y: 33, dir: 'u', party: [], box: [], bag: { potion: 5, orb: 8 }, flags: {}, steps: 0, caught: {} };
@@ -762,14 +767,27 @@ async function dexScreen() {
   };
   await choose(items, { cols: 6, x: 20, y: 20, w: 600, h: 440, rh: 46, draw, title: 'ずかん / DEX   つかまえた ' + dexCount() + ' / ' + ids.length });
 }
+async function optionsScreen() {
+  let cur = 0;
+  while (true) {
+    const items = [{ label: 'メッセージそくど: ' + ['ゆっくり', 'ふつう', 'はやい'][OPT.text], en: 'TEXT SPEED' }, { label: 'せんとうアニメ: ' + (OPT.anim ? 'ON' : 'OFF(はやおくり)'), en: 'BATTLE ANIMATION' },
+      { label: 'BGM: ' + (OPT.bgm ? 'ON' : 'OFF'), en: 'MUSIC  (M キーで ぜんぶの おとを きりかえ)' }, { label: 'もどる', en: 'BACK' }];
+    const i = await choose(items, { x: 120, y: 120, w: 400, h: 250, rh: 50, cursor: cur, title: 'せってい / OPTIONS' });
+    if (i < 0 || i === 3) return;
+    cur = i;
+    if (i === 0) OPT.text = (OPT.text + 1) % 3; else if (i === 1) OPT.anim = !OPT.anim; else OPT.bgm = !OPT.bgm;
+    saveOpts();
+  }
+}
 async function pauseMenu() {
   while (true) {
-    const i = await choose([{ label: 'てもち  PARTY' }, { label: 'ずかん  DEX' }, { label: 'もちもの  BAG' }, { label: 'レポート  SAVE' }, { label: 'とじる  CLOSE' }], { x: 440, y: 20, w: 190, h: 186, rh: 34 });
-    if (i < 0 || i === 4) return;
+    const i = await choose([{ label: 'てもち  PARTY' }, { label: 'ずかん  DEX' }, { label: 'もちもの  BAG' }, { label: 'せってい  OPTIONS' }, { label: 'レポート  SAVE' }, { label: 'とじる  CLOSE' }], { x: 440, y: 20, w: 190, h: 222, rh: 34 });
+    if (i < 0 || i === 5) return;
     if (i === 0) await partyScreen(false);
     if (i === 1) await dexScreen();
     if (i === 2) await bagScreen(false);
-    if (i === 3) { const ok = saveGame(); await say(ok ? 'ぼうけんの きろくを かきこんだ!' : 'きろくに しっぱいした…(ブラウザの せってい)'); }
+    if (i === 3) await optionsScreen();
+    if (i === 4) { const ok = saveGame(); await say(ok ? 'ぼうけんの きろくを かきこんだ!' : 'きろくに しっぱいした…(ブラウザの せってい)'); }
   }
 }
 function hpBar(g, x, y, w, h, mon, big) {
@@ -1009,7 +1027,7 @@ async function residual(side) {
   return null;
 }
 async function foeAttack() { return await doMove('e', enemyMove(), B.foe); }
-async function tweenHP(mon) { const from = mon.disp, to = mon.hp, dur = clamp(Math.abs(from - to) / mon.max * 1.4, .25, 1.2); await anim(dur, p => { mon.disp = lerp(from, to, p); }); mon.disp = mon.hp; }
+async function tweenHP(mon) { const from = mon.disp, to = mon.hp, dur = clamp(Math.abs(from - to) / mon.max * 1.4, .25, 1.2) * (OPT.anim ? 1 : .4); await anim(dur, p => { mon.disp = lerp(from, to, p); }); mon.disp = mon.hp; }
 async function doMove(side, id, expect) {
   const att = side === 'p' ? B.mon : B.foe, def = side === 'p' ? B.foe : B.mon, mv = MV[id];
   if (expect && att !== expect) return null;
@@ -1034,6 +1052,7 @@ async function doMove(side, id, expect) {
   return null;
 }
 async function attackAnim(side, type) {
+  if (!OPT.anim) { B.shake = 9; await wait(120); return; }
   const from = side === 'p' ? [170, 330] : [470, 190], to = side === 'p' ? [470, 190] : [170, 330], col = TYPE[type].c, dir = side === 'p' ? 1 : -1;
   await anim(.14, p => { B.off[side][0] = dir * 38 * p; });
   const n = 9;
@@ -1537,8 +1556,8 @@ function update(dt) {
   for (let i = timers.length - 1; i >= 0; i--) { const t = timers[i]; t.t -= dt; if (t.t <= 0) { timers.splice(i, 1); t.res(); } }
   for (let i = anims.length - 1; i >= 0; i--) { const a = anims[i]; a.t += dt; const p = clamp(a.t / a.dur, 0, 1); a.fn(p); if (p >= 1) { anims.splice(i, 1); a.res(); } }
   for (let i = waiters.length - 1; i >= 0; i--) { if (waiters[i].cond()) { const w = waiters.splice(i, 1)[0]; w.res(); } }
-  if (DLG && !DLG.done) { DLG.i += dt * 55; if (DLG.i >= DLG.text.length) { DLG.i = DLG.text.length; DLG.done = true; } }
-  if (DLG && DLG.done) { if (DLG.auto || demo) { DLG.t += dt; if (DLG.t > (demo ? .9 : .85)) resolveDlg(); } }
+  if (DLG && !DLG.done) { DLG.i += dt * [28, 55, 150][OPT.text]; if (DLG.i >= DLG.text.length) { DLG.i = DLG.text.length; DLG.done = true; } }
+  if (DLG && DLG.done) { if (DLG.auto || demo) { DLG.t += dt; if (DLG.t > (demo ? .9 : [1.2, .85, .35][OPT.text])) resolveDlg(); } }
   if (DLG && DLG.done && !DLG.auto && !demo && DLG.t === 0 && false) resolveDlg();
   if (mode === 'over') updateOver(dt);
   else if (mode === 'title') { }
@@ -1582,6 +1601,7 @@ if (window.__LT_TEST) {
     boxNow() { scene(boxScreen); }, altarNow() { scene(altar); }, endingNow() { scene(ending); },
     give(id, lv) { S.party.push(mkMon(id, lv)); },
     evolveNow() { scene(async () => { await afterBattle('win'); }); },
+    OPT, effAt, effSp, calcDmg,
     setMap(n, x, y) { S.map = n; P.tx = x; P.ty = y; P.x = x * TS; P.y = y * TS; P.moving = false; }, drawAll(g, t) { Object.keys(SP).forEach((id, i) => drawMon(g, id, 50 + (i % 8) * 76, 80 + Math.floor(i / 8) * 90, .6, false, t, 0)); } };
 }
 })();
