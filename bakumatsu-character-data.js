@@ -28,7 +28,7 @@
   ];
   const data = {
     domains,places,edges,heroes,
-    scenarios:[{id:'ansei',name:'安政五年・条約と藩論',year:1858,month:6,day:1},{id:'bunkyu',name:'文久三年・京の風雲',year:1863,month:8,day:1}],
+    scenarios:[{id:'history1863',name:'歴史合戦・文久三年（1863）',year:1863,month:8,day:1,history:true},{id:'boshin',name:'歴史合戦・戊辰戦争（1868）',year:1868,month:1,day:20,history:true},{id:'ansei',name:'安政五年・条約と藩論',year:1858,month:6,day:1},{id:'bunkyu',name:'文久三年・京の風雲',year:1863,month:8,day:1}],
     ideologies:['尊王','公議','佐幕'], foreignPolicies:['開国','攘夷'], ranks:['浪士','藩士','重臣','藩主'],
     methods:['賄賂','脅迫','理論','威圧','本音'], phases:['朝','昼','夕','夜'],
     colors:{'尊王':'#c56d52','公議':'#519c8e','佐幕':'#688ebc'},
