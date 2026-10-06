@@ -664,6 +664,10 @@ async function talkTo(n) {
     await say('ナース「おまたせしました! みんな げんきに なりましたよ!」');
     if (S.bag.orb < 6) { S.bag.orb += 4; await say('ナース「サービスです。ルミナオーブを ４こ どうぞ!」'); }
     if (saveGame() && !demo) await say('（ぼうけんの きろくも かきこんだよ）');
+    if (!demo && (S.box.length || S.party.length > 1)) {
+      await say('ナース「ボックスも ごりように なりますか?」');
+      if ((await choose([{ label: 'ひらく / OPEN' }, { label: 'いまはいい / NO' }], { x: 440, y: 270, w: 180, h: 80 })) === 0) await boxScreen();
+    }
   } else if (n.kind === 'ferry') {
     if (!S.flags.gym3) { await say('ふなのり「ほしうみ島へ わたる ふねだ。三つの バッジを もつ テイマーしか のせられないよ。」'); return; }
     await say('ふなのり「ほしうみ島へ いくかい? あそこには かげの ジムと バトルタワーが あるぜ。」');
@@ -761,6 +765,46 @@ function hpBar(g, x, y, w, h, mon, big) {
   g.fillStyle = '#2a2d44'; rr(g, x, y, w, h, h / 2); g.fill();
   if (r > 0) { g.fillStyle = r > .5 ? '#4ee06a' : r > .2 ? '#f0d040' : '#ff5050'; rr(g, x, y, Math.max(h, w * r), h, h / 2); g.fill(); }
 }
+function monCell(g, it, x, y, w, h) {
+  const m = it.m, s = SP[m.id];
+  drawMon(g, m.id, x + 30, y + h - 6, .42, false, gtime, 0);
+  txt(g, s.n, x + 64, y + 14, 16, m.hp <= 0 ? '#888' : '#fff', 'left', 800);
+  txt(g, 'Lv.' + m.lv, x + 64, y + 34, 13, '#cfd8ff', 'left', 700);
+  txt(g, TYPE[s.t].n, x + 308, y + 38, 12, TYPE[s.t].c, 'right', 800);
+  txt(g, m.hp + ' / ' + m.max, x + 308, y + 14, 12, '#fff', 'right', 700);
+}
+async function boxPick(title) {
+  let page = 0; const PER = 5;
+  while (true) {
+    const pages = Math.max(1, Math.ceil(S.box.length / PER)), start = page * PER;
+    const items = S.box.slice(start, start + PER).map((m, k) => ({ m, idx: start + k }));
+    if (page > 0) items.push({ nav: -1, label: '◀ まえの ページ' });
+    if (start + PER < S.box.length) items.push({ nav: 1, label: 'つぎの ページ ▶' });
+    const draw = (g, it, x, y, w, h) => { if (it.nav) txt(g, it.label, x + 20, y + h / 2, 16, '#ffe27a', 'left', 800); else monCell(g, it, x, y, w, h); };
+    const i = await choose(items, { x: 40, y: 30, w: 560, h: 440, rh: 52, draw, title: title + '  ' + (page + 1) + '/' + pages + '   ボックス ' + S.box.length + 'たい' });
+    if (i < 0) return -1;
+    if (items[i].nav) { page += items[i].nav; continue; }
+    return items[i].idx;
+  }
+}
+async function boxScreen() {
+  while (true) {
+    const i = await choose([{ label: 'あずける', en: 'DEPOSIT' }, { label: 'ひきだす', en: 'WITHDRAW' }, { label: 'とじる', en: 'CLOSE' }], { x: 380, y: 200, w: 240, h: 190, rh: 46, title: 'ボックス / PC' });
+    if (i < 0 || i === 2) return;
+    if (i === 0) {
+      if (S.party.length <= 1) { await say('てもちが ひとりに なってしまう! あずけられない。'); continue; }
+      const j = await partyScreen(true); if (j < 0) continue;
+      const m = S.party[j];
+      if (!S.party.some((q, k) => k !== j && q.hp > 0)) { await say('たたかえる モンスターが いなくなってしまう!'); continue; }
+      S.party.splice(j, 1); S.box.push(m); sfx('ok'); await say(nameOf(m) + ' を ボックスに あずけた。');
+    } else {
+      if (!S.box.length) { await say('ボックスは からっぽだ。'); continue; }
+      if (S.party.length >= 6) { await say('てもちが いっぱいだ! さきに あずけよう。'); continue; }
+      const k = await boxPick('ひきだす'); if (k < 0) continue;
+      const m = S.box.splice(k, 1)[0]; m.disp = m.hp; S.party.push(m); sfx('ok'); await say(nameOf(m) + ' を てもちに くわえた!');
+    }
+  }
+}
 async function partyScreen(inBattle, forced) {
   while (true) {
     const items = S.party.map(m => ({ m, label: SP[m.id].n, disabled: false }));
@@ -805,9 +849,15 @@ async function bagScreen(inBattle) {
    バトル
    ==================================================================== */
 const nameOf = m => SP[m.id].n;
+const WEATHER = { sun: ['はれ', 'ひざしが つよい!', { ember: 1.3, tide: .7 }], rain: ['あめ', 'あめが ふっている!', { tide: 1.3, ember: .7 }], snow: ['ゆき', 'ゆきが ふっている!', { frost: 1.3 }] };
+function pickWeather() {
+  const m = curMap(); if (m.interior) return null;
+  const t = { out: [.12, .12, 0], harbor: [.2, .35, 0], isle: [.15, .25, 0], summit: [0, 0, .5], cave: [0, 0, 0] }[m.name] || [.1, .1, 0], r = Math.random();
+  return r < t[0] ? 'sun' : r < t[0] + t[1] ? 'rain' : r < t[0] + t[1] + t[2] ? 'snow' : null;
+}
 function calcDmg(a, d, mv) {
   const crit = Math.random() < 1 / 16, e = eff(mv.t, SP[d.id].t), stab = SP[a.id].t === mv.t ? 1.5 : 1;
-  const base = ((2 * a.lv / 5 + 2) * mv.p * a.at * (a.st === 'brn' ? .5 : 1) / d.df / 50 + 2) * stab * e * (.85 + Math.random() * .15) * (crit ? 1.5 : 1);
+  const base = ((2 * a.lv / 5 + 2) * mv.p * a.at * (a.st === 'brn' ? .5 : 1) / d.df / 50 + 2) * stab * e * (.85 + Math.random() * .15) * (crit ? 1.5 : 1) * ((B && B.weather && WEATHER[B.weather][2][mv.t]) || 1);
   return { dmg: e === 0 ? 0 : Math.max(1, Math.floor(base)), crit, e };
 }
 async function runBattle(foes, trainer) {
@@ -815,11 +865,12 @@ async function runBattle(foes, trainer) {
   B = { foes, fi: 0, trainer, mon: first, foe: foes[0], off: { p: [0, 0], e: [0, 0] }, blink: { p: 0, e: 0 }, show: { p: 0, e: 0 }, proj: [], expDisp: 0, res: null, bg: curMap().bg || (curMap().interior ? 'gym' : 'field'), turn: 0, shake: 0 };
   mode = 'battle'; bgmMode = 'battle';
   await anim(.5, p => { TR = 1 - p; }); TR = 0;
-  B.expDisp = expRatio(B.mon);
+  B.expDisp = expRatio(B.mon); B.weather = pickWeather();
   if (trainer) { B.trainerShow = 1; await say(trainer.name + ' が しょうぶを しかけてきた!', true); B.trainerShow = 0; await say(trainer.name + ' は ' + nameOf(B.foe) + ' を くりだした!', true); }
   else await say('やせいの ' + nameOf(B.foe) + ' が あらわれた!', true);
   S.caught[B.foe.id] = S.caught[B.foe.id] || 0;
   await anim(.35, p => { B.show.e = p; });
+  if (B.weather) await say(WEATHER[B.weather][1], true);
   await say('ゆけっ! ' + nameOf(B.mon)+ '!', true);
   await anim(.35, p => { B.show.p = p; });
   let result = null;
@@ -1315,9 +1366,16 @@ function drawBattle(g) {
   // 弾
   for (const o of b.proj) { if (o.p <= 0 || o.p >= 1) continue; const x = lerp(o.from[0], o.to[0], o.p), y = lerp(o.from[1] - 60, o.to[1] - 50, o.p) - Math.sin(o.p * Math.PI) * 40; glowMon(g, x, y, 18, hexRgb(o.col)); g.fillStyle = '#fff'; ell(g, x, y, 4, 4); g.fill(); }
   if (b.orb) { const o = b.orb; g.save(); g.translate(o.x, o.y); g.rotate((o.spin || 0) + (o.rot || 0)); if (o.glow) glowMon(g, 0, 0, 30, '255,240,150'); g.fillStyle = '#e8f0ff'; ell(g, 0, 0, 11, 11); g.fill(); g.fillStyle = '#4a90e8'; g.beginPath(); g.arc(0, 0, 11, Math.PI, 0); g.fill(); g.fillStyle = '#233'; g.fillRect(-11, -1.5, 22, 3); g.fillStyle = '#fff'; ell(g, 0, 0, 3.5, 3.5); g.fill(); g.strokeStyle = '#233'; g.lineWidth = 1.5; ell(g, 0, 0, 11, 11); g.stroke(); g.restore(); }
+  if (b.weather) drawWeather(g, b.weather, t);
   // 情報ボックス
   if (b.foe) infoBox(g, 20, 20, 290, 70, b.foe, false);
   if (b.mon) infoBox(g, 330, 290, 290, 88, b.mon, true);
+}
+function drawWeather(g, w, t) {
+  if (w === 'sun') { const gr = g.createRadialGradient(W - 40, 30, 10, W - 40, 30, 420); gr.addColorStop(0, 'rgba(255,240,170,.55)'); gr.addColorStop(1, 'rgba(255,200,100,0)'); g.fillStyle = gr; g.fillRect(0, 0, W, 392); }
+  else if (w === 'rain') { g.fillStyle = 'rgba(30,50,100,.18)'; g.fillRect(0, 0, W, 392); g.strokeStyle = 'rgba(210,230,255,.7)'; g.lineWidth = 1.5; g.beginPath(); for (let i = 0; i < 70; i++) { const x = (i * 59 + t * 260) % (W + 40) - 20, y = (i * 97 + t * 760) % 372; g.moveTo(x, y); g.lineTo(x - 5, y + 16); } g.stroke(); }
+  else { g.fillStyle = 'rgba(210,225,255,.12)'; g.fillRect(0, 0, W, 392); g.fillStyle = 'rgba(255,255,255,.9)'; for (let i = 0; i < 60; i++) { const x = (i * 71 + Math.sin(t + i) * 20 + t * 20) % W, y = (i * 53 + t * 60) % 392; g.fillRect(x, y, 3, 3); } }
+  g.fillStyle = 'rgba(20,24,56,.7)'; rr(g, W - 84, 34, 68, 20, 10); g.fill(); txt(g, WEATHER[w][0], W - 50, 44.5, 12, '#fff', 'center', 800);
 }
 function hexRgb(h) { const n = parseInt(h.slice(1), 16); return (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255); }
 function infoBox(g, x, y, w, h, m, mine) {
@@ -1480,7 +1538,7 @@ if (window.__LT_TEST) {
     trainer(id) { const n = NPCS.find(q => q.id === id); scene(async () => { await talkTo(n); }); },
     elderRematch() { const n = NPCS.find(q => q.id === 'elder'); n.defeated = true; scene(async () => { await talkTo(n); }); },
     towerNow() { S.tower = S.tower || { best: 0, clears: 0 }; scene(towerRun); },
-    altarNow() { scene(altar); }, endingNow() { scene(ending); },
+    boxNow() { scene(boxScreen); }, altarNow() { scene(altar); }, endingNow() { scene(ending); },
     give(id, lv) { S.party.push(mkMon(id, lv)); },
     evolveNow() { scene(async () => { await afterBattle('win'); }); },
     setMap(n, x, y) { S.map = n; P.tx = x; P.ty = y; P.x = x * TS; P.y = y * TS; P.moving = false; }, drawAll(g, t) { Object.keys(SP).forEach((id, i) => drawMon(g, id, 50 + (i % 8) * 76, 80 + Math.floor(i / 8) * 90, .6, false, t, 0)); } };
