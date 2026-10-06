@@ -99,7 +99,7 @@
       if(type==='battleFinish'){
         const b=s.battle;if(!b || b.phase!=='result')return error('合戦はまだ決着していません。');
         const won=b.outcome==='victory',survivors=b.units.filter(u=>u.team==='player').reduce((n,u)=>n+u.hp,0);
-        if(!b.practice){const source=s.domainsById[b.source];if(source)source.troops=Math.max(0,source.troops-(Math.min(3600,Math.max(600,b.initialTroops))-survivors)-(b.outcome==='retreat'?Math.round(survivors*.1):0));
+        if(!b.practice){const source=s.domainsById[b.source];if(source)source.troops=Math.max(0,source.troops-(Math.min(3600,Math.max(400,b.initialTroops))-survivors)-(b.outcome==='retreat'?Math.round(survivors*.1):0));
           if(b.eventId)s.history.results[b.eventId]=b.outcome;
           if(won&&b.target){const t=s.domainsById[b.target];t.ideology=s.initialIdeology;s.peopleById[t.leaderId].ideology=s.initialIdeology;t.troops=Math.max(500,t.troops-1000);if(['aizu','choshu'].includes(t.id))s.campaigns[t.id]=true;}
           if(won&&b.eventId==='aizu-war'&&b.side===0)s.campaigns.aizu=true;
