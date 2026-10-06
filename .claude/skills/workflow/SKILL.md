@@ -12,6 +12,7 @@ GitHub Pages ホスティング・エージェントパイプライン・コー�
 ## Skill: コードレビューチェックリスト (Code Review Checklist)
 - **概要**: プルリクエスト / コミット前に確認すべき項目。
 - **機械チェック**: 混入・console.log・SRI・大容量・シークレットは `bash .claude/skills/release-check/release-check.sh` で一括検査できる（/release-check）。以下のうち目視が必要な項目だけ手で確認する。
+- **必須検査の選定**: 触ったファイルに対応する検査（sengoku/sanguo/zero1/sw.js/アセット等）は `bash .claude/skills/required-checks/required-checks.sh --run` で割り出して実行する（正本は agent-conventions §4）。
 - **チェック項目**:
   - [ ] `.edge-test-profile/` がステージングに含まれていないこと（`git status` で確認）
   - [ ] XSS脆弱性がないこと（`innerHTML` / `eval` へのユーザー入力の直接代入を禁止）

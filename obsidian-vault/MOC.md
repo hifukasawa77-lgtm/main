@@ -61,6 +61,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0032-marketer-data-driven-evolve-loop]] — マーケターを反応駆動の週次学習ループへ（個別ゲーム自動告知＋反応計測＋/marketer-evolve）
 - [[0033-note-monetization-automation-boundary]] — noteの自動化境界を「書くまで」に置く（規約リスク＞収益）
 - [[0034-agent-contract-and-least-privilege]] — 全エージェントに契約・最小権限・必須検査を導入し検査#14で強制（19体→22体）
+- [[0035-self-improve-2026-09-27-promotions]] — Routine修正後初の/self-improve実行。検査#15の盲点修正（ブランチ側成果物を見ていなかった）＋学び5件をverifier/design/seo-audit/CLAUDE.mdへ昇格＋未マージPRバックログ発見
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約

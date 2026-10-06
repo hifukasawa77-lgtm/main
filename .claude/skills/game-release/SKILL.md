@@ -11,6 +11,7 @@ description: 完成したゲーム/ツールを公開する一連のリリース
 
 ### 1. 品質ゲート（必須）
 ```bash
+bash .claude/skills/required-checks/required-checks.sh --run # 触ったファイルに対応する必須検査を割り出して一括実行
 bash .claude/skills/release-check/release-check.sh          # 混入・SRI・シークレット
 bash .claude/skills/dynamic-test/run.sh <ゲーム.html>       # 動作検証＋スクショ取得
 bash .claude/skills/seo-audit/seo-audit.sh <ゲーム.html>    # OGP（欠落ならテンプレで是正）

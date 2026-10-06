@@ -99,6 +99,36 @@ function commitDate(sha) {
   } catch { return null; }
 }
 
+/**
+ * 成果物ブランチの木の中にある obsidian-vault/01-Daily/*.md にマーカーが無いかを見る。
+ * ブランチ型のRoutineは main へマージされるまでAの「main上のDaily」検査からは永遠に見えない
+ * （2026-09-27実例: note-post はブランチへ正しく痕跡付きDailyをコミットしていたが、
+ * PRを作る権限が無いため main には一度も入らず、Aだけを見ると「一度も動いていない」に見えた）。
+ * sha は commitDate 等で既に `git fetch` 済みである前提（未フェッチなら null を返す）。
+ */
+function newestMarkerDateInBranch(sha, skill) {
+  if (!sha) return null;
+  let files;
+  try {
+    files = execFileSync('git', ['ls-tree', '-r', '--name-only', sha, '--', 'obsidian-vault/01-Daily'],
+      { cwd: ROOT, encoding: 'utf8', timeout: 10000 }).trim().split('\n').filter(Boolean);
+  } catch { return null; }
+  const re = new RegExp(`<!--\\s*routine:${skill}\\s*-->`);
+  let newest = null;
+  for (const f of files) {
+    const base = path.basename(f);
+    if (!/^\d{4}-\d{2}-\d{2}\.md$/.test(base)) continue;
+    let content;
+    try {
+      content = execFileSync('git', ['show', `${sha}:${f}`], { cwd: ROOT, encoding: 'utf8', timeout: 10000 });
+    } catch { continue; }
+    if (!re.test(content)) continue;
+    const d = base.slice(0, 10);
+    if (!newest || d > newest) newest = d;
+  }
+  return newest;
+}
+
 // ── 本体 ───────────────────────────────────────────────────
 const rows = parseRoutineTable(readFileSync(path.join(ROOT, 'CLAUDE.md'), 'utf8'));
 if (!rows) { console.log('CLAUDE.md に「定期実行（Routine）一覧」が無い'); process.exit(1); }
@@ -107,26 +137,42 @@ if (rows.length === 0) { console.log('Routine一覧の表から行を抽出で�
 console.log(`CLAUDE.md の Routine ${rows.length}本の成果物を検査する`);
 console.log('（表に載っているなら動いている証跡があること。動かないなら表から外して停止する）\n');
 
-console.log('== A. Daily の実行痕跡マーカーの鮮度 ==');
+// ブランチのSHAは A・B 両方で使うので先に一度だけ解決する（B側の git fetch を使い回す）。
+let offline = false;
+const branchSha = new Map();
+for (const r of rows) {
+  const br = artifactBranch(r.artifact);
+  if (!br) continue;
+  const sha = remoteBranch(br);
+  if (sha === undefined) offline = true;
+  branchSha.set(r.skill, sha);
+  if (sha) { try { execFileSync('git', ['fetch', '-q', 'origin', sha], { cwd: ROOT, timeout: 30000, stdio: 'ignore' }); } catch {} }
+}
+
+console.log('== A. Daily の実行痕跡マーカーの鮮度（main + 未マージの成果物ブランチ）==');
 for (const r of rows) {
   const tol = toleranceDays(r.schedule);
-  const d = newestMarkerDate(r.skill);
+  const sha = branchSha.get(r.skill);
+  const dLocal = newestMarkerDate(r.skill);
+  const dBranch = sha ? newestMarkerDateInBranch(sha, r.skill) : null;
+  const d = [dLocal, dBranch].filter(Boolean).sort().pop() || null;
   if (!d) {
-    bad(`/${r.skill}: 実行痕跡マーカー <!-- routine:${r.skill} --> がDailyに一度も無い（起動しても何も出していない／マーカーを書かせていない）`);
+    bad(`/${r.skill}: 実行痕跡マーカー <!-- routine:${r.skill} --> がDailyに一度も無い（main・成果物ブランチとも）（起動しても何も出していない／マーカーを書かせていない）`);
   } else if (daysAgo(d) > tol) {
     bad(`/${r.skill}: 最後の痕跡が ${d}（${daysAgo(d)}日前、許容 ${tol}日）。${r.schedule} のはずが動いていない`);
+  } else if (!dLocal && dBranch) {
+    ok(`/${r.skill}: 痕跡 ${d}（${daysAgo(d)}日前 ≤ ${tol}日、成果物ブランチ側。main未マージ＝要PR化）`);
   } else {
     ok(`/${r.skill}: 痕跡 ${d}（${daysAgo(d)}日前 ≤ ${tol}日）`);
   }
 }
 
 console.log('== B. 成果物ブランチの実在と鮮度 ==');
-let offline = false;
 for (const r of rows) {
   const br = artifactBranch(r.artifact);
   if (!br) { ok(`/${r.skill}: 成果物がブランチではない（${r.artifact.slice(0, 32)}…）— Aの痕跡で判定`); continue; }
-  const sha = remoteBranch(br);
-  if (sha === undefined) { offline = true; warn(`/${r.skill}: origin に問い合わせできない（ネットワーク無し）— 判定を保留`); continue; }
+  const sha = branchSha.get(r.skill);
+  if (sha === undefined) { warn(`/${r.skill}: origin に問い合わせできない（ネットワーク無し）— 判定を保留`); continue; }
   if (sha === null) { bad(`/${r.skill}: 成果物ブランチ ${br} が origin に存在しない`); continue; }
   const cd = commitDate(sha);
   const tol = toleranceDays(r.schedule);
@@ -140,11 +186,13 @@ if (offline) console.log('  ※ ネットワークが無い環境では B は保
 console.log('');
 if (fail) {
   console.log('==> verify-routine-delivery: 問題あり ❌');
-  console.log('    直し方は2つ。どちらかを必ずやる（放置すると「起動はしている」が成功として通り続ける）:');
+  console.log('    直し方は3つ。当てはまるものをやる（放置すると「起動はしている」が成功として通り続ける）:');
   console.log('      1) Routineを直す — トリガーの sources にリポジトリが入っているかを確認する');
   console.log('         （create_trigger には source 指定が無いので、claude.ai の Routines 画面で作り直すか');
   console.log('          persistent_session_id でリポジトリを持つセッションへ紐づける）');
-  console.log('      2) 直せないなら停止して CLAUDE.md の表から外す（動かないものを載せ続けない）');
+  console.log('      2) Aが「成果物ブランチ側」で通っているのにBが古い/無い場合は、動いてはいるがmainに入っていないだけ。');
+  console.log('         そのブランチをPRにしてmainへ入れる（Routineセッション自身はGitHubツールを持たないことが多い）');
+  console.log('      3) 直せないなら停止して CLAUDE.md の表から外す（動かないものを載せ続けない）');
 } else {
   console.log('==> verify-routine-delivery: 問題なし ✅');
 }

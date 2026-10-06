@@ -20,8 +20,8 @@ export const securityHeaders = {
 export function publicHeaders(origin) {
   return { ...securityHeaders,
     ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Vocalis-Code, X-Vocalis-Admin',
   };
 }
 
