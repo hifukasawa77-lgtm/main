@@ -11,7 +11,8 @@ Artwork was generated with the available image-generation tool. The tool does no
 - All 23 regular enemies: four movement poses each, plus four hidden-worm poses (96 frames).
 - All eight bosses: four movement poses each (32 frames).
 - Environment objects: 20; castle objects: 15; terrain tiles: nine; equipment, projectiles and effects: 24.
-- Total: 14 atlases, 232 extracted frames. `manifest.json` records source sizes and encoded byte counts.
+- Additional directional townsperson walks: man and woman, four directions and four poses each (32 frames).
+- Total: 16 atlases, 264 extracted frames. `manifest.json` records source sizes and encoded byte counts.
 
 ## Rendering and movement
 
@@ -41,4 +42,10 @@ Room scrolling keeps overworld coordinates fixed while inside a dungeon. The HUD
 
 Run `node scripts/verify-fahren-hd.cjs` (Node and Python with Pillow required).
 
-The actual generated RGBA pixels were decoded and loaded through `graphics.js` with an instrumented Canvas API. Verification covered all 232 slices, all character animation keys, rendering all 625 field rooms and 56 dungeon rooms, connected doors, side branches, entrance interaction, deepest-room-only bosses, exit, dungeon save/load and cleared-boss persistence, solid/passable movement, bush cutting, distance-based animation, continued wing cycles, four weapon types triggering the final ending, and existing save/load behavior. This verifies game logic and asset data; it does not substitute for visual testing in an unrestricted browser.
+The actual generated RGBA pixels were decoded and loaded through `graphics.js` with an instrumented Canvas API. Verification covered all 264 slices, all character animation keys, rendering all 625 field rooms and 56 dungeon rooms, connected doors, side branches, entrance interaction, deepest-room-only bosses, exit, dungeon save/load and cleared-boss persistence, solid/passable movement, bush cutting, distance-based animation, continued wing cycles, four weapon types triggering the final ending, and existing save/load behavior. This verifies game logic and asset data; it does not substitute for visual testing in an unrestricted browser.
+
+## Townsperson gait and sword sweep
+
+Male and female townspeople use separate four-direction walk atlases with one common scale and foot baseline across directions. A four-pose cycle covers 24 logical pixels; motion accelerates and decelerates over ten ticks. Walks preserve their facing when stopped and cannot leave the current screen. Breathing deformation is suppressed while walking.
+
+The sword attack lasts 24 simulation ticks (0.4 seconds), including wind-up and recovery. The blade rotates through a 143-degree arc with a short trail and torso follow-through. A swept blade hitbox follows the rendered angle during the active phase only; wind-up and recovery do not deal damage.
