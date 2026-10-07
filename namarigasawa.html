@@ -194,13 +194,13 @@ const G={mode:'demo',scene:'play',t:0,fade:1,doc:null,paused:false,intro:0,msg:[
   gun:false,mag:0,res:0,herb:0,keys:{},fuse:0,flags:{vent:false},hp:100,torch:true,
   items:[],zombies:[],cp:null,reload:0,fireCd:0,kick:0,deadT:0,clearT:0,notes:{},stats:{kills:0,time:0},hint:null,nextGroan:3,lockMsgT:0,field:null,fieldT:0,heart:0,step:0,bobP:0};
 const P={x:5.5,y:33.5,yaw:-Math.PI/2,vx:0,vy:0};
-function mkZombie(a){const boss=false;return{x:a[0],y:a[1],costume:a[2],hp:a[2]===3?4:3,mhp:a[2]===3?4:3,state:'idle',stun:0,atk:0,atkAnim:0,alert:0,wob:rnd()*6,home:[a[0],a[1]],wx:a[0],wy:a[1],wt:rnd()*3,lost:0,hit:0,boss:false,pose:0,spd:1.1+rnd()*.2,face:rnd()*TAU};}
+function mkZombie(a){const boss=false;return{x:a[0],y:a[1],costume:a[2],hp:a[2]===3?4:3,mhp:a[2]===3?4:3,state:'idle',stun:0,atk:0,atkAnim:0,alert:0,wob:rnd()*6,home:[a[0],a[1]],wx:a[0],wy:a[1],wt:rnd()*3,lost:0,hit:0,boss:false,pose:0,spd:.78+rnd()*.17,face:rnd()*TAU,ct:0};}
 function newWorld(){
   buildMap();bakeLights();SEEN.fill(0);
   G.items=ITEMS0.map(i=>Object.assign({taken:false},i));
   G.zombies=ZOM0.map(mkZombie);
   // 坑長(ボス) 換気室の守り
-  const b=mkZombie([71.5,6.5,3]);b.boss=true;b.hp=b.mhp=16;b.spd=1.0;G.zombies.push(b);
+  const b=mkZombie([71.5,6.5,3]);b.boss=true;b.hp=b.mhp=16;b.spd=.85;G.zombies.push(b);
   G.gun=false;G.mag=0;G.res=0;G.herb=0;G.keys={};G.fuse=0;G.flags={vent:false};G.hp=100;G.torch=true;G.notes={};G.stats={kills:0,time:0};
   G.msg=[];G.doc=null;G.reload=0;G.fireCd=0;G.deadT=0;G.clearT=0;
   P.x=5.5;P.y=33.5;P.yaw=-Math.PI/2;P.vx=P.vy=0;
@@ -265,6 +265,7 @@ const sfx={
   pick(){tone(880,.1,'triangle',.1);tone(1320,.14,'triangle',.1,0,.08);},
   paper(){noise(.25,.08,3500,0,'highpass');},
   hit(){tone(90,.12,'sawtooth',.2,-40);noise(.15,.25,900);},
+  punch(){noise(.09,.12,1800,0,'highpass');tone(150,.09,'sine',.12,-60);},
   hurt(){noise(.3,.4,500);tone(120,.3,'sawtooth',.2,-60);},
   zdie(){tone(100,.6,'sawtooth',.18,-70);noise(.4,.2,500);},
   herb(){for(let i=0;i<4;i++)tone(500+i*180,.18,'sine',.09,0,i*.1);},
@@ -396,13 +397,30 @@ function interact(){
   }
   return false;
 }
+function punch(){
+  if(G.fireCd>0||G.reload>0&&G.gun)return;
+  G.fireCd=.48;G.punchT=.28;G.kick=.35;sfx.punch();
+  const fx=Math.cos(P.yaw),fy=Math.sin(P.yaw);let best=null,bd=9;
+  for(const z of G.zombies){
+    if(z.hp<=0)continue;const dx=z.x-P.x,dy=z.y-P.y,d=hyp(dx,dy);
+    if(d>1.25||d<.01)continue;if(Math.abs(angDiff(P.yaw,Math.atan2(dy,dx)))>.75)continue;
+    if(d<bd){bd=d;best=z;}
+  }
+  if(!best)return;
+  const crit=rnd()<.15,dmg=crit?2:1;best.hp-=dmg;best.hit=.25;best.stun=.5;best.state='chase';best.ct=0;best.alert=3;best.atk=Math.max(best.atk,.5);
+  sfx.hit();G.shake=Math.max(G.shake,4);
+  const dd=hyp(best.x-P.x,best.y-P.y)||1;moveZ(best,(best.x-P.x)/dd*.55,(best.y-P.y)/dd*.55);
+  if(crit)say('クリーンヒット!',1.2);
+  if(best.hp<=0){best.state='dead';best.hp=0;G.stats.kills++;sfx.zdie();}
+  else if(AC&&rnd()<.4)groan(.5);
+}
 function fire(){
-  if(!G.gun){if(G.fireCd<=0){say('銃がない……',2);G.fireCd=.6;}return;}
+  if(!G.gun){punch();return;}
   if(G.fireCd>0||G.reload>0)return;
   if(G.mag<=0){sfx.empty();G.fireCd=.35;if(G.res>0)startReload();else say('弾がない!',2);return;}
   G.mag--;G.fireCd=.34;G.kick=1;G.flash=.12;G.shake=Math.max(G.shake,2.5);sfx.shot();
   // 銃声で周囲が気づく
-  for(const z of G.zombies)if(z.hp>0&&hyp(z.x-P.x,z.y-P.y)<14){z.alert=Math.max(z.alert,6);}
+  for(const z of G.zombies)if(z.hp>0&&hyp(z.x-P.x,z.y-P.y)<9){z.alert=Math.max(z.alert,3);}
   // ヒットスキャン
   const fx=Math.cos(P.yaw),fy=Math.sin(P.yaw);let best=null,bd=1e9;
   for(const z of G.zombies){
@@ -412,7 +430,7 @@ function fire(){
     if(al<bd){bd=al;best=z;}
   }
   if(best){
-    const crit=rnd()<.18,dmg=crit?2:1;best.hp-=dmg;best.hit=.25;best.stun=.35;best.alert=8;best.state='chase';sfx.hit();
+    const crit=rnd()<.18,dmg=crit?2:1;best.hp-=dmg;best.hit=.25;best.stun=.35;best.alert=4;best.state='chase';best.ct=0;sfx.hit();
     if(crit)say('ヘッドショット!',1.2);
     if(best.hp<=0){best.state='dead';best.hp=0;G.stats.kills++;sfx.zdie();}
     else if(AC&&rnd()<.4)groan(.6);
@@ -443,17 +461,18 @@ function updateZombies(dt){
     const dx=P.x-z.x,dy=P.y-z.y,d=hyp(dx,dy);
     const near=d<22;
     if(!near&&z.state!=='chase')continue;
-    const see=d<(G.torch?10:7)&&losGrid(z.x,z.y,P.x,P.y);
-    const sneakTooClose=d<2.6&&see;
+    const see=d<(G.torch?8:5.5)&&losGrid(z.x,z.y,P.x,P.y);
+    const sneakTooClose=d<2&&see;
     if(z.state==='idle'){
-      if((see&&d<(G.torch?8:5.5))||sneakTooClose||z.alert>0){z.state='chase';z.lost=0;if(near&&d<16&&G.nextGroan<=0){groan(clamp(1-d/16,.2,1));G.nextGroan=2+rnd()*3;}}
+      if((see&&d<(G.torch?6.5:4.5))||sneakTooClose||z.alert>0){z.state='chase';z.lost=0;z.ct=0;if(near&&d<16&&G.nextGroan<=0){groan(clamp(1-d/16,.2,1));G.nextGroan=2+rnd()*3;}}
       else{ // うろうろ
         z.wt-=dt;if(z.wt<=0){z.wt=2+rnd()*3;z.wx=z.home[0]+(rnd()-.5)*3;z.wy=z.home[1]+(rnd()-.5)*3;}
         const wx=z.wx-z.x,wy=z.wy-z.y,wd=hyp(wx,wy);if(wd>.3){const s=.35*dt;moveZ(z,wx/wd*s,wy/wd*s);z.face=Math.atan2(wy,wx);z.pose=1;}else z.pose=0;
       }
     }else if(z.state==='chase'){
       if(see){z.lost=0;}else z.lost+=dt;
-      if(z.lost>7&&d>10){z.state='idle';continue;}
+      z.ct+=dt;
+      if((z.lost>2.5&&d>4.5)||(z.ct>10&&d>3)||(d>14)){z.state='idle';z.ct=0;z.alert=0;continue;}
       if(d<1.0){
         z.pose=2;
         if(z.atk<=0&&z.stun<=0){z.atk=z.boss?1.4:1.1;z.atkAnim=.45;z.hitT=.26;}
@@ -482,8 +501,9 @@ function playerStep(dt,inp){
   movePlayer(P.vx*dt,P.vy*dt);
   const spd=hyp(P.vx,P.vy);
   G.bobP+=spd*dt*2.2;G.step+=spd*dt;
-  if(G.step>(inp.run?1.1:.85)){G.step=0;const f=FL[ID(Math.floor(P.x),Math.floor(P.y))];sfx.step(f===2?2:f===1?1:f===3?3:0,inp.run?1.3:.8);if(inp.run){for(const z of G.zombies)if(z.hp>0&&hyp(z.x-P.x,z.y-P.y)<5)z.alert=Math.max(z.alert,2);}}
+  if(G.step>(inp.run?1.1:.85)){G.step=0;const f=FL[ID(Math.floor(P.x),Math.floor(P.y))];sfx.step(f===2?2:f===1?1:f===3?3:0,inp.run?1.3:.8);if(inp.run){for(const z of G.zombies)if(z.hp>0&&hyp(z.x-P.x,z.y-P.y)<3.5)z.alert=Math.max(z.alert,1.5);}}
   if(inp.fire)fire();
+  if(inp.melee&&G.gun)punch();
   if(inp.use){inp.use=false;interact();}
   // 自動拾得
   for(const it of G.items){if(it.taken)continue;if(it.t==='herb'||it.t==='ammo'||it.t==='key'||it.t==='pistol'||it.t==='fuse'){if(hyp(it.x-P.x,it.y-P.y)<.7)pickup(it);}}
@@ -522,6 +542,7 @@ function botInput(dt){
   // 戦う
   let foe=null,fd=99;
   for(const z of G.zombies){if(z.hp<=0)continue;const d=hyp(z.x-P.x,z.y-P.y);if(d<7&&d<fd&&losGrid(P.x,P.y,z.x,z.y)){foe=z;fd=d;}}
+  if(foe&&!G.gun&&fd<1.2){const want=Math.atan2(foe.y-P.y,foe.x-P.x),d=angDiff(P.yaw,want);P.yaw+=clamp(d,-7*dt,7*dt);if(Math.abs(d)<.3)inp.fire=true;return inp;}
   if(foe&&G.gun&&G.mag>0){
     const want=Math.atan2(foe.y-P.y,foe.x-P.x),d=angDiff(P.yaw,want);P.yaw+=clamp(d,-6*dt,6*dt);
     if(Math.abs(d)<.12&&fd<6.5)inp.fire=true;
@@ -695,6 +716,13 @@ function updateEcg(dt){
   if(G.hp<35&&G.hp>0){G.heart-=dt;if(G.heart<=0){G.heart=.8;sfx.beat();}}
 }
 function drawWeapon(){
+ if(!G.gun&&G.punchT>0){
+  const pk=Math.sin((1-G.punchT/.28)*Math.PI);
+  ctx.save();ctx.translate(VW/2+150-pk*150,VH-60-pk*190);ctx.rotate(-.25+pk*.2);const sc=1+pk*.7;ctx.scale(sc,sc);
+  ctx.fillStyle='#c8a78a';ctx.fillRect(-34,-34,68,74);ctx.fillStyle='#b08c70';for(let i=0;i<3;i++)ctx.fillRect(-26+i*18,-34,3,22);
+  ctx.fillStyle='#d8b898';ctx.fillRect(-30,40,60,90);ctx.restore();
+  return;
+ }
  const k=G.kick,by=VH-26+k*26+Math.sin(G.bobP)*Math.min(1,hyp(P.vx,P.vy)/2)*5;
  ctx.save();ctx.translate(VW/2+90,by);ctx.rotate(-.06-k*.1);
  ctx.drawImage(G.gun?gunAsset:torchAsset,-128,-212,256,256);
@@ -708,7 +736,7 @@ function drawHUD(){
   // 弾薬
   ctx.drawImage(panelAsset,VW-206,VH-110,182,84);ctx.drawImage(frameAsset,VW-210,VH-114,190,92);
   if(G.gun){otext(G.reload>0?'装填中…':String(G.mag),VW-170,VH-70,G.reload>0?18:36,G.mag<=2?'#e07050':'#f2efe0','center');otext('/ '+G.res,VW-106,VH-62,22,'#c8c4b0','left');}
-  else otext('拳銃なし',VW-115,VH-70,22,'#9a9688','center');
+  else{otext('素手',VW-115,VH-76,26,'#d8d4c0','center');otext('Space / クリックで殴る',VW-115,VH-54,13,'#9a9688','center');}
   otext('薬草 ×'+G.herb+'  [H]',VW-115,VH-38,15,'#7fe08a');
   // 鍵
   let ky=VH-150;const kn={police:'駐在所の鍵',office:'事務所の鍵',gate:'ゲートの鍵'};
@@ -750,7 +778,7 @@ function drawTitle(){
   otext('ガスに耐性を持つ大学生・朝倉 蓮は、一人、生き残った――。',VW/2,288,17,'#d8d4c0','center','rgba(0,0,0,.9)',FONT);
   if(Math.floor(G.t*1.5)%2===0)otext('なにかキーを おして スタート',VW/2,VH-176,30,'#ffe08a');
   ctx.fillStyle='rgba(0,0,0,.7)';ctx.fillRect(VW/2-370,VH-146,740,116);
-  otext('WASD いどう / ←→・マウス みまわす / Shift はしる / Space・クリック うつ / R そうてん',VW/2,VH-124,16,'#e0e4d0');
+  otext('WASD いどう / ←→・マウス みまわす / Shift はしる / Space・クリック うつ(銃なしは なぐる) / V なぐる / R そうてん',VW/2,VH-124,16,'#e0e4d0');
   otext('E しらべる・拾う / H 薬草 / F 懐中電灯 / Tab マップ / P ポーズ / M おと',VW/2,VH-98,16,'#e0e4d0');
   otext('鍵と手がかりを集め、坑道の換気装置を復旧して脱出せよ。音と光に屍人は集まる。',VW/2,VH-68,16,'#b8c0a8');
   otext('ただいま デモプレイ中',VW/2,VH-44,13,'rgba(255,255,255,.5)');
@@ -802,7 +830,7 @@ function newGame(mode){
   for(const k in keys)keys[k]=false;
 }
 function update(dt){
-  G.t+=dt;G.shake*=Math.exp(-6*dt);G.flash=Math.max(0,G.flash-dt);G.hurt=Math.max(0,G.hurt-dt);G.kick=Math.max(0,G.kick-dt*5);
+  G.t+=dt;G.punchT=Math.max(0,(G.punchT||0)-dt);G.shake*=Math.exp(-6*dt);G.flash=Math.max(0,G.flash-dt);G.hurt=Math.max(0,G.hurt-dt);G.kick=Math.max(0,G.kick-dt*5);
   if(G.paused||G.doc)return;
   G.fade=Math.max(0,G.fade-dt/1.2);G.intro=Math.max(0,G.intro-dt);G.lockMsgT=Math.max(0,G.lockMsgT-dt);
   for(const m of G.msg)m.age+=dt;G.msg=G.msg.filter(m=>m.age<m.d);
@@ -816,7 +844,7 @@ function update(dt){
   let inp;
   if(G.mode==='play'){
     const k=keys;
-    inp={fwd:(k.KeyW||k.ArrowUp?1:0)-(k.KeyS||k.ArrowDown?1:0),strafe:(k.KeyD?1:0)-(k.KeyA?1:0),turn:(k.ArrowRight||k.KeyE&&false?1:0)-(k.ArrowLeft?1:0),run:!!(k.ShiftLeft||k.ShiftRight),fire:!!(k.Space||mouse.down||k.KeyZ),use:!!G.useReq};
+    inp={fwd:(k.KeyW||k.ArrowUp?1:0)-(k.KeyS||k.ArrowDown?1:0),strafe:(k.KeyD?1:0)-(k.KeyA?1:0),turn:(k.ArrowRight||k.KeyE&&false?1:0)-(k.ArrowLeft?1:0),run:!!(k.ShiftLeft||k.ShiftRight),fire:!!(k.Space||mouse.down||k.KeyZ),melee:!!k.KeyV,use:!!G.useReq};
     G.useReq=false;
   }else{inp=botInput(dt);}
   playerStep(dt,inp);
