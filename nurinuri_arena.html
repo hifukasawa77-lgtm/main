@@ -2,15 +2,38 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>ぬりぬりアリーナ</title>
 <style>
 html,body{margin:0;height:100%;background:#080813;overflow:hidden;cursor:crosshair}
 canvas{display:block;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);image-rendering:auto}
+#tui{display:none;position:fixed;inset:0;pointer-events:none;z-index:5;-webkit-user-select:none;user-select:none;touch-action:none}
+body.touch #tui{display:block}
+#tui .zone{position:absolute;bottom:0;top:30%;pointer-events:auto;touch-action:none}
+#zl{left:0;width:42%}#zr{right:0;width:42%}
+.stick{position:absolute;width:120px;height:120px;margin:-60px 0 0 -60px;border-radius:50%;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.35);display:none;pointer-events:none}
+.stick i{position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;background:rgba(255,255,255,.4)}
+.base{position:absolute;bottom:max(18px,env(safe-area-inset-bottom));width:120px;height:120px;border-radius:50%;border:2px dashed rgba(255,255,255,.22);pointer-events:none}
+#bl{left:max(30px,env(safe-area-inset-left))}#br{right:max(30px,env(safe-area-inset-right))}
+.btn{position:absolute;pointer-events:auto;touch-action:none;width:58px;height:58px;border-radius:50%;border:2px solid rgba(255,255,255,.55);background:rgba(20,20,58,.55);color:#fff;font:700 12px/1.1 sans-serif;display:flex;align-items:center;justify-content:center;text-align:center}
+.btn.on{background:rgba(255,242,90,.6);color:#111}
+#bSwim{right:176px;bottom:24px}#bBomb{right:150px;bottom:92px}#bSpec{right:222px;bottom:92px;width:50px;height:50px}
+#bPause{right:max(10px,env(safe-area-inset-right));top:8px;width:40px;height:40px;font-size:16px}
+#rot{display:none;position:fixed;inset:0;z-index:99;background:#080813;color:#fff;font:700 18px/1.7 sans-serif;text-align:center;align-items:center;justify-content:center;flex-direction:column}
+#rot b{font-size:64px;display:block;animation:rt 2s ease-in-out infinite}
+@keyframes rt{0%,30%{transform:rotate(0)}70%,100%{transform:rotate(-90deg)}}
+@media (orientation:portrait){body.touch #rot{display:flex}}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="tui">
+ <div id="bl" class="base"></div><div id="br" class="base"></div>
+ <div id="zl" class="zone"></div><div id="zr" class="zone"></div>
+ <div id="sl" class="stick"><i></i></div><div id="sr" class="stick"><i></i></div>
+ <div id="bSwim" class="btn">およぐ<br>SWIM</div><div id="bBomb" class="btn">ボム<br>BOMB</div><div id="bSpec" class="btn">とくせい</div><div id="bPause" class="btn">⏸</div>
+</div>
+<div id="rot"><b>📱</b>画面を横向きにしてください<br>Please rotate your device to landscape</div>
 <script>
 (()=>{
 'use strict';
@@ -169,6 +192,8 @@ function newMatch(mode){
 }
 
 /* ---------------- 入力 ---------------- */
+const IS_TOUCH=matchMedia('(pointer:coarse)').matches||'ontouchstart' in window;
+const T={mx:0,my:0,ax:0,ay:0,aim:false,swim:false,bomb:false,spec:false};
 const keys={},mouse={x:W/2,y:H/2,down:false,right:false,on:false};
 addEventListener('keydown',ev=>{
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab'].includes(ev.code))ev.preventDefault();
@@ -197,15 +222,61 @@ cv.addEventListener('mousedown',ev=>{
 addEventListener('mouseup',ev=>{if(ev.button===0)mouse.down=false;if(ev.button===2)mouse.right=false;});
 cv.addEventListener('contextmenu',ev=>ev.preventDefault());
 
+/* ---------------- タッチ操作(スマホ横画面) ---------------- */
+function tapAction(){
+  audioInit();if(AC&&AC.state==='suspended')AC.resume();
+  if(G.mode==='demo'){newMatch('play');return true;}
+  if(G.paused){G.paused=false;return true;}
+  if(G.phase==='result'&&G.resT>1.2){newMatch('play');return true;}
+  return false;
+}
+function goLandscape(){
+  try{const d=document.documentElement;const p=d.requestFullscreen?d.requestFullscreen():null;
+    const lock=()=>{try{screen.orientation&&screen.orientation.lock&&screen.orientation.lock('landscape').catch(()=>{});}catch(e){}};
+    if(p&&p.then)p.then(lock,()=>{});else lock();}catch(e){}
+}
+if(IS_TOUCH){
+  document.body.classList.add('touch');
+  const R_MAX=55;
+  function stick(zoneId,knobId,onMove,onEnd){
+    const z=document.getElementById(zoneId),k=document.getElementById(knobId),kn=k.firstElementChild;let pid=null,ox=0,oy=0;
+    z.addEventListener('pointerdown',ev=>{ev.preventDefault();if(pid!==null)return;
+      if(tapAction()){goLandscape();return;}
+      pid=ev.pointerId;z.setPointerCapture(pid);ox=ev.clientX;oy=ev.clientY;
+      k.style.display='block';k.style.left=ox+'px';k.style.top=oy+'px';kn.style.transform='';onMove(0,0,false);});
+    z.addEventListener('pointermove',ev=>{if(ev.pointerId!==pid)return;ev.preventDefault();
+      let dx=ev.clientX-ox,dy=ev.clientY-oy;const d=Math.hypot(dx,dy);
+      if(d>R_MAX){ox+=dx*(d-R_MAX)/d;oy+=dy*(d-R_MAX)/d;dx=ev.clientX-ox;dy=ev.clientY-oy;k.style.left=ox+'px';k.style.top=oy+'px';}
+      kn.style.transform='translate('+dx+'px,'+dy+'px)';
+      const m=Math.min(1,Math.hypot(dx,dy)/R_MAX);onMove(dx/(Math.hypot(dx,dy)||1),dy/(Math.hypot(dx,dy)||1),m>.3,m);});
+    const end=ev=>{if(ev.pointerId!==pid)return;pid=null;k.style.display='none';onEnd();};
+    z.addEventListener('pointerup',end);z.addEventListener('pointercancel',end);
+  }
+  stick('zl','sl',(x,y,on,m)=>{T.mx=on?x*Math.min(1,(m-.2)/.6):0;T.my=on?y*Math.min(1,(m-.2)/.6):0;},()=>{T.mx=T.my=0;});
+  stick('zr','sr',(x,y,on)=>{T.aim=on;if(on){T.ax=x;T.ay=y;}},()=>{T.aim=false;});
+  function hold(id,key){const b=document.getElementById(id);
+    b.addEventListener('pointerdown',ev=>{ev.preventDefault();if(tapAction())return;b.setPointerCapture(ev.pointerId);T[key]=true;b.classList.add('on');});
+    const up=()=>{T[key]=false;b.classList.remove('on');};b.addEventListener('pointerup',up);b.addEventListener('pointercancel',up);}
+  hold('bSwim','swim');hold('bBomb','bomb');hold('bSpec','spec');
+  document.getElementById('bPause').addEventListener('pointerdown',ev=>{ev.preventDefault();audioInit();
+    if(G.mode==='play'&&G.phase!=='result')G.paused=!G.paused;else tapAction();});
+  cv.addEventListener('pointerdown',ev=>{if(ev.pointerType==='mouse')return;ev.preventDefault();if(tapAction())goLandscape();});
+  const portraitCheck=()=>{if(innerHeight>innerWidth&&G.mode==='play'&&G.phase!=='result')G.paused=true;};
+  addEventListener('resize',portraitCheck);
+  addEventListener('orientationchange',portraitCheck);
+}
+
 function playerInput(e){
   const k=keys;
-  const mx=(k.KeyD?1:0)-(k.KeyA?1:0),my=(k.KeyS?1:0)-(k.KeyW?1:0);
+  let mx=(k.KeyD?1:0)-(k.KeyA?1:0),my=(k.KeyS?1:0)-(k.KeyW?1:0);
+  if(!mx&&!my){mx=T.mx;my=T.my;}
   const ax=(k.ArrowRight?1:0)-(k.ArrowLeft?1:0),ay=(k.ArrowDown?1:0)-(k.ArrowUp?1:0);
   let aim=null,fire=false;
   if(ax||ay){aim=Math.atan2(ay,ax);fire=true;}
+  else if(T.aim){aim=Math.atan2(T.ay,T.ax);fire=true;}
   else if(mouse.on){aim=Math.atan2(mouse.y-e.y,mouse.x-e.x);fire=mouse.down;}
   if(k.KeyF||k.KeyJ)fire=true;
-  return {mx,my,aim,fire,swim:!!(k.Space||k.ShiftLeft||k.ShiftRight||mouse.right),bomb:!!(k.KeyE||k.KeyZ),spec:!!(k.KeyQ||k.KeyX)};
+  return {mx,my,aim,fire,swim:!!(k.Space||k.ShiftLeft||k.ShiftRight||mouse.right||T.swim),bomb:!!(k.KeyE||k.KeyZ||T.bomb),spec:!!(k.KeyQ||k.KeyX||T.spec)};
 }
 
 /* ---------------- AI ---------------- */
@@ -629,7 +700,7 @@ function drawHint(){
   const a=hintT<14?1:clamp(1-(hintT-14)/2,0,1);if(a<=0)return;
   ctx.globalAlpha=a*.85;
   ctx.fillStyle='rgba(8,8,24,.75)';rrect(W/2-330,H-54,660,38,10);ctx.fill();
-  outlineText('WASD いどう  /  ↑↓←→ うつ  /  Space ひたっておよぐ(インク補給)  /  E ボム  /  Q とくせい  /  マウスでもOK',W/2,H-35,14,'#dfe3ff');
+  outlineText(IS_TOUCH?'左スティック いどう  /  右スティック ねらって うつ  /  およぐ(インク補給)  /  ボム  /  とくせい':'WASD いどう  /  ↑↓←→ うつ  /  Space ひたっておよぐ(インク補給)  /  E ボム  /  Q とくせい  /  マウスでもOK',W/2,H-35,14,'#dfe3ff');
   ctx.globalAlpha=1;
 }
 
@@ -645,9 +716,9 @@ function drawOverlay(){
     ctx.fillStyle=g;ctx.fillText('ぬりぬりアリーナ',0,0);
     ctx.restore();
     outlineText('INKY  ARENA  ─  4 vs 4  ぬりバトル',W/2,H/2+10,24,'#fff');
-    if(Math.floor(G.t*1.6)%2===0)outlineText('なにかキーを おして スタート!',W/2,H/2+90,34,'#fff25a');
+    if(Math.floor(G.t*1.6)%2===0)outlineText(IS_TOUCH?'画面を タッチして スタート!':'なにかキーを おして スタート!',W/2,H/2+90,34,'#fff25a');
     ctx.fillStyle='rgba(8,8,24,.75)';rrect(W/2-350,H/2+135,700,122,14);ctx.fill();
-    const L=['WASD : いどう　　↑ ↓ ← → : その方向にインクを うつ (マウス: ねらう/クリック)','Space / Shift : じぶんのインクの上で およぐ (はやい・インク回復・かくれる)','E : ボム　　Q : とくせい(ゲージが たまったら)　　M : 音 ON/OFF　　P : ポーズ','いろを たくさん ぬった チームの勝ち!  敵インクの上は おそくて ダメージ!'];
+    const L=IS_TOUCH?['左スティック : いどう　　右スティック : ねらった方向にインクを うつ','およぐ ボタン : じぶんのインクの上で およぐ (はやい・インク回復・かくれる)','ボム ボタン / とくせい ボタン(ゲージが たまったら)　　⏸ : ポーズ','いろを たくさん ぬった チームの勝ち!  敵インクの上は おそくて ダメージ!']:['WASD : いどう　　↑ ↓ ← → : その方向にインクを うつ (マウス: ねらう/クリック)','Space / Shift : じぶんのインクの上で およぐ (はやい・インク回復・かくれる)','E : ボム　　Q : とくせい(ゲージが たまったら)　　M : 音 ON/OFF　　P : ポーズ','いろを たくさん ぬった チームの勝ち!  敵インクの上は おそくて ダメージ!'];
     L.forEach((t,i)=>outlineText(t,W/2,H/2+158+i*26,15,'#dfe3ff'));
     outlineText('ただいま デモプレイ中',W/2,H-24,14,'rgba(255,255,255,.7)');
     return;
@@ -665,7 +736,7 @@ function drawOverlay(){
   if(G.phase==='result')drawResult();
   if(G.paused){
     ctx.fillStyle='rgba(6,6,20,.7)';ctx.fillRect(0,0,W,H);
-    outlineText('ポーズ中',W/2,H/2-20,72,'#fff');outlineText('P キー か クリックで さいかい',W/2,H/2+50,24,'#dfe3ff');
+    outlineText('ポーズ中',W/2,H/2-20,72,'#fff');outlineText(IS_TOUCH?'タッチで さいかい':'P キー か クリックで さいかい',W/2,H/2+50,24,'#dfe3ff');
   }
 }
 function drawResult(){
@@ -699,7 +770,7 @@ function drawResult(){
       outlineText('K '+e.kills+'   D '+e.deaths,x0+bw/2-34,y+19,18,'#dfe3ff','right');
     });
   }
-  if(G.mode==='play'&&G.resT>1.2&&Math.floor(G.t*2)%2===0)outlineText('Enter / Space : もういちど    Esc : タイトルへ',W/2,H-60,28,'#fff25a');
+  if(G.mode==='play'&&G.resT>1.2&&Math.floor(G.t*2)%2===0)outlineText(IS_TOUCH?'タッチで もういちど':'Enter / Space : もういちど    Esc : タイトルへ',W/2,H-60,28,'#fff25a');
 }
 
 function draw(){
