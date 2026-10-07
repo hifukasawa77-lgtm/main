@@ -148,6 +148,58 @@ const run=code=>vm.runInContext(code,sandbox);
     }`);
     console.log('PASS townsperson facing, smooth start/stop, stride and screen boundary; four-direction sword arcs, wind-up/recovery and moving damage area');
     run(`{
+        const setup=()=>{
+            startNewGame();const room=getRoom(currentRoomX,currentRoomY);
+            room.tiles=Array.from({length:SCREEN_ROWS},()=>Array(SCREEN_COLS).fill(0));room.npcs=[];
+            player.x=100;player.y=100;keys.Space=false;keys.KeyZ=false;
+        };
+        for(const dir of ['up','down','left','right']){
+            setup();player.dir=dir;keys.Space=true;keyPress.Space=true;player.update();
+            for(let n=1;n<SWORD_CHARGE_FRAMES;n++)player.update();
+            assert(player.isCharging);assert(!player.isAttacking);assert.equal(player.swordHitbox,null);
+            assert.equal(player.swordHoldFrames,SWORD_CHARGE_FRAMES);
+            const position=[player.x,player.y];keys.KeyD=true;player.update();keys.KeyD=false;
+            assert.equal(player.x,position[0]);assert.equal(player.y,position[1]);player.draw();
+            keys.Space=false;player.update();assert(player.spinAttack);assert.equal(player.attackTimer,SPIN_ATTACK_FRAMES);
+            const pose=getSwordPose(player),targets=[[0,-25],[0,25],[-25,0],[25,0]].map(([dx,dy])=>({x:pose.x+dx-3,y:pose.y+dy-3,w:6,h:6}));
+            const hits=new Set();
+            for(let n=0;n<SPIN_ATTACK_FRAMES;n++){
+                player.draw();player.update();
+                if(player.swordHitbox)targets.forEach((target,index)=>{if(checkAABB(player.swordHitbox,target))hits.add(index);});
+            }
+            assert.equal(hits.size,4,'Spin sweeps every side');
+            assert(!player.spinAttack&&!player.isAttacking&&!player.isCharging);
+            assert.equal(player.swordHitbox,null);assert(!player.swordHoldActive);
+        }
+        setup();keys.KeyZ=true;keyPress.KeyZ=true;player.update();
+        for(let n=1;n<SWORD_CHARGE_FRAMES-1;n++)player.update();
+        assert.equal(player.swordHoldFrames,SWORD_CHARGE_FRAMES-1);
+        keys.KeyZ=false;player.update();assert(!player.spinAttack&&!player.isCharging,'Early release cannot spin');
+        setup();keys.Space=true;keys.KeyZ=true;keyPress.Space=true;keyPress.KeyZ=true;player.update();
+        assert(!keyPress.Space&&!keyPress.KeyZ,'Gamepad aliases cannot queue a duplicate slash');
+        for(let n=1;n<SWORD_CHARGE_FRAMES;n++)player.update();
+        openPauseMenu();assert(!player.isCharging&&!player.swordHoldActive);
+        keys.Space=false;keys.KeyZ=false;gameState='PLAYING';player.update();assert(!player.spinAttack);
+        setup();keys.Space=true;keyPress.Space=true;player.update();
+        for(let n=1;n<SWORD_CHARGE_FRAMES;n++)player.update();
+        const saved=createSaveData();applySaveData(saved);assert(!player.isCharging&&!player.swordHoldActive&&!player.spinAttack);
+        keys.Space=false;keys.KeyZ=false;
+        setup();keys.Space=true;keyPress.Space=true;player.update();
+        for(let n=1;n<SWORD_CHARGE_FRAMES;n++)player.update();
+        const room=getRoom(currentRoomX,currentRoomY),origin=getSwordPose(player);
+        const enemies=[[0,-25],[0,25],[-25,0],[25,0]].map(([dx,dy])=>{
+            const enemy=new Enemy(origin.x+dx-7,origin.y+dy-7,currentRoomX,currentRoomY,'stone_shooter');
+            enemy.health=5;enemy.update=()=>{enemy.knockbackTimer=0;};return enemy;
+        });
+        room.enemies=enemies;player.invincibleTimer=1000;
+        const bushes=[[4,6],[8,6],[6,4],[6,8]];for(const [c,r] of bushes)room.tiles[r][c]=43;
+        keys.Space=false;updatePlaying();
+        for(let n=0;n<SPIN_ATTACK_FRAMES;n++)updatePlaying();
+        for(const enemy of enemies)assert.equal(enemy.health,4,'Each surrounding enemy is hit once per spin');
+        for(const [c,r] of bushes)assert.equal(room.tiles[r][c],0,'Spin cuts surrounding bushes');
+    }`);
+    console.log('PASS hold/release charge threshold, 360-degree spin, surrounding enemy damage and bush cutting, early release, pause/load cancellation and gamepad aliases');
+    run(`{
         Math.random=()=>0.9;
         const travel=(dx,dy,index)=>{
             const anchor=getRoomKey(currentRoomX,currentRoomY);
