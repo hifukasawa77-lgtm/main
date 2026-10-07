@@ -4,6 +4,8 @@ window.FahrenVisuals = (() => {
     const sheets = [
         {file:'hero-motion.svg',cols:4,rows:4,size:28,groups:['hero_down','hero_left','hero_right','hero_up']},
         {file:'npc-motion.svg',cols:4,rows:5,size:26,groups:['npc_man','npc_woman','merchant','npc_dog','npc_chicken'],sizes:[26,26,26,21,17]},
+        {file:'npc-man-walk.svg',cols:4,rows:4,size:26,uniformScale:true,groups:['npc_man_down','npc_man_left','npc_man_right','npc_man_up']},
+        {file:'npc-woman-walk.svg',cols:4,rows:4,size:26,uniformScale:true,groups:['npc_woman_down','npc_woman_left','npc_woman_right','npc_woman_up']},
         {file:'enemy-motion-a.svg',cols:4,rows:4,size:26,groups:['stone_shooter','goblin_warrior','bat','spider']},
         {file:'enemy-motion-b.svg',cols:4,rows:4,size:26,groups:['worm_emerge','slime','boar','goblin_spear']},
         {file:'enemy-motion-c.svg',cols:4,rows:4,size:26,groups:['forest_wisp','leaf_beetle','river_toad','desert_scarab']},
@@ -103,6 +105,7 @@ window.FahrenVisuals = (() => {
     async function loadSheet(spec, sprites) {
         const image=await imageAt(ROOT+spec.file);
         const w=image.naturalWidth/spec.cols;
+        const rowRects=[];
         for(let row=0;row<spec.rows;row++) {
             const y=(spec.rowCuts?.[row] ?? row/spec.rows)*image.naturalHeight;
             const bottom=(spec.rowCuts?.[row+1] ?? (row+1)/spec.rows)*image.naturalHeight;
@@ -112,7 +115,12 @@ window.FahrenVisuals = (() => {
                 const right=cuts?cuts[col+1]*image.naturalWidth:(col+1)*w;
                 return bounds(image,left,y,right-left,bottom-y,spec.terrain);
             });
-            const sharedScale=spec.groups ? Math.min((spec.size-2)/Math.max(...rects.map(r=>r.w)),(spec.size-2)/Math.max(...rects.map(r=>r.h))) : null;
+            rowRects.push(rects);
+        }
+        for(let row=0;row<spec.rows;row++) {
+            const rects=rowRects[row];
+            const scaleRects=spec.uniformScale?rowRects.flat():rects;
+            const sharedScale=spec.groups ? Math.min((spec.size-2)/Math.max(...scaleRects.map(r=>r.w)),(spec.size-2)/Math.max(...scaleRects.map(r=>r.h))) : null;
             for(let col=0;col<spec.cols;col++) {
                 const name=spec.groups ? spec.groups[row]+'_'+(col+1) : spec.names[row*spec.cols+col];
                 const size=spec.groups ? (spec.sizes?.[row]||spec.size) : (spec.sizes?.[name]||spec.size);
