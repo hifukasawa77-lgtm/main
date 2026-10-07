@@ -179,6 +179,18 @@
           title:{ja:'テトラ陣地',en:'Tetra Territory'}, emoji:'🧩',
           desc:{ja:'ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦',en:'Blokus-style board game — place polyomino pieces on a 20x20 grid, corner-touch rule, vs AI'},
           aliases:{ja:['ブロックス','ぶろっくす','テトラ陣地','ポリオミノ','陣取りゲーム'],en:['blokus','polyomino','territory game']} },
+        { slug:'lumina-tamer', href:'lumina_tamer.html', cat:'rpg',
+          title:{ja:'ルミナ・テイマー',en:'Lumina Tamer'}, emoji:'🔥',
+          desc:{ja:'草むらで出会い、仲間にして、ジムリーダーに挑むオリジナルのモンスター育成RPG。38種のモンスター・4つのジム・バトルタワー・ずかん・セーブ対応',en:'Original monster-taming RPG — catch creatures in the grass, train them, and challenge gym leaders. 38 species, 4 gyms, battle tower, pokedex and save support'},
+          aliases:{ja:['ルミナテイマー','るみなていまー','モンスター育成','育成rpg','ジムリーダー','ずかん'],en:['lumina tamer','monster taming','creature rpg','gym leader']} },
+        { slug:'nurinuri-arena', href:'nurinuri_arena.html', cat:'action',
+          title:{ja:'ぬりぬりアリーナ',en:'Nurinuri Arena'}, emoji:'🎨',
+          desc:{ja:'インクを撃って陣地を塗り広げる、オリジナルの4vs4チームバトル。自分のインクに潜って泳ぎ、ボムやひっさつで逆転',en:'Original 4v4 ink-splatting team battle — paint territory, dive into your own ink, and turn the tables with bombs and special moves'},
+          aliases:{ja:['ぬりぬりアリーナ','ぬりぬり','インクバトル','塗りバトル','陣地取り'],en:['nurinuri arena','ink battle','splat','territory battle']} },
+        { slug:'burst-brawlers', href:'burst_brawlers.html', cat:'action',
+          title:{ja:'ぶっ飛びブロウラーズ',en:'Burst Brawlers'}, emoji:'💥',
+          desc:{ja:'ダメージ%が溜まるほど遠くへ吹っ飛ぶ、最大4人の空中ステージ乱闘。4キャラ・2ステージ、ため攻撃・つかみ投げ・ふち復帰・アイテム対応',en:'Original 4-player platform fighter — the more damage you take, the farther you fly. 4 characters, 2 stages, charge attacks, grabs, edge recovery and items'},
+          aliases:{ja:['ぶっ飛びブロウラーズ','ブロウラーズ','乱闘アクション','プラットフォームファイター'],en:['burst brawlers','platform fighter','brawler']} },
       ];
       const RECOMMENDS = ['zelda','shogi','mahjong'];
 
