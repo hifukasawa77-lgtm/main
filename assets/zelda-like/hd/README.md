@@ -49,3 +49,7 @@ The actual generated RGBA pixels were decoded and loaded through `graphics.js` w
 Male and female townspeople use separate four-direction walk atlases with one common scale and foot baseline across directions. A four-pose cycle covers 24 logical pixels; motion accelerates and decelerates over ten ticks. Walks preserve their facing when stopped and cannot leave the current screen. Breathing deformation is suppressed while walking.
 
 The sword attack lasts 24 simulation ticks (0.4 seconds), including wind-up and recovery. The blade rotates through a 143-degree arc with a short trail and torso follow-through. A swept blade hitbox follows the rendered angle during the active phase only; wind-up and recovery do not deal damage.
+
+## Charged spin attack
+
+A short press still performs the normal slash. Holding Space/Z or mobile/gamepad A for 48 simulation ticks (0.8 seconds including the opening slash) prepares a charge: the hero settles into a crouched stance, draws the blade back, and a ring fills before turning gold with a sound. Releasing after the gold signal starts a 36-tick full-circle spin. The body cycles through four facing views and the blade/hitbox sweep all directions. Each enemy takes one sword hit per attack; all intersected cuttable bushes are cleared. Early release cancels an incomplete charge. Pause, load, room changes, damage, focus loss and touch cancellation clear the charge gesture.
