@@ -49,6 +49,15 @@
   <header class="game-header"><strong>FUKASAWA / ARCADE</strong><span>SPACE COMBAT · 07 SECTORS</span></header>
   <main class="game-shell" aria-label="ギャラクティック・アサルト">
     <canvas id="c" width="480" height="540" aria-label="ゲーム画面。矢印キーで移動、Zで射撃、Xで強化、Enterで一時停止。"></canvas>
+    <fieldset id="difficultyPicker" hidden aria-describedby="difficultyHelp">
+      <legend>難易度 / DIFFICULTY</legend>
+      <div class="difficulty-options">
+        <button type="button" data-difficulty="easy" aria-pressed="false">EASY</button>
+        <button type="button" data-difficulty="normal" aria-pressed="true">Normal</button>
+        <button type="button" data-difficulty="hard" aria-pressed="false">hard</button>
+      </div>
+      <p id="difficultyHelp" aria-live="polite">標準の難易度・残機3</p>
+    </fieldset>
     <button id="startGame" class="start-button" hidden>出撃する <small>LAUNCH MISSION →</small></button>
   </main>
   <div id="controls">
@@ -69,6 +78,22 @@
   'use strict';
   const W=480,H=540;
   const BOSS_SPAWN_FRAME=3600;
+  const DIFFICULTIES={
+    easy:{label:'EASY',lives:5,bulletSpeed:0.75,bossHp:0.75,spawnInterval:65,extraInterval:130,description:'敵が少なく、弾が遅い・残機5'},
+    normal:{label:'Normal',lives:3,bulletSpeed:1,bossHp:1,spawnInterval:45,extraInterval:90,description:'標準の難易度・残機3'},
+    hard:{label:'hard',lives:2,bulletSpeed:1.3,bossHp:1.35,spawnInterval:30,extraInterval:60,description:'敵が多く、弾が速い・残機2'}
+  };
+  let difficulty='normal';
+  try{
+    const saved=localStorage.getItem('galactic_assault_difficulty');
+    if(Object.hasOwn(DIFFICULTIES,saved))difficulty=saved;
+  }catch(_){}
+  function difficultySettings(){return DIFFICULTIES[difficulty];}
+  function selectDifficulty(value){
+    if(gameState!=='title'||!Object.hasOwn(DIFFICULTIES,value))return;
+    difficulty=value;lives=difficultySettings().lives;
+    try{localStorage.setItem('galactic_assault_difficulty',value);}catch(_){}
+  }
   const PU_NAMES=['SPEED UP','MISSILE','DOUBLE','LASER','OPTION','SHIELD'];
   const PU_COLORS=['#00ffff','#ff8800','#ffcc00','#00ff88','#ff44ff','#4488ff'];
   const PU_MAX=[4,3,3,2,4,4];
@@ -663,6 +688,7 @@
   // ── INPUT ──
   window.addEventListener('keydown',e=>{
     const k=e.key;
+    if(e.target.closest?.('#difficultyPicker'))return;
     if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Enter'].includes(k))e.preventDefault();
     handleCheatInput(k);
     if(k==='ArrowUp'||k==='w'||k==='W')keys.up=true;
@@ -689,7 +715,7 @@
   function initGame(){
     stopTitleBGM();
     loadHiScores(); isNewRecord=false;
-    score=0;lives=3;gameState='title';frame=0;stageFrame=0;
+    score=0;lives=difficultySettings().lives;gameState='title';frame=0;stageFrame=0;
     continues=3; contTimer=0;
     shakeFrames=0; flashFrames=0; warnTimer=0; bossEntryTimer=0;
     isClearAnim=false; clearScoreAnim=0; clearBonus=0;
@@ -1177,7 +1203,7 @@
   function updateEnemyBullets(){
     for(const b of enemyBullets){
       if(b.ay)b.vy+=b.ay;
-      b.x+=b.vx;b.y+=b.vy;
+      b.x+=b.vx*difficultySettings().bulletSpeed;b.y+=b.vy*difficultySettings().bulletSpeed;
       if(b.kind==='lava')b.ay=0.13;
       if(b.kind==='ring'&&b.w<46){b.w+=0.18;b.h+=0.18;}
       if(b.x<-70||b.x>W+70||b.y<-90||b.y>H+90)b.remove=true;
@@ -1231,7 +1257,7 @@
       const bossH=[64,80,80,80,100,80,120];
       const bt=bossTypes[stage-1];
       enemies.push({type:bt,x:W,y:H/2-bossH[stage-1]/2,w:bossW[stage-1],h:bossH[stage-1],
-                    hp:st.bossHp,maxHp:st.bossHp,vx:-1,pts:0,phase:0,stateTimer:0,attackPhase:0,bossPhase:0,isDead:false,deadTimer:0});
+                    hp:Math.round(st.bossHp*difficultySettings().bossHp),maxHp:Math.round(st.bossHp*difficultySettings().bossHp),vx:-1,pts:0,phase:0,stateTimer:0,attackPhase:0,bossPhase:0,isDead:false,deadTimer:0});
       bossEntryTimer=90; bossEntryName=st.bossName||bt.toUpperCase();
       playSE('bossWarn'); warnTimer=90; warnBossName=st.bossName||bt.toUpperCase();
     }
@@ -1241,8 +1267,8 @@
     if(stage===1&&stageFrame%300===130)stageHazards.push({type:'ceilingCannon',x:W+35,y:30,w:52,h:52,speed:1,timer:40});
     if(stage===1&&stageFrame>2000&&stageFrame%700===120)stageHazards.push({type:'invertedVolcano',x:W+60,y:32,w:108,h:88,speed:1,timer:0});
     if(stage===2&&stageFrame%240===40)stageHazards.push({type:'moai',x:W+35,y:H-150,w:58,h:112,speed:1,timer:20});
-    if(stageFrame%45===0)spawnStageEnemy();
-    if(stageFrame%90===30)spawnStageEnemy();
+    if(stageFrame%difficultySettings().spawnInterval===0)spawnStageEnemy();
+    if(stageFrame%difficultySettings().extraInterval===30)spawnStageEnemy();
     if(stageFrame%150===0&&stage>=2)enemies.push({type:'bigMeteor',x:W,y:Math.random()*H,w:40,h:40,vx:-1.5,vy:(Math.random()-0.5)*1.5,spin:0,spinSpeed:0.05,hp:8,pts:300,isDead:false,deadTimer:0});
   }
 
@@ -1291,7 +1317,7 @@
       contTimer--;frame++;
       if(contTimer<=0){saveHiScore(score,stage);playSE('gameOver');gameState='gameover';}
       if(keys.shot&&!shotPressed){
-        shotPressed=true;continues--;lives=3;player.hp=1;player.x=80;player.y=H/2;
+        shotPressed=true;continues--;lives=difficultySettings().lives;player.hp=1;player.x=80;player.y=H/2;
         player.invul=120;bullets=[];enemyBullets=[];powerItems=[];
         gameState='playing';playSE('continue');startBGM(stage);
       }
@@ -1580,7 +1606,7 @@
 
       if(e.type.startsWith('boss')&&!e.isDead){
         const st2=STAGES[stage-1];
-        const maxHp=STAGES[stage-1].bossHp;
+        const maxHp=e.maxHp;
         const pct=Math.max(0,e.hp/maxHp);
         const bx=e.x,by=e.y-18,bw=e.w;
         ctx.fillStyle='#111';ctx.fillRect(bx,by,bw,8);

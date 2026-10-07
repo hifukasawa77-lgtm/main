@@ -6,6 +6,9 @@ const volcanoArt=new Image();
 volcanoArt.src='assets/volcano-v2.png';
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const startButton=document.getElementById('startGame');
+const difficultyPicker=document.getElementById('difficultyPicker');
+const difficultyButtons=[...difficultyPicker.querySelectorAll('[data-difficulty]')];
+difficultyButtons.forEach(button=>button.addEventListener('click',()=>selectDifficulty(button.dataset.difficulty)));
 const pauseButton=document.getElementById('pauseGame');
 const sectorNames=['灼熱の火山帯','沈黙の石像群','砂塵のピラミッド','忘れられた遺跡','異星生命の内部','深宇宙宙域','最終防衛要塞'];
 const sceneCache=new Map();
@@ -122,7 +125,7 @@ function drawV2HUD(st){
   ctx.save();ctx.fillStyle='#07101ee8';ctx.fillRect(0,0,W,39);ctx.fillRect(0,H-42,W,42);
   ctx.strokeStyle='#9ab5cb44';ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(0,39);ctx.lineTo(W,39);ctx.moveTo(0,H-42);ctx.lineTo(W,H-42);ctx.stroke();
   ctx.textAlign='left';ctx.font='8px Arial';ctx.fillStyle='#8ca0b7';ctx.fillText('SCORE / スコア',13,12);ctx.font='bold 17px Consolas,monospace';ctx.fillStyle='#edf4fc';ctx.fillText(String(score).padStart(7,'0'),12,30);
-  ctx.textAlign='center';ctx.font='9px Arial';ctx.fillStyle='#9eafc3';ctx.fillText('SECTOR 0'+stage,W/2,13);ctx.font='bold 12px Arial';ctx.fillStyle='#d2deec';ctx.fillText(st.name,W/2,29);
+  ctx.textAlign='center';ctx.font='9px Arial';ctx.fillStyle='#9eafc3';ctx.fillText('SECTOR 0'+stage+' · '+difficultySettings().label,W/2,13);ctx.font='bold 12px Arial';ctx.fillStyle='#d2deec';ctx.fillText(st.name,W/2,29);
   ctx.textAlign='right';ctx.font='8px Arial';ctx.fillStyle='#8ca0b7';ctx.fillText(invincibleMode?'INVINCIBLE / 無敵':'SHIPS / 残機',W-12,12);ctx.font='14px Arial';ctx.fillStyle='#d1b294';ctx.fillText('◆ '.repeat(Math.max(0,lives)),W-10,30);
   const levels=[speedLevel,missDownLv,missUpLv,laserLv,optionCount,barrierHp];
   for(let i=0;i<6;i++){
@@ -147,12 +150,12 @@ renderTitle=function(){
   enginePlume(157,252+bob,70,10,.65);
   enginePlume(158,278+bob,70,10,.65);
   if(sprites.player){ctx.save();ctx.translate(267,263+bob);ctx.rotate(-.07);ctx.drawImage(sprites.player,-126,-77,252,154);ctx.restore();}
-  ctx.strokeStyle='#a0bfda44';ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(46,351);ctx.lineTo(150,351);ctx.moveTo(330,351);ctx.lineTo(434,351);ctx.stroke();
-  ctx.font='9px Arial';ctx.fillStyle='#bed0df';ctx.fillText('READY FOR SORTIE',W/2,354);
-  ctx.font='10px Arial';ctx.fillStyle='#afbece';ctx.fillText('7つの宙域を突破し、最終要塞へ。',W/2,374);
-  ctx.font='9px Arial';ctx.fillStyle='#b2c0d1';ctx.fillText('Z / SPACE / B で出撃',W/2,458);
-  ctx.fillStyle=invincibleMode?'#efd39b':'#8195ad';ctx.fillText('I : 無敵モード '+(invincibleMode?'ON':'OFF')+(allPowerCheat?'  •  FULL POWER':''),W/2,477);
-  if(hiScores.length){ctx.fillStyle='#b8c6d6';ctx.font='9px Consolas,monospace';ctx.fillText(hiScores.slice(0,3).map((h,i)=>(i+1)+'. '+String(h.score).padStart(7,'0')).join('    '),W/2,503);}
+  ctx.strokeStyle='#a0bfda44';ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(46,311);ctx.lineTo(150,311);ctx.moveTo(330,311);ctx.lineTo(434,311);ctx.stroke();
+  ctx.font='9px Arial';ctx.fillStyle='#bed0df';ctx.fillText('READY FOR SORTIE',W/2,314);
+  ctx.font='10px Arial';ctx.fillStyle='#afbece';ctx.fillText('7つの宙域を突破し、最終要塞へ。',W/2,332);
+  ctx.font='9px Arial';ctx.fillStyle='#b2c0d1';ctx.fillText('Z / SPACE / B で出撃',W/2,480);
+  ctx.fillStyle=invincibleMode?'#efd39b':'#8195ad';ctx.fillText('I : 無敵モード '+(invincibleMode?'ON':'OFF')+(allPowerCheat?'  •  FULL POWER':''),W/2,496);
+  if(hiScores.length){ctx.fillStyle='#b8c6d6';ctx.font='9px Consolas,monospace';ctx.fillText(hiScores.slice(0,3).map((h,i)=>(i+1)+'. '+String(h.score).padStart(7,'0')).join('    '),W/2,513);}
   ctx.fillStyle='#6d8299';ctx.font='8px Arial';ctx.fillText('© 2026 FUKASAWA',W/2,527);ctx.restore();
 };
 renderIntro=function(){
@@ -168,6 +171,9 @@ renderIntro=function(){
 const originalRender=render;
 render=function(){
   startButton.hidden=gameState!=='title';
+  difficultyPicker.hidden=gameState!=='title';
+  difficultyButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.difficulty===difficulty)));
+  document.getElementById('difficultyHelp').textContent=difficultySettings().description;
   pauseButton.textContent=gameState==='paused'?'再開 ▷':'停止 Ⅱ';
   pauseButton.disabled=!['playing','paused'].includes(gameState);
   // Clear device pixels before restoring logical coordinates, including screen-shake edges.
