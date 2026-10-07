@@ -172,7 +172,7 @@
         <p style="color: #fcd8a8;">25×25画面のフィールドを探索するトップビューRPGです。</p>
     </div>
 
-    <script src="assets/zelda-like/hd/graphics.js?v=20261005-placement1"></script>
+    <script src="assets/zelda-like/hd/graphics.js?v=20261007-motion1"></script>
     <script>
         const canvas = document.getElementById('gameCanvas');
         const VIEW_WIDTH = 256, VIEW_HEIGHT = 240, RENDER_SCALE = 3;
@@ -759,9 +759,10 @@
         });
 
         function advanceWalk(entity, distance, continuous = false) {
+            entity.isWalking = distance > 0.01 || continuous;
             if (distance > 0.01 || continuous) {
                 entity.animTimer += continuous ? 0.7 : distance;
-                const stride = entity.isBoss ? 3 : entity.baseSpeed >= 1 ? 8 : 3;
+                const stride = entity.walkStride || (entity.isBoss ? 3 : entity.baseSpeed >= 1 ? 8 : 3);
                 while (entity.animTimer >= stride) {
                     entity.animTimer -= stride;
                     entity.animFrame = entity.animFrame % 4 + 1;
@@ -775,15 +776,52 @@
         function drawCharacter(sprite, x, y, entity) {
             if (!sprite) return;
             const phase = performance.now() / 700 + entity.x * 0.07;
-            const breathing = 1 + Math.sin(phase) * 0.008;
+            const breathing = entity.isWalking ? 1 : 1 + Math.sin(phase) * 0.008;
             ctx.save();
             ctx.translate(x + sprite.width / 2, y + sprite.height);
             ctx.scale(1, breathing);
             if (entity.isAttacking) {
-                const swing = Math.sin((12 - entity.attackTimer) / 12 * Math.PI) * 0.12;
+                const swing = Math.sin((SWORD_ATTACK_FRAMES - entity.attackTimer) / SWORD_ATTACK_FRAMES * Math.PI) * 0.14;
                 ctx.rotate(entity.dir === 'left' ? -swing : swing);
             }
             drawSprite(sprite, -sprite.width / 2, -sprite.height);
+            ctx.restore();
+        }
+
+        const SWORD_ATTACK_FRAMES = 24;
+        function getSwordPose(actor, timer = actor.attackTimer) {
+            const progress = Math.max(0, Math.min(1, (SWORD_ATTACK_FRAMES-timer)/SWORD_ATTACK_FRAMES));
+            const facing = {up:-Math.PI/2,down:Math.PI/2,left:Math.PI,right:0}[actor.dir];
+            const sweep = Math.max(0, Math.min(1, (progress-0.2)/0.6));
+            const eased = sweep*sweep*(3-2*sweep);
+            const angle = facing-1.25+eased*2.5;
+            const x=actor.x+actor.w/2, y=actor.y+actor.h/2-4;
+            return {x,y,angle,progress,active:progress>=0.2&&progress<=0.8,
+                tipX:x+Math.cos(angle)*24,tipY:y+Math.sin(angle)*24};
+        }
+
+        function updateSwordHitbox(actor) {
+            const pose=getSwordPose(actor);
+            if(!pose.active){actor.swordHitbox=null;return;}
+            const previous=getSwordPose(actor,Math.min(SWORD_ATTACK_FRAMES,actor.attackTimer+1));
+            const innerX=pose.x+Math.cos(pose.angle)*8, innerY=pose.y+Math.sin(pose.angle)*8;
+            const left=Math.min(innerX,pose.tipX,previous.tipX)-3;
+            const top=Math.min(innerY,pose.tipY,previous.tipY)-3;
+            actor.swordHitbox={x:left,y:top,w:Math.max(innerX,pose.tipX,previous.tipX)+3-left,
+                h:Math.max(innerY,pose.tipY,previous.tipY)+3-top};
+        }
+
+        function drawSwordSwing(actor) {
+            const pose=getSwordPose(actor),x=pose.x+transOffset.x,y=pose.y+transOffset.y+UI_OFFSET;
+            ctx.save();
+            ctx.translate(x,y);
+            if(pose.active){
+                const previous=getSwordPose(actor,Math.min(SWORD_ATTACK_FRAMES,actor.attackTimer+3));
+                ctx.beginPath();ctx.arc(0,0,23,previous.angle,pose.angle);
+                ctx.strokeStyle='rgba(255,240,195,0.65)';ctx.lineWidth=2;ctx.stroke();
+            }
+            ctx.rotate(pose.angle+Math.PI/2);
+            FahrenVisuals.drawObject(ctx,sprites.sword_up,-3,-24,6,26);
             ctx.restore();
         }
 
@@ -1517,7 +1555,7 @@
                     if (this.attackTimer <= 0) {
                         this.isAttacking = false;
                         this.swordHitbox = null;
-                    }
+                    } else updateSwordHitbox(this);
                     return;
                 }
 
@@ -1550,12 +1588,10 @@
                     }
                     // If no NPC, attack
                     this.isAttacking = true;
-                    this.attackTimer = 12;
-                    this.swordHitbox = { x: talkHx, y: talkHy, w: 16, h: 16 };
+                    this.attackTimer = SWORD_ATTACK_FRAMES;
+                    this.animFrame = 1;
+                    updateSwordHitbox(this);
                     playSFX('sword');
-                    // Sword slash particles
-                    spawnParticles(talkHx+8, talkHy+8+UI_OFFSET, '#f8d8b0', 6, 1.5, 2, 10);
-                    spawnParticles(talkHx+8, talkHy+8+UI_OFFSET, '#ffffff', 4, 2, 1.5, 8);
                     return;
                 }
 
@@ -1627,20 +1663,14 @@
                 const drawX = Math.round(this.x + transOffset.x + this.w / 2 - sprite.width / 2);
                 const drawY = Math.round(this.y + transOffset.y + UI_OFFSET + this.h - sprite.height + 4);
                 
-                if (this.isAttacking) {
-                    let sX = drawX, sY = drawY;
-                    if (this.dir === 'up') sY -= 14;
-                    if (this.dir === 'down') sY += 14;
-                    if (this.dir === 'left') sX -= 14;
-                    if (this.dir === 'right') sX += 14;
-                    drawSprite(sprites['sword_' + this.dir], sX, sY);
-                }
+                if (this.isAttacking && this.dir === 'up') drawSwordSwing(this);
                 
                 ctx.save();
                 if(equipment.armorLevel === 1) ctx.filter = 'hue-rotate(90deg)'; // Greenish/Different
                 if(equipment.armorLevel === 2) ctx.filter = 'hue-rotate(180deg)'; // Reddish
                 drawCharacter(sprite, drawX, drawY, this);
                 ctx.restore();
+                if (this.isAttacking && this.dir !== 'up') drawSwordSwing(this);
             }
 
             takeDamage() {
@@ -1677,6 +1707,8 @@
                 this.role = role;
                 this.timer = 0; this.dx = 0; this.dy = 0;
                 this.animFrame = 1; this.animTimer = 0;
+                this.dir = 'down'; this.walkStride = 6;
+                this.velocityX = 0; this.velocityY = 0;
             }
             update() {
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY || isTransitioning) return;
@@ -1694,8 +1726,17 @@
                         }
                     }
                     this.timer--;
-                    if (!checkCollision(this.x + this.dx, this.y, this.w, this.h)) this.x += this.dx;
-                    if (!checkCollision(this.x, this.y + this.dy, this.w, this.h)) this.y += this.dy;
+                    const approach=(value,target)=>value+Math.max(-0.05,Math.min(0.05,target-value));
+                    this.velocityX=approach(this.velocityX,this.dx);
+                    this.velocityY=approach(this.velocityY,this.dy);
+                    const nx=this.x+this.velocityX,ny=this.y+this.velocityY;
+                    const free=nx>=0&&ny>=0&&nx+this.w<=SCREEN_COLS*TILE&&ny+this.h<=SCREEN_ROWS*TILE&&
+                        !checkCollision(nx,ny,this.w,this.h);
+                    if(free){this.x=nx;this.y=ny;}
+                    else {this.dx=0;this.dy=0;this.velocityX=0;this.velocityY=0;this.timer=30;}
+                    const mx=this.x-oldX,my=this.y-oldY;
+                    if(Math.abs(mx)>Math.abs(my))this.dir=mx<0?'left':'right';
+                    else if(Math.abs(my)>0.01)this.dir=my<0?'up':'down';
                     
                 }
                 advanceWalk(this, Math.hypot(this.x - oldX, this.y - oldY));
@@ -1703,6 +1744,7 @@
             draw() {
                 if (this.roomX !== currentRoomX || this.roomY !== currentRoomY) return;
                 let sprName = `npc_${this.type}_${this.animFrame}`;
+                if(this.type==='man'||this.type==='woman')sprName=`npc_${this.type}_${this.dir}_${this.animFrame}`;
                 if (this.type === 'merchant') sprName = `merchant_${this.animFrame}`;
                 // Fallback for simple sprites
                 if (!sprites[sprName]) sprName = `npc_${this.type}`; // like dog or chicken without anim frames if not defined properly, but we will define them.
