@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const OUT = resolve(dirname(fileURLToPath(import.meta.url)), '../data/ai-news.json');
 const SOURCES = [
   { name: 'ITmedia AI+', url: 'https://rss.itmedia.co.jp/rss/2.0/ait.xml' },
-  { name: 'VentureBeat AI', url: 'https://venturebeat.com/category/ai/feed/' },
+  { name: 'TechCrunch AI', url: 'https://techcrunch.com/category/artificial-intelligence/feed/' },
   { name: 'The Verge AI', url: 'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml' },
 ];
 const PER_SOURCE = 5;

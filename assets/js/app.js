@@ -5804,7 +5804,7 @@ document.addEventListener('click', event => {
 
         const AI_SOURCES = [
           'https://rss.itmedia.co.jp/rss/2.0/ait.xml',
-          'https://venturebeat.com/category/ai/feed/',
+          'https://techcrunch.com/category/artificial-intelligence/feed/',
           'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml',
         ];
         const AI_PROXIES = [
@@ -5892,7 +5892,7 @@ document.addEventListener('click', event => {
         } else {
           list.innerHTML = `<li class="dashboard-mini-item" style="flex-direction:column;gap:6px;">
             <span style="color:var(--muted);font-size:0.8rem;">ニュースを取得できませんでした</span>
-            <a href="https://venturebeat.com/category/ai/" target="_blank" rel="noopener noreferrer" style="font-size:0.78rem;color:var(--blue,#0ea5e9)">VentureBeat AIを確認する →</a>
+            <a href="https://techcrunch.com/category/artificial-intelligence/" target="_blank" rel="noopener noreferrer" style="font-size:0.78rem;color:var(--blue,#0ea5e9)">TechCrunch AIを確認する →</a>
           </li>`;
         }
         if (timeEl) timeEl.textContent = '更新: ' + new Date().toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'});
