@@ -5848,8 +5848,22 @@ document.addEventListener('click', event => {
           return [];
         }
 
-        const results = await Promise.allSettled(AI_SOURCES.map(fetchAISource));
-        const allItems = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+        // 正本は毎朝7:00(JST)に GitHub Actions が書く data/ai-news.json。
+        // sw.js は静的ファイルを cache-first で返すので、日付クエリでキャッシュキーを日替わりにする。
+        let allItems = [];
+        try {
+          const day = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' });
+          const res = await fetchWithTimeout(`data/ai-news.json?d=${day}`, 9000);
+          if (res.ok) {
+            const data = await res.json();
+            allItems = (data.items || []).map(i => ({ title: i.title || '', link: i.link || '#', pubDate: i.pubDate || '' })).filter(i => i.title);
+          }
+        } catch {}
+        // 取れなかったときだけ、従来のブラウザ経由RSS取得へフォールバック
+        if (!allItems.length) {
+          const results = await Promise.allSettled(AI_SOURCES.map(fetchAISource));
+          allItems = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+        }
 
         allItems.sort((a, b) => {
           const da = a.pubDate ? new Date(a.pubDate) : 0;
