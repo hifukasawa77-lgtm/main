@@ -52,11 +52,12 @@ const run=code=>vm.runInContext(code,sandbox);
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(run('graphicsReady'),true);
     assert.equal(run('canvas.width'),768);assert.equal(run('canvas.height'),720);
-    assert.equal(run('FahrenVisuals.sheets.length'),14);
-    assert.equal(run('FahrenVisuals.sheets.reduce((n,s)=>n+s.cols*s.rows,0)'),232);
+    assert.equal(run('FahrenVisuals.sheets.length'),16);
+    assert.equal(run('FahrenVisuals.sheets.reduce((n,s)=>n+s.cols*s.rows,0)'),264);
+    assert(run('["man","woman"].every(type=>["up","down","left","right"].every(dir=>[1,2,3,4].every(n=>sprites[`npc_${type}_${dir}_${n}`])))'));
     assert(run('Object.keys(ENEMY_PROFILES).every(type => type === "worm" ? [1,2,3,4].every(n=>sprites[`worm_emerge_${n}`]&&sprites[`worm_hidden_${n}`]) : [1,2,3,4].every(n=>sprites[`${type}_${n}`]))'));
     assert(run('sprites.hero_down_1.image.width===84 && sprites.boss_gran_4.image.width===150'));
-    console.log('PASS all 232 generated frames loaded, every enemy/boss covered, HD backing resolution');
+    console.log('PASS all 264 generated frames loaded, directional townspeople, every enemy/boss covered, HD backing resolution');
     run('startNewGame();');
     // Render all 625 rooms, all species and all four animation frames.
     run(`for(let y=WORLD_MIN;y<=WORLD_MAX;y++) for(let x=WORLD_MIN;x<=WORLD_MAX;x++) {
@@ -112,6 +113,40 @@ const run=code=>vm.runInContext(code,sandbox);
     run('const wing={animFrame:1,animTimer:0};const wings=new Set();for(let i=0;i<30;i++){advanceWalk(wing,0,true);wings.add(wing.animFrame);}');
     assert.equal(run('wings.size'),4);
     console.log('PASS four-frame gait, stopped idle, continuous wing/spirit animation');
+    run(`{
+        startNewGame();const room=getRoom(currentRoomX,currentRoomY);
+        room.tiles=Array.from({length:SCREEN_ROWS},()=>Array(SCREEN_COLS).fill(0));room.npcs=[];
+        keys.KeyW=false;keys.KeyA=false;keys.KeyS=false;keys.KeyD=false;
+        const walker=new NPC(80,100,currentRoomX,currentRoomY,'man','test');
+        walker.timer=1000;walker.dx=0.5;
+        const frames=new Set(),velocities=[];
+        for(let n=0;n<60;n++){walker.update();frames.add(walker.animFrame);velocities.push(walker.velocityX);walker.draw();}
+        assert.equal(walker.dir,'right');assert.equal(frames.size,4);
+        assert(velocities[0]>0&&velocities[0]<velocities[9],'Smooth acceleration');
+        walker.dx=0;for(let n=0;n<12;n++)walker.update();
+        assert.equal(walker.animFrame,1);assert(Math.abs(walker.velocityX)<0.001);
+        walker.dx=-0.5;for(let n=0;n<20;n++)walker.update();assert.equal(walker.dir,'left');
+        walker.dx=0;walker.dy=-0.5;for(let n=0;n<20;n++)walker.update();assert.equal(walker.dir,'up');
+        walker.dy=0.5;for(let n=0;n<25;n++)walker.update();assert.equal(walker.dir,'down');
+        walker.x=0;walker.dx=-0.5;walker.dy=0;walker.velocityX=-0.5;walker.velocityY=0;
+        walker.update();assert.equal(walker.x,0);assert.equal(walker.dx,0);
+        for(const dir of ['up','down','left','right']){
+            player.x=100;player.y=100;player.dir=dir;player.isAttacking=false;
+            keyPress.Space=true;player.update();assert.equal(player.attackTimer,SWORD_ATTACK_FRAMES);
+            assert.equal(player.swordHitbox,null,'Wind-up does not deal damage');
+            const tips=[], facing={up:-Math.PI/2,down:Math.PI/2,left:Math.PI,right:0}[dir];
+            const origin=getSwordPose(player),front={x:origin.x+Math.cos(facing)*20-3,y:origin.y+Math.sin(facing)*20-3,w:6,h:6};
+            const behind={x:origin.x-Math.cos(facing)*20-3,y:origin.y-Math.sin(facing)*20-3,w:6,h:6};
+            let hitFront=false;
+            for(let n=0;n<SWORD_ATTACK_FRAMES;n++){
+                player.draw();player.update();const pose=getSwordPose(player);tips.push(pose.angle);
+                if(player.swordHitbox){hitFront ||=checkAABB(player.swordHitbox,front);assert(!checkAABB(player.swordHitbox,behind),'Swing must not hit behind hero');}
+            }
+            assert(hitFront,'Sweeping blade must hit forward target');assert(tips[tips.length-1]-tips[0]>2,'Sword rotates through an arc');
+            assert(!player.isAttacking);assert.equal(player.swordHitbox,null);
+        }
+    }`);
+    console.log('PASS townsperson facing, smooth start/stop, stride and screen boundary; four-direction sword arcs, wind-up/recovery and moving damage area');
     run(`{
         Math.random=()=>0.9;
         const travel=(dx,dy,index)=>{
