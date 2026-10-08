@@ -4,15 +4,34 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Lumina Tamer | ルミナ・テイマー</title>
-<meta name="description" content="生成画像アセットを使用したオリジナル・モンスター育成RPG。草むらで出会い、仲間にして、街のジムリーダーに挑もう。開くと自動デモ、キーで自分でも遊べます。">
+<meta name="description" content="生成画像アセットを使用したオリジナル・モンスター育成RPG。草むらで出会い、仲間にして、街のジムリーダーに挑もう。開くと自動デモ、キーやスマホのタッチ操作で自分でも遊べます。">
 <style>
 html,body{margin:0;height:100%;background:#06070f;overflow:hidden}
 body{display:flex;align-items:center;justify-content:center}
-canvas{display:block;outline:none;background:#000}
+canvas{display:block;outline:none;background:#000;touch-action:none}
+#tp{display:none;position:fixed;left:0;right:0;bottom:0;height:0;pointer-events:none;z-index:5;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+body.touch #tp{display:block}
+body.touch.portrait{align-items:flex-start}
+#tp button{position:absolute;pointer-events:auto;touch-action:none;-webkit-tap-highlight-color:transparent;font:800 18px system-ui,sans-serif;color:#e8f4ff;background:rgba(20,28,52,.62);border:1.5px solid rgba(160,210,255,.45);border-radius:50%;width:var(--b);height:var(--b);padding:0;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+#tp button.on{background:rgba(90,170,255,.6);border-color:#bfe3ff}
+#tp .d{border-radius:14px}
+#tp .sm{width:calc(var(--b)*.78);height:calc(var(--b)*.78);font-size:14px}
+#tp{--b:62px;--m:14px}
+#tp [data-k=u]{left:calc(var(--m) + var(--b) + 4px);bottom:calc(var(--m) + (var(--b) + 4px)*2)}
+#tp [data-k=d]{left:calc(var(--m) + var(--b) + 4px);bottom:var(--m)}
+#tp [data-k=l]{left:var(--m);bottom:calc(var(--m) + var(--b) + 4px)}
+#tp [data-k=r]{left:calc(var(--m) + (var(--b) + 4px)*2);bottom:calc(var(--m) + var(--b) + 4px)}
+#tp [data-k=ok]{right:var(--m);bottom:calc(var(--m) + var(--b)*.5 + 4px)}
+#tp [data-k=back]{right:calc(var(--m) + var(--b) + 6px);bottom:var(--m)}
+#tp [data-k=run]{right:calc(var(--m) + var(--b)*.1);bottom:calc(var(--m) + var(--b)*1.75 + 12px)}
 </style>
 </head>
 <body>
 <canvas id="c" width="640" height="512" tabindex="0" aria-label="Lumina Tamer"></canvas>
+<div id="tp" aria-label="タッチ操作 / Touch controls">
+<button class="d" data-k="u" aria-label="上 Up">▲</button><button class="d" data-k="l" aria-label="左 Left">◀</button><button class="d" data-k="r" aria-label="右 Right">▶</button><button class="d" data-k="d" aria-label="下 Down">▼</button>
+<button data-k="ok" aria-label="けってい OK">A</button><button data-k="back" aria-label="もどる・メニュー Back">B</button><button class="sm" data-k="run" aria-label="ダッシュ Run">RUN</button>
+</div>
 <script>
 (() => {
 'use strict';
@@ -436,6 +455,34 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => { const a = KEYMAP[e.code]; if (a) held[a] = false; if (e.code.startsWith('Shift')) held.run = false; });
 addEventListener('blur', () => { for (const k in held) held[k] = false; });
 cv.addEventListener('pointerdown', () => { cv.focus(); initAudio(); if (demo) enterTitle(); });
+/* ---- タッチ操作（画面ボタン）：キー入力と同じ held / dispatch を通す ---- */
+const TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (window.matchMedia && matchMedia('(pointer:coarse)').matches);
+if (TOUCH) {
+  document.body.classList.add('touch');
+  const tp = document.getElementById('tp'), down = new Map();
+  const setOn = (b, v) => b.classList.toggle('on', v);
+  tp.addEventListener('contextmenu', e => e.preventDefault());
+  tp.querySelectorAll('button').forEach(b => {
+    const k = b.dataset.k;
+    b.addEventListener('pointerdown', e => {
+      e.preventDefault(); try { b.setPointerCapture(e.pointerId); } catch (_) { }
+      initAudio(); down.set(e.pointerId, b); setOn(b, true);
+      if (demo) { enterTitle(); return; }
+      if (k === 'run') { held.run = !held.run; setOn(b, held.run); down.delete(e.pointerId); return; }
+      held[k] = true; b._t = performance.now(); dispatch(k);
+    });
+    const up = e => { if (!down.has(e.pointerId)) return; down.delete(e.pointerId); if (k === 'run') return; const rel = () => { held[k] = false; setOn(b, false); }; const rest = 130 - (performance.now() - (b._t || 0)); rest > 0 ? setTimeout(rel, rest) : rel(); };
+    b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
+  });
+  // 方向ボタンの押しっぱなし中の連続入力（メニューのカーソル送り）
+  let rep = 0;
+  setInterval(() => {
+    if (!(MENU && !demo)) { rep = 0; return; }
+    const d = ['u', 'd', 'l', 'r'].find(x => held[x]); if (!d) { rep = 0; return; }
+    if (++rep > 3) dispatch(d);
+  }, 110);
+  addEventListener('blur', () => { tp.querySelectorAll('button').forEach(b => { if (b.dataset.k !== 'run') setOn(b, false); }); });
+}
 function dispatch(a) {
   if (endSkip && a === 'ok') { const r = endSkip; endSkip = null; r(); return; }
   if (MENU) {
@@ -1420,8 +1467,8 @@ function drawDemoOverlay(g) {
   const by = Math.sin(gtime * 1.6) * 3;
   txt(g, 'LUMINA TAMER', W / 2, 52 + by, 38, '#fff4d6', 'center', 900, true);
   txt(g, 'ルミナ・テイマー  ·  DEMO PLAY 自動デモ', W / 2, 88 + by, 16, '#ffd9a0', 'center', 800, true);
-  if (!DLG) { if (Math.floor(gtime * 1.6) % 2 === 0) txt(g, 'PRESS ANY KEY', W / 2, H - 52, 26, '#fff', 'center', 800, true);
-  txt(g, '何かキーを押してスタート', W / 2, H - 24, 14, '#cfd8ff', 'center', 700, true); }
+  if (!DLG) { if (Math.floor(gtime * 1.6) % 2 === 0) txt(g, TOUCH ? 'TAP TO START' : 'PRESS ANY KEY', W / 2, H - 52, 26, '#fff', 'center', 800, true);
+  txt(g, TOUCH ? '画面をタップしてスタート' : '何かキーを押してスタート', W / 2, H - 24, 14, '#cfd8ff', 'center', 700, true); }
 }
 
 /* ====================================================================
@@ -1459,7 +1506,12 @@ function frame(now) {
   render(); requestAnimationFrame(frame);
 }
 function resize() {
-  const dpr = window.devicePixelRatio || 1, k = Math.min(innerWidth / W, innerHeight / H);
+  const dpr = window.devicePixelRatio || 1;
+  const portrait = innerHeight > innerWidth * 1.05, touchUI = document.body.classList.contains('touch');
+  document.body.classList.toggle('portrait', touchUI && portrait);
+  const tp = document.getElementById('tp'); if (tp) tp.style.setProperty('--b', Math.round(clamp(Math.min(innerWidth, innerHeight) * .17, 52, 76)) + 'px');
+  const reserve = touchUI && portrait ? Math.round(clamp(innerWidth * .17, 52, 76)) * 3 + 36 : 0;
+  const k = Math.min(innerWidth / W, (innerHeight - reserve) / H);
   cv.style.width = Math.floor(W * k) + 'px'; cv.style.height = Math.floor(H * k) + 'px';
   cv.width = Math.max(1, Math.round(W * k * dpr)); cv.height = Math.max(1, Math.round(H * k * dpr));
 }
