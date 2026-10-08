@@ -64,8 +64,10 @@
 ### Y9 `lumina_tamer.html` — ポケモン類似の構成
 - 「ミモザはかせ→初期モンスター→ライバル→ジム4つ→バッジ→ずかん→チャンピオン候補→**バトルタワー**」という骨格がポケットモンスターと同型。ゲームの型は保護されないが、名称（バトルタワー等）と**キャラクターデザインの類似**は不正競争防止法・著作権の論点になり得る。**画像の生成元の記録（`assets/lumina-tamer/`）が無い**。
 - **対応**: 生成元・プロンプトをREADMEに記録。38体を既存キャラと並べて目視。「バトルタワー」等の固有語を独自語へ。
+- **【2026-10-08 追記・目視結果】`monsters-1.png` を確認したところ、草系（緑の斑点＋背中の蕾→開花）と水系（甲羅を背負う青い四足獣）が、著名なモンスターRPGの初期キャラの意匠に近いと受け取られ得る。YELLOW の中で**最優先**。描き直しを推奨（残り4枚は未確認）。
 
 ### Y10 出自記録が無い生成画像群
+> **【2026-10-08 追記】** 事後記録を整備（`assets/{lumina-tamer,burst-brawlers,eclipse-castle,underpass-anomaly,namarigasawa,audio}/README.md`、`assets/hanafuda/README.md` 補完）。履歴から確認できた事実のみ記し、**生成ツール・プロンプトは「要確認」欄として深澤さんの記入待ち**。訂正: `locker-cry.wav` は `audio-source.txt` に出典（Freesound the_yura・CC0、実在の乳児の録音）が記録済みで、「記録なし」は誤りだった。`taihei/bakumatsu-dawn.wav` は「自作」との自己申告のみで生成手段の記録なし。
 - 記録なし: `assets/lumina-tamer/` `burst-brawlers/` `eclipse-castle/` `underpass-anomaly/` `namarigasawa/`。`sengoku-japan-map-user-v2.webp`（プロンプト無し・経緯のみ）。
 - 音声: `assets/audio/taihei-dawn.wav` `bakumatsu-dawn.wav` `underpass-anomaly/locker-cry.wav` の**制作元・ライセンスの記録なし**。
 - 生成AI画像は、日本では「AI生成物そのものに著作権が生じるか」「既存作品への依拠・類似」が論点。**記録が無いと問題発生時に潔白を示せない**。
