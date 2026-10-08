@@ -94,11 +94,45 @@ function bgmTick(){
 }
 
 /* ---------------- 入力 ---------------- */
-const KEYS={l:['ArrowLeft','KeyA'],r:['ArrowRight','KeyD'],u:['ArrowUp','KeyW'],d:['ArrowDown','KeyS'],jump:['KeyZ','Space','KeyK'],atk:['KeyX','KeyJ'],sub:['KeyC','KeyL']};
+const KEYS={l:['ArrowLeft','KeyA','T_l'],r:['ArrowRight','KeyD','T_r'],u:['ArrowUp','KeyW','T_u'],d:['ArrowDown','KeyS','T_d'],jump:['KeyZ','Space','KeyK','T_jump'],atk:['KeyX','KeyJ','T_atk'],sub:['KeyC','KeyL','T_sub']};
 const K={},pk={};
 function held(n){return KEYS[n].some(c=>K[c]);}
+/* ---- ゲームパッド(標準配置): スティック/十字=移動, A=ジャンプ, X=鎖鎌, B=サブ武器, Start=ポーズ ---- */
+function padRead(){
+  let p=null;try{const gp=navigator.getGamepads?navigator.getGamepads():[];p=gp[0]||gp[1]||null;}catch(e){}
+  if(!p||!p.connected)return null;
+  const b=n=>!!(p.buttons[n]&&p.buttons[n].pressed),ax=p.axes[0]||0,ay=p.axes[1]||0;
+  return {l:ax<-.45||b(14),r:ax>.45||b(15),u:ay<-.6||b(12),d:ay>.6||b(13),jump:b(0)||b(3),atk:b(2),sub:b(1)||b(5),start:b(9),any:p.buttons.some(x=>x.pressed)};
+}
+let padStartPrev=false,padAnyPrev=false;
+function pollPad(){
+  const p=padRead();if(!p)return;
+  if(G.mode==='demo'&&p.any&&!padAnyPrev){audioInit();newGame('play');}
+  if(G.mode==='play'&&p.start&&!padStartPrev&&G.scene==='play')G.paused=!G.paused;
+  padStartPrev=p.start;padAnyPrev=p.any;
+}
+/* ---- タッチ操作(スマホ): 画面の仮想ボタン ---- */
+let TOUCH=false;const TB=[
+  {k:'T_l',x:24,y:VH-150,w:84,h:84,t:'◀'},{k:'T_r',x:220,y:VH-150,w:84,h:84,t:'▶'},{k:'T_u',x:122,y:VH-238,w:84,h:84,t:'▲'},{k:'T_d',x:122,y:VH-120,w:84,h:84,t:'▼'},
+  {k:'T_jump',x:VW-300,y:VH-130,w:90,h:90,t:'ジャンプ'},{k:'T_atk',x:VW-196,y:VH-190,w:90,h:90,t:'鎖鎌'},{k:'T_sub',x:VW-100,y:VH-130,w:80,h:80,t:'サブ'}
+];
+function touchSync(ev){
+  TOUCH=true;const r=cv.getBoundingClientRect(),on={};
+  for(const t of ev.touches){const x=(t.clientX-r.left)*VW/r.width,y=(t.clientY-r.top)*VH/r.height;for(const b of TB)if(x>b.x-14&&x<b.x+b.w+14&&y>b.y-14&&y<b.y+b.h+14)on[b.k]=true;}
+  for(const b of TB)K[b.k]=!!on[b.k];
+}
+cv.addEventListener('touchstart',ev=>{ev.preventDefault();audioInit();if(AC&&AC.state==='suspended')AC.resume();if(G.mode==='demo'){newGame('play');TOUCH=true;return;}if(G.paused)G.paused=false;touchSync(ev);},{passive:false});
+cv.addEventListener('touchmove',ev=>{ev.preventDefault();touchSync(ev);},{passive:false});
+cv.addEventListener('touchend',ev=>{ev.preventDefault();touchSync(ev);},{passive:false});
+function drawTouch(){
+  if(!TOUCH||G.mode!=='play')return;
+  ctx.globalAlpha=.55;
+  for(const b of TB){const on=K[b.k];ctx.fillStyle=on?'rgba(255,226,122,.55)':'rgba(20,12,36,.55)';ctx.fillRect(b.x,b.y,b.w,b.h);ctx.strokeStyle='#d8c8f0';ctx.lineWidth=2;ctx.strokeRect(b.x,b.y,b.w,b.h);otext(b.t,b.x+b.w/2,b.y+b.h/2,b.t.length>1?18:30,'#fff','center','rgba(0,0,0,.6)');}
+  ctx.globalAlpha=1;
+}
 function humanInput(){
   const cur={l:held('l'),r:held('r'),u:held('u'),d:held('d'),jump:held('jump'),atk:held('atk'),sub:held('sub')};
+  const pd=padRead();if(pd){cur.l=cur.l||pd.l;cur.r=cur.r||pd.r;cur.u=cur.u||pd.u;cur.d=cur.d||pd.d;cur.jump=cur.jump||pd.jump;cur.atk=cur.atk||pd.atk;cur.sub=cur.sub||pd.sub;}
   const inp={l:cur.l?1:0,r:cur.r?1:0,u:cur.u?1:0,d:cur.d?1:0,jumpP:cur.jump&&!pk.jump?1:0,atkP:cur.atk&&!pk.atk?1:0,subP:cur.sub&&!pk.sub?1:0,jump:cur.jump?1:0};
   Object.assign(pk,cur);return inp;
 }
@@ -211,7 +245,7 @@ function stage3(){
   fillT(L,67,8,80,13,1);
   L.stairs.push(mkStair(61*16,224,6,1),mkStair(87*16,224,6,-1));
   for(const [a,b,y] of [[100,104,11],[114,118,10],[34,36,8]])fillT(L,a,y,b,y,2);
-  L.movers.push({x:500,y:206,w:40,x0:500,x1:572,vx:.6},{x:580,y:190,w:40,x0:556,x1:628,vx:-.6},{x:640,y:206,w:40,x0:610,x1:690,vx:.7});
+  L.movers.push({x:500,y:206,w:56,x0:500,x1:556,vx:.45},{x:572,y:198,w:56,x0:560,x1:616,vx:-.4},{x:640,y:206,w:56,x0:628,x1:684,vx:.45});
   for(const x of [10,24,50,58,74,106,124,134])L.lants.push({x:x*16+8,y:224});
   L.lants.push({x:72*16+8,y:128});
   for(const x of [50,92,108,126])L.ens.push({t:'armor',x:x*16,y:224});
@@ -251,7 +285,7 @@ function moveY(b,dy,noPlat){
     }
     for(const m of movers){
       if(noPlat||b.drop>0)continue;
-      if(b.x+b.w/2>m.x&&b.x-b.w/2<m.x+m.w&&py<=m.y+.5&&b.y>=m.y&&b.y<=m.y+6){b.y=m.y;b.vy=0;b.ground=true;b.rideM=m;return;}
+      if(b.x+b.w/2>m.x&&b.x-b.w/2<m.x+m.w&&py<=m.y+.5&&b.y>=m.y&&b.y<=m.y+10){b.y=m.y;b.vy=0;b.ground=true;b.rideM=m;return;}
     }
   }else{
     if(solidBox(b.x,b.y,b.w,b.h)){b.y=py;b.vy=0;}
@@ -678,6 +712,7 @@ function updateSpawns(){
     G.bossActive=true;cam.lock={x0:LV.arena.x0,x1:LV.arena.x1};LV.gateOn=true;
     for(let y=0;y<14;y++)LV.t[y*LV.LW+LV.arena.gate]=1;
     spawnBoss(LV.arena.boss);setTrack(3);sfx.boss();G.shake=8;
+    G.banner={t:170,txt:{bigbat:'夜叉蝙蝠',gasha:'がしゃ髑髏',lunar:'月蝕の主'}[LV.arena.boss]};
     for(let i=enemies.length-1;i>=0;i--)if(!enemies[i].boss)enemies.splice(i,1);
   }
   // チェックポイント
@@ -749,6 +784,7 @@ function botInput(){
 /* ---------------- 更新 ---------------- */
 function update(){
   G.t+=1/60;G.shake*=.88;G.flash=Math.max(0,G.flash-.04);
+  pollPad();
   if(G.paused)return;
   if(G.scene==='intro'){
     G.sceneT+=1/60;if(G.sceneT>2.2){G.scene='play';G.sceneT=0;sfx.start();}
@@ -1011,7 +1047,8 @@ function draw(){
   ctx.imageSmoothingEnabled=false;ctx.drawImage(lc,0,0,VW,VH);
   // 暗い周辺
   const vg=ctx.createRadialGradient(VW/2,VH/2,VH*.35,VW/2,VH/2,VH*.95);vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.5)');ctx.fillStyle=vg;ctx.fillRect(0,0,VW,VH);
-  drawHUDtext();
+  drawHUDtext();drawTouch();
+  if(G.banner&&G.banner.t>0&&!G.paused){const a=Math.min(1,G.banner.t/30,(170-G.banner.t)/20+.2);ctx.globalAlpha=clamp(a,0,1);otext('WARNING',VW/2,150,34,'#ff5a4a','center','#200');otext(G.banner.txt,VW/2,206,66,'#f4ecd8','center','rgba(140,10,40,.95)',FONTM);ctx.globalAlpha=1;if(G.scene==='play')G.banner.t--;}
   // フロート
   for(const f of floats){ctx.globalAlpha=clamp(f.life/20,0,1);otext(f.t,(f.x-cam.x)*2,f.y*2,18,f.col,'center');}ctx.globalAlpha=1;
   if(G.scene==='intro')drawIntro();
