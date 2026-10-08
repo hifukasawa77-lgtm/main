@@ -92,6 +92,21 @@ jobs:
           cat wrangler.toml
           npx --yes wrangler@4 deploy
 
+      - name: Security alert webhook (optional)
+        # 攻撃検知の通知先（Slack Incoming Webhook）。GitHub Secret があれば Worker の secret へ反映する。
+        # 無くてもデプロイは止めない（ログ＝シスログは残る。通知だけが届かない）
+        working-directory: cloudflare-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SECURITY_ALERT_WEBHOOK_URL: ${{ secrets.SECURITY_ALERT_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SECURITY_ALERT_WEBHOOK_URL" ]; then
+            echo "::warning::SECURITY_ALERT_WEBHOOK_URL が未設定のため、攻撃の通知は送られません（ログには残ります）"
+            exit 0
+          fi
+          printf '%s' "$SECURITY_ALERT_WEBHOOK_URL" | npx --yes wrangler@4 secret put SECURITY_ALERT_WEBHOOK_URL
+
       - name: Smoke test
         run: |
           sleep 5
@@ -110,3 +125,7 @@ jobs:
             -H 'Content-Type: application/json' -H 'Origin: https://hifukasawa77-lgtm.github.io' -d '{"names":["テスト"]}')
           echo "/oshi/research http_code: $RS_CODE"
           { [ "$RS_CODE" = "200" ] || [ "$RS_CODE" = "502" ]; } || { echo "::error::/oshi/research が 200/502 以外（$RS_CODE）。ルートが未反映の可能性"; exit 1; }
+          # 攻撃の遮断（security-monitor.js）が本番で効いているか: 典型的な探索リクエストが 403 になること
+          PROBE_CODE=$(curl -s -m 30 -o /dev/null -w '%{http_code}' 'https://ai-proxy.hi-fukasawa77.workers.dev/.env')
+          echo "/.env probe http_code: $PROBE_CODE"
+          [ "$PROBE_CODE" = "403" ] || { echo "::error::攻撃パターンが遮断されていません（/.env → $PROBE_CODE）"; exit 1; }

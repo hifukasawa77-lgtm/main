@@ -15,7 +15,8 @@
  * 設定方法: README.md を参照
  */
 import { buildSystemPrompt } from './site-knowledge.js';
-import { allowedOrigin, withHardening, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
+import { allowedOrigin, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
+import { withSecurityGate } from './security-monitor.js';
 import { researchOshi } from './oshi-research.js';
 import { handleVocalSong, handleVocalPortrait } from './vocalis-ai.js';
 
@@ -201,7 +202,7 @@ async function handleVideoTts(env, body, origin) {
   }
 }
 
-export default withHardening({
+export default withSecurityGate('ai-proxy', {
   async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
     const isAllowed = allowedOrigin(origin, env);
@@ -360,7 +361,7 @@ async function handleStats(env, origin) {
 async function handleAdmin(request, env, url) {
   if (!env.ADMIN_TOKEN) return new Response('Not Found', { status: 404 });
   const token = request.headers.get('X-Admin-Token') || '';
-  if (token !== env.ADMIN_TOKEN) {
+  if (!secureEqual(token, env.ADMIN_TOKEN)) {
     return new Response('Unauthorized', { status: 401, headers: adminCorsHeaders() });
   }
 

@@ -1000,7 +1000,25 @@ node --test tests/security.test.mjs          # Worker: 全応答に nosniff / CS
 - `frame-guard.js` は `sw.js` の事前キャッシュに入れてある（圏外で取れないと全ページに読込失敗が残る）
 - **`frame-ancestors` / `X-Frame-Options` / `Permissions-Policy` を `<meta>` に書かない**。meta では無視されるので、
   書くと「対応済み」に見えるだけで何も守らない。HTTPヘッダで付けられるのは Worker の応答だけ
-  （`cloudflare-worker/request-security.js` の `withHardening`）
+  （`cloudflare-worker/security-monitor.js` の `withSecurityGate` → `hardenResponse`）
+
+### 攻撃の遮断・シスログ・深澤への通知（2026-10-08 新設）
+
+**遮断→記録→通知の3段は `cloudflare-worker/security-monitor.js`（両Workerの入口 `withSecurityGate`）に一本化**。
+詳細と通知の設定手順は `cloudflare-worker/README.md`「攻撃の遮断・シスログ・通知」。
+
+- **遮断**: 攻撃パターン（パストラバーサル・`/.env` 等の探索・URL中のスクリプト/SQL/テンプレート注入）はハンドラ前に403。
+  拒否を IP ごとに `ABUSE_LIMITER` で数え、60秒10回超で15分間遮断（Cache API に置く＝KVの書き込み枠を攻撃者に使わせない）
+- **記録**: 全拒否を RFC 5424 のシスログ行（`<PRI>1 … SECURITY [sec@32473 kind=… ip=…]`）で Worker ログへ。
+  **SD値は `"` `\` `]` をエスケープし改行を潰す**（URLに改行を仕込んで偽のログ行を作らせない。検査が実際に流し込む）
+- **通知**: err 以上だけ Slack（`SECURITY_ALERT_WEBHOOK_URL`）へ。**同じ種別は10分に1通**。403（Originなしのボット）は
+  毎日大量に来るので notice（記録と遮断カウントだけ）——全部通知すると本物が埋もれて誰も見なくなる
+- **ページ側**: `frame-guard.js` が枠への埋め込み・CSPが遮断した外部スクリプト/イベント属性を `POST /security/report` へ送る。
+  **インライン `<script>` の遮断は送らない**（拡張機能が日常的に起こす雑音）。`connect-src` を絞ったページは通報先の
+  1ホストだけ足す（`security-baseline.mjs` が検査・補完。https: 全体へは広げない）
+- 本番で効いているかは `deploy-worker.yml` のスモークテストが `/.env` → 403 で確かめる
+- **「必ず防ぎきる」は仕組みで近づけるもので、保証はできない**。静的ページ（GitHub Pages）への大量アクセスや
+  未知の手口は、この層では止められない。限界は `SECURITY.md` に書いてある
 - 脆弱性の報告窓口は `SECURITY.md` と `.well-known/security.txt`（`Expires` は1年以内に更新すること）
 
 - **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。

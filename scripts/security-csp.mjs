@@ -17,7 +17,8 @@ export function securePage(html, page) {
     "script-src 'self' " + hashes.join(' ') + external, "script-src-attr 'none'",
     "style-src 'self' 'unsafe-inline'" + (page === 'index.html' ? ' https://fonts.googleapis.com https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css https://accounts.google.com/gsi/style' : ''),
     "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data: https:",
-    (page === 'blog.html' || page === 'blog-post.html') ? "connect-src 'self'" : "connect-src 'self' https:",
+    // Blog pages connect only to the attack-report endpoint (assets/js/frame-guard.js).
+    (page === 'blog.html' || page === 'blog-post.html') ? "connect-src 'self' https://ai-proxy.hi-fukasawa77.workers.dev" : "connect-src 'self' https:",
     page === 'index.html' ? 'frame-src https://accounts.google.com https://www.gstatic.com https://embed.windy.com' : "frame-src 'none'",
     "worker-src 'self'", 'upgrade-insecure-requests'].join('; ') + ';';
   const meta = `<meta http-equiv="Content-Security-Policy" content="${policy}">`;

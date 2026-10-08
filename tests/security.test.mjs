@@ -137,3 +137,121 @@ test('Every Worker reply carries hardening headers, including plain-text errors'
     assert.match(response.headers.get('Strict-Transport-Security'), /max-age=\d+/);
   }
 });
+
+// ── Security gate: block → syslog → notify ─────────────────────────────────────────────
+import { syslogLine, detectAttack, alertText, maskIp, BAN_SECONDS } from '../cloudflare-worker/security-monitor.js';
+
+// Fake webhook (not a secret). Split so the secret scanner in release-check does not flag the fixture.
+const FAKE_SLACK_WEBHOOK = 'https://hooks.slack.com/' + 'services/TEST/TEST/TEST';
+function harness({ webhook = FAKE_SLACK_WEBHOOK, abuse } = {}) {
+  const store = new Map();
+  const logs = [];
+  const posts = [];
+  const waits = [];
+  const saved = { caches: globalThis.caches, fetch: globalThis.fetch, warn: console.warn, error: console.error };
+  globalThis.caches = { default: {
+    match: async key => store.get(String(key)),
+    put: async (key, res) => { store.set(String(key), res); },
+  } };
+  globalThis.fetch = async (url, init) => { posts.push({ url: String(url), body: JSON.parse(init.body) }); return new Response('ok'); };
+  console.warn = line => logs.push(line);
+  console.error = line => logs.push(line);
+  const restore = () => Object.assign(globalThis, { caches: saved.caches, fetch: saved.fetch }) &&
+    Object.assign(console, { warn: saved.warn, error: saved.error });
+  const e = env({ SECURITY_ALERT_WEBHOOK_URL: webhook, ADMIN_TOKEN: 'correct-token', ...(abuse ? { ABUSE_LIMITER: abuse } : {}) });
+  const c = { waitUntil: p => waits.push(p) };
+  const settle = () => Promise.all(waits.splice(0));
+  return { store, logs, posts, e, c, settle, restore };
+}
+
+test('syslog lines are RFC 5424 with the authpriv facility and cannot be split by injected newlines', () => {
+  const line = syslogLine({ severity: 'alert', service: 'ai-proxy', host: 'w.test', kind: 'x', ip: '1.2.3.4',
+    path: '/a"]\nfake <0>1 line', time: '2026-10-08T00:00:00.000Z' });
+  assert.match(line, /^<81>1 2026-10-08T00:00:00\.000Z w\.test ai-proxy - SECURITY \[sec@32473 /);
+  assert.ok(!line.includes('\n'));
+  assert.match(line, /path="\/a\\"\\\] fake <0>1 line"/);
+  assert.match(syslogLine({ severity: 'notice', kind: 'k' }), /^<85>1 /);
+});
+
+for (const [path, kind] of [['/../../etc/passwd', 'path-traversal'], ['/wp-admin/setup.php', 'scanner-probe'],
+  ['/.env', 'scanner-probe'], ['/?q=%3Cscript%3Ealert(1)%3C/script%3E', 'markup-injection'],
+  ['/?id=1%20UNION%20SELECT%20password', 'sql-injection'], ['/?x=${jndi:ldap://e/a}', 'template-injection']]) {
+  test(`Attack-shaped request ${path} is refused before the handler and logged`, async () => {
+    assert.equal(detectAttack(new URL('https://w.test' + path)), kind);
+    const h = harness();
+    try {
+      const response = await worker.fetch(req({}, path), h.e, h.c);
+      await h.settle();
+      assert.equal(response.status, 403);
+      assert.equal(response.headers.get('X-Frame-Options'), 'DENY');
+      assert.ok(h.logs.some(l => l.includes(`kind="${kind}"`)), h.logs.join('\n'));
+      assert.equal(h.posts.length, 1, 'owner is notified');
+      assert.match(h.posts[0].body.text, /攻撃を検知して遮断/);
+    } finally { h.restore(); }
+  });
+}
+test('Ordinary requests are not mistaken for attacks', () => {
+  for (const p of ['/', '/feedback', '/video/script', '/oshi/research', '/vocal/usage', '/stats'])
+    assert.equal(detectAttack(new URL('https://w.test' + p)), null);
+});
+
+test('Admin token guessing is logged at alert level, notified once, then throttled', async () => {
+  const h = harness();
+  try {
+    for (let i = 0; i < 3; i++) {
+      const r = await worker.fetch(req({}, '/admin/list', { 'X-Admin-Token': 'guess' + i }, 'GET'), h.e, h.c);
+      assert.equal(r.status, 401);
+      await h.settle();
+    }
+    assert.equal(h.logs.filter(l => l.startsWith('<81>1') && l.includes('kind="admin-auth-failure"')).length, 3);
+    assert.equal(h.posts.length, 1, 'same kind within the throttle window → one message');
+  } finally { h.restore(); }
+});
+
+test('An IP that keeps getting rejected is banned and refused before reaching the handler', async () => {
+  let strikes = 0;
+  const h = harness({ abuse: { limit: async () => ({ success: ++strikes <= 2 }) } });
+  try {
+    for (let i = 0; i < 3; i++) await worker.fetch(req({}, '/', { Origin: 'https://evil.test', 'CF-Connecting-IP': '203.0.113.9' }), h.e, h.c);
+    await h.settle();
+    assert.ok(h.logs.some(l => l.includes('kind="ip-banned"')), 'ban is logged');
+    assert.ok(h.posts.some(p => /ip-banned/.test(p.body.text) && /203\.0\.113\.x/.test(p.body.text)), 'ban is notified, IP masked');
+    let handlerRan = false;
+    const r = await worker.fetch(req({ message: 'hi' }, '/', { 'CF-Connecting-IP': '203.0.113.9' }),
+      { ...h.e, AI: { run: async () => { handlerRan = true; return { response: 'x' }; } } }, h.c);
+    assert.equal(r.status, 403);
+    assert.equal(handlerRan, false);
+    const other = await worker.fetch(req({ message: 'hi' }, '/', { 'CF-Connecting-IP': '198.51.100.1' }), h.e, { waitUntil() {} });
+    assert.equal(other.status, 200, 'other visitors are unaffected');
+    assert.equal(BAN_SECONDS, 900);
+  } finally { h.restore(); }
+});
+
+test('Page reports: only from the site, small, known kinds; framing is notified', async () => {
+  const h = harness();
+  const report = (body, origin = SITE_ORIGIN) => worker.fetch(new Request('https://w.test/security/report', {
+    method: 'POST', headers: { Origin: origin, 'Content-Type': 'text/plain;charset=UTF-8' }, body }), h.e, h.c);
+  try {
+    assert.equal((await report(JSON.stringify({ kind: 'framed', page: '/main/', framer: 'https://evil.test' }))).status, 204);
+    assert.equal((await report(JSON.stringify({ kind: 'framed' }), 'https://evil.test')).status, 403);
+    assert.equal((await report('{"kind":"nope"}')).status, 400);
+    assert.equal((await report('x'.repeat(5000))).status, 400);
+    await h.settle();
+    assert.ok(h.logs.some(l => l.includes('kind="framed"') && l.includes('framer=https://evil.test')));
+    assert.equal(h.posts.filter(p => /framed/.test(p.body.text)).length, 1);
+  } finally { h.restore(); }
+});
+
+test('Alerts only go to real webhook hosts, and nothing is sent when no webhook is configured', async () => {
+  for (const webhook of ['https://evil.test/hook', 'http://hooks.slack.com/x', '']) {
+    const h = harness({ webhook });
+    try {
+      await worker.fetch(req({}, '/.env'), h.e, h.c);
+      await h.settle();
+      assert.equal(h.posts.length, 0, webhook);
+      assert.ok(h.logs.some(l => l.includes('kind="scanner-probe"')), 'still logged');
+    } finally { h.restore(); }
+  }
+  assert.equal(maskIp('2001:db8:1:2::5'), '2001:db8:1:…');
+  assert.match(alertText({ severity: 'err', kind: 'k', method: 'GET', host: 'h', path: '/p', ip: '1.2.3.4' }), /1\.2\.3\.x/);
+});

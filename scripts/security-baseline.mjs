@@ -24,6 +24,13 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE_CSP = "object-src 'none'; base-uri 'self'; form-action 'self'";
+// frame-guard.js が攻撃を通報する先（cloudflare-worker/security-monitor.js の /security/report）。
+// connect-src を絞っているページで塞がれると、通報が例外も出さずに届かなくなる
+export const REPORT_ORIGIN = 'https://ai-proxy.hi-fukasawa77.workers.dev';
+function allowsReport(d) {
+  const c = d.get('connect-src') || d.get('default-src');
+  return !c || c.includes('https:') || c.includes('*') || c.includes(REPORT_ORIGIN);
+}
 const REFERRER = '<meta name="referrer" content="strict-origin-when-cross-origin">';
 const GUARD_TAG = '<script src="assets/js/frame-guard.js"></script>';
 const CSP_RE = /<meta\b[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/i;
@@ -68,6 +75,7 @@ export function auditPage(html) {
     if (!d.has('form-action')) problems.push('form-action が無い（差し込まれたフォームで外部へ送信される）');
     const script = d.get('script-src') || d.get('default-src');
     if (script && !script.includes("'self'")) problems.push("script-src が 'self' を許していない（frame-guard.js が読めない）");
+    if (!allowsReport(d)) problems.push('connect-src が攻撃の通報先（' + REPORT_ORIGIN + '）を塞いでいる（通報が無言で届かない）');
   }
   if (!hasFrameGuard(html)) problems.push('クリックジャッキング対策（frame-guard.js）が <head> に無い');
   if (!/<meta\b[^>]*name=["']referrer["']/i.test(html)) problems.push('Referrer-Policy の meta が無い');
@@ -95,11 +103,18 @@ export function applyBaseline(html) {
     if (!d.has('object-src')) add.push("object-src 'none'");
     if (!d.has('base-uri')) add.push("base-uri 'self'");
     if (!d.has('form-action')) add.push("form-action 'self'");
-    if (add.length) {
-      const trimmed = csp.trim().replace(/;\s*$/, '');
-      const next = (trimmed ? trimmed + '; ' : '') + add.join('; ') + ';';
-      out = out.replace(CSP_RE, tag => tag.replace(csp, next));
+    let next = csp;
+    if (!allowsReport(d)) {
+      // 通報先の1ホストだけを足す（https: 全体へは広げない）
+      next = d.has('connect-src')
+        ? next.replace(/(connect-src\b[^;]*?)\s*(;|$)/i, `$1 ${REPORT_ORIGIN}$2`)
+        : next.trim().replace(/;\s*$/, '') + `; connect-src ${[...d.get('default-src').filter(v => v !== "'none'"), REPORT_ORIGIN].join(' ')};`;
     }
+    if (add.length) {
+      const trimmed = next.trim().replace(/;\s*$/, '');
+      next = (trimmed ? trimmed + '; ' : '') + add.join('; ') + ';';
+    }
+    if (next !== csp) out = out.replace(CSP_RE, tag => tag.replace(csp, next));
   }
   if (!/<meta\b[^>]*name=["']referrer["']/i.test(out)) out = insertAfterCsp(out, REFERRER);
   if (!hasFrameGuard(out)) out = insertAfterCsp(out, GUARD_TAG);
@@ -147,6 +162,7 @@ function inject() {
     ['referrer を消す', h => h.replace(REFERRER, '')],
     ['noopener を外す', h => h.replace(' rel="noopener noreferrer"', '')],
     ['http:// のスクリプト', h => h.replace('</head>', '<script src="http://cdn.example/x.js"></script></head>')],
+    ['connect-src で通報先を塞ぐ', h => h.replace("object-src 'none'", "connect-src 'self'; object-src 'none'")],
     ['http:// のスタイルシート', h => h.replace('</head>', '<link rel="stylesheet" href="http://cdn.example/x.css"></head>')],
   ];
   let ok = auditPage(good).length === 0;
@@ -160,7 +176,8 @@ function inject() {
   // 既存CSPの値を変えずに足すだけか（厳格なCSPを緩めないこと）
   const strict = `<head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-abc';"></head>`;
   const applied = applyBaseline(strict);
-  const kept = applied.includes("default-src 'none'; script-src 'self' 'sha256-abc'; object-src 'none'; base-uri 'self'; form-action 'self';");
+  const kept = applied.includes("default-src 'none'; script-src 'self' 'sha256-abc'; connect-src " + REPORT_ORIGIN +
+    "; object-src 'none'; base-uri 'self'; form-action 'self';");
   console.log((kept ? '✅' : '❌') + ' 既存CSPは値を変えず、足りない指令だけ足す');
   ok = ok && kept;
   const twice = applyBaseline(applied) === applied;

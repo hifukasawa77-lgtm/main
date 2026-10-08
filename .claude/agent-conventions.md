@@ -80,7 +80,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `bakumatsu.html` / `game.js` / `bakumatsu.css` | `node scripts/verify-bakumatsu-map.mjs` |
 | `sw.js` | `node scripts/verify-service-worker.mjs` |
 | `assets/js/frame-guard.js` / `scripts/security-baseline.mjs`（全ページのセキュリティ基礎線） | `node scripts/security-baseline.mjs`（`--inject` で故障注入）/ `node scripts/verify-frame-guard.mjs`（実ブラウザ。`--inject` で故障注入） |
-| `cloudflare-worker/request-security.js` / `cloudflare-worker/gemini-proxy.js` / `cloudflare-worker/notebook-worker.js` | `node --test tests/security.test.mjs` |
+| `cloudflare-worker/request-security.js` / `cloudflare-worker/security-monitor.js` / `cloudflare-worker/gemini-proxy.js` / `cloudflare-worker/notebook-worker.js` | `node --test tests/security.test.mjs`（遮断・シスログ・通知・IP遮断・ページ通報） |
 | `zero-1-mobile.html` / `assets/js/zero1-worker.js` / `assets/js/zero1-tools.js` | `node scripts/verify-zero1-mobile.mjs` / `node scripts/verify-service-worker.mjs` |
 | `assets/js/gesture-pointer.js` | `node scripts/verify-gesture-pointer.mjs` |
 | `synth-eq.html` | `node scripts/verify-synth-eq.mjs` |

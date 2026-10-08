@@ -164,6 +164,35 @@ Workers AI のモデルカタログ: https://developers.cloudflare.com/workers-a
 - 管理画面のCORSはローカルファイル利用との互換性のため全Originを許可しますが、毎回トークンで認可します。任意Origin許可を認証とは扱いません。
 - AI・管理レスポンスはno-store。上流AIサービスの例外詳細はクライアントへ返しません。
 
+## 攻撃の遮断・シスログ・通知（2026-10-08）
+
+実装は `security-monitor.js`（両Workerの入口を包む `withSecurityGate`）。
+
+| 段 | 内容 |
+|---|---|
+| 遮断 | パストラバーサル・スキャナーの探索（`/.env` `/wp-admin` 等）・URL中のスクリプト/SQL/テンプレート注入はハンドラに届く前に 403。拒否（401/403/413/415/429・攻撃パターン）を IP ごとに `ABUSE_LIMITER` で数え、**60秒に10回を超えた IP は15分間すべて拒否** |
+| 記録 | すべての拒否を **RFC 5424 形式のシスログ行**（facility=authpriv）で Worker のログへ出す。例: `<83>1 2026-10-08T… ai-proxy.….workers.dev ai-proxy - SECURITY [sec@32473 kind="scanner-probe" ip="…" path="/.env" status="403"] scanner-probe` |
+| 通知 | 重大度 err 以上（攻撃パターン・管理トークンの総当たり・IPの遮断・ページからの通報）を Slack へ。**同じ種別は10分に1通**にまとめる（洪水が通知の洪水にならない。ログには全件残る） |
+| ページからの通報 | `assets/js/frame-guard.js` が「別サイトに枠で埋め込まれた」「CSPが外部スクリプト・イベント属性の注入を遮断した」を `POST /security/report` へ送る |
+
+### 通知を受け取る設定（深澤の作業・1回だけ）
+
+1. Slack で Incoming Webhook を作り URL を控える（無料。経理の通知と同じ仕組み）
+2. GitHub の Settings → Secrets and variables → Actions に `SECURITY_ALERT_WEBHOOK_URL` として登録
+3. Actions の「Deploy Worker」を再実行（`wrangler secret put` で Worker へ反映される）
+
+手元から入れる場合: `npx wrangler secret put SECURITY_ALERT_WEBHOOK_URL`。
+受け付ける宛先は `https://hooks.slack.com/…` と `https://discord.com/api/webhooks/…` だけ（書き間違えた secret で任意のURLへ送らないため）。
+
+### シスログの見方
+
+```bash
+npx wrangler tail ai-proxy --format pretty | grep SECURITY     # リアルタイム
+```
+
+ダッシュボード → Workers & Pages → ai-proxy → ログ（`[observability]` で保存。無料プランは数日保持）。
+自前の syslog サーバーへ転送したい場合は Logpush（有料プラン）が必要——課金が発生するので Accounting の承認を通すこと。
+
 ## 検証と反映
 
 リポジトリ直下で以下を実行します。

@@ -39,10 +39,6 @@ export function hardenResponse(response) {
   return out;
 }
 
-export function withHardening(handler) {
-  return { ...handler, async fetch(...args) { return hardenResponse(await handler.fetch(...args)); } };
-}
-
 export function publicHeaders(origin) {
   return { ...securityHeaders,
     ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
