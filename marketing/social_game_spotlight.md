@@ -82,7 +82,7 @@ Canvas APIで作ったトップビューRPG
 ```
 ♟️ AI将棋
 
-藤井棋風AIと3段階難易度で対局
+AI電竜・AI幻石の2つの棋風と3段階難易度で対局
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
@@ -94,7 +94,7 @@ Canvas APIで作ったトップビューRPG
 ```
 ♟️ AI Shogi
 
-Play vs Fujii-style AI, 3 difficulties
+Play vs two AI styles (Denryu / Genseki), 3 difficulties
 
 Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
@@ -105,7 +105,7 @@ Free in your browser, no install required.
 ### game-shogi-bsky-ja
 ```
 ♟️ AI将棋
-藤井棋風AIと3段階難易度で対局
+AI電竜・AI幻石の2つの棋風と3段階難易度で対局
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
 #ブラウザゲーム #個人開発 #ボードゲーム
@@ -286,13 +286,13 @@ UCT-MCTS搭載 9路盤/13路盤
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
-## AIオセロ / Reversi AI (`othello`)
+## AIリバーシ / Reversi AI (`othello`)
 
 ### game-othello-x-ja
 ```
-⚪ AIオセロ
+⚪ AIリバーシ
 
-ミニマックスAI搭載のオセロ
+ミニマックスAI搭載のリバーシ
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/othello.html
@@ -314,8 +314,8 @@ Free in your browser, no install required.
 
 ### game-othello-bsky-ja
 ```
-⚪ AIオセロ
-ミニマックスAI搭載のオセロ
+⚪ AIリバーシ
+ミニマックスAI搭載のリバーシ
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/othello.html
 #ブラウザゲーム #個人開発 #ボードゲーム
@@ -747,7 +747,7 @@ Free in your browser, no install required.
 ```
 🀫 麻雀ソリティア
 
-上海パズル × 144枚
+牌ペア消しパズル × 144枚
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
@@ -759,7 +759,7 @@ Free in your browser, no install required.
 ```
 🀫 Mahjong Solitaire
 
-Shanghai-style solitaire with 144 tiles
+Tile-matching solitaire with 144 tiles
 
 Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
@@ -770,7 +770,7 @@ Free in your browser, no install required.
 ### game-mahjong-solitaire-bsky-ja
 ```
 🀫 麻雀ソリティア
-上海パズル × 144枚
+牌ペア消しパズル × 144枚
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
 #ブラウザゲーム #個人開発 #パズルゲーム
@@ -922,7 +922,7 @@ Free in your browser, no install required.
 ```
 🏙️ CITY BUILDER
 
-シムシティ風 × 電力管理
+都市育成 × 電力管理
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
@@ -934,7 +934,7 @@ Free in your browser, no install required.
 ```
 🏙️ City Builder
 
-SimCity-style with power grid
+City-building with power grid
 
 Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
@@ -945,7 +945,7 @@ Free in your browser, no install required.
 ### game-city-bsky-ja
 ```
 🏙️ CITY BUILDER
-シムシティ風 × 電力管理
+都市育成 × 電力管理
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
@@ -1299,4 +1299,249 @@ Free in your browser, no install required.
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/corridor.html
 #ブラウザゲーム #個人開発 #ボードゲーム
+```
+
+## ピッパの月灯りランタン / Pippa's Moonlit Lantern (`pippa-run`)
+
+### game-pippa-run-x-ja
+```
+🦊 ピッパの月灯りランタン
+
+星のかけらを集めてランタンを目指す、オリジナルの横スクロールアクション。自動デモつき
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pippa_run.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-pippa-run-x-en
+```
+🦊 Pippa's Moonlit Lantern
+
+Original side-scrolling platformer — collect star shards and reach the lantern
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pippa_run.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-pippa-run-bsky-ja
+```
+🦊 ピッパの月灯りランタン
+星のかけらを集めてランタンを目指す、オリジナルの横スクロールアクション。自動デモつき
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pippa_run.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## ルミナ・テイマー / Lumina Tamer (`lumina-tamer`)
+
+### game-lumina-tamer-x-ja
+```
+🔥 ルミナ・テイマー
+
+モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・バトルタワー・セーブ対応
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
+
+#個人開発 #ブラウザゲーム #RPG
+```
+
+### game-lumina-tamer-x-en
+```
+🔥 Lumina Tamer
+
+Monster-taming RPG with 38 monsters, 4 gyms, a battle tower and saves
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
+
+#indiedev #browsergames #rpg
+```
+
+### game-lumina-tamer-bsky-ja
+```
+🔥 ルミナ・テイマー
+モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・バトルタワー・セーブ対応
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
+#ブラウザゲーム #個人開発 #RPG
+```
+
+## ぬりぬりアリーナ / Nurinuri Arena (`nurinuri-arena`)
+
+### game-nurinuri-arena-x-ja
+```
+🎨 ぬりぬりアリーナ
+
+インクを撃って陣地を塗り広げる4vs4チームバトル。自分のインクに潜って泳ぎ、ボムやとくせいで逆転
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/nurinuri_arena.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-nurinuri-arena-x-en
+```
+🎨 Nurinuri Arena
+
+4v4 ink-turf team battle — swim in your own ink, bomb and special your way to victory
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/nurinuri_arena.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-nurinuri-arena-bsky-ja
+```
+🎨 ぬりぬりアリーナ
+インクを撃って陣地を塗り広げる4vs4チームバトル。自分のインクに潜って泳ぎ、ボムやとくせいで逆転
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/nurinuri_arena.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## ねじれ地下道 / Underpass Anomaly (`underpass-anomaly`)
+
+### game-underpass-anomaly-x-ja
+```
+🚪 ねじれ地下道
+
+異変を見つけたら引き返す一人称の脱出ホラー。異変は26種類、正しい判断を8回続ければ脱出(ホラー注意)
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/underpass_anomaly.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-underpass-anomaly-x-en
+```
+🚪 Underpass Anomaly
+
+First-person escape horror — spot the anomaly and turn back; 26 anomalies, 8 correct calls to escape
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/underpass_anomaly.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-underpass-anomaly-bsky-ja
+```
+🚪 ねじれ地下道
+異変を見つけたら引き返す一人称の脱出ホラー。異変は26種類、正しい判断を8回続ければ脱出(ホラー注意)
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/underpass_anomaly.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## 鉛ヶ沢 ― 屍人の夜 / Namarigasawa — Night of the Hollow (`namarigasawa`)
+
+### game-namarigasawa-x-ja
+```
+🌫️ 鉛ヶ沢 ― 屍人の夜
+
+毒ガスで住人が屍人と化した山奥の鉱山町を舞台にした、和風サバイバルホラー。鍵と手記を集めて脱出(ホラー注意)
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/namarigasawa.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-namarigasawa-x-en
+```
+🌫️ Namarigasawa — Night of the Hollow
+
+Japanese survival horror in a gas-stricken mining town — find keys and notes to escape
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/namarigasawa.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-namarigasawa-bsky-ja
+```
+🌫️ 鉛ヶ沢 ― 屍人の夜
+毒ガスで住人が屍人と化した山奥の鉱山町を舞台にした、和風サバイバルホラー。鍵と手記を集めて脱出(ホラー注意)
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/namarigasawa.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## ぶっ飛びブロウラーズ / Blast Brawlers (`burst-brawlers`)
+
+### game-burst-brawlers-x-ja
+```
+💥 ぶっ飛びブロウラーズ
+
+ダメージ%が溜まるほど吹っ飛ぶ最大4人の乱闘アクション。4キャラ・2ステージ・2P対戦・パッド対応
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/burst_brawlers.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-burst-brawlers-x-en
+```
+💥 Blast Brawlers
+
+Up to 4-player platform fighter — the more damage, the farther you fly. 2P and gamepad supported
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/burst_brawlers.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-burst-brawlers-bsky-ja
+```
+💥 ぶっ飛びブロウラーズ
+ダメージ%が溜まるほど吹っ飛ぶ最大4人の乱闘アクション。4キャラ・2ステージ・2P対戦・パッド対応
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/burst_brawlers.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## 月蝕城 / Eclipse Castle (`eclipse-castle`)
+
+### game-eclipse-castle-x-ja
+```
+🌑 月蝕城
+
+退魔の剣士・紅葉が妖の城を登る和風ゴシック横スクロールアクション。鎖鎌・階段・サブ武器・全3ステージとボス戦
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/eclipse_castle.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-eclipse-castle-x-en
+```
+🌑 Eclipse Castle
+
+Japanese gothic side-scrolling action — chain-sickle, stairs, sub-weapons, 3 stages and bosses
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/eclipse_castle.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-eclipse-castle-bsky-ja
+```
+🌑 月蝕城
+退魔の剣士・紅葉が妖の城を登る和風ゴシック横スクロールアクション。鎖鎌・階段・サブ武器・全3ステージとボス戦
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/eclipse_castle.html
+#ブラウザゲーム #個人開発 #アクションゲーム
 ```
