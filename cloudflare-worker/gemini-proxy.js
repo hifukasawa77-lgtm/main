@@ -16,6 +16,7 @@
  */
 import { buildSystemPrompt } from './site-knowledge.js';
 import { allowedOrigin, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
+import { withSecurityGate } from './security-monitor.js';
 import { researchOshi } from './oshi-research.js';
 import { handleVocalSong, handleVocalPortrait } from './vocalis-ai.js';
 
@@ -201,7 +202,7 @@ async function handleVideoTts(env, body, origin) {
   }
 }
 
-export default {
+export default withSecurityGate('ai-proxy', {
   async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
     const isAllowed = allowedOrigin(origin, env);
@@ -334,7 +335,7 @@ export default {
       return errorResponse(502, 'AI service unavailable', corsHeaders(origin));
     }
   },
-};
+});
 
 // ── 管理API: 学習エントリの閲覧・削除（ADMIN_TOKEN必須） ──
 // ── 公開統計エンドポイント ─────────────────────────────────
@@ -360,7 +361,7 @@ async function handleStats(env, origin) {
 async function handleAdmin(request, env, url) {
   if (!env.ADMIN_TOKEN) return new Response('Not Found', { status: 404 });
   const token = request.headers.get('X-Admin-Token') || '';
-  if (token !== env.ADMIN_TOKEN) {
+  if (!secureEqual(token, env.ADMIN_TOKEN)) {
     return new Response('Unauthorized', { status: 401, headers: adminCorsHeaders() });
   }
 
