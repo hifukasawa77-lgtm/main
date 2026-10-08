@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>ねじれ地下道 - UNDERPASS ANOMALY</title>
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden}
@@ -304,6 +304,75 @@ document.addEventListener('mousemove',ev=>{
     P.yaw+=ev.movementX*.0023;P.pitch=clamp(P.pitch-ev.movementY*.0023,-.45,.45);
   }
 });
+
+/* ---------------- タッチ操作(スマホ) ----------------
+   左半分: 仮想スティックで移動 / 右半分: ドラッグで見回す / ボタン: はしる・ポーズ。
+   キー入力(keys)へ橋渡しするので、移動ロジックは PC と共通。 */
+const touchUI=('ontouchstart' in window)||matchMedia('(pointer:coarse)').matches;
+if(touchUI){
+  const st=document.createElement('style');
+  st.textContent='.tz{position:fixed;top:0;bottom:0;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;z-index:5}'
+   +'#tzL{left:0;width:50%}#tzR{right:0;width:50%}'
+   +'.tb{position:fixed;z-index:7;touch-action:none;user-select:none;-webkit-user-select:none;border:2px solid rgba(255,255,255,.55);background:rgba(20,20,30,.45);color:#fff;border-radius:50%;width:76px;height:76px;font:bold 15px sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.1}'
+   +'.tb.on{background:rgba(255,225,74,.55);color:#000}'
+   +'#tjb,#tjk{position:fixed;z-index:6;pointer-events:none;border-radius:50%;display:none}'
+   +'#tjb{width:120px;height:120px;border:2px solid rgba(255,255,255,.4);background:rgba(255,255,255,.08)}'
+   +'#tjk{width:52px;height:52px;background:rgba(255,255,255,.45)}';
+  document.head.appendChild(st);
+  const mkEl=(t,id,cls)=>{const e=document.createElement(t);if(id)e.id=id;if(cls)e.className=cls;document.body.appendChild(e);return e;};
+  const zL=mkEl('div','tzL','tz'),zR=mkEl('div','tzR','tz');
+  const jb=mkEl('div','tjb'),jk=mkEl('div','tjk');
+  const bRun=mkEl('div','tbRun','tb'),bPause=mkEl('div','tbPause','tb');
+  bRun.textContent='はしる';bRun.style.cssText='right:18px;bottom:22px';
+  bPause.textContent='Ⅱ';bPause.style.cssText='right:18px;top:14px;width:52px;height:52px;font-size:20px';
+  let runHeld=false,stickRun=false;
+  const syncRun=()=>{keys.ShiftLeft=runHeld||stickRun;bRun.classList.toggle('on',runHeld);};
+  // タイトル/ポーズ/クリア画面は、どこをタッチしても進む
+  const wake=()=>{
+    audioInit();if(AC&&AC.state==='suspended')AC.resume();
+    if(G.mode==='demo'){newGame('play');return true;}
+    if(G.paused){G.paused=false;return true;}
+    if(G.st==='clear'&&G.stT>1.5){newGame('demo');return true;}
+    return false;
+  };
+  let jid=null,jx0=0,jy0=0;
+  const R=55;
+  const stickOff=()=>{keys.KeyW=keys.KeyS=keys.KeyA=keys.KeyD=false;stickRun=false;syncRun();jb.style.display=jk.style.display='none';};
+  zL.addEventListener('pointerdown',ev=>{
+    ev.preventDefault();if(wake()||jid!==null)return;
+    jid=ev.pointerId;jx0=ev.clientX;jy0=ev.clientY;zL.setPointerCapture(jid);
+    jb.style.cssText='display:block;left:'+(jx0-60)+'px;top:'+(jy0-60)+'px';
+    jk.style.cssText='display:block;left:'+(jx0-26)+'px;top:'+(jy0-26)+'px';
+  });
+  zL.addEventListener('pointermove',ev=>{
+    if(ev.pointerId!==jid)return;
+    let dx=ev.clientX-jx0,dy=ev.clientY-jy0;const d=Math.hypot(dx,dy);
+    if(d>R){dx*=R/d;dy*=R/d;}
+    jk.style.left=(jx0+dx-26)+'px';jk.style.top=(jy0+dy-26)+'px';
+    const nx=dx/R,ny=dy/R,dz=.28;
+    keys.KeyW=ny<-dz;keys.KeyS=ny>dz;keys.KeyD=nx>dz;keys.KeyA=nx<-dz;
+    stickRun=Math.hypot(nx,ny)>.97;syncRun();   // スティックを端まで倒すと走る
+  });
+  const stickEnd=ev=>{if(ev.pointerId!==jid)return;jid=null;stickOff();};
+  zL.addEventListener('pointerup',stickEnd);zL.addEventListener('pointercancel',stickEnd);
+  let lid=null,lx=0,ly=0;
+  zR.addEventListener('pointerdown',ev=>{
+    ev.preventDefault();if(wake()||lid!==null)return;
+    lid=ev.pointerId;lx=ev.clientX;ly=ev.clientY;zR.setPointerCapture(lid);
+  });
+  zR.addEventListener('pointermove',ev=>{
+    if(ev.pointerId!==lid)return;
+    const dx=ev.clientX-lx,dy=ev.clientY-ly;lx=ev.clientX;ly=ev.clientY;
+    if(G.mode==='play'&&G.st==='walk'&&!G.paused){P.yaw+=dx*.0065;P.pitch=clamp(P.pitch-dy*.0055,-.45,.45);}
+  });
+  const lookEnd=ev=>{if(ev.pointerId===lid)lid=null;};
+  zR.addEventListener('pointerup',lookEnd);zR.addEventListener('pointercancel',lookEnd);
+  bRun.addEventListener('pointerdown',ev=>{ev.preventDefault();if(wake())return;bRun.setPointerCapture(ev.pointerId);runHeld=true;syncRun();});
+  const runEnd=()=>{runHeld=false;syncRun();};
+  bRun.addEventListener('pointerup',runEnd);bRun.addEventListener('pointercancel',runEnd);
+  bPause.addEventListener('pointerdown',ev=>{ev.preventDefault();if(G.mode==='demo'){wake();return;}G.paused=!G.paused;if(G.paused)stickOff();});
+  for(const e of [zL,zR,bRun,bPause])e.addEventListener('contextmenu',ev=>ev.preventDefault());
+}
 
 /* ---------------- ラウンド生成 ---------------- */
 function pickAnomaly(){
@@ -612,7 +681,7 @@ function draw(){
     const a=Math.min(1,Math.max(0,G.stT-1.2));
     ctx.globalAlpha=a;otext('脱出成功',VW/2,VH/2-40,86,'#1a3a2a','center','rgba(255,255,255,.9)');
     otext('出口の向こうに 朝の光が見える…',VW/2,VH/2+40,28,'#2a2a2a','center','rgba(255,255,255,.9)');
-    if(G.mode==='play'&&G.stT>1.5&&Math.floor(G.t*2)%2===0)otext('Enter / Space : タイトルへ',VW/2,VH-60,26,'#1a3a2a','center','rgba(255,255,255,.9)');
+    if(G.mode==='play'&&G.stT>1.5&&Math.floor(G.t*2)%2===0)otext(touchUI?'タッチ : タイトルへ':'Enter / Space : タイトルへ',VW/2,VH-60,26,'#1a3a2a','center','rgba(255,255,255,.9)');
     ctx.globalAlpha=1;
   }
   if(G.mode==='play'&&G.st==='walk'&&!G.paused){
@@ -621,22 +690,22 @@ function draw(){
   if(G.mode==='play'&&G.introT>0&&G.st!=='msg'&&G.st!=='clear'){
     ctx.globalAlpha=Math.min(1,G.introT/1.5);
     ctx.drawImage(panelAsset,VW/2-370,VH-120,740,86);
-    otext('WASD:いどう  ←→/Q E/マウス:みまわす  Shift/Space:はしる  P:ポーズ  M:おと',VW/2,VH-92,19,'#dfe3ff');
+    otext(touchUI?'左スティック:いどう(端まで倒すと走る)  右ドラッグ:みまわす':'WASD:いどう  ←→/Q E/マウス:みまわす  Shift/Space:はしる  P:ポーズ  M:おと',VW/2,VH-92,19,'#dfe3ff');
     otext('異変を見つけたら ひきかえす。なければ 突き当たりを右へ。',VW/2,VH-58,22,'#ffe14a');
     ctx.globalAlpha=1;
   }
   if(G.mode==='demo')drawTitle();
-  if(G.paused){ctx.fillStyle='rgba(0,0,0,.72)';ctx.fillRect(0,0,VW,VH);otext('ポーズ中',VW/2,VH/2-20,60,'#fff');otext('P キー か クリックで さいかい',VW/2,VH/2+44,22,'#cfd5ff');}
+  if(G.paused){ctx.fillStyle='rgba(0,0,0,.72)';ctx.fillRect(0,0,VW,VH);otext('ポーズ中',VW/2,VH/2-20,60,'#fff');otext(touchUI?'タッチで さいかい':'P キー か クリックで さいかい',VW/2,VH/2+44,22,'#cfd5ff');}
 }
 function drawTitle(){
   ctx.fillStyle='rgba(0,0,0,.42)';ctx.fillRect(0,0,VW,VH);
   ctx.drawImage(logoAsset,VW/2-160,18,320,268);
   otext('U N D E R P A S S   A N O M A L Y',VW/2,316,20,'#c9c6bb');
-  if(Math.floor(G.t*1.5)%2===0)otext('なにかキーを おして スタート',VW/2,VH-170,30,'#ffe14a');
+  if(Math.floor(G.t*1.5)%2===0)otext(touchUI?'画面をタッチして スタート':'なにかキーを おして スタート',VW/2,VH-170,30,'#ffe14a');
   ctx.drawImage(panelAsset,VW/2-340,VH-140,680,112);
   otext('異変を 見つけたら → ひきかえす     異変が なければ → 突き当たりを右へ',VW/2,VH-118,19,'#fff');
   otext('正しい判断を 8回 つづければ 脱出。まちがえたら 最初から。',VW/2,VH-90,19,'#fff');
-  otext('WASD いどう / ←→・マウス みまわす / Shift・Space はしる / P ポーズ / M おと',VW/2,VH-58,16,'#c9ceff');
+  otext(touchUI?'左スティック いどう / 右ドラッグ みまわす / 右下ボタン はしる':'WASD いどう / ←→・マウス みまわす / Shift・Space はしる / P ポーズ / M おと',VW/2,VH-58,16,'#c9ceff');
   otext('ただいま デモプレイ中',VW/2,VH-36,14,'rgba(255,255,255,.55)');
 }
 
