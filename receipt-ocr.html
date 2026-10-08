@@ -1005,6 +1005,17 @@
       var hist = new Array(256).fill(0);
       for (i = 0; i < n; i++) hist[g[i]]++;
       var thr = otsuThreshold(hist), tol = 12;
+      // 明るい机（白木・白いテーブル）: 大津の閾値が「黒いキーボード等 対 それ以外」を分けてしまい、
+      // 机が閾値より明るくなって外周から辿れず、紙を1つも見つけられない（2026-10-08 深澤報告・0品目）。
+      // 外周の大半が閾値より明るいときは、明るい側だけで閾値を引き直して「机 対 紙」を分ける
+      var ringAll = 0, ringDark = 0;
+      for (i = 0; i < w; i++) { ringAll += 2; if (g[i] < thr) ringDark++; if (g[(h - 1) * w + i] < thr) ringDark++; }
+      for (i = 0; i < h; i++) { ringAll += 2; if (g[i * w] < thr) ringDark++; if (g[i * w + w - 1] < thr) ringDark++; }
+      if (ringDark < ringAll * 0.5) {
+        var hiHist = hist.map(function (v, k) { return k >= thr ? v : 0; });
+        var thr2 = otsuThreshold(hiHist);
+        if (thr2 > thr) thr = thr2;
+      }
       // 机の色: 外周の画素の平均と広がり。影の中の紙は明るさだけなら机に近いが、色は机と違う
       var ring = [], cm = [0, 0, 0], cv = [0, 0, 0];
       for (i = 0; i < w; i++) ring.push(i, (h - 1) * w + i);
@@ -1031,6 +1042,37 @@
       if (paperRatio > 0.08 && paperRatio < 0.985) {
         paper = new Uint8Array(n);
         for (i = 0; i < n; i++) if (!out[i]) paper[i] = 1;
+        // 机の上の小物（キーボードのキー・袋の照り返し）も「机から辿れない所」として残り、
+        // 木目の濃い筋は辿りが止まって机の島になる。それを紙に数えると外接矩形が画面いっぱいに広がり、
+        // 机の模様ごとOCRへ渡ってしまう。そこで「明るい画素」の最大の連結成分＝レシートを取り、
+        // 外から辿れない穴（＝文字）だけを埋め戻して紙とする
+        var lab = new Int32Array(n), bestLab = 0, bestN = 0, nl = 0;
+        for (i = 0; i < n; i++) {
+          if (!paper[i] || g[i] < thr || lab[i]) continue;
+          nl++; lab[i] = nl; sp = 0; stack[sp++] = i; var cn = 0;
+          while (sp) {
+            var p0 = stack[--sp], p0x = p0 % w; cn++;
+            var nb = [p0x > 0 ? p0 - 1 : -1, p0x < w - 1 ? p0 + 1 : -1, p0 >= w ? p0 - w : -1, p0 < n - w ? p0 + w : -1];
+            for (var t0 = 0; t0 < 4; t0++) { var q0 = nb[t0]; if (q0 >= 0 && paper[q0] && g[q0] >= thr && !lab[q0]) { lab[q0] = nl; stack[sp++] = q0; } }
+          }
+          if (cn > bestN) { bestN = cn; bestLab = nl; }
+        }
+        if (bestN / n > 0.06) {
+          // 成分の外側を外周から辿る。辿れなかった所＝成分＋その中の穴（文字）
+          var reach = new Uint8Array(n); sp = 0;
+          var seed2 = function (q) { if (!reach[q] && lab[q] !== bestLab) { reach[q] = 1; stack[sp++] = q; } };
+          for (i = 0; i < w; i++) { seed2(i); seed2((h - 1) * w + i); }
+          for (i = 0; i < h; i++) { seed2(i * w); seed2(i * w + w - 1); }
+          while (sp) {
+            var q1 = stack[--sp], q1x = q1 % w;
+            if (q1x > 0) seed2(q1 - 1); if (q1x < w - 1) seed2(q1 + 1);
+            if (q1 >= w) seed2(q1 - w); if (q1 < n - w) seed2(q1 + w);
+          }
+          var pn = 0;
+          for (i = 0; i < n; i++) { paper[i] = reach[i] ? 0 : 1; pn += paper[i]; }
+          paperRatio = pn / n;
+          if (paperRatio > 0.985) { paper = null; paperRatio = 1; }
+        } else { paper = null; paperRatio = 1; }
       } else paperRatio = 1;   // 画面いっぱいが紙＝スキャン画像。切り抜かない
 
       var paperAspect = w / h;
