@@ -1,7 +1,7 @@
 # GPT Image 2.0 Prompt - Fahren Kingdom Field Map (25x25)
 
 Use case: stylized-concept
-Asset type: `zelda_like.html` overworld field map (base art for a 25x25 screen map)
+Asset type: `fahren_quest.html` overworld field map (base art for a 25x25 screen map)
 Primary request: Create an original top-down fantasy field map for the Kingdom of Fahren, a realm where humans, elves, and dwarves coexist.
 Scene/backdrop: One contiguous overworld with roads and natural barriers for exploration.
 Subject: A 25x25-screen-friendly kingdom map with readable regions and landmark silhouettes.
@@ -24,4 +24,4 @@ Avoid: cyberpunk city motifs, futuristic architecture, sci-fi neon signage, logo
 
 - Generated asset: `assets/zelda-like/world-map-fahren-25x25.png`
 - Logical gameplay layout: `assets/zelda-like/world-map-fahren-badon-25x25-layout.txt`
-- Current consumer: `zelda_like.html` title screen and 25x25 room biome selection
+- Current consumer: `fahren_quest.html` title screen and 25x25 room biome selection

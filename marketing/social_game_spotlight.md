@@ -50,7 +50,7 @@ Free in your browser, no install required.
 Canvas APIで作ったトップビューRPG
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fahren_quest.html
 
 #個人開発 #ブラウザゲーム #RPG
 ```
@@ -62,7 +62,7 @@ Canvas APIで作ったトップビューRPG
 Top-down RPG built with Canvas API
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fahren_quest.html
 
 #indiedev #browsergames #rpg
 ```
@@ -72,7 +72,7 @@ Free in your browser, no install required.
 🗡️ ファーレンクエスト
 Canvas APIで作ったトップビューRPG
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fahren_quest.html
 #ブラウザゲーム #個人開発 #RPG
 ```
 
@@ -601,73 +601,73 @@ Free in your browser, no install required.
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
-## ConHex / ConHex (`conhex`)
+## Cell Connect / Cell Connect (`conhex`)
 
 ### game-conhex-x-ja
 ```
-🔷 ConHex
+🔷 Cell Connect
 
 穴・石・セル獲得のボードゲーム
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cell_connect.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
 
 ### game-conhex-x-en
 ```
-🔷 ConHex
+🔷 Cell Connect
 
 Board game with pegs, holes, and cells
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cell_connect.html
 
 #indiedev #browsergames #boardgame
 ```
 
 ### game-conhex-bsky-ja
 ```
-🔷 ConHex
+🔷 Cell Connect
 穴・石・セル獲得のボードゲーム
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cell_connect.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
-## Indigo / Indigo (`indigo`)
+## Gem Gates / Gem Gates (`indigo`)
 
 ### game-indigo-x-ja
 ```
-💎 Indigo
+💎 Gem Gates
 
-クニツィア設計 × 宝石誘導
+ヘックスタイル × 宝石誘導
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/gem_gates.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
 
 ### game-indigo-x-en
 ```
-💎 Indigo
+💎 Gem Gates
 
-Knizia design — guide gems to the edges
+Hex tiles — guide gems to the gates
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/gem_gates.html
 
 #indiedev #browsergames #boardgame
 ```
 
 ### game-indigo-bsky-ja
 ```
-💎 Indigo
-クニツィア設計 × 宝石誘導
+💎 Gem Gates
+ヘックスタイル × 宝石誘導
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/gem_gates.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -1342,7 +1342,7 @@ Free in your browser, no install required.
 ```
 🔥 ルミナ・テイマー
 
-モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・バトルタワー・セーブ対応
+モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・ひかりの塔・セーブ対応
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
@@ -1365,7 +1365,7 @@ Free in your browser, no install required.
 ### game-lumina-tamer-bsky-ja
 ```
 🔥 ルミナ・テイマー
-モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・バトルタワー・セーブ対応
+モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・ひかりの塔・セーブ対応
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
 #ブラウザゲーム #個人開発 #RPG

@@ -9,7 +9,7 @@ description: アクセシビリティ監査。img alt・lang属性・aria・pref
 
 ```bash
 bash .claude/skills/a11y-audit/a11y-audit.sh            # 全HTML
-bash .claude/skills/a11y-audit/a11y-audit.sh zelda_like.html  # 指定ファイル
+bash .claude/skills/a11y-audit/a11y-audit.sh fahren_quest.html  # 指定ファイル
 ```
 
 終了コード: 問題なし=0 / 問題あり=1。検査項目（静的）:

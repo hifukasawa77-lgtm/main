@@ -124,3 +124,23 @@
 5. **名称変更の判断が要るもの**: Y1 FAMICOM ROOM、Y7 Indigo/ConHex、Y9 ルミナ・テイマー、Y13 8番出口類似
 
 ※ 1〜3 は私が実装可能です（4・5 は深澤さんの判断後）。本レポートは調査のみで、ゲーム本体は変更していません。
+
+---
+
+## 対応状況（2026-10-08 追記）
+| 項目 | 状況 |
+|---|---|
+| Y3 藤井棋風／Y4 オセロ／Y8 シムシティ・上海／Y14 コメント | ✅ 文言修正済み |
+| Y1 FAMICOM ROOM | ✅ 「RETRO 8-BIT ROOM」へ改称、注意書き・GPL表記追加、URL `retro-emulator.html` |
+| Y2 zelda | ✅ URL `fahren_quest.html`（旧URLは転送ページ） |
+| Y5 catan | ✅ URL `hexlan.html`（旧URLは転送ページ） |
+| Y6 blokus | ✅ URL `tetra_territory.html` / `tri_territory.html`（旧URLは転送ページ） |
+| Y7 Indigo／ConHex | ✅ 「Gem Gates（ジェムゲート）」`gem_gates.html`／「Cell Connect（セルコネクト）」`cell_connect.html`。設計者名を削除 |
+| Y9 ルミナ・テイマー | 🔶 「バトルタワー」→「ひかりの塔」に変更済み。**モンスター6体の描き直しは未実施**（画像生成が必要） |
+| Y10 出自記録 | 🔶 事後記録を整備済み。生成ツール・プロンプトは深澤さんの記入待ち |
+| Y11 CC BY-SA | 🔶 `credits.html` で範囲を明記。牌SVGのライセンスは未確認（外部接続不可） |
+| Y12 鉄道／Y15 権利表記 | ✅ 注記・`credits.html` 追加 |
+| Y13 ねじれ地下道 | ✅ `credits.html` に「着想」の注記（ゲーム本体は無変更） |
+
+**未実施（既知）**: アセットのフォルダ名（`assets/zelda-like/`・`assets/blokus/`・`assets/conhex/`・`assets/nes/`）は参照が多く、無言で絵が消える危険があるため改称していない。URLは転送ページで旧名を残している。
+**対象外で気づいた点**: リポジトリ直下の `FamicomEmulatorWin/`（Windows版）は公開サイトの掲載外だが、同じく「Famicom」名を使っている。

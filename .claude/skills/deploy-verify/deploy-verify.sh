@@ -10,7 +10,7 @@ PAGES=()
 for a in "$@"; do
   if [ "$a" = "--smoke" ]; then SMOKE=1; else PAGES+=("$a"); fi
 done
-[ "${#PAGES[@]}" = 0 ] && PAGES=(index.html zelda_like.html shogi.html)
+[ "${#PAGES[@]}" = 0 ] && PAGES=(index.html fahren_quest.html shogi.html)
 
 FAIL=0
 echo "== HTTPステータス確認 =="

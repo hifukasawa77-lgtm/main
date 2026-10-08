@@ -44,7 +44,7 @@ const sandbox={console,assert,Math:Object.create(Math),Date,Image,performance:{n
     requestAnimationFrame(fn){raf=fn},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)}};
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(root+'assets/zelda-like/hd/graphics.js','utf8'),sandbox);
-const html=fs.readFileSync(root+'zelda_like.html','utf8');
+const html=fs.readFileSync(root+'fahren_quest.html','utf8');
 vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],sandbox);
 const run=code=>vm.runInContext(code,sandbox);
 (async()=>{

@@ -33,7 +33,7 @@ tools: Read, Grep, Glob, Write, WebFetch, WebSearch, Bash
 ## チェック対象と確認項目
 
 ### 1. ライブラリ・フレームワーク（CDN）
-確認対象ファイル: `index.html`, `zelda_like.html`, `shogi.html` 等の `<script src>` / `<link>` タグ
+確認対象ファイル: `index.html`, `fahren_quest.html`, `shogi.html` 等の `<script src>` / `<link>` タグ
 
 | 確認項目 | チェック内容 |
 |---|---|
@@ -170,7 +170,7 @@ tools: Read, Grep, Glob, Write, WebFetch, WebSearch, Bash
   アセットは YELLOW。是正は削除ではなく**記録の追加**を第一候補にする。
 - **配布形態が変わったら再評価する**。ライブ描画で「見えるだけ」だったものを OGP画像・サムネイル・
   スクリーンショットへ**焼き込んで配布**すると、リスクが一段上がる。
-- 改称の実績（旧称 ZELDA QUEST／旧ファイル名 game.html → **`zelda_like.html`**）は
+- 改称の実績（旧称 ZELDA QUEST／旧ファイル名 game.html → **`fahren_quest.html`**）は
   `legal/zelda_quest_legal_report.md` に記録がある。**同種の名称・意匠の寄せは公開前に指摘する**。
 - 本レポートは**法的効力を持たない**一次確認。グレーは「YELLOW＋専門家確認推奨」で報告する。
 

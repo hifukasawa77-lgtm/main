@@ -101,7 +101,7 @@ git push -u origin vX.Y.Z
 
 プッシュ後、以下の確認を行う：
 - `https://hifukasawa77-lgtm.github.io/main/` へのアクセスが可能か（WebFetch ツールで確認）
-- 主要ページ（index.html / zelda_like.html / shogi.html）が正常に返答するか
+- 主要ページ（index.html / fahren_quest.html / shogi.html）が正常に返答するか
 
 ### Step 8: 完了報告
 
@@ -136,7 +136,7 @@ node scripts/verify-asset-format.mjs                 # 公開物がWebP方針か
 ```
 
 公開後は `.claude/skills/deploy-verify/` の手順で**本番URLの疎通と pageerror**を確認する。
-主要ページ（`index.html` / `zelda_like.html` / `shogi.html` ほか公開対象）が 200 を返すこと。
+主要ページ（`index.html` / `fahren_quest.html` / `shogi.html` ほか公開対象）が 200 を返すこと。
 
 ## 停止条件（深澤へ確認してから進む）
 

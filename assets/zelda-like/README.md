@@ -1,6 +1,6 @@
 # Zelda Like Assets
 
-This folder contains free game art used by `zelda_like.html`.
+This folder contains free game art used by `fahren_quest.html`.
 
 - Source: Kenney Roguelike/RPG pack
 - URL: https://kenney.nl/assets/roguelike-rpg-pack
@@ -10,7 +10,7 @@ This folder contains free game art used by `zelda_like.html`.
 
 The game references `Spritesheet/roguelikeSheet_transparent.png` directly from the extracted pack.
 
-Current `zelda_like.html` uses lightweight original Canvas pixel art for the live map and keeps this imported CC0 pack available for thumbnails, reference, and future asset replacement.
+Current `fahren_quest.html` uses lightweight original Canvas pixel art for the live map and keeps this imported CC0 pack available for thumbnails, reference, and future asset replacement.
 
 ## Player Sprite
 
@@ -20,7 +20,7 @@ Current `zelda_like.html` uses lightweight original Canvas pixel art for the liv
 - License: Creative Commons Zero (CC0)
 - License URL: https://creativecommons.org/publicdomain/zero/1.0/
 
-`zelda_like.html` step 1 uses `player/basic_character_set/Basic Character Set/Basic Char Set Green.png` as a 4-direction, 3-frame walking spritesheet.
+`fahren_quest.html` step 1 uses `player/basic_character_set/Basic Character Set/Basic Char Set Green.png` as a 4-direction, 3-frame walking spritesheet.
 
 ## GPT Image 2 Hero Sprite
 
@@ -30,11 +30,11 @@ Current `zelda_like.html` uses lightweight original Canvas pixel art for the liv
   - `player/gpt-image-2-hero-sheet-v2-source.png` - detailed generated sheet with chroma-key background
   - `player/gpt-image-2-hero-sheet-v2.png` - detailed transparent PNG
   - `player/gpt-image-2-hero-sheet-v3-source.png` - refined generated sheet with chroma-key background
-  - `player/gpt-image-2-hero-sheet-v3.png` - refined transparent PNG currently used by `zelda_like.html`
+  - `player/gpt-image-2-hero-sheet-v3.png` - refined transparent PNG currently used by `fahren_quest.html`
 - Generator: GPT Image 2
 - Created: 2026-05-19
 - Updated: 2026-05-25
-- Purpose: Original protagonist sprite sheet for `zelda_like.html`
+- Purpose: Original protagonist sprite sheet for `fahren_quest.html`
 - Layout: 4 rows by 3 columns; rows are down, left, right, up; columns are step, idle, step
 
 Prompt summary: original top-down fantasy adventure hero sprite sheet for Fahren Kingdom, polished 16-bit/32-bit top-down action RPG mood, no copyrighted Zelda/Nintendo likeness, no official symbols, flat chroma-key background.
@@ -45,17 +45,17 @@ Prompt summary: original top-down fantasy adventure hero sprite sheet for Fahren
   - `enemies/gpt-image-2-enemy-sheet-source.png` - original generated sheet with chroma-key background
   - `enemies/gpt-image-2-enemy-sheet.png` - local transparent PNG processed from the source
   - `enemies/gpt-image-2-enemy-sheet-v2-source.png` - detailed generated sheet with chroma-key background
-  - `enemies/gpt-image-2-enemy-sheet-v2.png` - detailed transparent PNG currently used by `zelda_like.html`
+  - `enemies/gpt-image-2-enemy-sheet-v2.png` - detailed transparent PNG currently used by `fahren_quest.html`
   - `enemies/gpt-image-2-enemy-pack-a-v1-source.png` - generated grassland/forest enemy expansion sheet with chroma-key background
-  - `enemies/gpt-image-2-enemy-pack-a-v1.png` - transparent grassland/forest enemy expansion sheet currently used by `zelda_like.html`
+  - `enemies/gpt-image-2-enemy-pack-a-v1.png` - transparent grassland/forest enemy expansion sheet currently used by `fahren_quest.html`
   - `enemies/gpt-image-2-enemy-pack-b-v1-source.png` - generated desert enemy expansion sheet with chroma-key background
-  - `enemies/gpt-image-2-enemy-pack-b-v1.png` - transparent desert enemy expansion sheet currently used by `zelda_like.html`
+  - `enemies/gpt-image-2-enemy-pack-b-v1.png` - transparent desert enemy expansion sheet currently used by `fahren_quest.html`
   - `enemies/gpt-image-2-enemy-pack-c-v1-source.png` - generated volcano/mountain/swamp enemy expansion sheet with chroma-key background
-  - `enemies/gpt-image-2-enemy-pack-c-v1.png` - transparent volcano/mountain/swamp enemy expansion sheet currently used by `zelda_like.html`
+  - `enemies/gpt-image-2-enemy-pack-c-v1.png` - transparent volcano/mountain/swamp enemy expansion sheet currently used by `fahren_quest.html`
 - Generator: GPT Image 2
 - Created: 2026-05-19
 - Updated: 2026-05-26
-- Purpose: Original enemy sprite sheets for `zelda_like.html`, including 18 additional Fahren Kingdom enemy types
+- Purpose: Original enemy sprite sheets for `fahren_quest.html`, including 18 additional Fahren Kingdom enemy types
 - Layout: 5 rows by 2 columns
   - row 1: red pebble-spitter enemy, two frames
   - row 2: green forest brute, two frames
@@ -90,7 +90,7 @@ Prompt summary: original polished top-down enemy sprite sheets preserving gamepl
 
 - Files:
   - `bosses/gpt-image-2-boss-sheet-v1-source.png` - generated sacred-stone boss sheet with chroma-key background
-  - `bosses/gpt-image-2-boss-sheet-v1.png` - transparent boss sheet currently used by `zelda_like.html`
+  - `bosses/gpt-image-2-boss-sheet-v1.png` - transparent boss sheet currently used by `fahren_quest.html`
 - Generator: GPT Image 2
 - Created: 2026-05-25
 - Purpose: Seven sacred-stone guardians and final boss Demon King Gran for Fahren Kingdom
@@ -114,11 +114,11 @@ Prompt summary: original polished top-down fantasy RPG boss sprite sheet for sev
   - `npcs/gpt-image-2-npc-sheet-v2-source.png` - detailed generated sheet with chroma-key background
   - `npcs/gpt-image-2-npc-sheet-v2.png` - detailed transparent PNG
   - `npcs/gpt-image-2-npc-sheet-v3-source.png` - refined generated sheet with chroma-key background
-  - `npcs/gpt-image-2-npc-sheet-v3.png` - refined transparent PNG currently used by `zelda_like.html`
+  - `npcs/gpt-image-2-npc-sheet-v3.png` - refined transparent PNG currently used by `fahren_quest.html`
 - Generator: GPT Image 2
 - Created: 2026-05-24
 - Updated: 2026-05-25
-- Purpose: Original NPC sprite sheet for `zelda_like.html`
+- Purpose: Original NPC sprite sheet for `fahren_quest.html`
 - Layout: 5 rows by 2 columns
   - row 1: human villager man, two frames
   - row 2: elven villager woman, two frames
@@ -142,7 +142,7 @@ Prompt summary: original polished top-down NPC sprite sheet for Fahren Kingdom v
 - Generator: GPT Image 2
 - Created: 2026-05-19
 - Updated: 2026-05-26
-- Purpose: Original environment object sprite sheets for `zelda_like.html`, including Fahren Castle gates, walls, towers, banners, and drawbridges
+- Purpose: Original environment object sprite sheets for `fahren_quest.html`, including Fahren Castle gates, walls, towers, banners, and drawbridges
 - Layout: 5 rows by 5 columns
   - row 1: house roof top-left, roof top-middle, roof top-right, wooden wall-left, wooden door
   - row 2: house lower-left, lower-middle, lower-right, wooden wall-right, mailbox
@@ -152,7 +152,7 @@ Prompt summary: original polished top-down NPC sprite sheet for Fahren Kingdom v
 
 Prompt summary: original retro top-down object sprite sheet for houses, fences, mailbox, trees, rocks, bushes, and biome obstacles, no copyrighted Zelda/Nintendo object likenesses, flat chroma-key background.
 
-House correction: the first generated object sheet included house parts for compatibility with the old tile renderer. A separate complete house object was generated afterward and is now used by `zelda_like.html` as `sprites.house_full`, drawn once at 3x3 tile size. A separate castle wall tile is used by `zelda_like.html` as `sprites.wall_town` for solid royal-capital walls.
+House correction: the first generated object sheet included house parts for compatibility with the old tile renderer. A separate complete house object was generated afterward and is now used by `fahren_quest.html` as `sprites.house_full`, drawn once at 3x3 tile size. A separate castle wall tile is used by `fahren_quest.html` as `sprites.wall_town` for solid royal-capital walls.
 
 ## GPT Image 2 Terrain Sprite
 
@@ -162,7 +162,7 @@ House correction: the first generated object sheet included house parts for comp
 - Generator: GPT Image 2
 - Created: 2026-05-19
 - Updated: 2026-05-24
-- Purpose: Original field terrain tiles for `zelda_like.html`
+- Purpose: Original field terrain tiles for `fahren_quest.html`
 - Layout: 3 rows by 3 columns
   - row 1: grassland, desert, rocky mountain
   - row 2: wetland marsh, poison swamp, river
@@ -175,7 +175,7 @@ Prompt summary: original retro top-down fantasy adventure terrain tiles in a cla
 - Files:
   - `world-map-fahren-badon-25x25.prompt.md` - GPT Image 2.0 prompt spec for regenerating the field map
   - `world-map-fahren-badon-25x25-layout.txt` - 25x25 logical layout draft (biome/landmark planning)
-  - `world-map-fahren-25x25.png` - GPT Image 2.0 generated field map for `zelda_like.html`
+  - `world-map-fahren-25x25.png` - GPT Image 2.0 generated field map for `fahren_quest.html`
   - `world-map-fahren-25x25-full.jpg` - JPEG export of the full 25x25 field map
   - `world-map-fahren-25x25-grid-1-25.jpg` - JPEG export with 1-25 row/column labels and the Fahren Castle start marker
   - `world-map-fahren-25x25-dungeons.png` - annotated field map showing the seven sacred-stone dungeon locations and boss names
