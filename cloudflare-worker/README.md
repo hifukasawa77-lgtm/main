@@ -172,7 +172,7 @@ Workers AI のモデルカタログ: https://developers.cloudflare.com/workers-a
 |---|---|
 | 遮断 | パストラバーサル・スキャナーの探索（`/.env` `/wp-admin` 等）・URL中のスクリプト/SQL/テンプレート注入はハンドラに届く前に 403。拒否（401/403/413/415/429・攻撃パターン）を IP ごとに `ABUSE_LIMITER` で数え、**60秒に10回を超えた IP は15分間すべて拒否** |
 | 記録 | すべての拒否を **RFC 5424 形式のシスログ行**（facility=authpriv）で Worker のログへ出す。例: `<83>1 2026-10-08T… ai-proxy.….workers.dev ai-proxy - SECURITY [sec@32473 kind="scanner-probe" ip="…" path="/.env" status="403"] scanner-probe` |
-| 通知 | 重大度 err 以上（攻撃パターン・管理トークンの総当たり・IPの遮断・ページからの通報）を Slack へ。**同じ種別は10分に1通**にまとめる（洪水が通知の洪水にならない。ログには全件残る） |
+| 通知 | 重大度 err 以上（攻撃パターン・`/admin/` の管理トークン総当たり・IPの遮断・ページからの通報＝未検証と明記）を Slack へ。利用者のアクセスコード打ち間違い（401）と自己検査 `/__security-selftest/` は記録のみ。**同じ種別は10分に1通**にまとめる（洪水が通知の洪水にならない。ログには全件残る） |
 | ページからの通報 | `assets/js/frame-guard.js` が「別サイトに枠で埋め込まれた」「CSPが外部スクリプト・イベント属性の注入を遮断した」を `POST /security/report` へ送る |
 
 ### 通知を受け取る設定（深澤の作業・1回だけ）

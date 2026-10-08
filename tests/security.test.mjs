@@ -139,7 +139,7 @@ test('Every Worker reply carries hardening headers, including plain-text errors'
 });
 
 // ── Security gate: block → syslog → notify ─────────────────────────────────────────────
-import { syslogLine, detectAttack, alertText, maskIp, BAN_SECONDS } from '../cloudflare-worker/security-monitor.js';
+import { syslogLine, detectAttack, alertText, maskIp, BAN_SECONDS, SELFTEST_PREFIX } from '../cloudflare-worker/security-monitor.js';
 
 // Fake webhook (not a secret). Split so the secret scanner in release-check does not flag the fixture.
 const FAKE_SLACK_WEBHOOK = 'https://hooks.slack.com/' + 'services/TEST/TEST/TEST';
@@ -254,4 +254,51 @@ test('Alerts only go to real webhook hosts, and nothing is sent when no webhook 
   }
   assert.equal(maskIp('2001:db8:1:2::5'), '2001:db8:1:…');
   assert.match(alertText({ severity: 'err', kind: 'k', method: 'GET', host: 'h', path: '/p', ip: '1.2.3.4' }), /1\.2\.3\.x/);
+});
+
+test('Deploy self-test probe is blocked and logged but never pages the owner or uses the throttle', async () => {
+  const h = harness();
+  try {
+    const r = await worker.fetch(req({}, SELFTEST_PREFIX + '.env', {}, 'GET'), h.e, h.c);
+    await h.settle();
+    assert.equal(r.status, 403);
+    assert.ok(h.logs.some(l => l.includes('kind="scanner-probe"')));
+    assert.equal(h.posts.length, 0, 'no alert for the self-test');
+    await worker.fetch(req({}, '/.env', {}, 'GET'), h.e, h.c);
+    await h.settle();
+    assert.equal(h.posts.length, 1, 'a real probe right after the self-test is still notified');
+  } finally { h.restore(); }
+});
+
+test('A mistyped user access code is counted but not paged; a wrong admin token is', async () => {
+  const h = harness();
+  try {
+    const r = await worker.fetch(req({}, '/vocal/usage', { 'X-Vocalis-Code': 'typo' }, 'GET'),
+      { ...h.e, VOCALIS_ACCESS_PIN: 'right' }, h.c);
+    await h.settle();
+    assert.equal(r.status, 401);
+    assert.ok(h.logs.some(l => l.includes('kind="access-code-failure"') && l.startsWith('<85>1')), h.logs.join('\n'));
+    assert.equal(h.posts.length, 0, 'user typo must not alert');
+    await worker.fetch(req({}, '/admin/list', { 'X-Admin-Token': 'guess' }, 'GET'), h.e, h.c);
+    await h.settle();
+    assert.equal(h.posts.length, 1);
+    assert.match(h.posts[0].body.text, /admin-auth-failure/);
+  } finally { h.restore(); }
+});
+
+test('Page reports are labelled unverified and a forged flood gets the sender banned', async () => {
+  let strikes = 0;
+  const h = harness({ abuse: { limit: async () => ({ success: ++strikes <= 3 }) } });
+  const report = () => worker.fetch(new Request('https://w.test/security/report', {
+    method: 'POST', headers: { Origin: SITE_ORIGIN, 'Content-Type': 'text/plain', 'CF-Connecting-IP': '192.0.2.7' },
+    body: JSON.stringify({ kind: 'framed', framer: 'https://x.test' }) }), h.e, h.c);
+  try {
+    const first = await report();
+    assert.equal(first.status, 204);
+    for (let i = 0; i < 4; i++) await report();
+    await h.settle();
+    assert.ok(h.posts.some(p => /検証できない/.test(p.body.text)), 'alert says the report is unverified');
+    assert.ok(h.logs.some(l => l.includes('kind="ip-banned"')), 'forged flood is banned');
+    assert.equal((await report()).status, 403);
+  } finally { h.restore(); }
 });

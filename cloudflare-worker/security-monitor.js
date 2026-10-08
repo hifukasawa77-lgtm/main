@@ -37,13 +37,21 @@ const ATTACK_PATTERNS = [
 // Notified: err and worse. warning/notice are logged and count as strikes (bans catch floods)
 // but do not page the owner — bots without an Origin header hit 403 all day.
 const STATUS_EVENTS = {
-  401: ['auth-failure', 'alert'],      // wrong admin token = someone guessing
+  // 401 here is a mistyped user access code (Vocalis): counted toward a ban (brute force),
+  // not paged. A wrong admin token is upgraded to admin-auth-failure / alert below.
+  401: ['access-code-failure', 'notice'],
   403: ['forbidden-origin', 'notice'],
   413: ['oversized-body', 'warning'],
   415: ['bad-content-type', 'notice'],
   429: ['rate-limited', 'warning'],
 };
 export const NOTIFY_AT_OR_ABOVE = SEVERITY.err;
+
+// The deploy smoke test probes here (deploy-worker.yml): still blocked, logged and counted,
+// but never paged — otherwise every deploy would send a false alarm and use up the
+// scanner-probe throttle window, hiding a real probe for 10 minutes. Opting out of paging
+// buys an attacker nothing: the request is refused all the same.
+export const SELFTEST_PREFIX = '/__security-selftest/';
 
 const now = () => new Date().toISOString();
 
@@ -129,6 +137,7 @@ export function alertText(event) {
     `対象 target: ${event.method} ${event.host}${event.path}${event.status ? ' → ' + event.status : ''}`,
     `送信元 source: ${maskIp(event.ip)}${event.country ? ' (' + event.country + ')' : ''}`,
     event.detail ? `詳細 detail: ${String(event.detail).slice(0, 200)}` : '',
+    event.unverified ? '※ページからの通報です。送信元は検証できないため、偽装の可能性があります / Unverified client report' : '',
     `同じ種別の通知は${ALERT_THROTTLE_SECONDS / 60}分間まとめます（ログには全件）`,
   ].filter(Boolean).join('\n');
 }
@@ -231,9 +240,11 @@ async function handleReport(request, env, ctx, base) {
   const detail = ['page', 'directive', 'blocked', 'source', 'framer']
     .filter(k => typeof report[k] === 'string' && report[k])
     .map(k => `${k}=${report[k].slice(0, 120)}`).join(' ');
-  // A report is evidence about someone else, not a strike against the reporting visitor.
+  // Origin can be forged by any non-browser client, so a report is unverified telemetry:
+  // it is labelled as such in the alert, and every report counts toward the sender's ban,
+  // so a forged flood gets the sender refused (a real visitor sends at most 3 per page).
   await recordEvent(env, ctx, { ...base, kind: report.kind, severity: REPORT_KINDS[report.kind],
-    status: 204, detail, strike: false });
+    status: 204, detail, unverified: true });
   return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': SITE_ORIGIN, 'Cache-Control': 'no-store' } });
 }
 
@@ -254,7 +265,8 @@ export function withSecurityGate(service, handler) {
       }
       const attack = detectAttack(url);
       if (attack) {
-        await recordEvent(env, ctx, { ...base, kind: attack, severity: 'err', status: 403,
+        await recordEvent(env, ctx, { ...base, kind: attack,
+          severity: url.pathname.startsWith(SELFTEST_PREFIX) ? 'notice' : 'err', status: 403,
           detail: (url.pathname + url.search).slice(0, 200) });
         return hardenResponse(plain(403, 'Forbidden'));
       }
@@ -270,8 +282,9 @@ export function withSecurityGate(service, handler) {
       const mapped = STATUS_EVENTS[response.status];
       if (mapped) {
         const [kind, severity] = mapped;
-        await recordEvent(env, ctx, { ...base, kind: url.pathname.startsWith('/admin/') && response.status === 401 ? 'admin-auth-failure' : kind,
-          severity, status: response.status });
+        const admin = url.pathname.startsWith('/admin/') && response.status === 401;
+        await recordEvent(env, ctx, { ...base, kind: admin ? 'admin-auth-failure' : kind,
+          severity: admin ? 'alert' : severity, status: response.status });
       }
       return hardenResponse(response);
     },
