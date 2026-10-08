@@ -79,6 +79,8 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `genpei.html` | `node scripts/verify-genpei-boot.mjs` / `node scripts/verify-genpei-balance.mjs` / `node scripts/verify-genpei-kyoten.mjs` |
 | `bakumatsu.html` / `game.js` / `bakumatsu.css` | `node scripts/verify-bakumatsu-map.mjs` |
 | `sw.js` | `node scripts/verify-service-worker.mjs` |
+| `assets/js/frame-guard.js` / `scripts/security-baseline.mjs`（全ページのセキュリティ基礎線） | `node scripts/security-baseline.mjs`（`--inject` で故障注入）/ `node scripts/verify-frame-guard.mjs`（実ブラウザ。`--inject` で故障注入） |
+| `cloudflare-worker/request-security.js` / `cloudflare-worker/gemini-proxy.js` / `cloudflare-worker/notebook-worker.js` | `node --test tests/security.test.mjs` |
 | `zero-1-mobile.html` / `assets/js/zero1-worker.js` / `assets/js/zero1-tools.js` | `node scripts/verify-zero1-mobile.mjs` / `node scripts/verify-service-worker.mjs` |
 | `assets/js/gesture-pointer.js` | `node scripts/verify-gesture-pointer.mjs` |
 | `synth-eq.html` | `node scripts/verify-synth-eq.mjs` |
@@ -91,6 +93,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `note/` | `node scripts/verify-note-articles.mjs` |
 | CLAUDE.md の「定期実行（Routine）一覧」（Routineの新設・変更・停止） | `node scripts/verify-routine-delivery.mjs` |
 | 上記以外のHTML（新規ゲーム含む） | `bash .claude/skills/dynamic-test/run.sh --changed` |
+| HTMLの `<head>` を足した・新規ページ（全ページ共通のCSP／frame-guard／referrer） | `node scripts/security-baseline.mjs`（不足は `--write` で補う） |
 | コミット直前（全変更共通） | `bash .claude/skills/release-check/release-check.sh` |
 
 - **表に無いファイルでも、CLAUDE.md に検査の記載があればそちらが優先**（CLAUDE.md が正、この表は索引）。

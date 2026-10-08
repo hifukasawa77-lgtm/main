@@ -981,6 +981,28 @@ openssl dgst -sha384 -binary package/<CDNパスと同じファイル> | openssl 
   **画面は壊れず dynamic-test も素通りし、GitHub Actions の security が赤くなって初めて気づく**（2026-09-26）
 - インラインscript（JSON-LD含む）を触ったら `node scripts/security-csp.mjs --write` で再生成する
 
+### 全ページのセキュリティ基礎線（2026-10-08 新設）
+
+```bash
+node scripts/security-baseline.mjs           # 全HTML（直下107ページ）: CSP基礎線・frame-guard・referrer・noopener・http://読込なし
+node scripts/security-baseline.mjs --write   # 不足を補う（既存CSPの値は変えず、足りない指令だけ足す）
+node scripts/verify-frame-guard.mjs          # 実ブラウザで「別オリジンの枠に入れられたら遮る／同オリジンの枠は邪魔しない」
+node --test tests/security.test.mjs          # Worker: 全応答に nosniff / CSP / X-Frame-Options / HSTS
+```
+
+- **新しいページを足したら `--write` を1回かける**（CIの `security.yml` が全ページを見ているので、忘れると赤くなる）
+- 基礎線のCSPは `object-src 'none'; base-uri 'self'; form-action 'self'` だけ。**`script-src` は触らない**——
+  インラインの `onclick` を多用するゲームが無言で動かなくなる。厳格なCSP（ハッシュ固定）は上記5ページのみ
+- **旧インラインのフレームバスター `if (self !== top) top.location = …` は効いていなかった**。Chrome は
+  「操作の無い別オリジンの枠から最上位を遷移させる」のを**例外も出さずに黙って止める**ため、
+  index.html は埋め込まれても素通しだった（2026-10-08 実ブラウザで確認）。`assets/js/frame-guard.js` は
+  抜け出しを試みたうえで**常に操作を全面で遮る**。同じオリジンの枠（`taihei-ui-preview.html`）は許可する
+- `frame-guard.js` は `sw.js` の事前キャッシュに入れてある（圏外で取れないと全ページに読込失敗が残る）
+- **`frame-ancestors` / `X-Frame-Options` / `Permissions-Policy` を `<meta>` に書かない**。meta では無視されるので、
+  書くと「対応済み」に見えるだけで何も守らない。HTTPヘッダで付けられるのは Worker の応答だけ
+  （`cloudflare-worker/request-security.js` の `withHardening`）
+- 脆弱性の報告窓口は `SECURITY.md` と `.well-known/security.txt`（`Expires` は1年以内に更新すること）
+
 - **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。
   `--depth 1 --filter=blob:none --sparse` で18MBまで落ち、触るゲームのassetsだけ後から足せる。
   手順とスクリプト: `docs/クローンを軽くする.md` / `scripts/slim-clone.ps1`

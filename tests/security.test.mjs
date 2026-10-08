@@ -122,3 +122,18 @@ for (const page of pages) {
     assert.notEqual(securePage(html.replace('</script>', '\n// modified\n</script>'), page), html);
   });
 }
+test('Every Worker reply carries hardening headers, including plain-text errors', async () => {
+  const replies = [
+    await worker.fetch(req({}, '/no-such-route', {}, 'GET'), env(), ctx),
+    await worker.fetch(req({}, '/', { Origin: 'https://evil.test' }), env(), ctx),
+    await worker.fetch(req({ message: '' }), env(), ctx),
+    await notebook.fetch(req({}, '/', {}, 'GET'), env(), ctx),
+    await notebook.fetch(req({}, '/', {}, 'OPTIONS'), env(), ctx),
+  ];
+  for (const response of replies) {
+    assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
+    assert.equal(response.headers.get('X-Frame-Options'), 'DENY');
+    assert.match(response.headers.get('Content-Security-Policy'), /default-src 'none'.*frame-ancestors 'none'/);
+    assert.match(response.headers.get('Strict-Transport-Security'), /max-age=\d+/);
+  }
+});

@@ -15,7 +15,7 @@
  * 設定方法: README.md を参照
  */
 import { buildSystemPrompt } from './site-knowledge.js';
-import { allowedOrigin, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
+import { allowedOrigin, withHardening, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
 import { researchOshi } from './oshi-research.js';
 import { handleVocalSong, handleVocalPortrait } from './vocalis-ai.js';
 
@@ -201,7 +201,7 @@ async function handleVideoTts(env, body, origin) {
   }
 }
 
-export default {
+export default withHardening({
   async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
     const isAllowed = allowedOrigin(origin, env);
@@ -334,7 +334,7 @@ export default {
       return errorResponse(502, 'AI service unavailable', corsHeaders(origin));
     }
   },
-};
+});
 
 // ── 管理API: 学習エントリの閲覧・削除（ADMIN_TOKEN必須） ──
 // ── 公開統計エンドポイント ─────────────────────────────────
