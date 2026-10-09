@@ -5,15 +5,46 @@
 <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; form-action 'self'">
 <script src="assets/js/frame-guard.js"></script>
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>鉛ヶ沢 - 屍人の夜 NIGHT OF THE HOLLOW</title>
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden}
 canvas{display:block;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);cursor:crosshair}
+html,body{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+#tc{position:fixed;inset:0;display:none;z-index:5;touch-action:none}
+body.touch #tc{display:block}
+#tc .zone{position:absolute;top:0;bottom:0;touch-action:none}
+#tcL{left:0;width:42%}#tcR{right:0;width:58%}
+#stick{position:absolute;width:120px;height:120px;margin:-60px 0 0 -60px;border-radius:50%;border:2px solid rgba(255,255,255,.35);background:rgba(255,255,255,.08);display:none;pointer-events:none}
+#knob{position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;background:rgba(255,255,255,.35);border:2px solid rgba(255,255,255,.55)}
+#tc button{position:absolute;touch-action:none;border-radius:50%;border:2px solid rgba(255,255,255,.45);background:rgba(20,20,20,.5);color:#eee;font:700 13px/1.1 sans-serif;padding:0;-webkit-appearance:none;appearance:none}
+#tc button.on{background:rgba(255,224,138,.45)}
+#bFire{right:max(22px,env(safe-area-inset-right));bottom:max(22px,env(safe-area-inset-bottom));width:84px;height:84px;font-size:15px}
+#bUse{right:calc(max(22px,env(safe-area-inset-right)) + 96px);bottom:max(30px,env(safe-area-inset-bottom));width:62px;height:62px;font-size:15px}
+#bRel{right:calc(max(22px,env(safe-area-inset-right)) + 14px);bottom:calc(max(22px,env(safe-area-inset-bottom)) + 96px);width:50px;height:50px}
+#bHerb{right:calc(max(22px,env(safe-area-inset-right)) + 70px);bottom:calc(max(22px,env(safe-area-inset-bottom)) + 80px);width:50px;height:50px}
+#bWpn{right:calc(max(22px,env(safe-area-inset-right)) + 126px);bottom:calc(max(22px,env(safe-area-inset-bottom)) + 70px);width:50px;height:50px}
+#bRun{left:max(20px,env(safe-area-inset-left));bottom:max(16px,env(safe-area-inset-bottom));width:56px;height:56px}
+#bTorch,#bMap,#bPause{top:max(8px,env(safe-area-inset-top));width:44px;height:44px;font-size:11px}
+#bTorch{left:50%;margin-left:-70px}#bMap{left:50%;margin-left:-22px}#bPause{left:50%;margin-left:26px}
+#rot{position:fixed;inset:0;z-index:10;background:#000;color:#eee;display:none;align-items:center;justify-content:center;text-align:center;font:16px/1.7 sans-serif;padding:24px}
+body.touch.portrait #rot{display:flex}
+#rot b{display:block;font-size:44px;margin-bottom:8px}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="tc">
+ <div class="zone" id="tcL"></div><div class="zone" id="tcR"></div>
+ <div id="stick"><div id="knob"></div></div>
+ <button id="bFire">攻撃<br>FIRE</button><button id="bUse">調べる<br>USE</button>
+ <button id="bRel">装填<br>R</button><button id="bHerb">薬草<br>HEAL</button><button id="bWpn">武器<br>SWAP</button>
+ <button id="bRun">走る<br>RUN</button>
+ <button id="bTorch">灯り<br>LIGHT</button><button id="bMap">地図<br>MAP</button><button id="bPause">停止<br>PAUSE</button>
+</div>
+<div id="rot"><div><b>⟲</b>横向きにしてください<br>Please rotate your device to landscape</div></div>
 <script>
 (async()=>{
 'use strict';
@@ -386,6 +417,71 @@ addEventListener('mouseup',ev=>{if(ev.button===0)mouse.down=false;});
 cv.addEventListener('wheel',ev=>{ev.preventDefault();if(G.mode==='play'&&G.scene==='play'&&!G.paused)cycleWeapon(ev.deltaY>0?1:-1);},{passive:false});
 document.addEventListener('pointerlockchange',()=>{locked=document.pointerLockElement===cv;});
 document.addEventListener('mousemove',ev=>{if(document.pointerLockElement===cv&&G.mode==='play'&&!G.paused&&!G.doc&&G.scene==='play')P.yaw+=ev.movementX*.0023;});
+
+
+/* ================= タッチ操作(スマホ・横画面) ================= */
+const TV={fwd:0,strafe:0,run:false,fire:false,look:0};let touchMode=false;
+(function(){
+  const tc=document.getElementById('tc'),zl=document.getElementById('tcL'),zr=document.getElementById('tcR');
+  const stick=document.getElementById('stick'),knob=document.getElementById('knob');
+  const $=id=>document.getElementById(id);
+  function enable(){if(touchMode)return;touchMode=true;document.body.classList.add('touch');orient();}
+  function orient(){document.body.classList.toggle('portrait',innerHeight>innerWidth);}
+  if(matchMedia('(pointer:coarse)').matches||'ontouchstart' in window)enable();
+  addEventListener('touchstart',enable,{passive:true,once:true});
+  addEventListener('resize',orient);addEventListener('orientationchange',()=>setTimeout(()=>{orient();fit();},200));
+  let fsTried=false;
+  function lockLandscape(){
+    if(fsTried)return;fsTried=true;
+    try{const e=document.documentElement;const r=e.requestFullscreen?e.requestFullscreen():null;
+      const lk=()=>{try{screen.orientation&&screen.orientation.lock&&screen.orientation.lock('landscape').catch(()=>{});}catch(_){}};
+      if(r&&r.then)r.then(lk).catch(()=>{});else lk();}catch(_){}
+  }
+  // 画面状態を進めるタップ(タイトル・手記・死亡・クリア・ポーズ)
+  function tapAdvance(){
+    audioInit();if(AC&&AC.state==='suspended')AC.resume();lockLandscape();
+    if(G.mode==='demo'){newGame('play');return true;}
+    if(G.paused){G.paused=false;return true;}
+    if(G.doc){G.doc=null;sfx.paper();return true;}
+    if(G.scene==='dead'&&G.deadT>1.6){respawn();return true;}
+    if(G.scene==='clear'&&G.clearT>2){newGame('demo');return true;}
+    return false;
+  }
+  // 左: 移動スティック
+  let sid=null,sx=0,sy=0;const R=55;
+  zl.addEventListener('pointerdown',e=>{e.preventDefault();if(tapAdvance())return;if(sid!==null)return;sid=e.pointerId;zl.setPointerCapture(sid);sx=e.clientX;sy=e.clientY;
+    stick.style.display='block';stick.style.left=sx+'px';stick.style.top=sy+'px';knob.style.transform='translate(0,0)';});
+  zl.addEventListener('pointermove',e=>{if(e.pointerId!==sid)return;let dx=e.clientX-sx,dy=e.clientY-sy;const l=Math.hypot(dx,dy);if(l>R){dx*=R/l;dy*=R/l;}
+    knob.style.transform='translate('+dx+'px,'+dy+'px)';const m=Math.hypot(dx,dy)/R;
+    if(m<.18){TV.fwd=0;TV.strafe=0;TV.run=false;}else{TV.strafe=dx/R;TV.fwd=-dy/R;TV.run=m>.95||TV.runBtn;}});
+  const endS=e=>{if(e.pointerId!==sid)return;sid=null;TV.fwd=0;TV.strafe=0;TV.run=false;stick.style.display='none';};
+  zl.addEventListener('pointerup',endS);zl.addEventListener('pointercancel',endS);
+  // 右: ドラッグで視点
+  let lid=null,lx=0;
+  zr.addEventListener('pointerdown',e=>{e.preventDefault();if(tapAdvance())return;if(lid!==null)return;lid=e.pointerId;zr.setPointerCapture(lid);lx=e.clientX;});
+  zr.addEventListener('pointermove',e=>{if(e.pointerId!==lid)return;const dx=e.clientX-lx;lx=e.clientX;
+    if(G.mode==='play'&&!G.paused&&!G.doc&&G.scene==='play')P.yaw+=dx*.0065;});
+  const endL=e=>{if(e.pointerId===lid)lid=null;};
+  zr.addEventListener('pointerup',endL);zr.addEventListener('pointercancel',endL);
+  // ボタン
+  function hold(id,on,off){const b=$(id);let pid=null;
+    b.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();if(tapAdvance())return;pid=e.pointerId;b.setPointerCapture(pid);b.classList.add('on');on();});
+    const up=e=>{if(e.pointerId!==pid)return;pid=null;b.classList.remove('on');off&&off();};
+    b.addEventListener('pointerup',up);b.addEventListener('pointercancel',up);}
+  function tap(id,fn){hold(id,()=>{if(G.mode==='play'&&G.scene==='play')fn();},null);}
+  hold('bFire',()=>{TV.fire=true;},()=>{TV.fire=false;});
+  hold('bRun',()=>{TV.runBtn=true;if(sid!==null&&(TV.fwd||TV.strafe))TV.run=true;},()=>{TV.runBtn=false;});
+  tap('bUse',()=>{G.useReq=true;});tap('bRel',startReload);tap('bHerb',useHerb);tap('bWpn',()=>cycleWeapon(1));
+  tap('bTorch',()=>{G.torch=!G.torch;});
+  hold('bMap',()=>{keys.Tab=true;},()=>{keys.Tab=false;});
+  hold('bPause',()=>{if(G.mode==='play'&&G.scene==='play')G.paused=true;},null);
+  // ブラウザ既定のスクロール・ズームを止める
+  document.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+  document.addEventListener('gesturestart',e=>e.preventDefault());
+  document.addEventListener('contextmenu',e=>e.preventDefault());
+  // 画面が隠れたらスティック等を放す
+  document.addEventListener('visibilitychange',()=>{TV.fwd=TV.strafe=0;TV.run=TV.fire=false;});
+})();
 
 /* ================= 判定・移動 ================= */
 function solidAt(x,y){const cx=Math.floor(x),cy=Math.floor(y);if(cx<0||cy<0||cx>=MW||cy>=MH)return true;return WL[cy*MW+cx]!==0;}
@@ -834,16 +930,16 @@ function drawHUD(){
   ctx.drawImage(panelAsset,VW-206,VH-110,182,84);ctx.drawImage(frameAsset,VW-210,VH-114,190,92);
   const equipped=WEAPONS[G.weapon],gunEquipped=equipped?.kind==='gun',shotgunEquipped=G.weapon==='shotgun';
   if(gunEquipped){const mag=shotgunEquipped?G.shellMag:G.mag,res=shotgunEquipped?G.shellRes:G.res;otext(G.reload>0?'装填中…':String(mag),VW-170,VH-70,G.reload>0?18:36,mag<=2?'#e07050':'#f2efe0','center');otext('/ '+res,VW-106,VH-62,22,'#c8c4b0','left');}
-  else{otext(equipped?.name||'素手',VW-115,VH-76,22,'#d8d4c0','center');otext('Space / クリックで攻撃',VW-115,VH-54,13,'#9a9688','center');}
-  otext('Q / C・ホイール 武器切替',VW-115,VH-124,12,'#b9b49e');
-  otext('薬草 ×'+G.herb+'  [H]',VW-115,VH-38,15,'#7fe08a');
+  else{otext(equipped?.name||'素手',VW-115,VH-76,22,'#d8d4c0','center');if(!touchMode)otext('Space / クリックで攻撃',VW-115,VH-54,13,'#9a9688','center');}
+  if(!touchMode)otext('Q / C・ホイール 武器切替',VW-115,VH-124,12,'#b9b49e');
+  otext('薬草 ×'+G.herb+(touchMode?'':'  [H]'),VW-115,VH-38,15,'#7fe08a');
   // 鍵
   let ky=VH-150;const kn={police:'駐在所の鍵',office:'事務所の鍵',gate:'ゲートの鍵'};
   for(const k in G.keys){if(G.keys[k]){ctx.drawImage(keyIcon,20,ky-12);otext(kn[k],48,ky,14,'#e8c860','left');ky-=20;}}
   if(G.fuse)otext('■ ヒューズ',24,ky,14,'#d8d8d0','left');
   // 目的
   otext('目的: '+objective(),24,24,16,'#e8e4d0','left');
-  if(G.torch)otext('[F] 懐中電灯 ON',24,48,12,'#a8b090','left');else otext('[F] 懐中電灯 OFF',24,48,12,'#808070','left');
+  if(touchMode){}else if(G.torch)otext('[F] 懐中電灯 ON',24,48,12,'#a8b090','left');else otext('[F] 懐中電灯 OFF',24,48,12,'#808070','left');
   // メッセージ
   let my=VH-170;
   for(let i=G.msg.length-1;i>=0;i--){const m=G.msg[i],a=clamp(1-(m.age-m.d+.7)/.7,0,1);ctx.globalAlpha=a;otext(m.t,VW/2,my,19,'#f2efe0','center');ctx.globalAlpha=1;my-=28;}
@@ -857,7 +953,7 @@ function drawHUD(){
     for(let y=0;y<MH;y++)for(let x=0;x<MW;x++){if(!SEEN[ID(x,y)])continue;const w=WL[ID(x,y)];ctx.fillStyle=w?(DOORS[ID(x,y)]?'#c8a040':'#6a6a62'):'#2a3a2a';ctx.fillRect(ox+x*s,oy+y*s,s,s);}
     for(const z of G.zombies)if(z.hp>0&&SEEN[ID(Math.floor(z.x),Math.floor(z.y))]){ctx.fillStyle='#d44';ctx.fillRect(ox+z.x*s-1,oy+z.y*s-1,3,3);}
     ctx.fillStyle='#fff';ctx.fillRect(ox+P.x*s-2,oy+P.y*s-2,4,4);ctx.strokeStyle='#fff';ctx.beginPath();ctx.moveTo(ox+P.x*s,oy+P.y*s);ctx.lineTo(ox+P.x*s+Math.cos(P.yaw)*8,oy+P.y*s+Math.sin(P.yaw)*8);ctx.stroke();
-  }else otext('[Tab] マップ',VW-24,24,12,'#a8b090','right');
+  }else if(!touchMode)otext('[Tab] マップ',VW-24,24,12,'#a8b090','right');
 }
 function wrapText(t,w,size){ctx.font=size+'px '+FONT;const out=[];for(const para of t.split('\n')){let line='';for(const ch of para){if(ctx.measureText(line+ch).width>w){out.push(line);line=ch;}else line+=ch;}out.push(line);}return out;}
 function drawDoc(){
@@ -875,10 +971,11 @@ function drawTitle(){
   otext('屍人の夜  ―  NIGHT OF THE HOLLOW',VW/2,206,24,'#c8c4b0','center','rgba(0,0,0,.9)',FONT);
   otext('山奥の鉱山町を毒の霧が呑んだ夜、町の人々は屍人と化した。',VW/2,262,17,'#d8d4c0','center','rgba(0,0,0,.9)',FONT);
   otext('ガスに耐性を持つ大学生・朝倉 蓮は、一人、生き残った――。',VW/2,288,17,'#d8d4c0','center','rgba(0,0,0,.9)',FONT);
-  if(Math.floor(G.t*1.5)%2===0)otext('なにかキーを おして スタート',VW/2,VH-176,30,'#ffe08a');
+  if(Math.floor(G.t*1.5)%2===0)otext(touchMode?'画面を タップして スタート':'なにかキーを おして スタート',VW/2,VH-176,30,'#ffe08a');
   ctx.fillStyle='rgba(0,0,0,.7)';ctx.fillRect(VW/2-370,VH-146,740,116);
-  otext('WASD 移動 / マウス 視点 / Shift 走る / Space・クリック 攻撃 / Q・C・ホイール 武器切替 / R 装填',VW/2,VH-124,16,'#e0e4d0');
-  otext('E しらべる・拾う / H 薬草 / F 懐中電灯 / Tab マップ / P ポーズ / M おと',VW/2,VH-98,16,'#e0e4d0');
+  if(touchMode){otext('左スティック 移動 / 右ドラッグ 視点 / 攻撃・調べる・装填・薬草・武器ボタン',VW/2,VH-124,16,'#e0e4d0');
+  otext('灯り=懐中電灯 / 地図=長押しで表示 / 停止=ポーズ / 走る=ボタン長押し',VW/2,VH-98,16,'#e0e4d0');}else{otext('WASD 移動 / マウス 視点 / Shift 走る / Space・クリック 攻撃 / Q・C・ホイール 武器切替 / R 装填',VW/2,VH-124,16,'#e0e4d0');
+  otext('E しらべる・拾う / H 薬草 / F 懐中電灯 / Tab マップ / P ポーズ / M おと',VW/2,VH-98,16,'#e0e4d0');}
   otext('鍵と手がかりを集め、坑道の換気装置を復旧して脱出せよ。音と光に屍人は集まる。',VW/2,VH-68,16,'#b8c0a8');
   otext('ただいま デモプレイ中',VW/2,VH-44,13,'rgba(255,255,255,.5)');
 }
@@ -917,7 +1014,7 @@ function draw(){
   if(G.doc)drawDoc();
   if(G.mode==='demo')drawTitle();
   if(G.fade>0){ctx.fillStyle='rgba(0,0,0,'+G.fade+')';ctx.fillRect(0,0,VW,VH);}
-  if(G.paused){ctx.fillStyle='rgba(0,0,0,.75)';ctx.fillRect(0,0,VW,VH);otext('ポーズ中',VW/2,VH/2-20,64,'#fff');otext('P キー か クリックで さいかい',VW/2,VH/2+44,22,'#cfd5c0');}
+  if(G.paused){ctx.fillStyle='rgba(0,0,0,.75)';ctx.fillRect(0,0,VW,VH);otext('ポーズ中',VW/2,VH/2-20,64,'#fff');otext(touchMode?'タップで さいかい':'P キー か クリックで さいかい',VW/2,VH/2+44,22,'#cfd5c0');}
 }
 
 /* ================= メイン更新 ================= */
@@ -943,7 +1040,7 @@ function update(dt){
   let inp;
   if(G.mode==='play'){
     const k=keys;
-    inp={fwd:(k.KeyW||k.ArrowUp?1:0)-(k.KeyS||k.ArrowDown?1:0),strafe:(k.KeyD?1:0)-(k.KeyA?1:0),turn:(k.ArrowRight||k.KeyE&&false?1:0)-(k.ArrowLeft?1:0),run:!!(k.ShiftLeft||k.ShiftRight),fire:!!(k.Space||mouse.down||k.KeyZ),melee:!!k.KeyV,use:!!G.useReq};
+    inp={fwd:clamp((k.KeyW||k.ArrowUp?1:0)-(k.KeyS||k.ArrowDown?1:0)+TV.fwd,-1,1),strafe:clamp((k.KeyD?1:0)-(k.KeyA?1:0)+TV.strafe,-1,1),turn:(k.ArrowRight||k.KeyE&&false?1:0)-(k.ArrowLeft?1:0),run:!!(k.ShiftLeft||k.ShiftRight||TV.run),fire:!!(k.Space||mouse.down||k.KeyZ||TV.fire),melee:!!k.KeyV,use:!!G.useReq};
     G.useReq=false;
   }else{inp=botInput(dt);}
   playerStep(dt,inp);
