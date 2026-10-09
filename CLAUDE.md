@@ -526,7 +526,7 @@ node scripts/verify-receipt-ocr.mjs --ocr   # 実物のTesseractで読む（npm�
 ## 推し活ログの必須チェック（oshikatsu.html を触ったら必ず実行）
 
 ```bash
-node scripts/verify-oshikatsu.mjs            # 検疫→基本フロー→予定→定期出費→ほしい物→入出力→予算→グラフ画素→テーマ→FAB→モバイル幅（149項目・リサーチ／聖地巡礼の連携を含む）
+node scripts/verify-oshikatsu.mjs            # 検疫→基本フロー→予定→定期出費→ほしい物→入出力→予算→グラフ画素→テーマ→FAB→モバイル幅→Pro（185項目・リサーチ／聖地巡礼／Proライセンスを含む）
 node scripts/verify-oshikatsu.mjs --shots DIR # 画面を撮る（見た目を変えたら目視する）
 ```
 
@@ -593,6 +593,21 @@ node scripts/verify-oshi-research.mjs --inject   # 防御を壊して ❌ が出
   そこにも足す——忘れるとバックアップから戻しても**例外も出ずに消えたまま**になる（2026-10-01 に踏んだ）
 - 検査用ブリッジ `window.OSHI_DEBUG` は `window.__OSHI_TEST` のときだけ開く。関数を足したらここにも足す
 - 検査の**スクロール位置に注意**: 画面外のCanvasは `page.mouse.click` の座標が合わない（`scrollIntoViewIfNeeded` してから）
+
+### 推し活ログ Pro（有料版・`assets/js/oshi-pro.js` ＋ `scripts/oshi-license.mjs`）
+
+販売計画・法務の仕分け・深澤の作業手順は `docs/monetization-plan.md`、出品文は `marketing/oshikatsu-pro_booth.md`。
+
+- **無料の機能を削らない**。Pro は追加パック（レポート画像の全デザイン・年間/累計・透かし除去・メンカラ）。
+  無料版の画像には**アプリ名とURLを必ず入れる**（SNSでの唯一の導線）
+- **ライセンスは ECDSA P-256 署名を端末内で検証**。秘密鍵はリポジトリに置かない（`~/.oshikatsu-pro/`）。
+  `init` は公開鍵が入っていると止まる——**作り直すと販売済みのキーが全部無効になる**ため
+- **キーは別の保存枠 `oshikatsu_pro_v1`**。JSONバックアップへ混ぜない（渡したバックアップからキーが漏れる）
+- 失効は**署名が正しいキーだけ**に答える（偽キーに「無効化済み」と返すとIDの存在を教える）
+- メンカラは**コントラスト比4.5以上へ自動補正**。推し色をそのまま文字色にすると、黄色・ミントで白地に読めなくなる（例外は出ない）。
+  起動前のちらつき防止に、検証済みの色だけ `oshikatsu_accent_v1` に写して `<head>` で当てる
+- 検査は使い捨ての鍵ペアで通す（`window.__OSHI_PRO_TEST_OPTS`、`__OSHI_TEST` のときだけ有効）。
+  **`oshi-pro.js` を変えたら `oshikatsu.html` の `?v=` を上げる**
 
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）

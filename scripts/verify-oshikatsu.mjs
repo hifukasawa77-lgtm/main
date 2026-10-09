@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * verify-oshikatsu.mjs — 推し活ログ（oshikatsu.html）の必須チェック
+ * verify-oshikatsu.mjs — 推し活ログ（oshikatsu.html）の必須チェック（Pro のライセンス・レポート画像を含む）
  *
  * 「例外0件＝動いている」ではない。このページの無言の壊れ方:
  *   - 日付が壊れた1件で一覧とダッシュボードが丸ごと描かれなくなる（sanitize を通さないと起きる）
@@ -18,6 +18,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { webcrypto } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { signKey } from './oshi-license.mjs';
 
 const PAGE = 'oshikatsu.html';
 const INJECT = process.argv.includes('--inject');
@@ -610,6 +613,168 @@ if (SHOTS) {
 }
 await mctx.close();
 
+console.log('\n── 14. 推し活ログ Pro（ライセンス・レポート画像・メンカラ）──');
+// 本番の公開鍵ではなく、検査のたびに作る使い捨ての鍵ペアで通す（秘密鍵をリポジトリに置かないため）
+const OshiPro = createRequire(import.meta.url)('../assets/js/oshi-pro.js');
+const sub = webcrypto.subtle;
+const pair = await sub.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+const other = await sub.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+const pubJwk = await sub.exportKey('jwk', pair.publicKey);
+const goodKey = await signKey(pair.privateKey, { p: 'oshikatsu-pro', v: 1, lot: 'test', id: 'verify0001' });
+const forgedKey = await signKey(other.privateKey, { p: 'oshikatsu-pro', v: 1, lot: 'test', id: 'verify0002' });
+const wrongProduct = await signKey(pair.privateKey, { p: 'other-app', v: 1, lot: 'test', id: 'verify0003' });
+const flip = (k) => { const i = k.indexOf('.') + 5; return k.slice(0, i) + (k[i] === 'A' ? 'B' : 'A') + k.slice(i + 1); };
+// ブラウザ無しの純粋ロジック
+check('Node: 正しいキーは有効・改行や全角スペース混じりの貼り付けも通る', (await OshiPro.verifyKey(goodKey, { jwk: pubJwk, subtle: sub })).ok && (await OshiPro.verifyKey('  ' + goodKey.slice(0, 40) + '\n　' + goodKey.slice(40), { jwk: pubJwk, subtle: sub })).ok);
+check('Node: 1文字の改ざん・別の鍵で作ったキー・別製品のキーは無効', !(await OshiPro.verifyKey(flip(goodKey), { jwk: pubJwk, subtle: sub })).ok
+  && (await OshiPro.verifyKey(forgedKey, { jwk: pubJwk, subtle: sub })).reason === 'signature' && (await OshiPro.verifyKey(wrongProduct, { jwk: pubJwk, subtle: sub })).reason === 'product');
+check('Node: 失効IDは「署名が正しいときだけ」revoked と答える', (await OshiPro.verifyKey(goodKey, { jwk: pubJwk, subtle: sub, revoked: ['verify0001'] })).reason === 'revoked'
+  && (await OshiPro.verifyKey(forgedKey, { jwk: pubJwk, subtle: sub, revoked: ['verify0002'] })).reason === 'signature');
+check('Node: 空・長すぎ・ゴミはネットワークも暗号も使わず形式で弾く', (await OshiPro.verifyKey('', {})).reason === 'empty' && (await OshiPro.verifyKey('OSHI-PRO-' + 'A'.repeat(900), {})).reason === 'format' && (await OshiPro.verifyKey('<script>', {})).reason === 'format');
+const lumHex = (h) => { const c = OshiPro.hexToRgb(h); return c; };
+const worst = ['#fde047', '#a3e635', '#22d3ee', '#ffffff', '#f472b6', '#1e1b4b', '#000000'].reduce((m, h) => Math.min(m,
+  OshiPro.contrast(lumHex(OshiPro.accentVars(h, false)['--accent']), [255, 255, 255]), OshiPro.contrast(lumHex(OshiPro.accentVars(h, true)['--accent']), [15, 23, 42])), 99);
+check('Node: メンカラは黄色・白・黒の推し色でも文字として読める（コントラスト比4.5以上）', worst >= 4.5, `最小=${worst.toFixed(2)}`);
+
+const proCtx = async (opts) => {
+  const c = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
+  const p = await c.newPage(); const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message)); p.on('dialog', (d) => { errs.push('dialog:' + d.message()); d.accept(); });
+  await p.addInitScript((o) => { window.__OSHI_TEST = true; if (o) window.__OSHI_PRO_TEST_OPTS = o; }, opts || null);
+  if (opts && opts.route) await p.route('**/assets/js/oshi-pro.js*', opts.route);
+  await p.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
+  await p.evaluate(() => localStorage.clear()); await p.reload({ waitUntil: 'load' });
+  return { c, p, errs };
+};
+const canvasStats = (p) => p.evaluate(() => {
+  const cv = document.getElementById('card-canvas'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data, seen = new Set();
+  for (let i = 0; i < d.length; i += 4 * 97) seen.add((d[i] >> 4) + ',' + (d[i + 1] >> 4) + ',' + (d[i + 2] >> 4));
+  const band = cv.getContext('2d').getImageData(0, cv.height - 130, cv.width, 110).data; let ink = 0;
+  for (let i = 0; i < band.length; i += 4) { const k = band[i] + band[i + 1] + band[i + 2]; if (k < 450) ink++; }
+  return { colors: seen.size, w: cv.width, h: cv.height, bottomInk: ink };
+});
+const sampleData = async (p) => { await p.click('#btn-onb-sample'); await p.waitForTimeout(150); };
+
+// 公開鍵が未設定の本番状態（販売前）
+{
+  const { c, p, errs } = await proCtx(null);
+  await p.click('#tab-settings');
+  check('販売前（公開鍵なし）: 「販売準備中」を出し、購入ボタンは出さない', await p.isVisible('#pro-soon') && !(await p.isVisible('#pro-buy')));
+  await p.fill('#pro-key', goodKey); await p.click('#form-pro button[type=submit]'); await p.waitForTimeout(150);
+  check('販売前: キーを入れても有効にならず理由を出す', (await p.textContent('#pro-msg')).includes('販売準備中') && !(await p.evaluate(() => window.OSHI_DEBUG.getPro().on)));
+  check('販売前: 例外0件', errs.length === 0, errs.join(' | '));
+  await c.close();
+}
+
+{
+  const { c, p, errs } = await proCtx({ jwk: pubJwk });
+  await sampleData(p);
+  await p.click('#btn-card'); await p.waitForTimeout(250);
+  let st = await canvasStats(p), last = await p.evaluate(() => window.OSHI_DEBUG.getCardLast());
+  check('無料: 「画像で残す」でパネルが開き、カードが実際に描かれる（色数で判定）', await p.isVisible('#panel-card') && st.colors > 12 && st.w === 1080 && st.h === 1350, JSON.stringify(st));
+  check('無料: アプリ名の透かしが入り、外せない（チェックは無効化）', last.watermark && await p.isDisabled('#card-mark') && await p.isChecked('#card-mark'));
+  check('無料: 月のパステルは保存できる', !last.sample && !(await p.isDisabled('#card-save')));
+  const [dl] = await Promise.all([p.waitForEvent('download'), p.click('#card-save')]);
+  const png = fs.readFileSync(await dl.path());
+  check('保存: PNG（シグネチャ）・ファイル名に年月・中身がある', png.slice(1, 4).toString() === 'PNG' && /^oshikatsu-\d{4}-\d{2}\.png$/.test(dl.suggestedFilename()) && png.length > 20000, `${dl.suggestedFilename()} ${png.length}B`);
+  await p.selectOption('#card-tpl', 'night'); await p.waitForTimeout(100);
+  last = await p.evaluate(() => window.OSHI_DEBUG.getCardLast());
+  check('無料: Proのデザインは「SAMPLE」付きの見本になり、保存・共有できない', last.sample && last.tpl === 'night' && await p.isDisabled('#card-save') && await p.isDisabled('#card-share') && (await p.textContent('#card-note')).includes('Pro'));
+  await p.selectOption('#card-tpl', 'pastel'); await p.click('.range-bar .seg button[data-mode="year"]'); await p.waitForTimeout(100);
+  last = await p.evaluate(() => window.OSHI_DEBUG.getCardLast());
+  check('無料: 年間まとめは見本のみ（期間の切替にカードが追随する）', last.sample && (await p.textContent('#card-period')).includes('年'));
+  await p.click('.range-bar .seg button[data-mode="month"]');
+
+  await p.click('#tab-settings');
+  check('販売前でもURL未設定なら「準備中」（公開鍵だけあっても購入導線を出さない）', await p.isVisible('#pro-soon'));
+  for (const [label, k, want] of [['1文字改ざん', flip(goodKey), '確認できません'], ['別の鍵で偽造', forgedKey, '確認できません'], ['別製品', wrongProduct, 'このアプリのキーではありません'], ['ゴミ', 'hello', '形式']]) {
+    await p.fill('#pro-key', k); await p.click('#form-pro button[type=submit]'); await p.waitForTimeout(120);
+    const r = await p.evaluate(() => ({ on: window.OSHI_DEBUG.getPro().on, saved: localStorage.getItem('oshikatsu_pro_v1'), msg: document.getElementById('pro-msg').textContent }));
+    check(`無効なキー（${label}）: 有効にならず・保存もされず・理由が出る`, !r.on && r.saved === null && r.msg.includes(want), r.msg);
+  }
+  await p.fill('#pro-key', ' ' + goodKey + '\n'); await p.click('#form-pro button[type=submit]'); await p.waitForTimeout(150);
+  let r = await p.evaluate(() => ({ on: window.OSHI_DEBUG.getPro().on, saved: localStorage.getItem('oshikatsu_pro_v1') }));
+  check('正しいキー: Pro が有効になり、キーが保存され、入力欄が空になる', r.on && r.saved === goodKey && await p.isVisible('#pro-badge') && (await p.inputValue('#pro-key')) === '');
+  await p.reload({ waitUntil: 'load' }); await p.waitForTimeout(200);
+  check('再読み込み後も Pro のまま（起動時に検証し直す）', await p.evaluate(() => window.OSHI_DEBUG.getPro().on));
+
+  await p.click('#tab-dashboard'); await p.click('#btn-card'); await p.selectOption('#card-tpl', 'night'); await p.waitForTimeout(100);
+  last = await p.evaluate(() => window.OSHI_DEBUG.getCardLast());
+  check('Pro: Proのデザインがそのまま保存できる', !last.sample && last.tpl === 'night' && !(await p.isDisabled('#card-save')));
+  await p.selectOption('#card-tpl', 'mono'); await p.waitForTimeout(80);
+  const withMark = await canvasStats(p);
+  await p.uncheck('#card-mark'); await p.waitForTimeout(80);
+  const noMark = await canvasStats(p); last = await p.evaluate(() => window.OSHI_DEBUG.getCardLast());
+  check('Pro: 透かしを外すと実際に下端の文字が減る（画素で判定）', !last.watermark && noMark.bottomInk < withMark.bottomInk * 0.7, `${withMark.bottomInk}→${noMark.bottomInk}`);
+  await p.click('.range-bar .seg button[data-mode="year"]'); await p.waitForTimeout(80);
+  check('Pro: 年間まとめも保存できる', !(await p.evaluate(() => window.OSHI_DEBUG.getCardLast().sample)));
+  await p.click('.range-bar .seg button[data-mode="month"]');
+  await p.selectOption('#card-size', 'story'); await p.waitForTimeout(80);
+  st = await canvasStats(p);
+  check('ストーリー（9:16）は 1080×1920 で描かれる', st.w === 1080 && st.h === 1920 && st.colors > 12);
+
+  // メンカラ
+  await p.evaluate(() => { const d = window.OSHI_DEBUG, s = d.getState(); s.oshiList[0].color = '#fde047'; d.setState(s); });
+  await p.click('#tab-settings');
+  const oid = await p.evaluate(() => window.OSHI_DEBUG.getState().oshiList[0].id);
+  await p.selectOption('#pro-accent', oid); await p.waitForTimeout(80);
+  const acc = await p.evaluate(() => ({ v: document.documentElement.style.getPropertyValue('--accent'), cache: localStorage.getItem('oshikatsu_accent_v1'), btn: getComputedStyle(document.querySelector('#form-pro button, .btn')).backgroundImage }));
+  check('メンカラ: 推しの色がページ全体の --accent に入り、黄色でも文字が読める濃さに寄せる', /^#[0-9a-f]{6}$/.test(acc.v) && OshiPro.contrast(OshiPro.hexToRgb(acc.v), [255, 255, 255]) >= 4.5 && !!acc.cache, acc.v);
+  await p.reload({ waitUntil: 'domcontentloaded' });
+  const early = await p.evaluate(() => document.documentElement.style.getPropertyValue('--accent'));
+  check('メンカラ: 再読み込み直後（検証完了前）から色が当たっている＝ちらつかない', early === acc.v, early);
+  await p.waitForLoadState('load');
+  await p.evaluate((id) => { const d = window.OSHI_DEBUG, s = d.getState(); s.oshiList = s.oshiList.filter((o) => o.id !== id); d.setState(s); }, oid);
+  const after = await p.evaluate(() => ({ v: document.documentElement.style.getPropertyValue('--accent'), pref: window.OSHI_DEBUG.getState().prefs.accent, cache: localStorage.getItem('oshikatsu_accent_v1') }));
+  check('メンカラ: その推しを消すと標準の色に戻る（色だけ残らない）', after.v === '' && after.pref === '' && after.cache === null, JSON.stringify(after));
+
+  const [dj] = await Promise.all([p.waitForEvent('download'), p.click('#btn-export-json')]);
+  const json = fs.readFileSync(await dj.path(), 'utf8');
+  check('JSONバックアップにライセンスキーが入らない（渡したバックアップからキーが漏れない）', !json.includes('OSHI-PRO-') && json.includes('oshiList'));
+
+  // 金額を隠す設定の人は、画像でも既定で隠す
+  await p.evaluate(() => { const d = window.OSHI_DEBUG, s = d.getState(); s.prefs.mask = true; d.setState(s); });
+  await p.click('#tab-dashboard'); await p.click('#card-close').catch(() => {}); await p.click('#btn-card'); await p.waitForTimeout(80);
+  check('「金額を隠す」にしていると、画像の金額も既定でオフ', !(await p.isChecked('#card-amt')));
+
+  // XSS: 推し名はキャンバスに描くだけ（DOMへ入らない）
+  await p.evaluate(() => { const d = window.OSHI_DEBUG, s = d.getState(); s.oshiList[0].name = '<img src=x onerror=alert(1)>'; d.setState(s); });
+  await p.click('#card-close').catch(() => {}); await p.click('#btn-card'); await p.waitForTimeout(150);
+  check('推し名にHTMLを入れても実行されない', !errs.some((e) => e.startsWith('dialog:alert')) && (await p.locator('img[src="x"]').count()) === 0);
+
+  await p.click('#tab-settings');
+  await p.click('#pro-remove'); await p.waitForTimeout(80);
+  check('解除: Pro が外れ、キーも消える', !(await p.evaluate(() => window.OSHI_DEBUG.getPro().on)) && (await p.evaluate(() => localStorage.getItem('oshikatsu_pro_v1'))) === null);
+  // 保存されたキーが壊されていたら、起動時に無効と判定して理由を出す
+  await p.evaluate((k) => localStorage.setItem('oshikatsu_pro_v1', k), flip(goodKey));
+  await p.reload({ waitUntil: 'load' }); await p.waitForTimeout(200);
+  check('保存済みキーの改ざん: 起動時に無効と判定し、理由を残す', !(await p.evaluate(() => window.OSHI_DEBUG.getPro().on)) && (await p.textContent('#pro-msg')).includes('確認できませんでした'));
+  check('Pro 一連の操作で例外0件', errs.filter((e) => !e.startsWith('dialog:')).length === 0, errs.join(' | '));
+  await c.close();
+}
+
+// 部品（oshi-pro.js）が読めなくても、無料の機能は止まらない
+{
+  const { c, p, errs } = await proCtx({ jwk: pubJwk, route: (rt) => rt.abort() });
+  await sampleData(p);
+  await p.click('#btn-card'); await p.waitForTimeout(80);
+  check('oshi-pro.js が読めない: 例外なし・ダッシュボードは描かれ・画像は理由を出して止まる', errs.length === 0 && (await p.textContent('#hero-num')) === '21' && (await p.textContent('#card-note')).includes('読み込めません') && await p.isDisabled('#card-save'), errs.join(' | '));
+  await c.close();
+}
+
+// スマホ幅でカードのパネルが溢れない
+{
+  const c = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true });
+  const p = await c.newPage();
+  await p.addInitScript(() => { window.__OSHI_TEST = true; });
+  await p.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' }); await p.evaluate(() => localStorage.clear()); await p.reload({ waitUntil: 'load' });
+  await sampleData(p); await p.click('#btn-card'); await p.waitForTimeout(200);
+  const g = await p.evaluate(() => ({ over: document.documentElement.scrollWidth - window.innerWidth, cw: Math.round(document.getElementById('card-canvas').getBoundingClientRect().width) }));
+  check('スマホ幅（390px）: レポート画像パネルで横溢れなし・プレビューが見える大きさ', g.over <= 0 && g.cw >= 200 && g.cw <= 300, JSON.stringify(g));
+  if (SHOTS) await p.screenshot({ path: path.join(SHOTS, 'mobile-card.png'), fullPage: true });
+  await c.close();
+}
+
 if (INJECT) {
   console.log('\n── 故障注入（この下が ❌ にならなければ、検査は素通りしている）──');
   await fresh();
@@ -617,6 +782,12 @@ if (INJECT) {
     try { const s = window.OSHI_DEBUG.getState(); s.expenses.push({ id: 'bad', date: undefined, oshiId: '', category: 'グッズ', amount: 100 }); window.OSHI_DEBUG.renderAll(); return false; } catch (e) { return true; }
   });
   check('【注入】sanitize を通さない壊れた日付は描画で例外になる（＝入口の検疫が要る証拠）', !threw);
+  // 署名の確認を外した oshi-pro.js を差し込む → 偽造キーが通る＝上の「別の鍵で偽造」検査が ❌ になるべき
+  const src = fs.readFileSync(path.join(ROOT, 'assets/js/oshi-pro.js'), 'utf8').replace("if (!good) return { ok: false, reason: 'signature' };", '');
+  const { c, p } = await proCtx({ jwk: pubJwk, route: (rt) => rt.fulfill({ body: src, contentType: 'text/javascript' }) });
+  await p.click('#tab-settings'); await p.fill('#pro-key', forgedKey); await p.click('#form-pro button[type=submit]'); await p.waitForTimeout(150);
+  check('【注入】署名確認を外すと偽造キーで Pro が開く（＝署名確認が効いている証拠）', !(await p.evaluate(() => window.OSHI_DEBUG.getPro().on)));
+  await c.close();
 }
 
 await browser.close(); server.close();
