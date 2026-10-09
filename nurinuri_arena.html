@@ -26,10 +26,23 @@ body.touch #tui{display:block}
 #rot b{font-size:64px;display:block;animation:rt 2s ease-in-out infinite}
 @keyframes rt{0%,30%{transform:rotate(0)}70%,100%{transform:rotate(-90deg)}}
 @media (orientation:portrait){body.touch #rot{display:flex}}
+#arenaControls{position:fixed;right:12px;bottom:10px;z-index:12;display:flex;gap:8px;align-items:center;padding:8px 10px;border-radius:12px;background:#15182eee;color:#fff;font:700 13px sans-serif;cursor:auto}
+#arenaControls select,#arenaControls button{font:inherit;color:#fff;background:#353b60;border:1px solid #7a83b2;border-radius:7px;padding:7px;cursor:pointer}
+body.easy #zr,body.easy #br,body.easy #sr,body.easy #bSpec{display:none}
+body.touch.easy #zl{width:70%}
+body.touch #arenaControls{top:52px;bottom:auto;right:60px;padding:5px;font-size:11px;gap:5px}
+body.touch.easy #bSwim{right:28px;bottom:100px}body.touch.easy #bBomb{right:28px;bottom:26px;width:72px;height:72px}
+@media(max-width:650px){#arenaControls label{font-size:0}#arenaControls select{font-size:11px;padding:5px}}
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
+<canvas id="c" tabindex="0" aria-label="ぬりぬりアリーナのゲーム画面"></canvas>
+<div id="artStatus" role="status" style="position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:#080813;color:#fff;font:700 18px sans-serif">キャラクターとステージ画像を読み込み中 / Loading artwork…</div>
+<div id="arenaControls">
+ <label>ステージ <select id="stageSelect" aria-label="ステージを選ぶ"></select></label>
+ <label>操作 <select id="controlSelect" aria-label="操作方法"><option value="easy">かんたん（移動だけ）</option><option value="manual">手動でねらう</option></select></label>
+ <button id="startMatch" type="button">このステージで遊ぶ</button>
+</div>
 <div id="tui">
  <div id="bl" class="base"></div><div id="br" class="base"></div>
  <div id="zl" class="zone"></div><div id="zr" class="zone"></div>
@@ -41,7 +54,7 @@ body.touch #tui{display:block}
 (()=>{
 'use strict';
 /* ============================================================
-   ぬりぬりアリーナ  -  4vs4 インクぬりバトル (全てコード描画・外部ファイルなし)
+   ぬりぬりアリーナ  -  4vs4 インクぬりバトル (キャラクターは生成画像アセット)
    ============================================================ */
 const W=1200,H=720,CS=10,GW=W/CS,GH=H/CS,R=13,TAU=Math.PI*2;
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
@@ -57,8 +70,69 @@ const TEAM=[null,
  {name:'アクア団',  col:'#1fd0f0',dark:'#0b7b99',light:'#a8f1ff'}];
 const NAMES=[null,['ピコ','モチ','ココ','ナナ'],['ゲル','ジュレ','ポロン','タピ']];
 
+
+/* ---------------- キャラクター画像 ---------------- */
+const CHARACTER_ART=[null,[],[]];
+let artReady=false;
+function splitCharacterAtlas(image){
+  const w=image.width,h=image.height,n=w*h,source=document.createElement('canvas');
+  source.width=w;source.height=h;const g=source.getContext('2d');g.drawImage(image,0,0);
+  const pixels=g.getImageData(0,0,w,h).data,labels=new Int32Array(n),queue=new Int32Array(n),parts=[null];
+  for(let k=0;k<n;k++){
+    if(labels[k]||pixels[k*4+3]<16)continue;
+    const label=parts.length;let head=0,tail=1,sx=0,sy=0;queue[0]=k;labels[k]=label;
+    const add=p=>{if(p>=0&&p<n&&!labels[p]&&pixels[p*4+3]>=16){labels[p]=label;queue[tail++]=p;}};
+    while(head<tail){const p=queue[head++],x=p%w,y=Math.floor(p/w);sx+=x;sy+=y;if(x>0)add(p-1);if(x<w-1)add(p+1);if(y>0)add(p-w);if(y<h-1)add(p+w);}
+    parts.push({area:tail,x:sx/tail,y:sy/tail,owner:-1});
+  }
+  const main=parts.slice(1).filter(p=>p.area>1200);
+  for(const p of main)p.owner=Math.min(3,Math.floor(p.x/w*4))+Math.min(3,Math.floor(p.y/h*4))*4;
+  for(const p of parts.slice(1))if(p.area>=4&&p.owner<0){let best=null,distance=Infinity;for(const m of main){const d=(p.x-m.x)**2+(p.y-m.y)**2;if(d<distance){distance=d;best=m;}}p.owner=best?best.owner:-1;}
+  const owners=new Int16Array(n);owners.fill(-1);
+  for(let p=0;p<n;p++)if(labels[p])owners[p]=parts[labels[p]].owner;
+  for(let pass=0;pass<2;pass++){const next=owners.slice();for(let p=0;p<n;p++)if(owners[p]<0&&pixels[p*4+3]>0){const x=p%w;for(const q of [x>0?p-1:-1,x<w-1?p+1:-1,p>=w?p-w:-1,p<n-w?p+w:-1])if(q>=0&&owners[q]>=0){next[p]=owners[q];break;}}owners.set(next);}
+  const bounds=Array.from({length:16},()=>({x0:w,y0:h,x1:-1,y1:-1}));
+  for(let p=0;p<n;p++){const i=owners[p];if(i<0)continue;const x=p%w,y=Math.floor(p/w),b=bounds[i];b.x0=Math.min(b.x0,x);b.x1=Math.max(b.x1,x);b.y0=Math.min(b.y0,y);b.y1=Math.max(b.y1,y);}
+  if(bounds.some(b=>b.x1<0))throw new Error('Missing character frame');
+  const scale=224/Math.max(...bounds.map(b=>Math.max(b.x1-b.x0+1,b.y1-b.y0+1)));
+  return bounds.map((b,i)=>{
+    const crop=document.createElement('canvas');crop.width=b.x1-b.x0+1;crop.height=b.y1-b.y0+1;
+    const cg=crop.getContext('2d'),data=cg.createImageData(crop.width,crop.height);
+    for(let y=0;y<crop.height;y++)for(let x=0;x<crop.width;x++){const p=(y+b.y0)*w+x+b.x0;if(owners[p]===i)data.data.set(pixels.subarray(p*4,p*4+4),(y*crop.width+x)*4);}
+    cg.putImageData(data,0,0);
+    const sprite=document.createElement('canvas');sprite.width=sprite.height=256;
+    const dw=crop.width*scale,dh=crop.height*scale;sprite.getContext('2d').drawImage(crop,(256-dw)/2,(256-dh)/2,dw,dh);
+    return sprite;
+  });
+}
+async function loadCharacterArt(){
+  await Promise.all(['pinky','aqua'].map((name,i)=>new Promise((resolve,reject)=>{
+    const image=new Image();
+    image.onload=()=>{
+      try{const frames=splitCharacterAtlas(image);for(let row=0;row<4;row++)CHARACTER_ART[i+1][row]=frames.slice(row*4,row*4+4);resolve();}catch(error){reject(error);}
+    };
+    image.onerror=()=>reject(new Error('Character asset failed: '+name));
+    image.src='assets/nurinuri-arena/'+name+'.png';
+  })));
+  artReady=true;
+}
+function drawCharacterSprite(e,swim,moving,bob){
+  const frame=(swim?2:0)+(moving?Math.floor(G.t*9+e.idx)%2:0);
+  const sprite=CHARACTER_ART[e.team][e.idx][frame];
+  const direction=swim&&moving?Math.atan2(e.vy,e.vx):e.aim;
+  const size=swim?42:56;
+  ctx.save();ctx.translate(0,swim?0:-2+bob);ctx.rotate(direction);
+  ctx.drawImage(sprite,-size/2,-size/2,size,size);ctx.restore();
+}
+
 /* ---------------- ステージ ---------------- */
-const WALLS=[
+const STAGES=[
+ {name:'ひろびろ広場',hint:'見通しがよく、はじめてでも遊びやすい',floor:['#334557','#203042'],wall:['#99b9c7','#557e92'],walls:[{x:380,y:180,w:70,h:110},{x:750,y:180,w:70,h:110},{x:380,y:430,w:70,h:110},{x:750,y:430,w:70,h:110}]},
+ {name:'箱庭ガーデン',hint:'小さな花壇を回って、広い通路を塗ろう',floor:['#31483f','#20352e'],wall:['#9fbd8c','#567b60'],walls:[{x:260,y:140,w:90,h:90},{x:850,y:140,w:90,h:90},{x:260,y:490,w:90,h:90},{x:850,y:490,w:90,h:90},{x:450,y:285,w:90,h:150},{x:660,y:285,w:90,h:150}]},
+ {name:'みなと倉庫',hint:'倉庫の間を抜けて、中央の広場へ',floor:['#294858','#1c303f'],wall:['#8dbacc','#446e89'],walls:[{x:300,y:100,w:90,h:230},{x:810,y:100,w:90,h:230},{x:300,y:430,w:90,h:190},{x:810,y:430,w:90,h:190},{x:520,y:140,w:160,h:65},{x:520,y:515,w:160,h:65}]},
+ {name:'クロス市場',hint:'中央の十字路を通り、四方に塗り広げよう',floor:['#53453a','#352e2b'],wall:['#cfb494','#8a705b'],walls:[{x:340,y:140,w:180,h:120},{x:680,y:140,w:180,h:120},{x:340,y:460,w:180,h:120},{x:680,y:460,w:180,h:120}]},
+ {name:'ぐるぐる工房',hint:'中央の設備を回る、内側と外側の二つの道',floor:['#464254','#29283b'],wall:['#b9adcf','#776d91'],walls:[{x:550,y:270,w:100,h:180},{x:360,y:170,w:170,h:50},{x:670,y:170,w:170,h:50},{x:360,y:500,w:170,h:50},{x:670,y:500,w:170,h:50},{x:330,y:290,w:50,h:140},{x:820,y:290,w:50,h:140}]},
+ {name:'ツイン回廊',hint:'上下の通路を使って、相手の横へ回り込もう',floor:['#2a2f55','#1b1e3b'],wall:['#7f86c4','#5a609b'],walls:[
  {x:560,y:310,w:80,h:100},
  {x:300,y:110,w:40,h:190},{x:300,y:420,w:40,h:190},
  {x:860,y:110,w:40,h:190},{x:860,y:420,w:40,h:190},
@@ -66,7 +140,37 @@ const WALLS=[
  {x:440,y:460,w:60,h:60},{x:700,y:460,w:60,h:60},
  {x:500,y:60,w:200,h:24},{x:500,y:636,w:200,h:24},
  {x:150,y:300,w:30,h:120},{x:1020,y:300,w:30,h:120}
+]}
 ];
+let selectedStage=0,easyControls=true;
+let WALLS=STAGES[0].walls;
+const STAGE_ART=[];
+let stageArtReady=false;
+async function loadStageArt(){
+  const names=['plaza','garden','harbor','market','workshop','corridor'];
+  await Promise.all(names.map((name,index)=>new Promise((resolve,reject)=>{
+    const image=new Image();
+    image.onload=()=>{
+      try{
+        STAGE_ART[index]=[];
+        for(let tile=0;tile<4;tile++){
+          const texture=document.createElement('canvas');texture.width=texture.height=512;
+          texture.getContext('2d').drawImage(image,(tile%2)*image.width/2,Math.floor(tile/2)*image.height/2,image.width/2,image.height/2,0,0,512,512);
+          STAGE_ART[index].push(texture);
+        }
+        resolve();
+      }catch(error){reject(error);}
+    };
+    image.onerror=()=>reject(new Error('Stage asset failed: '+name));
+    image.src='assets/nurinuri-arena/stage-'+name+'.png';
+  })));
+  stageArtReady=true;
+}
+function applyStage(index){
+  selectedStage=clamp(Math.floor(Number(index)||0),0,STAGES.length-1);WALLS=STAGES[selectedStage].walls;
+  rebuildMask();buildFloor();
+}
+
 function circRect(x,y,r,w){const cx=clamp(x,w.x,w.x+w.w),cy=clamp(y,w.y,w.y+w.h),dx=x-cx,dy=y-cy;return dx*dx+dy*dy<r*r;}
 function blocked(x,y,r){if(x<r||y<r||x>W-r||y>H-r)return true;for(const w of WALLS)if(circRect(x,y,r,w))return true;return false;}
 function inWall(x,y){if(x<0||y<0||x>W||y>H)return true;for(const w of WALLS)if(x>w.x&&x<w.x+w.w&&y>w.y&&y<w.y+w.h)return true;return false;}
@@ -75,7 +179,8 @@ function los(x1,y1,x2,y2){const d=Math.hypot(x2-x1,y2-y1),n=Math.ceil(d/10);for(
 /* ---------------- インク盤面 ---------------- */
 const owner=new Uint8Array(GW*GH),mask=new Uint8Array(GW*GH),counts=[0,0,0];
 let total=0;
-for(let i=0;i<GW*GH;i++){const x=(i%GW+.5)*CS,y=(Math.floor(i/GW)+.5)*CS;mask[i]=inWall(x,y)?0:1;total+=mask[i];}
+function rebuildMask(){total=0;for(let i=0;i<GW*GH;i++){const x=(i%GW+.5)*CS,y=(Math.floor(i/GW)+.5)*CS;mask[i]=inWall(x,y)?0:1;total+=mask[i];}}
+rebuildMask();
 const inkC=document.createElement('canvas');inkC.width=W;inkC.height=H;const ink=inkC.getContext('2d');
 function inkAt(x,y){const gx=Math.floor(x/CS),gy=Math.floor(y/CS);if(gx<0||gy<0||gx>=GW||gy>=GH)return 0;return owner[gy*GW+gx];}
 function stamp(x,y,r,t){
@@ -98,9 +203,17 @@ function paint(x,y,r,t){
 
 /* ---------------- 床(キャッシュ) ---------------- */
 const floorC=document.createElement('canvas');floorC.width=W;floorC.height=H;
-(function(){
+function buildFloor(){
   const f=floorC.getContext('2d');
-  const g=f.createLinearGradient(0,0,0,H);g.addColorStop(0,'#2a2f55');g.addColorStop(1,'#1b1e3b');
+  if(STAGE_ART[selectedStage]){
+    f.clearRect(0,0,W,H);
+    for(let y=0;y<H;y+=240)for(let x=0;x<W;x+=240){
+      const texture=STAGE_ART[selectedStage][((x/240+y/240)%2)];
+      f.drawImage(texture,x,y,240,240);
+    }
+    return;
+  }
+  const g=f.createLinearGradient(0,0,0,H);g.addColorStop(0,STAGES[selectedStage].floor[0]);g.addColorStop(1,STAGES[selectedStage].floor[1]);
   f.fillStyle=g;f.fillRect(0,0,W,H);
   for(let y=0;y<H;y+=40)for(let x=0;x<W;x+=40){if(((x+y)/40)%2===0){f.fillStyle='rgba(255,255,255,.035)';f.fillRect(x,y,40,40);}}
   f.strokeStyle='rgba(255,255,255,.06)';f.lineWidth=1;
@@ -108,7 +221,8 @@ const floorC=document.createElement('canvas');floorC.width=W;floorC.height=H;
   for(let y=0;y<=H;y+=40){f.beginPath();f.moveTo(0,y+.5);f.lineTo(W,y+.5);f.stroke();}
   f.strokeStyle='rgba(255,255,255,.12)';f.lineWidth=3;f.beginPath();f.moveTo(W/2,0);f.lineTo(W/2,H);f.stroke();
   f.beginPath();f.arc(W/2,H/2,90,0,TAU);f.stroke();
-})();
+}
+buildFloor();
 
 /* ---------------- 音(WebAudioで合成) ---------------- */
 let AC=null,mg=null,muted=false,noiseBuf=null;
@@ -183,10 +297,13 @@ function mkEnt(team,idx){
     sx:team===1?70:W-70,sy:SPAWN_Y[idx],ai:{mode:'paint',tgt:null,t:rnd()*2,rt:0,strafe:1,sf:0,flip:1,seeT:0,px:0,py:0,pt:0,fav:rnd()}};
 }
 function spawn(e){
-  e.x=e.sx;e.y=e.sy;e.vx=e.vy=0;e.hp=100;e.ink=100;e.alive=true;e.inv=2;e.swim=false;e.aim=e.team===1?0:Math.PI;
+  e.x=e.sx;e.y=e.sy;e.vx=e.vy=0;e.hp=100;e.ink=100;e.alive=true;e.inv=2;e.swim=false;e.autoRefill=false;e.aim=e.team===1?0:Math.PI;
   paint(e.x,e.y,28,e.team);
 }
-function newMatch(mode){
+function newMatch(mode,stage=selectedStage){
+  applyStage(stage);
+  for(const key of Object.keys(keys))keys[key]=false;
+  T.mx=T.my=0;T.aim=T.swim=T.bomb=T.spec=false;mouse.down=mouse.right=false;
   owner.fill(0);counts[1]=counts[2]=0;ink.clearRect(0,0,W,H);
   bullets.length=bombs.length=parts.length=feed.length=0;ents.length=0;
   for(let t=1;t<=2;t++)for(let i=0;i<4;i++)ents.push(mkEnt(t,i));
@@ -199,6 +316,7 @@ const IS_TOUCH=matchMedia('(pointer:coarse)').matches||'ontouchstart' in window;
 const T={mx:0,my:0,ax:0,ay:0,aim:false,swim:false,bomb:false,spec:false};
 const keys={},mouse={x:W/2,y:H/2,down:false,right:false,on:false};
 addEventListener('keydown',ev=>{
+  if(ev.target&&ev.target.closest&&ev.target.closest('#arenaControls'))return;
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab'].includes(ev.code))ev.preventDefault();
   if(ev.repeat)return;
   audioInit();
@@ -272,7 +390,17 @@ if(IS_TOUCH){
 function playerInput(e){
   const k=keys;
   let mx=(k.KeyD?1:0)-(k.KeyA?1:0),my=(k.KeyS?1:0)-(k.KeyW?1:0);
+  if(easyControls&&!mx&&!my){mx=(k.ArrowRight?1:0)-(k.ArrowLeft?1:0);my=(k.ArrowDown?1:0)-(k.ArrowUp?1:0);}
   if(!mx&&!my){mx=T.mx;my=T.my;}
+  if(easyControls){
+    let target=null,best=360;
+    for(const foe of ents){if(!foe.alive||foe.team===e.team)continue;const d=dist(e.x,e.y,foe.x,foe.y);if(foe.swim&&d>75)continue;if(d<best&&los(e.x,e.y,foe.x,foe.y)){target=foe;best=d;}}
+    if(e.ink<18)e.autoRefill=true;if(e.ink>=90)e.autoRefill=false;
+    const refill=e.autoRefill&&inkAt(e.x,e.y)===e.team;
+    const swim=refill||!!(k.Space||k.ShiftLeft||k.ShiftRight||T.swim);
+    const aim=target?Math.atan2(target.y-e.y,target.x-e.x):(mx||my?Math.atan2(my,mx):e.aim);
+    return {mx,my,aim,fire:!e.autoRefill&&!swim&&!!(target||mx||my),swim,bomb:!!(k.KeyE||k.KeyZ||T.bomb),spec:!!(e.spec>=1&&target||k.KeyQ||T.spec)};
+  }
   const ax=(k.ArrowRight?1:0)-(k.ArrowLeft?1:0),ay=(k.ArrowDown?1:0)-(k.ArrowUp?1:0);
   let aim=null,fire=false;
   if(ax||ay){aim=Math.atan2(ay,ax);fire=true;}
@@ -430,7 +558,7 @@ function stepEnt(e,inp,dt){
   }
   // インク・体力
   if(swim){e.ink=Math.min(100,e.ink+55*dt);e.hp=Math.min(100,e.hp+45*dt);}
-  else e.ink=Math.min(100,e.ink+(inp.fire?0:4)*dt);
+  else e.ink=Math.min(100,e.ink+(inp.fire?0:e.isPlayer&&easyControls?24:4)*dt);
   if(foeInk&&!swim){e.hp-=7*dt;e.hurtT=0;if(e.hp<=0){kill(e,null);return;}}
   if(e.hurtT>2.5&&e.hp<100)e.hp=Math.min(100,e.hp+22*dt);
   // 攻撃
@@ -533,10 +661,17 @@ function outlineText(t,x,y,size,fill,align,stroke){
 function rrect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
 function drawWalls(){
-  for(const w of WALLS){
+  for(let index=0;index<WALLS.length;index++){
+    const w=WALLS[index];
     ctx.fillStyle='rgba(0,0,0,.35)';ctx.fillRect(w.x+8,w.y+16,w.w,w.h);
+    if(STAGE_ART[selectedStage]){
+      ctx.fillStyle=STAGES[selectedStage].wall[1];ctx.fillRect(w.x,w.y+8,w.w,w.h);
+      ctx.drawImage(STAGE_ART[selectedStage][2+index%2],w.x,w.y,w.w,w.h);
+      ctx.strokeStyle='rgba(0,0,0,.4)';ctx.lineWidth=2;ctx.strokeRect(w.x+1,w.y+1,w.w-2,w.h-2);
+      continue;
+    }
     ctx.fillStyle='#2a2d52';ctx.fillRect(w.x,w.y+12,w.w,w.h);
-    const g=ctx.createLinearGradient(0,w.y,0,w.y+w.h);g.addColorStop(0,'#7f86c4');g.addColorStop(1,'#5a609b');
+    const g=ctx.createLinearGradient(0,w.y,0,w.y+w.h);g.addColorStop(0,STAGES[selectedStage].wall[0]);g.addColorStop(1,STAGES[selectedStage].wall[1]);
     ctx.fillStyle=g;ctx.fillRect(w.x,w.y,w.w,w.h);
     ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=2;ctx.strokeRect(w.x+1,w.y+1,w.w-2,w.h-2);
     ctx.fillStyle='rgba(255,255,255,.12)';ctx.fillRect(w.x+4,w.y+4,w.w-8,5);
@@ -553,44 +688,18 @@ function drawEnt(e){
   }
   ctx.save();ctx.translate(e.x,e.y);
   if(e.inv>0&&Math.floor(G.t*14)%2)ctx.globalAlpha=.45;
+  const moving=Math.hypot(e.vx,e.vy)>20;
   if(e.swim){
     let vis=e.team===1?.65:.1;
     if(e.team!==1)for(const o of ents)if(o.team===1&&o.alive&&dist(o.x,o.y,e.x,e.y)<80){vis=.55;break;}
     ctx.globalAlpha*=vis;
-    const sp=Math.hypot(e.vx,e.vy)/275;
-    ctx.fillStyle=T.light;ctx.beginPath();ctx.ellipse(0,2,15+sp*6,9,Math.atan2(e.vy,e.vx),0,TAU);ctx.fill();
-    ctx.fillStyle=T.col;ctx.beginPath();ctx.ellipse(0,0,11,7,Math.atan2(e.vy,e.vx),0,TAU);ctx.fill();
+    drawCharacterSprite(e,true,moving,0);
     ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.globalAlpha*=.8;
     const rr=(G.t*20+e.id)%14;ctx.beginPath();ctx.arc(0,2,10+rr,0,TAU);ctx.stroke();
   }else{
-    const mv=Math.hypot(e.vx,e.vy)>20,bob=Math.sin(G.t*14+e.id)*(mv?1.8:.6);
+    const bob=Math.sin(G.t*14+e.id)*(moving?1.8:.6);
     ctx.fillStyle='rgba(0,0,0,.35)';ctx.beginPath();ctx.ellipse(0,10,13,6,0,0,TAU);ctx.fill();
-    const c=Math.cos(e.aim),s=Math.sin(e.aim);
-    ctx.save();ctx.translate(0,-4+bob);
-    // タンク(背中)
-    ctx.save();ctx.translate(-c*11,-s*11);ctx.rotate(e.aim);
-    ctx.fillStyle='#e8ecff';rrect(-5,-7,10,14,3);ctx.fill();
-    ctx.fillStyle=T.col;const lv=clamp(e.ink/100,0,1);ctx.fillRect(-4,7-12*lv-1,8,12*lv);
-    ctx.restore();
-    // 体
-    const g=ctx.createRadialGradient(-4,-5,2,0,0,R+2);g.addColorStop(0,T.light);g.addColorStop(.45,T.col);g.addColorStop(1,T.dark);
-    ctx.fillStyle=g;ctx.beginPath();ctx.ellipse(0,0,R,R-1+bob*.15,0,0,TAU);ctx.fill();
-    ctx.strokeStyle='rgba(0,0,0,.45)';ctx.lineWidth=2;ctx.stroke();
-    // しっぽ(ぴょこ)
-    ctx.fillStyle=T.dark;ctx.beginPath();ctx.ellipse(-c*13,-s*13-3,4,3,0,0,TAU);ctx.fill();
-    // 銃
-    ctx.save();ctx.rotate(e.aim);
-    ctx.fillStyle='#3b3f66';rrect(5,-3.5,19,7,3);ctx.fill();
-    ctx.fillStyle=e.specT>0?'#fff':T.light;rrect(19,-3,6,6,2);ctx.fill();
-    ctx.restore();
-    // 目
-    const ex1=c*5,ey1=s*5,px=-s*4.2,py=c*4.2;
-    for(const sg of[-1,1]){
-      const X=ex1+px*sg,Y=ey1+py*sg-1;
-      ctx.fillStyle='#fff';ctx.beginPath();ctx.ellipse(X,Y,3.6,4.4,0,0,TAU);ctx.fill();
-      ctx.fillStyle='#14143a';ctx.beginPath();ctx.arc(X+c*1.5,Y+s*1.5,1.9,0,TAU);ctx.fill();
-    }
-    ctx.restore();
+    drawCharacterSprite(e,false,moving,bob);
     if(e.specT>0){ctx.strokeStyle='#fff';ctx.globalAlpha=.5+.4*Math.sin(G.t*20);ctx.lineWidth=3;ctx.beginPath();ctx.arc(0,-2,R+6+Math.sin(G.t*12)*2,0,TAU);ctx.stroke();}
   }
   ctx.restore();
@@ -702,8 +811,8 @@ function drawHint(){
   if(G.mode!=='play'||G.phase==='result')return;
   const a=hintT<14?1:clamp(1-(hintT-14)/2,0,1);if(a<=0)return;
   ctx.globalAlpha=a*.85;
-  ctx.fillStyle='rgba(8,8,24,.75)';rrect(W/2-330,H-54,660,38,10);ctx.fill();
-  outlineText(IS_TOUCH?'左スティック いどう  /  右スティック ねらって うつ  /  およぐ(インク補給)  /  ボム  /  ひっさつ':'WASD いどう  /  ↑↓←→ うつ  /  Space ひたっておよぐ(インク補給)  /  E ボム  /  Q ひっさつ  /  マウスでもOK',W/2,H-35,14,'#dfe3ff');
+  ctx.fillStyle='rgba(8,8,24,.75)';rrect(W/2-330,H-94,660,38,10);ctx.fill();
+  outlineText(easyControls?(IS_TOUCH?'左スティックで移動するだけ! 狙い・射撃・補給・必殺は自動':'矢印キー / WASDで移動するだけ! 狙い・射撃・補給・必殺は自動'):(IS_TOUCH?'左:移動 / 右:ねらって射撃 / およぐ / ボム / 必殺':'WASD:移動 / 矢印:射撃 / Space:泳ぐ / E:ボム / Q:必殺'),W/2,H-75,14,'#dfe3ff');
   ctx.globalAlpha=1;
 }
 
@@ -722,7 +831,8 @@ function drawOverlay(){
     if(Math.floor(G.t*1.6)%2===0)outlineText(IS_TOUCH?'画面を タッチして スタート!':'なにかキーを おして スタート!',W/2,H/2+90,34,'#fff25a');
     ctx.fillStyle='rgba(8,8,24,.75)';rrect(W/2-350,H/2+135,700,122,14);ctx.fill();
     const L=IS_TOUCH?['左スティック : いどう　　右スティック : ねらった方向にインクを うつ','およぐ ボタン : じぶんのインクの上で およぐ (はやい・インク回復・かくれる)','ボム ボタン / ひっさつ ボタン(ゲージが たまったら)　　⏸ : ポーズ','いろを たくさん ぬった チームの勝ち!  敵インクの上は おそくて ダメージ!']:['WASD : いどう　　↑ ↓ ← → : その方向にインクを うつ (マウス: ねらう/クリック)','Space / Shift : じぶんのインクの上で およぐ (はやい・インク回復・かくれる)','E : ボム　　Q : ひっさつ(ゲージが たまったら)　　M : 音 ON/OFF　　P : ポーズ','いろを たくさん ぬった チームの勝ち!  敵インクの上は おそくて ダメージ!'];
-    L.forEach((t,i)=>outlineText(t,W/2,H/2+158+i*26,15,'#dfe3ff'));
+    const instructions=easyControls?[IS_TOUCH?'左スティックだけで移動できます':'矢印キー / WASDだけで移動できます','近くの敵に自動でねらい、移動中は自動で塗ります','インクが少ないと自分の色に潜って自動補給。必殺も自動!','ステージは6種類。画面のメニューから選べます']:L;
+    instructions.forEach((t,i)=>outlineText(t,W/2,H/2+158+i*26,15,'#dfe3ff'));
     outlineText('ただいま デモプレイ中',W/2,H-24,14,'rgba(255,255,255,.7)');
     return;
   }
@@ -730,7 +840,7 @@ function drawOverlay(){
     const n=Math.ceil(G.cd),f=G.cd-Math.floor(G.cd);
     ctx.fillStyle='rgba(6,6,20,.25)';ctx.fillRect(0,0,W,H);
     outlineText(String(Math.max(1,n)),W/2,H/2-30,150*(1+f*.35),'#fff25a');
-    outlineText('あなたは「ピコ」 ピンキー隊!  かくじつに ぬりひろげよう',W/2,H/2+70,26,'#fff');
+    outlineText(STAGES[selectedStage].name+' / '+(easyControls?'移動するだけでOK!':'手動操作'),W/2,H/2+70,26,'#fff');
   }else if(G.phase==='play'&&G.timeLeft>0){
     const since=90-G.timeLeft;
     if(since<1){ctx.globalAlpha=1-since;outlineText('GO!',W/2,H/2-30,160+since*60,'#7dff6a');ctx.globalAlpha=1;}
@@ -788,6 +898,7 @@ function draw(){
   if(me&&me.alive&&me.hp<40){ctx.fillStyle='rgba(255,30,60,'+(.12+.1*Math.sin(G.t*8))+')';ctx.fillRect(0,0,W,H);}
   if(G.flash>0){ctx.fillStyle='rgba(255,60,80,'+G.flash*.5+')';ctx.fillRect(0,0,W,H);}
   drawHUD();drawHint();drawOverlay();
+  outlineText(STAGES[selectedStage].name,W/2,106,16,'#dfe3ff');
 }
 
 /* ---------------- メインループ ---------------- */
@@ -798,10 +909,28 @@ function frame(now){
   draw();
   requestAnimationFrame(frame);
 }
+
+const stageSelect=document.getElementById('stageSelect');
+STAGES.forEach((stage,i)=>{const option=document.createElement('option');option.value=i;option.textContent=(i+1)+'. '+stage.name;stageSelect.appendChild(option);});
+function syncControls(){document.body.classList.toggle('easy',easyControls);document.getElementById('controlSelect').value=easyControls?'easy':'manual';}
+syncControls();
+stageSelect.addEventListener('change',()=>{newMatch('demo',stageSelect.value);});
+document.getElementById('controlSelect').addEventListener('change',event=>{easyControls=event.target.value==='easy';syncControls();for(const key of Object.keys(keys))keys[key]=false;T.mx=T.my=0;T.aim=T.swim=T.bomb=T.spec=false;mouse.down=mouse.right=false;hintT=0;cv.focus();});
+document.getElementById('startMatch').addEventListener('click',()=>{audioInit();newMatch('play',stageSelect.value);cv.focus();});
+
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&G.mode==='play'&&G.phase!=='result')G.paused=true;});
 newMatch('demo');
-requestAnimationFrame(frame);
-window.__g={G,ents,counts,get total(){return total;},newMatch,keys,bullets,bombs,step(n){for(let i=0;i<n;i++)update(1/60);draw();}};
+Promise.all([loadCharacterArt(),loadStageArt()]).then(()=>{
+  buildFloor();
+  document.getElementById('artStatus').remove();
+  last=performance.now();draw();requestAnimationFrame(frame);
+}).catch(error=>{
+  console.error(error);
+  const status=document.getElementById('artStatus');
+  status.textContent='画像を読み込めませんでした。クリックして再読み込み / Click to retry';
+  status.style.cursor='pointer';status.onclick=()=>location.reload();
+});
+window.__g={G,ents,counts,CHARACTER_ART,STAGES,WALLS:()=>WALLS,mask,owner,blocked,playerInput,get selectedStage(){return selectedStage;},get easyControls(){return easyControls;},setEasy(value){easyControls=value;syncControls();},STAGE_ART,get artReady(){return artReady&&stageArtReady;},get total(){return total;},newMatch,keys,bullets,bombs,step(n){for(let i=0;i<n;i++)update(1/60);draw();}};
 })();
 </script>
 </body>
