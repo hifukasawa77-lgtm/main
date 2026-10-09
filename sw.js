@@ -3,7 +3,7 @@
 // 静的アセットは cache-first（速度維持）。バージョン更新で旧キャッシュを破棄する。
 //
 // ★このSWが見るのは**同じオリジンの通信だけ**。別オリジンへは一切触らない（下の理由を参照）。
-const CACHE_NAME = 'hide-portfolio-v7';
+const CACHE_NAME = 'hide-portfolio-v8';
 const SITE_SCOPE = new URL('./', self.location.href);
 
 // ★パスは必ず相対で書く。このサイトは https://…github.io/main/ 配下にあり、
@@ -31,7 +31,21 @@ const PRECACHE_URLS = [
   './assets/js/agent-data.js',
   // 全ページの <head> が読むクリックジャッキング対策。圏外で取れないと
   // ページごとに読み込み失敗のエラーが残る（scripts/security-baseline.mjs が挿入）
-  './assets/js/frame-guard.js'
+  './assets/js/frame-guard.js',
+  // ★推し活ログは Android アプリ（Google Play・TWA）としても配る。アプリは圏外でも開けないと
+  //   Play の品質基準に引っかかり、利用者には「アプリが壊れている」に見える。
+  //   スクリプトの ?v= は oshikatsu.html の <script src> と**完全に同じ文字列**で書く
+  //   （違うとキャッシュの鍵がずれて圏外で読めない。verify-oshikatsu.mjs が突き合わせる）
+  './oshikatsu.html',
+  './oshikatsu.webmanifest',
+  './assets/js/oshi-research.js?v=1',
+  './assets/js/oshi-pro.js?v=2',
+  './assets/icons/oshikatsu-192.png',
+  './assets/oshikatsu/chara-sakura.webp',
+  './assets/oshikatsu/chara-minato.webp',
+  './assets/oshikatsu/chara-haru.webp',
+  './assets/oshikatsu/chara-mio.webp',
+  './assets/oshikatsu/chara-sora.webp'
 ];
 
 self.addEventListener('install', event => {
@@ -74,7 +88,9 @@ self.addEventListener('fetch', event => {
   const url = new URL(req.url);
   if (!url.pathname.startsWith(SITE_SCOPE.pathname)) return;
   // Never persist authenticated or query-bearing responses (tokens, private searches).
-  if (req.headers.has('Authorization') || url.search || req.cache === 'no-store') return;
+  // ただし版番号だけのクエリ（?v=2）は例外: キャッシュ破りのための印で、秘密を含まない。
+  // これも素通しにすると、?v= 付きで読むスクリプトが圏外で一切取れなくなる
+  if (req.headers.has('Authorization') || (url.search && !isVersionOnly(url)) || req.cache === 'no-store') return;
 
   const accept = req.headers.get('accept') || '';
   const isHTML = req.mode === 'navigate' || accept.includes('text/html') || /\.(?:html?|m?js)$/i.test(url.pathname);
@@ -120,6 +136,12 @@ self.addEventListener('fetch', event => {
     }
   })());
 });
+
+/** クエリが「v=数字」だけか（キャッシュ破りの版番号）。それ以外のクエリは従来どおり触らない */
+function isVersionOnly(url) {
+  const keys = [...url.searchParams.keys()];
+  return keys.length === 1 && keys[0] === 'v' && /^\d{1,6}$/.test(url.searchParams.get('v'));
+}
 
 /** キャッシュ照会。Cache Storage が使えない端末でも、ここで止めない */
 function matchInCache(request) {

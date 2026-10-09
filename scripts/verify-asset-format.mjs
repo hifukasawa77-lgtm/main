@@ -37,6 +37,7 @@ const EXEMPT = [
   { re: /^assets\/marketing\/ig-.*\.jpe?g$/i, why: 'Instagram Graph API は JPEG しか受け付けない' },
   { re: /^assets\/og\//i,                     why: 'OGP画像。SNS側のWebP対応が不安定' },
   { re: /^assets\/maps\/strategic-japan\.png$/i, why: 'scripts/verify-bakumatsu-map.mjs がパスを直書きで参照' },
+  { re: /^assets\/icons\/oshikatsu-[\w-]+\.png$/i, why: 'Android アプリ（TWA）のアイコン。Bubblewrap・Google Play・manifest は PNG を要求する' },
   { re: /^assets\/sengoku\/gpt\/[^/]+\.jpe?g$/i, why: '肖像・地形アトラス。合計1.9MBで、source-rect直書き箇所に触る割に合わない' },
 ];
 

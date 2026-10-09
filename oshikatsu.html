@@ -7,6 +7,8 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#fff1f7" id="meta-theme">
+  <link rel="manifest" href="oshikatsu.webmanifest">
+  <link rel="apple-touch-icon" href="assets/icons/oshikatsu-192.png">
   <script>try{var _d=JSON.parse(localStorage.getItem("oshikatsu_log_v1")||"{}");if(_d.prefs&&_d.prefs.theme==="dark")document.documentElement.setAttribute("data-theme","dark");var _a=JSON.parse(localStorage.getItem("oshikatsu_accent_v1")||"null");if(_a&&typeof _a==="object")for(var _k in _a)if(/^--[a-z0-9-]+$/.test(_k)&&/^[#a-z0-9(),.%\s-]+$/i.test(_a[_k]))document.documentElement.style.setProperty(_k,_a[_k]);}catch(e){}</script>
   <meta name="description" content="推し活ログは、推しごとの出費（チケット・グッズ・遠征）と参戦記録・参戦予定・ウィッシュリスト・聖地巡礼マップをブラウザだけで管理できる無料アプリ。月予算のペース予測、推し別・費目別の集計グラフ、定期出費（サブスク）の自動記録、CSV/JSON/カレンダー書き出しに対応。インストール不要・データは端末内に保存。">
   <meta name="keywords" content="聖地巡礼,推し活,推し活 出費管理,推し活 家計簿,参戦記録,推し活 アプリ,グッズ 管理,遠征 費用,オタ活,ウィッシュリスト,ライブ 参戦 予定,チケット 当落">
@@ -1062,6 +1064,13 @@
             <a class="btn" id="pro-buy" href="#" target="_blank" rel="noopener noreferrer" hidden>🛒 Pro を購入する / Buy</a>
             <span class="note" id="pro-soon" hidden>Pro版は販売準備中です / Coming soon</span>
           </div>
+          <div id="pro-play" hidden>
+            <div class="btn-row" style="margin-top:6px">
+              <button type="button" class="btn" id="pro-play-buy">💎 Pro を購入する / Buy</button>
+              <button type="button" class="btn ghost small" id="pro-play-restore">🔄 購入を復元 / Restore</button>
+            </div>
+            <p class="note" id="pro-play-msg" role="status" aria-live="polite">お支払いは Google Play で行います。買い切りで、同じ Google アカウントなら機種変更しても「購入を復元」で戻せます。</p>
+          </div>
           <form id="form-pro" autocomplete="off" style="margin-top:14px">
             <div class="field"><label for="pro-key">ライセンスキー / License key</label>
               <textarea id="pro-key" rows="3" spellcheck="false" autocapitalize="off" placeholder="OSHI-PRO-..."></textarea></div>
@@ -1147,7 +1156,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="assets/js/oshi-research.js?v=1"></script>
-  <script src="assets/js/oshi-pro.js?v=1"></script>
+  <script src="assets/js/oshi-pro.js?v=2"></script>
   <script>
   (function () {
     'use strict';
@@ -3474,14 +3483,101 @@
       var ready = !!(OP && (OP.hasPublicKey() || proOpts));
       el('pro-badge').hidden = !pro.on;
       el('pro-off').hidden = pro.on; el('pro-on').hidden = !pro.on;
-      el('pro-buy').hidden = !(url && ready); el('pro-soon').hidden = !!(url && ready);
+      el('pro-buy').hidden = inAndroidApp || !(url && ready); el('pro-soon').hidden = inAndroidApp || !!(url && ready);
+      // Android アプリ（Google Play 配布）の中では、Play 以外の買い方へ案内しない（Play の決済ポリシー）。
+      // キーの入力欄も出さない。Web で買ったキーが同じ Chrome に保存済みなら、それは起動時にそのまま有効になる
+      el('form-pro').hidden = inAndroidApp; el('pro-play').hidden = !inAndroidApp;
+      el('pro-remove').hidden = pro.id === 'play';
       if (url) { el('pro-buy').href = url; el('pro-buy').textContent = '🛒 Pro を購入する ' + OP.PRICE_LABEL + ' / Buy'; }
-      el('pro-status').textContent = pro.on ? 'Pro が有効です。応援ありがとうございます 💖（ロット ' + pro.lot + '）' : PRO_STATUS_OFF;
+      el('pro-status').textContent = pro.on ? 'Pro が有効です。応援ありがとうございます 💖（' + (pro.id === 'play' ? 'Google Play で購入済み' : 'ロット ' + pro.lot) + '）' : PRO_STATUS_OFF;
       var sel = el('pro-accent'); sel.textContent = '';
       var none = node('option', null, 'なし（標準の色） / Default'); none.value = ''; sel.appendChild(none);
       state.oshiList.forEach(function (o) { var op = node('option', null, '💗 ' + o.name); op.value = o.id; sel.appendChild(op); });
       sel.value = state.prefs.accent || '';
     }
+
+    // ---- Android アプリ（Google Play）での購入 ----
+    // Play で配るアプリの中では、デジタル商品は Google Play の課金で売る（Digital Goods API ＋ Payment Request）。
+    // 判定はアプリが付ける referrer（android-app://パッケージ名）。起動URLにクエリを付けないのは、
+    // sw.js がクエリ付きの通信をキャッシュしない＝圏外でアプリが開かなくなるため
+    var PLAY_BILLING = 'https://play.google.com/billing', PLAY_SKU = 'oshikatsu_pro', PLAY_KEY = 'oshikatsu_play_v1';
+    var PLAY_ENT = { ok: true, id: 'play', lot: 'Google Play' };
+    var inAndroidApp = detectAndroidApp();
+    var play = { service: null };
+    function detectAndroidApp() {
+      if (window.__OSHI_TEST && window.__OSHI_ANDROID) return true;
+      var fromApp = /^android-app:\/\//.test(document.referrer || '');
+      try {
+        if (fromApp) sessionStorage.setItem('oshikatsu_twa', '1'); // タブ内の再読み込みでは referrer が消えるので覚えておく
+        return fromApp || sessionStorage.getItem('oshikatsu_twa') === '1';
+      } catch (e) { return fromApp; }
+    }
+    function playService() {
+      if (play.service) return Promise.resolve(play.service);
+      if (typeof window.getDigitalGoodsService !== 'function') return Promise.reject({ name: 'Unsupported' });
+      return window.getDigitalGoodsService(PLAY_BILLING).then(function (s) {
+        if (!s) throw { name: 'Unsupported' };
+        play.service = s; return s;
+      });
+    }
+    function playMsg(text, ng) { var m = el('pro-play-msg'); m.className = 'note' + (ng ? ' ng' : ''); m.textContent = text; }
+    function playError(e) {
+      var n = e && e.name;
+      if (n === 'Unsupported' || n === 'NotSupportedError') playMsg('この端末では Google Play の購入を使えません。Google Play ストアと Chrome を最新にしてから、もう一度お試しください', true);
+      else if (n === 'NetworkError' || (typeof navigator.onLine === 'boolean' && !navigator.onLine)) playMsg('通信できませんでした。電波のよい所でもう一度お試しください', true);
+      else playMsg('購入を完了できませんでした（' + (n || 'Error') + '）。料金は請求されていません。時間をおいてもう一度お試しください', true);
+    }
+    // 1回きりの購入は「確認済み」にしないと、Google Play が3日後に自動で返金する。
+    // 版によって acknowledge が無い（アプリ側が自動で確認する）ので、あるときだけ呼ぶ
+    function playAck(p) {
+      var s = play.service;
+      if (!s || !p || !p.purchaseToken || p.acknowledged === true || typeof s.acknowledge !== 'function') return Promise.resolve();
+      return Promise.resolve().then(function () { return s.acknowledge(p.purchaseToken, 'onetime'); }).catch(function () { /* 次回起動の復元で再試行 */ });
+    }
+    function grantPlay() { lsSet(PLAY_KEY, '1'); if (!pro.on || pro.id === 'play') setPro(PLAY_ENT); }
+    function playRestore(silent) {
+      return playService().then(function (s) { return s.listPurchases(); }).then(function (list) {
+        var hit = (list || []).filter(function (p) { return p && p.itemId === PLAY_SKU; })[0];
+        if (hit) { grantPlay(); playAck(hit); if (!silent) toast('購入を復元しました 💎'); return true; }
+        // 照会に成功して「無い」＝返金・取り消し。覚えていた印を外す（照会に失敗したときは外さない＝圏外で Pro が消えない）
+        lsSet(PLAY_KEY, null);
+        if (pro.id === 'play') setPro(null);
+        if (!silent) playMsg('この Google アカウントでの購入は見つかりませんでした', true);
+        return false;
+      }, function (e) { if (!silent) playError(e); return false; });
+    }
+    function playPrice() {
+      return playService().then(function (s) { return s.getDetails([PLAY_SKU]); }).then(function (d) {
+        var it = d && d[0], pr = it && it.price;
+        if (!pr || !pr.currency) return;
+        var label;
+        try { label = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: pr.currency }).format(Number(pr.value)); } catch (e) { label = pr.value + ' ' + pr.currency; }
+        el('pro-play-buy').textContent = '💎 Pro を購入する ' + label + '（買い切り） / Buy';
+      }).catch(function () { /* 値段が取れなくても購入ボタンは押せる */ });
+    }
+    function playBuy() {
+      var btn = el('pro-play-buy'), req;
+      if (typeof window.PaymentRequest !== 'function') { playError({ name: 'Unsupported' }); return; }
+      btn.disabled = true;
+      playService().then(function () {
+        req = new PaymentRequest([{ supportedMethods: PLAY_BILLING, data: { sku: PLAY_SKU } }],
+          { total: { label: '推し活ログ Pro', amount: { currency: 'JPY', value: '0' } } });
+        return req.show();
+      }).then(function (res) {
+        var token = res && res.details && res.details.purchaseToken;
+        return Promise.resolve(res.complete('success')).then(function () {
+          if (!token) throw { name: 'NoToken' };
+          grantPlay(); playMsg('');
+          toast('Pro を有効にしました 💎 ありがとうございます！');
+          return playAck({ purchaseToken: token });
+        });
+      }).catch(function (e) {
+        if (e && e.name === 'AbortError') { playMsg('購入をやめました。料金は請求されていません'); return; }
+        playError(e);
+      }).then(function () { btn.disabled = false; });
+    }
+    el('pro-play-buy').addEventListener('click', playBuy);
+    el('pro-play-restore').addEventListener('click', function () { playMsg('確認しています… / Checking…'); playRestore(false); });
 
     el('form-pro').addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -3577,12 +3673,20 @@
     });
 
     renderPro();
+    // Android アプリで買った印があれば、照会を待たずに Pro で始める（圏外でも使える）。照会の結果で取り消すことはある
+    var playFlag = inAndroidApp && lsGet(PLAY_KEY) === '1';
     if (pro.pending) {
       proVerify(savedKey).then(function (r) {
+        if (!r.ok && (playFlag || pro.id === 'play')) { setPro(PLAY_ENT); return; }
         setPro(r);
         if (!r.ok) { el('pro-msg').className = 'note ng'; el('pro-msg').textContent = '保存されていたキーを確認できませんでした: ' + proReason(r.reason); }
       });
-    } else setPro(null);
+    } else setPro(playFlag ? PLAY_ENT : null);
+    if (inAndroidApp) { playPrice(); playRestore(true); }
+    // 圏外でも開けるように（Android アプリでは必須）。登録はトップページと同じ sw.js。表示が済んでから行う
+    if ('serviceWorker' in navigator && window.isSecureContext) {
+      window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () { /* 登録できなくても通常どおり使える */ }); });
+    }
 
     resetAllForms();
     renderAll();
@@ -3598,7 +3702,7 @@
         sanitize: sanitize, effStatus: effStatus, applyRecurring: applyRecurring, buildICS: buildICS,
         csvCell: csvCell, highlightLines: highlightLines, importData: importData, daysToBirthday: daysToBirthday,
         view: view, renderAll: renderAll, validAvatar: validAvatar, mergeResearch: mergeResearch, RESEARCH_API: RESEARCH_API, PREFS: PREFS, parseCoords: parseCoords, inferPref: inferPref, haversine: haversine, routeUrl: routeUrl, mapSearchUrl: mapSearchUrl, PRESET_AVATARS: PRESET_AVATARS, yen: yen, STORE_KEY: STORE_KEY, CORRUPT_KEY: CORRUPT_KEY,
-        getPro: function () { return pro; }, renderCard: renderCard, cardReport: cardReport, getCardLast: function () { return cardLast; }, PRO_KEY: PRO_KEY, ACCENT_KEY: ACCENT_KEY
+        getPro: function () { return pro; }, isAndroidApp: function () { return inAndroidApp; }, PLAY_SKU: PLAY_SKU, renderCard: renderCard, cardReport: cardReport, getCardLast: function () { return cardLast; }, PRO_KEY: PRO_KEY, ACCENT_KEY: ACCENT_KEY
       };
     }
   })();

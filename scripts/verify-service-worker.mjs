@@ -165,6 +165,10 @@ async function dispatchFetch(sw, url, { method = 'GET', accept = '', mode = 'no-
   const sw = boot({ cached: true });
   check('12. 別プロジェクトの同一オリジンURLは横取りしない', !(await dispatchFetch(sw, 'https://hifukasawa77-lgtm.github.io/other/file.js')).intercepted);
   check('13. クエリ付きURLを保存しない', !(await dispatchFetch(sw, `${SCOPE}file.json?token=test`)).intercepted);
+  // 版番号だけのクエリ（?v=2）は扱う＝圏外でも ?v= 付きのスクリプトが読める。それ以外が混ざったら従来どおり触らない
+  check('13b. 版番号だけのクエリ（?v=2）は扱う（推し活ログの Android アプリが圏外で開くため）', (await dispatchFetch(sw, `${SCOPE}assets/js/oshi-pro.js?v=2`)).intercepted);
+  check('13c. 版番号＋別のクエリ・数字でない版は触らない（秘密が混ざりうる）', !(await dispatchFetch(sw, `${SCOPE}assets/js/oshi-pro.js?v=2&token=x`)).intercepted
+    && !(await dispatchFetch(sw, `${SCOPE}assets/js/oshi-pro.js?v=abc`)).intercepted);
   check('14. 認証ヘッダー付きURLを保存しない', !(await dispatchFetch(sw, `${SCOPE}private.json`, {headers:{Authorization:'Bearer test'}})).intercepted);
   const script = await dispatchFetch(sw, `${SCOPE}assets/js/app.js`);
   check('15. JavaScriptの修正版をネットワークから優先取得', await script.response.text() === 'live');

@@ -88,6 +88,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `oshikatsu.html` | `node scripts/verify-oshikatsu.mjs`（見た目を変えたら `--shots DIR` で撮って目視。`--inject` で故障注入） |
 | `assets/js/oshi-research.js` / `cloudflare-worker/oshi-research.js`（推し活ログのイベントリサーチ） | `node scripts/verify-oshi-research.mjs`（`--inject` で故障注入）＋ `node --test tests/security.test.mjs` ＋ `node scripts/verify-oshikatsu.mjs`（画面側の連携） |
 | `assets/js/oshi-pro.js` / `scripts/oshi-license.mjs`（推し活ログ Pro: ライセンス・レポート画像・メンカラ） | `node scripts/verify-oshikatsu.mjs`（節14。`--inject` で署名確認を外して❌が出ることを確認）。キーの書式を変えたら `node scripts/oshi-license.mjs verify <キー>` も |
+| `android/`・`oshikatsu.webmanifest`・`assets/icons/oshikatsu-*`（推し活ログの Android アプリ／TWA・Play課金） | `node scripts/verify-oshikatsu.mjs`（節15: Play課金・manifest・事前キャッシュ・圏外起動・TWA設定）＋ `node scripts/verify-service-worker.mjs` |
 | `assets/` 配下の画像（追加・差し替え・再エンコード） | `node scripts/verify-game-assets.mjs` / `node scripts/verify-asset-format.mjs` / `node scripts/verify-known-bug-patterns.mjs` |
 | `assets/js/agent-data.js` | `node scripts/agent-evolve-check.mjs` / `node scripts/agent-dynamic-test.cjs` |
 | `marketing/` / `scripts/post-social.js` | `node scripts/verify-social-posts.mjs` |

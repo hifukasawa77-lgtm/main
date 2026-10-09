@@ -27,7 +27,7 @@ const INJECT = process.argv.includes('--inject');
 const SHOTS = process.argv.includes('--shots') ? process.argv[process.argv.indexOf('--shots') + 1] : '';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8', '.webp': 'image/webp', '.png': 'image/png', '.svg': 'image/svg+xml' };
+  '.json': 'application/json; charset=utf-8', '.webp': 'image/webp', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 const server = http.createServer((req, res) => {
   const url = decodeURIComponent(req.url.split('?')[0]);
@@ -49,7 +49,7 @@ const check = (name, cond, extra = '') => {
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH || (fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined),
 });
-const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
+const ctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 }, acceptDownloads: true });
 const page = await ctx.newPage();
 const errors = [], missing = [], external = [];
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
@@ -225,7 +225,7 @@ check('グラフの棒をクリックすると「累計」から先月の月表�
 
 // 高DPIで再描画のたびにCanvasが膨らむ不具合（height属性の読み書き）の回帰検査。例外は出ず、ただ巨大になる
 {
-  const hp = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
+  const hp = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
   await hp.addInitScript(() => { window.__OSHI_TEST = true; });
   await hp.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
   await hp.evaluate(() => localStorage.clear()); await hp.reload({ waitUntil: 'load' });
@@ -238,7 +238,7 @@ check('グラフの棒をクリックすると「累計」から先月の月表�
 
 console.log('\n── 10b. アイコン（写真アップロード・初期キャラ）──');
 {
-  const ap = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const ap = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const aerr = []; ap.on('pageerror', (e) => aerr.push(e.message));
   const reqs = []; ap.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !/fonts\.(googleapis|gstatic)/.test(r.url())) reqs.push(r.url()); });
   await ap.addInitScript(() => { window.__OSHI_TEST = true; });
@@ -279,7 +279,7 @@ console.log('\n── 10c. イベントリサーチ（Worker はモック・実�
 {
   const WORKER = 'https://ai-proxy.hi-fukasawa77.workers.dev';
   const mk = async (seed, opts = {}) => {
-    const pg = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const pg = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
     const log = { reqs: [], errs: [] };
     pg.on('pageerror', (e) => log.errs.push(e.message));
     await pg.addInitScript(() => { window.__OSHI_TEST = true; });
@@ -428,7 +428,7 @@ console.log('\n── 10c. イベントリサーチ（Worker はモック・実�
 
 console.log('\n── 10d. 聖地巡礼 ──');
 {
-  const sp = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const sp = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const serrs = []; sp.on('pageerror', (e) => serrs.push(e.message));
   const outReqs = []; sp.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !/fonts\.(googleapis|gstatic)/.test(r.url())) outReqs.push(r.url()); });
   await sp.addInitScript(() => { window.__OSHI_TEST = true; });
@@ -523,7 +523,7 @@ console.log('\n── 10d. 聖地巡礼 ──');
   await sp.close();
 
   // 現在地（位置情報）: 許可あり・なし
-  const gctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, geolocation: { latitude: 35.68, longitude: 139.76 }, permissions: ['geolocation'] });
+  const gctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 }, geolocation: { latitude: 35.68, longitude: 139.76 }, permissions: ['geolocation'] });
   const gp = await gctx.newPage(); const greqs = []; gp.on('request', (r) => { if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !/fonts\.(googleapis|gstatic)/.test(r.url())) greqs.push(r.url()); });
   await gp.addInitScript(() => { window.__OSHI_TEST = true; });
   await gp.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' }); await gp.evaluate(() => localStorage.clear()); await gp.reload({ waitUntil: 'load' });
@@ -536,7 +536,7 @@ console.log('\n── 10d. 聖地巡礼 ──');
   check('位置情報は端末内の計算のみ（座標を含む通信・保存が無い）', greqs.length === 0 && !(await gp.evaluate(() => localStorage.getItem('oshikatsu_log_v1'))).includes('35.68') && !(await gp.evaluate(() => localStorage.getItem('oshikatsu_log_v1'))).includes('139.76'));
   await gp.close(); await gctx.close();
   // 位置情報の拒否・失敗: Playwright は許可の確認が未応答のまま残り「拒否」にならないため、エラー応答を差し込んで再現する
-  const nctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const nctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const np = await nctx.newPage(); const nerr = []; np.on('pageerror', (e) => nerr.push(e.message));
   await np.addInitScript(() => { window.__OSHI_TEST = true; window.__geoCode = 1; navigator.geolocation.getCurrentPosition = (ok, ng) => setTimeout(() => ng({ code: window.__geoCode, message: 'x' }), 10); });
   await np.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' }); await np.click('#tab-spots');
@@ -567,7 +567,7 @@ await page.goto(`${BASE}/${PAGE}#wishes`, { waitUntil: 'load' });
 check('#wishes で直接そのタブが開く', await page.isVisible('#page-wishes'));
 
 console.log('\n── 13. モバイル幅（390px）の崩れ ──');
-const mctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true });
+const mctx = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true });
 const mp = await mctx.newPage();
 const merr = []; mp.on('pageerror', (e) => merr.push(e.message));
 await mp.addInitScript(() => { window.__OSHI_TEST = true; });
@@ -637,7 +637,7 @@ const worst = ['#fde047', '#a3e635', '#22d3ee', '#ffffff', '#f472b6', '#1e1b4b',
 check('Node: メンカラは黄色・白・黒の推し色でも文字として読める（コントラスト比4.5以上）', worst >= 4.5, `最小=${worst.toFixed(2)}`);
 
 const proCtx = async (opts) => {
-  const c = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
+  const c = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 }, acceptDownloads: true });
   const p = await c.newPage(); const errs = [];
   p.on('pageerror', (e) => errs.push(e.message)); p.on('dialog', (d) => { errs.push('dialog:' + d.message()); d.accept(); });
   await p.addInitScript((o) => { window.__OSHI_TEST = true; if (o) window.__OSHI_PRO_TEST_OPTS = o; }, opts || null);
@@ -764,7 +764,7 @@ const sampleData = async (p) => { await p.click('#btn-onb-sample'); await p.wait
 
 // スマホ幅でカードのパネルが溢れない
 {
-  const c = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true });
+  const c = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true });
   const p = await c.newPage();
   await p.addInitScript(() => { window.__OSHI_TEST = true; });
   await p.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' }); await p.evaluate(() => localStorage.clear()); await p.reload({ waitUntil: 'load' });
@@ -772,6 +772,156 @@ const sampleData = async (p) => { await p.click('#btn-onb-sample'); await p.wait
   const g = await p.evaluate(() => ({ over: document.documentElement.scrollWidth - window.innerWidth, cw: Math.round(document.getElementById('card-canvas').getBoundingClientRect().width) }));
   check('スマホ幅（390px）: レポート画像パネルで横溢れなし・プレビューが見える大きさ', g.over <= 0 && g.cw >= 200 && g.cw <= 300, JSON.stringify(g));
   if (SHOTS) await p.screenshot({ path: path.join(SHOTS, 'mobile-card.png'), fullPage: true });
+  await c.close();
+}
+
+
+console.log('\n── 15. Android アプリ（Google Play 課金・圏外起動・manifest）──');
+// Digital Goods API と Payment Request を合成して差し込む（実機の Play が無いヘッドレスで、購入・復元・返金・取消を通す）。
+// 設定は localStorage の __playcfg に置き、再読み込みをまたいで「持っている／返金された」を切り替える
+const PLAY_MOCK = () => {
+  let cfg = {};
+  try { cfg = JSON.parse(localStorage.getItem('__playcfg') || '{}'); } catch (e) { /* 既定 */ }
+  if (cfg.web) return;
+  window.__OSHI_TEST = true; window.__OSHI_ANDROID = true;
+  const st = window.__play = { purchases: cfg.owned ? [{ itemId: 'oshikatsu_pro', purchaseToken: 'tok-old', acknowledged: cfg.ack !== false }] : [], acks: [], prs: [] };
+  if (cfg.unsupported) return;
+  window.getDigitalGoodsService = async (id) => id !== 'https://play.google.com/billing' ? null : {
+    getDetails: async (ids) => ids.map((i) => ({ itemId: i, title: 'Pro', price: { currency: 'JPY', value: '980' } })),
+    listPurchases: async () => { if (cfg.listFail) throw Object.assign(new Error('offline'), { name: 'NetworkError' }); return st.purchases; },
+    acknowledge: async (t, k) => { st.acks.push([t, k]); },
+  };
+  window.PaymentRequest = class {
+    constructor(m, d) { st.prs.push({ m, d }); }
+    async show() {
+      if (cfg.cancel) throw Object.assign(new Error('cancel'), { name: 'AbortError' });
+      st.purchases.push({ itemId: 'oshikatsu_pro', purchaseToken: 'tok-new', acknowledged: false });
+      return { details: { purchaseToken: 'tok-new' }, complete: async () => {} };
+    }
+  };
+};
+const playCtx = async (cfg, extra) => {
+  const c = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
+  const p = await c.newPage(); const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message)); p.on('dialog', (d) => d.accept());
+  await p.addInitScript(() => { window.__OSHI_TEST = true; });
+  if (extra) await p.addInitScript(extra.fn, extra.arg);
+  await p.addInitScript(PLAY_MOCK);
+  await p.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
+  await p.evaluate((c) => { localStorage.clear(); localStorage.setItem('__playcfg', JSON.stringify(c)); }, cfg);
+  await p.reload({ waitUntil: 'load' }); await p.waitForTimeout(150);
+  const setCfg = async (c2, seed) => { await p.evaluate(([c, s]) => { localStorage.setItem('__playcfg', JSON.stringify(c)); if (s) Object.entries(s).forEach(([k, v]) => v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v)); }, [c2, seed || null]); await p.reload({ waitUntil: 'load' }); await p.waitForTimeout(200); };
+  const info = () => p.evaluate(() => ({ on: window.OSHI_DEBUG.getPro().on, id: window.OSHI_DEBUG.getPro().id, flag: localStorage.getItem('oshikatsu_play_v1'), play: window.__play, msg: document.getElementById('pro-play-msg').textContent }));
+  return { c, p, errs, setCfg, info };
+};
+
+{
+  const { c, p, errs, setCfg, info } = await playCtx({});
+  await p.click('#btn-go-settings'); await p.waitForTimeout(100);
+  const ui = await p.evaluate(() => ({ android: window.OSHI_DEBUG.isAndroidApp(), form: !document.getElementById('form-pro').hidden, booth: !document.getElementById('pro-buy').hidden || !document.getElementById('pro-soon').hidden, play: !document.getElementById('pro-play').hidden, label: document.getElementById('pro-play-buy').textContent }));
+  check('Android: BOOTHへの導線とキー入力欄を出さず、Google Play の購入だけを出す（Play の決済ポリシー）', ui.android && !ui.form && !ui.booth && ui.play, JSON.stringify(ui));
+  check('Android: 購入ボタンに Play から取った価格が出る', /980/.test(ui.label), ui.label);
+  await p.click('#pro-play-buy'); await p.waitForTimeout(200);
+  let r = await info();
+  const pr = r.play.prs[0];
+  check('購入: Payment Request に Play の決済方法と商品ID（oshikatsu_pro）を渡す', pr && pr.m[0].supportedMethods === 'https://play.google.com/billing' && pr.m[0].data.sku === 'oshikatsu_pro', JSON.stringify(pr));
+  check('購入: Pro が有効になり、購入の印を覚える', r.on && r.id === 'play' && r.flag === '1');
+  check('購入: 1回きりの購入として「確認済み」にする（しないと3日後に自動返金）', r.play.acks.some(([t, k]) => t === 'tok-new' && k === 'onetime'), JSON.stringify(r.play.acks));
+  check('Play で買った Pro は「この端末で解除」を出さない（解除しても次の起動で戻るだけ）', !(await p.isVisible('#pro-remove')));
+  await setCfg({ owned: true });
+  r = await info();
+  check('再起動: Play に購入があれば Pro のまま', r.on && r.id === 'play');
+  await setCfg({ owned: true, listFail: true });
+  r = await info();
+  check('圏外（購入の照会に失敗）: 覚えていた印で Pro のまま使える', r.on && r.flag === '1');
+  await setCfg({ owned: false });
+  r = await info();
+  check('返金・取り消し（照会に成功して購入が無い）: Pro を外し、印も消す', !r.on && r.flag === null, JSON.stringify({ on: r.on, flag: r.flag }));
+  await p.click('#btn-go-settings'); await p.click('#pro-play-restore'); await p.waitForTimeout(150);
+  r = await info();
+  check('「購入を復元」で何も無ければ、理由を画面に残す', r.msg.includes('見つかりませんでした'), r.msg);
+  check('Android の購入まわりで例外0件', errs.length === 0, errs.join(' | '));
+  await c.close();
+}
+{
+  const { c, p, errs, info } = await playCtx({ cancel: true });
+  await p.click('#btn-go-settings'); await p.click('#pro-play-buy'); await p.waitForTimeout(150);
+  const r = await info();
+  check('購入をやめた: Pro にならず、「請求されていません」と伝える・ボタンは押せる状態に戻る', !r.on && r.flag === null && r.msg.includes('請求されていません') && !(await p.isDisabled('#pro-play-buy')) && errs.length === 0, r.msg);
+  await c.close();
+}
+{
+  const { c, p, info } = await playCtx({ owned: true, ack: false });
+  const r = await info();
+  check('別の端末で買っていた（未確認の購入）: 起動時に黙って復元し、確認済みにする', r.on && r.play.acks.some(([t]) => t === 'tok-old'), JSON.stringify(r.play.acks));
+  await c.close();
+}
+{
+  const { c, p, errs } = await playCtx({ unsupported: true });
+  await p.click('#btn-go-settings'); await p.click('#pro-play-buy'); await p.waitForTimeout(150);
+  check('Play の購入を使えない端末: 例外を出さず、次の一手（ストアとChromeの更新）を出す', errs.length === 0 && (await p.textContent('#pro-play-msg')).includes('最新に'));
+  await c.close();
+}
+{
+  const { c, p } = await playCtx({ owned: false }, { fn: (o) => { window.__OSHI_PRO_TEST_OPTS = o; }, arg: { jwk: pubJwk } });
+  await p.evaluate((k) => localStorage.setItem('oshikatsu_pro_v1', k), goodKey); await p.reload({ waitUntil: 'load' }); await p.waitForTimeout(250);
+  const r = await p.evaluate(() => window.OSHI_DEBUG.getPro());
+  check('Android: Web で買ったキーが保存済みなら、Play に購入が無くても Pro のまま（返金扱いで消さない）', r.on && r.id === 'verify0001', JSON.stringify(r));
+  await c.close();
+}
+{
+  const { c, p } = await playCtx({ web: true });
+  await p.click('#btn-go-settings');
+  check('Web版（アプリ外）では Play の購入欄を出さず、従来のキー入力を出す', !(await p.isVisible('#pro-play')) && await p.isVisible('#form-pro'));
+  await c.close();
+}
+
+// manifest・アイコン・事前キャッシュ・TWA 設定の突き合わせ（書き間違えても例外は出ず、静かに別ページが開く／圏外で開かない）
+{
+  const html = fs.readFileSync(path.join(ROOT, PAGE), 'utf8');
+  const manHref = (html.match(/<link rel="manifest" href="([^"]+)"/) || [])[1];
+  const man = manHref ? JSON.parse(fs.readFileSync(path.join(ROOT, manHref), 'utf8')) : null;
+  const manUrl = new URL(manHref || 'x', `${BASE}/${PAGE}`);
+  const pngSize = (f) => { const b = fs.readFileSync(f); return b.slice(1, 4).toString() === 'PNG' ? `${b.readUInt32BE(16)}x${b.readUInt32BE(20)}` : 'not-png'; };
+  const icons = (man?.icons || []).map((i) => ({ ...i, real: fs.existsSync(path.join(ROOT, i.src)) ? pngSize(path.join(ROOT, i.src)) : 'missing' }));
+  check('manifest: ページ専用の manifest があり、start_url が推し活ログを指す', !!man && new URL(man.start_url, manUrl).pathname === `/${PAGE}`, man && man.start_url);
+  check('manifest: アイコンが実在し、書いた大きさと実寸が一致・maskable と 512 がある', icons.length >= 3 && icons.every((i) => i.real === i.sizes) && icons.some((i) => i.purpose === 'maskable') && icons.some((i) => i.sizes === '512x512'), JSON.stringify(icons.map((i) => i.sizes + '=' + i.real)));
+  const metaTheme = (html.match(/<meta name="theme-color" content="([^"]+)"/) || [])[1];
+  check('manifest: 色がページと同じ（違うと起動直後に色が光る）', man && man.theme_color === metaTheme && man.background_color === metaTheme, `${man && man.theme_color} / ${metaTheme}`);
+  const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  const pre = [...(sw.match(/const PRECACHE_URLS = \[([\s\S]*?)\];/) || [, ''])[1].matchAll(/'([^']+)'/g)].map((m) => m[1].replace(/^\.\//, ''));
+  const needs = [PAGE, manHref, ...[...html.matchAll(/<script src="(assets\/[^"]+)"/g)].map((m) => m[1]), (html.match(/rel="apple-touch-icon" href="([^"]+)"/) || [])[1]].filter(Boolean);
+  const notPre = needs.filter((u) => !pre.includes(u));
+  check('圏外起動: ページ・manifest・読み込むスクリプト（?v= まで一字一句）が sw.js の事前キャッシュに入っている', notPre.length === 0, notPre.join(', '));
+  const ghost = pre.filter((u) => u && u !== '' && !fs.existsSync(path.join(ROOT, u.split('?')[0] || 'index.html')));
+  check('事前キャッシュの一覧に実在しないファイルが無い（addAll は1件の失敗で全部空になる）', ghost.length === 0, ghost.join(', '));
+  const twa = JSON.parse(fs.readFileSync(path.join(ROOT, 'android/twa-manifest.json'), 'utf8'));
+  const links = JSON.parse(fs.readFileSync(path.join(ROOT, 'android/user-site/.well-known/assetlinks.json'), 'utf8'));
+  check('TWA: 起動URLはクエリ無しで推し活ログを指す（クエリ付きは sw.js が素通しして圏外で開かない）', twa.startUrl === `/main/${PAGE}` && !twa.startUrl.includes('?'), twa.startUrl);
+  check('TWA: Play 課金が有効・パッケージ名が assetlinks と一致・アイコンURLの実体がある', twa.features?.playBilling?.enabled === true && links[0].target.package_name === twa.packageId
+    && [twa.iconUrl, twa.maskableIconUrl].every((u) => fs.existsSync(path.join(ROOT, new URL(u).pathname.replace(/^\/main\//, '')))));
+  check('TWA: assetlinks の置き場は Jekyll に消されない（.nojekyll がある）', fs.existsSync(path.join(ROOT, 'android/user-site/.nojekyll')));
+}
+
+// 実際に Service Worker を動かし、圏外で開けるかを確かめる
+{
+  const c = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const p = await c.newPage(); const errs = [];
+  p.on('pageerror', (e) => errs.push(e.message));
+  await p.goto(`${BASE}/${PAGE}`, { waitUntil: 'load' });
+  const ready = await p.evaluate(async () => {
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((r) => setTimeout(() => r(null), 8000))]);
+    if (!reg) return false;
+    for (let i = 0; i < 40; i++) { const k = await caches.keys(); if (k.length && (await (await caches.open(k[0])).keys()).length > 10) return true; await new Promise((r) => setTimeout(r, 150)); }
+    return false;
+  });
+  await c.setOffline(true);
+  let offline = { ok: false };
+  try {
+    await p.reload({ waitUntil: 'load' }); await p.waitForTimeout(300);
+    offline = await p.evaluate(() => ({ ok: true, pro: typeof window.OshiPro === 'object', research: typeof window.OshiResearch !== 'undefined' || typeof window.OR !== 'undefined' || true, title: document.title, hero: !!document.getElementById('hero-num') }));
+  } catch (e) { offline = { ok: false, err: e.message }; }
+  check('圏外: Service Worker が入り、通信を切って開き直してもアプリと Pro の部品が動く', ready && offline.ok && offline.pro && offline.hero && errs.length === 0, JSON.stringify({ ready, ...offline, errs }));
   await c.close();
 }
 
@@ -788,6 +938,17 @@ if (INJECT) {
   await p.click('#tab-settings'); await p.fill('#pro-key', forgedKey); await p.click('#form-pro button[type=submit]'); await p.waitForTimeout(150);
   check('【注入】署名確認を外すと偽造キーで Pro が開く（＝署名確認が効いている証拠）', !(await p.evaluate(() => window.OSHI_DEBUG.getPro().on)));
   await c.close();
+  // 購入の「確認済み」処理を外したページを差し込む → 3日後に自動返金される壊れ方。上の「確認済みにする」検査が ❌ になるべき
+  {
+    const bad = fs.readFileSync(path.join(ROOT, PAGE), 'utf8').replace("return s.acknowledge(p.purchaseToken, 'onetime');", 'return null;');
+    const { c, p, info } = await playCtx({});
+    await p.route(`${BASE}/${PAGE}`, (rt) => rt.fulfill({ body: bad, contentType: 'text/html; charset=utf-8' }));
+    await p.reload({ waitUntil: 'load' }); await p.waitForTimeout(150);
+    await p.click('#btn-go-settings'); await p.click('#pro-play-buy'); await p.waitForTimeout(200);
+    const r = await info();
+    check('【注入】acknowledge を外すと購入が確認済みにならない（＝確認の検査が効いている証拠）', r.play.acks.length > 0);
+    await c.close();
+  }
 }
 
 await browser.close(); server.close();

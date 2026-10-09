@@ -229,7 +229,7 @@ node scripts/verify-bakumatsu-map.mjs   # 拠点14件が地図の陸に載って
 ## Service Worker（sw.js）の必須チェック — 全ページの通信に効く
 
 ```bash
-node scripts/verify-service-worker.mjs   # 別オリジンの素通し／拒否の投げっぱなし／事前キャッシュのスコープ（11項目）
+node scripts/verify-service-worker.mjs   # 別オリジンの素通し／拒否の投げっぱなし／事前キャッシュのスコープ／?v=だけのクエリ（23項目）
 ```
 
 - **SWはスコープ内のページが出す全てのGETを横取りする。別オリジンにも及ぶ**。
@@ -526,7 +526,7 @@ node scripts/verify-receipt-ocr.mjs --ocr   # 実物のTesseractで読む（npm�
 ## 推し活ログの必須チェック（oshikatsu.html を触ったら必ず実行）
 
 ```bash
-node scripts/verify-oshikatsu.mjs            # 検疫→基本フロー→予定→定期出費→ほしい物→入出力→予算→グラフ画素→テーマ→FAB→モバイル幅→Pro（185項目・リサーチ／聖地巡礼／Proライセンスを含む）
+node scripts/verify-oshikatsu.mjs            # 検疫→基本フロー→予定→定期出費→ほしい物→入出力→予算→グラフ画素→テーマ→FAB→モバイル幅→Pro（210項目・リサーチ／聖地巡礼／Proライセンス／Androidアプリ（Play課金・圏外起動）を含む）
 node scripts/verify-oshikatsu.mjs --shots DIR # 画面を撮る（見た目を変えたら目視する）
 ```
 
@@ -608,6 +608,21 @@ node scripts/verify-oshi-research.mjs --inject   # 防御を壊して ❌ が出
   起動前のちらつき防止に、検証済みの色だけ `oshikatsu_accent_v1` に写して `<head>` で当てる
 - 検査は使い捨ての鍵ペアで通す（`window.__OSHI_PRO_TEST_OPTS`、`__OSHI_TEST` のときだけ有効）。
   **`oshi-pro.js` を変えたら `oshikatsu.html` の `?v=` を上げる**
+
+### 推し活ログ Android アプリ（Google Play・TWA）— 手順は `android/README.md`
+
+- **中身は Web版と同じ `oshikatsu.html`**（Bubblewrap で包むだけ）。正本は `android/twa-manifest.json`、生成物はコミットしない
+- **アプリの中では Google Play 課金だけで売る**（Digital Goods API ＋ Payment Request・商品ID `oshikatsu_pro`）。
+  BOOTH への導線とキー入力欄は出さない（Play の決済ポリシー）。Web で買ったキーが同じ Chrome に保存済みなら有効のまま
+- **1回きりの購入は「確認済み」にしないと Google が3日後に自動返金する**（例外は出ない）。`acknowledge` があれば呼ぶ。
+  実機で「3日後も Pro のまま」を内部テストで必ず確かめる（ヘッドレスでは確かめられない）
+- **返金の判定は「照会に成功して購入が無い」ときだけ**。照会の失敗（圏外）で外すと、電車の中で Pro が消える
+- **起動URLにクエリを付けない**。`sw.js` はクエリ付きの通信を素通しする＝圏外でアプリが開かない。
+  アプリ判定は `document.referrer`（`android-app://`）＋ sessionStorage で行う
+- **`sw.js` は「`?v=数字` だけ」のクエリを扱う**（それ以外のクエリは従来どおり触らない）。事前キャッシュには
+  `oshikatsu.html` の `<script src>` と**一字一句同じ** `?v=` で書く——**`?v=` を上げたら `sw.js` の一覧も同時に直す**（検査#15が突き合わせる）
+- assetlinks は別リポジトリ `hifukasawa77-lgtm.github.io` の `/.well-known/`。**`.nojekyll` が無いと Jekyll に消され、URLバーが消えないだけで例外は出ない**
+- 検査で `page.route` を使うコンテキストは `serviceWorkers: 'block'` にする（SWが入ると route が素通りする）
 
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
