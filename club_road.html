@@ -2,6 +2,9 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'; form-action 'self'">
+<script src="assets/js/frame-guard.js"></script>
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>クラブロード - 夢のスタジアムへ</title>
 <style>
@@ -17,7 +20,7 @@ canvas{display:block;position:absolute;left:50%;top:50%;transform:translate(-50%
 /* ============================================================
    クラブロード ― 夢のスタジアムへ  (オリジナル作品)
    3部リーグの小さなクラブのGMとなり、育成・補強・施設投資・戦術で1部優勝を目指す経営シミュレーション。
-   クラブ名・選手・リーグはすべて架空。画像・音声ファイルなし。絵も音もすべてコードで生成。
+   クラブ名・選手・リーグはすべて架空。グラフィックは生成画像アセット。音声はコードで生成。
    ============================================================ */
 const VW=1280,VH=720;
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');cv.width=VW;cv.height=VH;
@@ -28,6 +31,25 @@ const avg=(a,f)=>a.length?a.reduce((s,x)=>s+f(x),0)/a.length:40;
 function gauss(){return(rnd()+rnd()+rnd()+rnd()-2)*1.7;}
 const FONT='"Hiragino Sans","Yu Gothic UI","Meiryo","Noto Sans JP",sans-serif';
 const TAU=Math.PI*2;
+
+/* Generated raster assets. UI text and live data remain accessible Canvas text. */
+const ASSET_FILES={stadium:'stadium-levels.png',title:'title-stadium.png',pitch:'pitch.png',crests:'club-crests.png',sprites:'match-sprites.png'};
+const ART={},assetErrors=[];
+const assetReady=Promise.all(Object.entries(ASSET_FILES).map(([key,file])=>new Promise(resolve=>{
+ const im=new Image();ART[key]=im;im.onload=()=>resolve();im.onerror=()=>{assetErrors.push(file);resolve();};im.src='assets/club-road/'+file;
+})));
+function art(key,x,y,w,h){const im=ART[key];if(im&&im.complete&&im.naturalWidth)ctx.drawImage(im,x,y,w,h);}
+function tile(key,index,cols,rows,x,y,w,h){
+ const im=ART[key];if(!im||!im.complete||!im.naturalWidth)return;
+ const tw=im.naturalWidth/cols,th=im.naturalHeight/rows;
+ ctx.drawImage(im,(index%cols)*tw,Math.floor(index/cols)*th,tw,th,x,y,w,h);
+}
+function stadiumArt(level,x,y,w,h){
+ const im=ART.stadium;if(!im||!im.naturalWidth)return;
+ const cuts=[0,.188,.387,.587,.786,1],i=clamp(level-1,0,4);
+ ctx.drawImage(im,0,cuts[i]*im.naturalHeight,im.naturalWidth,(cuts[i+1]-cuts[i])*im.naturalHeight,x,y,w,h);
+}
+
 
 /* ================= サウンド ================= */
 let AC=null,mg=null,muted=false,nb=null,crowdG=null,bgmNext=0,bgmStep=0;
@@ -449,13 +471,8 @@ function bar(x,y,w,h,v,col,bg){ctx.fillStyle=bg||'rgba(255,255,255,.12)';rr(x,y,
 function addRow(run,enabled){UI.rows.push({run,enabled:enabled!==false});return UI.rows.length-1;}
 function selRow(i){return UI.focus==='content'&&UI.cs===i;}
 function emblem(c,x,y,s){
-  ctx.save();ctx.translate(x,y);ctx.scale(s,s);
-  ctx.beginPath();ctx.moveTo(-18,-20);ctx.lineTo(18,-20);ctx.lineTo(18,4);ctx.quadraticCurveTo(18,20,0,26);ctx.quadraticCurveTo(-18,20,-18,4);ctx.closePath();
-  ctx.fillStyle=c.c1;ctx.fill();ctx.save();ctx.clip();ctx.fillStyle=c.c2;ctx.fillRect(-18,-20,36,16);ctx.restore();
-  ctx.lineWidth=2.5;ctx.strokeStyle='#fff';ctx.stroke();
-  ctx.fillStyle=c.c1;ctx.font='900 17px '+FONT;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('★',0,-12);
-  ctx.fillStyle=c.c2;ctx.fillText(c.name.slice(0,1),0,8);
-  ctx.restore();
+ const i=c.id===undefined?CLUBDEF.findIndex(d=>d[0]===c.name):c.id;
+ tile('crests',Math.max(0,i),6,4,x-27*s,y-27*s,54*s,54*s);
 }
 
 /* ================= 画面: ヘッダー ================= */
@@ -468,8 +485,8 @@ function drawHeader(){
   const x0=620;
   T('資金',x0,24,13,'#8aa0c8');T(fmtM(c.money),x0,50,24,c.money<0?'#ff6a6a':'#ffe27a');
   T('ファン',x0+190,24,13,'#8aa0c8');T(c.fans.toLocaleString()+'人',x0+190,50,24,'#8ff0b0');
-  T('名声',x0+360,24,13,'#8aa0c8');const st=Math.max(1,Math.ceil(c.rep/20));T('★'.repeat(st)+'☆'.repeat(5-st),x0+360,50,22,'#ffd24a');
-  T('行動',x0+500,24,13,'#8aa0c8');for(let i=0;i<2;i++){ctx.fillStyle=i<S.ap?'#3ddc84':'rgba(255,255,255,.18)';ctx.beginPath();ctx.arc(x0+510+i*30,50,10,0,TAU);ctx.fill();}
+  T('名声',x0+360,24,13,'#8aa0c8');const st=Math.max(1,Math.ceil(c.rep/20));for(let i=0;i<5;i++){ctx.save();ctx.globalAlpha=i<st?1:.2;tile('sprites',7,4,2,x0+355+i*20,39,23,23);ctx.restore();}
+  T('行動',x0+500,24,13,'#8aa0c8');for(let i=0;i<2;i++){ctx.save();ctx.globalAlpha=i<S.ap?1:.2;tile('sprites',6,4,2,x0+498+i*30,38,24,24);ctx.restore();}
 }
 function drawMenu(){
   panel(24,100,250,596,null);
@@ -489,15 +506,8 @@ function drawOverview(){
   panel(CX,CY,CW,CHH,'クラブハウス');
   // スタジアム絵
   const sx=CX+20,sy=CY+44,sw=440,sh=220;
-  const g=ctx.createLinearGradient(0,sy,0,sy+sh);g.addColorStop(0,'#1a2c58');g.addColorStop(1,'#2a4a6a');ctx.fillStyle=g;rr(sx,sy,sw,sh,12);ctx.fill();
   const lv=c.fac.stadium;
-  ctx.save();rr(sx,sy,sw,sh,12);ctx.clip();
-  ctx.fillStyle='#2a8a3a';ctx.fillRect(sx,sy+sh-80,sw,80);for(let i=0;i<8;i++){ctx.fillStyle=i%2?'#2f9a42':'#27853a';ctx.fillRect(sx+i*55,sy+sh-80,55,80);}
-  ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=2;ctx.strokeRect(sx+40,sy+sh-70,sw-80,52);ctx.beginPath();ctx.moveTo(sx+sw/2,sy+sh-70);ctx.lineTo(sx+sw/2,sy+sh-18);ctx.stroke();
-  const stand=30+lv*16;ctx.fillStyle=c.c2;ctx.fillRect(sx,sy+sh-80-stand,sw,stand);ctx.fillStyle='rgba(255,255,255,.08)';for(let r=0;r<lv+1;r++)ctx.fillRect(sx,sy+sh-80-stand+r*14+4,sw,2);
-  for(let i=0;i<14*lv;i++){ctx.fillStyle=(i*7)%3?c.c1:'#fff';ctx.fillRect(sx+10+((i*37)%(sw-24)),sy+sh-80-stand+6+((i*13)%(stand-12)),5,5);}
-  if(lv>=3){ctx.fillStyle='#d0d8e8';ctx.fillRect(sx+20,sy+sh-80-stand-50,6,50);ctx.fillRect(sx+sw-26,sy+sh-80-stand-50,6,50);ctx.fillStyle='#fff6b0';ctx.fillRect(sx+10,sy+sh-80-stand-62,26,12);ctx.fillRect(sx+sw-36,sy+sh-80-stand-62,26,12);}
-  ctx.restore();
+  ctx.save();rr(sx,sy,sw,sh,12);ctx.clip();stadiumArt(lv,sx,sy,sw,sh);ctx.restore();
   T(c.name+' スタジアム  (収容 '+CAP[lv-1].toLocaleString()+'人)',sx+10,sy+sh+22,15,'#b8c8e8');
   // 次の試合
   const nx=sx+sw+20,nw=CW-sw-60;
@@ -808,12 +818,7 @@ function animBall(dt){
   });}
 }
 function drawPitch(px,py,pw,ph){
-  ctx.fillStyle='#1d6a30';rr(px-10,py-10,pw+20,ph+20,16);ctx.fill();
-  for(let i=0;i<10;i++){ctx.fillStyle=i%2?'#2a8a3e':'#26803a';ctx.fillRect(px+i*pw/10,py,pw/10,ph);}
-  ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=2.5;ctx.strokeRect(px,py,pw,ph);
-  ctx.beginPath();ctx.moveTo(px+pw/2,py);ctx.lineTo(px+pw/2,py+ph);ctx.stroke();ctx.beginPath();ctx.arc(px+pw/2,py+ph/2,60,0,TAU);ctx.stroke();
-  ctx.strokeRect(px,py+ph*.22,pw*.15,ph*.56);ctx.strokeRect(px+pw*.85,py+ph*.22,pw*.15,ph*.56);ctx.strokeRect(px,py+ph*.38,pw*.05,ph*.24);ctx.strokeRect(px+pw*.95,py+ph*.38,pw*.05,ph*.24);
-  ctx.fillStyle='rgba(255,255,255,.12)';ctx.fillRect(px-14,py+ph*.42,14,ph*.16);ctx.fillRect(px+pw,py+ph*.42,14,ph*.16);
+ art('pitch',px,py,pw,ph);
 }
 function drawMatch(){
   ctx.fillStyle='#08101e';ctx.fillRect(0,0,VW,VH);
@@ -830,13 +835,16 @@ function drawMatch(){
     const cl=t===0?M.home:M.away;
     M.pos[t].forEach((p,i)=>{
       const x=px+p.x*pw,y=py+p.y*ph,gk=i===0;
-      ctx.fillStyle='rgba(0,0,0,.3)';ctx.beginPath();ctx.ellipse(x,y+10,10,4,0,0,TAU);ctx.fill();
-      ctx.fillStyle=gk?'#ffd24a':cl.c1;ctx.beginPath();ctx.arc(x,y,11,0,TAU);ctx.fill();ctx.strokeStyle=gk?'#7a5a10':cl.c2;ctx.lineWidth=3;ctx.stroke();
-      const me2=(cl.id===S.me);if(me2){ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(x,y,15,0,TAU);ctx.stroke();}
+      // Generated player sprite; club-colored identity ring and direction follow live simulation.
+      const sprite=gk?2:t===0?0:1;
+      ctx.save();ctx.translate(x,y);ctx.rotate(t===0?Math.PI/2:-Math.PI/2);
+      tile('sprites',sprite,4,2,-18,-18,36,36);ctx.restore();
+      ctx.strokeStyle=cl.c1;ctx.lineWidth=cl.id===S.me?2:1;ctx.strokeRect(x-17,y-17,34,34);
+
     });
   }
   // ボール
-  const bx=px+M.ball.x*pw,by=py+M.ball.y*ph;ctx.fillStyle='rgba(0,0,0,.35)';ctx.beginPath();ctx.ellipse(bx,by+9,7,3,0,0,TAU);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(bx,by,7,0,TAU);ctx.fill();ctx.strokeStyle='#222';ctx.lineWidth=1.5;ctx.stroke();
+  const bx=px+M.ball.x*pw,by=py+M.ball.y*ph;tile('sprites',4,4,2,bx-11,by-11,22,22);
   // 右パネル
   panel(840,20,400,624,'実況');
   M.log.slice().reverse().forEach((l,i)=>{const col=l.k==='goal'?'#ffe27a':l.k==='yellow'||l.k==='red'?'#ff8a8a':'#dfe8ff';T(l.m+"'",858,62+i*30,14,'#8aa0c8');T(l.txt,900,62+i*30,l.k==='goal'?15:14,col);});
@@ -918,7 +926,7 @@ function drawEnding(){
   const t=G.endType,c=me();
   ctx.fillStyle='#070d18';ctx.fillRect(0,0,VW,VH);
   const g=ctx.createRadialGradient(VW/2,260,20,VW/2,260,500);g.addColorStop(0,t==='champ'?'rgba(255,210,80,.35)':'rgba(120,60,60,.3)');g.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g;ctx.fillRect(0,0,VW,VH);
-  emblem(c,VW/2,170,3);
+  if(t==='champ')tile('sprites',5,4,2,VW/2-90,70,180,180);else emblem(c,VW/2,170,3);
   const title={champ:'完全制覇! 夢のスタジアムへ',fired:'GM解任…',broke:'クラブ経営破綻…',time:'10シーズンを終えて'}[t];
   T(title,VW/2,300,52,t==='champ'?'#ffe27a':'#fff','center');
   const sub={champ:c.name+' は '+(S.season-1)+'シーズンで、ついに1部の頂点に立った!',fired:'役員会の信頼を失い、クラブを去ることになった。',broke:'資金が底をつき、クラブは存続できなくなった。',time:'長い道のりでしたが、クラブは確かに成長しました。'}[t];
@@ -946,6 +954,7 @@ function chooseModal(i){const m=G.modal;if(!m)return;G.modal=null;sfx.ok();m.cho
 
 /* ================= タイトル・クラブ選択 ================= */
 function drawTitle(){
+  art('title',0,0,VW,VH);
   ctx.fillStyle='rgba(5,10,22,.5)';ctx.fillRect(0,0,VW,VH);
   ctx.fillStyle='rgba(8,14,30,.85)';ctx.fillRect(0,200,VW,260);
   const fl=Math.sin(G.t*12)>.97?3:0;
@@ -960,7 +969,7 @@ function drawTitle(){
   T('M: 音 / P: ポーズ     ただいま GM(自動)のデモプレイ中',VW/2,644,14,'rgba(255,255,255,.55)','center');
 }
 function drawSelect(){
-  ctx.fillStyle='#08101e';ctx.fillRect(0,0,VW,VH);
+  art('title',0,0,VW,VH);ctx.fillStyle='rgba(8,16,30,.83)';ctx.fillRect(0,0,VW,VH);
   T('クラブを選んでGMに就任',VW/2,50,38,'#ffe27a','center');
   T('3部リーグ8クラブから、育てたいクラブを選ぼう',VW/2,90,17,'#8aa0c8','center');
   const base=16,hasSave=G.saved;
@@ -1170,9 +1179,9 @@ function frame(now){
   while(acc>=1/60){update(1/60);acc-=1/60;}
   draw();requestAnimationFrame(frame);
 }
-startDemo();
-requestAnimationFrame(frame);
-window.__g={G,UI,get S(){return S;},get M(){return M;},step(n){for(let i=0;i<n;i++)update(1/60);draw();},keyHandler,startDemo,newGame,simulate,ratings,seasonEnd,table,startMatch,finalizeRound,playRound,aiManager,actScout,actFac,actPR,actTrain};
+T('画像アセットを読み込み中 / Loading artwork…',VW/2,VH/2,24,'#dfe8ff','center');
+assetReady.then(()=>{startDemo();requestAnimationFrame(frame);if(assetErrors.length){const warning=document.createElement('div');warning.textContent='画像を読み込めません: '+assetErrors.join(', ');warning.style.cssText='position:fixed;bottom:0;background:#801b22;color:white;padding:8px;z-index:10';document.body.append(warning);}});
+window.__g={G,UI,ART,assetReady,assetErrors,get S(){return S;},get M(){return M;},step(n){for(let i=0;i<n;i++)update(1/60);draw();},keyHandler,startDemo,newGame,simulate,ratings,seasonEnd,table,startMatch,finalizeRound,playRound,aiManager,actScout,actFac,actPR,actTrain};
 })();
 </script>
 </body>
