@@ -40,3 +40,12 @@
 | `weapon-icons.webp` | 1312×1199 | RGBA | 310KB |
 | `weapons.png` | 1254×1254 | RGBA | 1494KB |
 | `zombies.png` | 1254×1254 | RGBA | 1277KB |
+
+## 追記（2026-10-10）: 建物の外壁テクスチャ6枚（出自の記録なし）
+`clinic-facade.png` `community-center-facade.png` `inn-facade.png` `mining-office-facade.png` `police-box-facade.png` `public-hall-facade.png`
+（いずれも 512×256・RGBA・PNG）。コミットメッセージは「Update … facade **from supplied reference**」（提供された参考画像から作成）。
+- 目視では**写真に近い質感**（朽ちた外壁・割れたガラス・ベンチ）で、手描き調の他アセットと異なる。
+- 参考画像の出所（自分で撮影／生成AI／Web上の写真／素材サイト）が記録されていない。**Web上の写真や実在の廃墟の写真を参考にした・加工した場合、著作権・撮影地の権利の問題になり得る**。
+- [ ] 参考画像の出所とライセンス: ________
+- [ ] 生成AIで作った場合: ツール・日付・プロンプト要旨: ________
+- 方針面: 新規PNG。CLAUDE.mdの方針ではWebP。
