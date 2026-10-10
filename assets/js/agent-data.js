@@ -194,6 +194,10 @@
           title:{ja:'月蝕城',en:'Eclipse Castle'}, emoji:'🌑',
           desc:{ja:'退魔の剣士・紅葉が妖の城を登る和風ゴシック横スクロールアクション。鎖鎌・階段・サブ武器・全3ステージとボス戦',en:'Japanese gothic side-scrolling action — chain-sickle, stairs, sub-weapons, 3 stages and bosses'},
           aliases:{ja:['月蝕城','月蝕','ゴシック','鎖鎌','城','ボス戦','横スクロール','アクション','ドット絵'],en:['eclipse castle','gothic','castle','chain sickle','boss','action platformer']} },
+        { slug:'club-road', href:'club_road.html', cat:'sim',
+          title:{ja:'クラブロード',en:'Club Road'}, emoji:'⚽',
+          desc:{ja:'3部の小さなサッカークラブのGMになり、育成・補強・施設・戦術で1部優勝を目指す経営シミュレーション',en:'Football club management sim — rise from the third division to the top with scouting, training, facilities and tactics'},
+          aliases:{ja:['クラブロード','サッカー','サッカークラブ','クラブ経営','経営','経営シミュレーション','育成','サッカー経営','サカつく風'],en:['club road','soccer','football','club management','manager','management sim']} },
       ];
       const RECOMMENDS = ['zelda','shogi','mahjong'];
 
