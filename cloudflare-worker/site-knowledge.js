@@ -2,19 +2,19 @@
 // 生成元: assets/js/agent-data.js / 生成コマンド: node scripts/gen-agent-knowledge.mjs
 // drift検査: node scripts/gen-agent-knowledge.mjs --check（deploy-worker.yml と harness-lint が実行）
 export const SITE_FACTS = {
-  "gameCount": 44,
+  "gameCount": 45,
   "genres": [
     "ボード20本（例: AI将棋、AIチェス）",
     "アクション10本（例: BLACK FANG、モーメンタム・テリトリー）",
-    "シミュレーション6本（例: CITY BUILDER、三国志・天下三分）",
+    "シミュレーション7本（例: CITY BUILDER、三国志・天下三分）",
     "RPG3本（例: ファーレンクエスト、将棋RPG Enhanced）",
     "パズル3本（例: 麻雀ソリティア、うかぶ？しずむ？）",
     "カード1本（例: トランプゲーム集）",
     "その他1本（例: Typing Dojo）"
   ],
   "sections": "トップ・三郷市のこと・趣味・ペット紹介・ブログ・Claudeツール・ダッシュボード・ゲーム一覧・AI解説スライド・連絡先",
-  "about": "hide は埼玉県三郷市在住。Claude AI とペアプロしながらブラウザゲーム44本・各種ツールを開発しています。",
-  "generatedAt": "2026-10-08"
+  "about": "hide は埼玉県三郷市在住。Claude AI とペアプロしながらブラウザゲーム45本・各種ツールを開発しています。",
+  "generatedAt": "2026-10-10"
 };
 
 export function buildSystemPrompt() {
