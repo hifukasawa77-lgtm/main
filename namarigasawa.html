@@ -233,6 +233,52 @@ const FACADES=[
  {s:BUILDING_ART.post,x:3.5,y:16.12,w:3.7},{s:BUILDING_ART.warehouse,x:57.5,y:16.12,w:4.8},
  {s:BUILDING_ART.sawmill,x:29,y:37.52,w:9},{s:BUILDING_ART.shrine,x:56,y:33.52,w:4.6}
 ];
+// Trim transparent atlas padding before mapping artwork onto world surfaces.
+function trimFacade(art){
+ let left=art.w,top=art.h,right=0,bottom=0;
+ for(let y=0;y<art.h;y++)for(let x=0;x<art.w;x++)if((art.t[y*art.w+x]>>>24)>=128){left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);}
+ if(left>right)return art;
+ const w=right-left+1,h=bottom-top+1,t=new Uint32Array(w*h);
+ for(let y=0;y<h;y++)t.set(art.t.subarray((top+y)*art.w+left,(top+y)*art.w+right+1),y*w);
+ return {t,w,h};
+}
+for(const f of FACADES)f.art=trimFacade(f.s||FACADE[f.t]);
+// Facades belong to fixed world walls, never camera-facing sprites.
+const BUILDING_BOUNDS=[[2,23,21,36],[6,7,18,15],[21,8,31,15],[34,8,44,15],[46,7,55,15],[24,23,34,33],[36,23,47,34],[50,23,58,31],[2,8,5,15],[56,8,59,15],[24,38,34,42],[54,34,58,38]];
+function exteriorFace(mx,my,side,rdx,rdy){
+ for(let i=0;i<BUILDING_BOUNDS.length;i++){
+  const [x0,y0,x1,y1]=BUILDING_BOUNDS[i];
+  if(mx<x0||mx>x1||my<y0||my>y1)continue;
+  const front=side===1&&(i>=1&&i<=4||i===8||i===9?my===y1&&rdy<0:my===y0&&rdy>0);
+  return {art:front?FACADES[i].art:null,x0,x1};
+ }
+ return null;
+}
+const attackCanvas=mk(256,384),attackCtx=attackCanvas.getContext('2d');
+function attackSprite(id,progress){
+ const c=attackCtx;c.clearRect(0,0,256,384);
+ c.putImageData(new ImageData(new Uint8ClampedArray(HERO[0].t.buffer),256,384),0,0);
+ const thrust=Math.sin(Math.PI*Math.min(1,progress)),knife=id==='fruitknife'||id==='survival',fist=id==='fists';
+ c.clearRect(186,105,42,114);
+ const shoulder=[180,100],hand=fist?[183+45*thrust,160-75*thrust]:knife?[180+48*thrust,160-72*thrust]:[185+25*thrust,130-25*thrust];
+ const elbow=[192+20*thrust,157-30*thrust];
+ c.lineCap='round';c.lineJoin='round';
+ function line(points,color,width){c.beginPath();c.moveTo(...points[0]);for(const p of points.slice(1))c.lineTo(...p);c.strokeStyle=color;c.lineWidth=width;c.stroke();}
+ line([shoulder,elbow,hand],'#15191b',24);line([shoulder,elbow,hand],'#65716c',18);
+ c.fillStyle='#c29c7b';c.beginPath();c.ellipse(...hand,fist?15:10,fist?12:9,-.4,0,Math.PI*2);c.fill();
+ if(!fist){
+  c.save();c.translate(...hand);
+  // Knives thrust forward; the sword descends from overhead; bats sweep sideways.
+  c.rotate(knife?-.25:id==='katana'?-.65+3.3*thrust:-1.5+2.9*thrust);
+  const katana=id==='katana',bat=id==='woodbat'||id==='metalbat',length=knife?52:katana?136:112;
+  line([[0,12],[0,-19]],'#32271e',10);
+  if(bat){line([[0,-12],[0,-length]],'#251c14',18);line([[0,-12],[0,-length]],id==='woodbat'?'#b98849':'#aab2b5',13);line([[-3,-35],[-3,-length+6]],id==='woodbat'?'#dfb879':'#e9eff0',3);}
+  else if(knife||katana){c.fillStyle='#d9e4e5';c.strokeStyle='#435358';c.lineWidth=2;c.beginPath();c.moveTo(-5,-17);c.lineTo(-5,-length+15);c.lineTo(1,-length);c.lineTo(7,-length+18);c.lineTo(6,-17);c.closePath();c.fill();c.stroke();line([[-13,-16],[13,-16]],'#b79a58',5);}
+  else {line([[0,-15],[0,-length]],'#807768',12);}
+  c.restore();
+ }
+ return {t:grab(attackCanvas),w:256,h:384};
+}
 const TREE_POS=[[2.5,16.4,0],[19.5,16.4,1],[32.5,16.4,2],[45.5,16.4,3],[57.5,16.4,0],[22.5,22.65,1],[35.5,22.65,2],[48.5,22.65,3],[58.5,22.65,0]];
 
 
@@ -308,7 +354,7 @@ function newWorld(){
   // 坑長(ボス) 換気室の守り
   const b=mkZombie([71.5,6.5,3]);b.boss=true;b.hp=b.mhp=16;b.spd=.85;G.zombies.push(b);
   G.gun=false;G.mag=0;G.res=0;G.shellMag=0;G.shellRes=0;G.owned=[];G.weapon='fists';G.herb=0;G.keys={};G.fuse=0;G.flags={vent:false};G.hp=100;G.torch=true;G.notes={};G.stats={kills:0,time:0};
-  G.msg=[];G.doc=null;G.reload=0;G.fireCd=0;G.deadT=0;G.clearT=0;
+  G.msg=[];G.doc=null;G.reload=0;G.fireCd=0;G.punchT=0;G.deadT=0;G.clearT=0;
   P.x=5.5;P.y=33.5;P.yaw=-Math.PI/2;P.vx=P.vy=0;
 }
 function snapshot(){
@@ -404,8 +450,8 @@ addEventListener('keydown',ev=>{
   if(ev.code==='KeyE')G.useReq=true;
 });
 addEventListener('keyup',ev=>{keys[ev.code]=false;});
-addEventListener('blur',()=>{for(const k in keys)keys[k]=false;mouse.down=false;if(G.mode==='play')G.paused=true;});
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&G.mode==='play')G.paused=true;});
+addEventListener('blur',()=>{for(const k in keys)keys[k]=false;mouse.down=false;});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){for(const k in keys)keys[k]=false;mouse.down=false;}});
 cv.addEventListener('mousedown',ev=>{
   audioInit();if(AC&&AC.state==='suspended')AC.resume();
   if(G.mode==='demo'){newGame('play');return;}
@@ -595,7 +641,7 @@ function interact(){
 function punch(forceFists=false){
   if(G.fireCd>0)return;
   const w=forceFists?null:WEAPONS[G.weapon];
-  G.fireCd=w?.cooldown||.48;G.punchT=.28;G.kick=.35;sfx.punch();
+  G.attackWeapon=w?G.weapon:'fists';G.attackDuration=w?.cooldown||.48;G.fireCd=G.attackDuration;G.punchT=G.attackDuration;G.kick=.35;sfx.punch();
   const fx=Math.cos(P.yaw),fy=Math.sin(P.yaw);let best=null,bd=9;
   for(const z of G.zombies){
     if(z.hp<=0)continue;const dx=z.x-P.x,dy=z.y-P.y,d=hyp(dx,dy);
@@ -807,8 +853,12 @@ function render(){
     zb[x]=perp;
     let wallX=side===0?py+perp*rdy:px+perp*rdx;wallX-=Math.floor(wallX);
     let tx=(wallX*256)|0;if(side===0&&rdx<0)tx=255-tx;if(side===1&&rdy>0)tx=255-tx;if(tx<0)tx=0;if(tx>255)tx=255;
-    const wt=WT[hit]||WT[2];
-    const top=hor-FPX*.5/perp,bot=hor+FPX*.5/perp;
+    let wt=WT[hit]||WT[2],texWidth=256,texHeight=256;
+    const outside=areaOf(FL[Math.max(0,Math.min(MW*MH-1,lmy*MW+lmx))])===0;
+    const face=outside&&hit<7?exteriorFace(mx,my,side,rdx,rdy):null;
+    const wallHeight=face?1.7:1;
+    if(face?.art){wt=face.art.t;texWidth=face.art.w;texHeight=face.art.h;const worldX=px+perp*rdx;tx=Math.max(0,Math.min(texWidth-1,Math.floor((worldX-face.x0)/(face.x1+1-face.x0)*texWidth)));}
+    const top=hor-FPX*(wallHeight-.5)/perp,bot=hor+FPX*.5/perp;
     let y0=Math.ceil(top),y1=Math.floor(bot);if(y0<0)y0=0;if(y1>SH-1)y1=SH-1;
     const li=Math.max(0,Math.min(MW*MH-1,lmy*MW+lmx)),area=areaOf(FL[li]);
     const ff=Math.exp(-perp*FOGK[area]),tor=tcone[x]*torch*Math.exp(-perp*.11);
@@ -818,10 +868,11 @@ function render(){
     let gr=1,gg=1,gb=1,gfr=0,gfg=0,gfb=0;
     if(area===2&&!G.flags.vent){gr=.9;gg=1.05;gb=.8;gfr=8;gfg=14;gfb=0;}
     const mr=b*tn[0]*ff*gr,mgn=b*tn[1]*ff*gg,mb=b*tn[2]*ff*gb,fr=fc[0]*(1-ff)+gfr*(1-ff),fg=fc[1]*(1-ff)+gfg*(1-ff),fb=fc[2]*(1-ff)+gfb*(1-ff);
-    const vs=256/(bot-top);let v=(y0-top)*vs;
+    const vs=texHeight/(bot-top);let v=(y0-top)*vs;
     for(let y=y0;y<=y1;y++){
-      let ty=v|0;if(ty>255)ty=255;v+=vs;
-      const c=wt[ty*256+tx];
+      let ty=v|0;if(ty>=texHeight)ty=texHeight-1;v+=vs;
+      let c=wt[ty*texWidth+tx];
+      if(face?.art&&(c>>>24)<128){const base=WT[hit]||WT[2];c=ty<texHeight*.5?0xff23282b:base[Math.min(255,Math.floor(ty/texHeight*256))*256+Math.min(255,Math.floor(wallX*256))];}
       let r=(c&255)*mr+fr,g=((c>>8)&255)*mgn+fg,bl=((c>>16)&255)*mb+fb;
       buf[y*SW+x]=0xFF000000|((bl>255?255:bl)<<16)|((g>255?255:g)<<8)|(r>255?255:r);
     }
@@ -856,7 +907,7 @@ function render(){
   }
   // スプライト収集
   sprites.length=0;
-  for(const f of FACADES)if(hyp(f.x-px,f.y-py)<20&&(f.y<20?P.y>f.y:P.y<f.y))pushSpr(f.s||FACADE[f.t],f.x,f.y,1.7,0,1,0,f.w);
+  // Building fronts are rendered by the ray caster on their actual wall planes.
   for(const [tx,ty,ti] of TREE_POS)if(hyp(tx-px,ty-py)<18)pushSpr(TREES[ti],tx,ty,1.9,0);
   for(const p of PROPS0){const d=hyp(p.x-px,p.y-py);if(d>16)continue;const S=SPR[p.t];if(!S)continue;
     const h=p.t==='lamp'?1.8:p.t==='lantern'?.5:p.t==='jizo'?.4:p.t==='barrel'?.32:p.t==='corpse'?.22:p.t==='innDesk'||p.t==='postCounter'||p.t==='shoeCabinet'?.65:p.t==='clinicBed'?.45:p.t==='schoolDesk'||p.t==='lowTable'?.35:p.t==='futon'?.22:p.t==='warehouseCrates'?.7:p.t==='sawBench'?.6:p.t==='shrineAltar'?.45:.3;pushSpr(S,p.x,p.y,h,0);}
@@ -868,8 +919,8 @@ function render(){
     const pose=z.atkAnim>0?2:(z.state==='idle'&&z.pose===0?0:z.pose);
     pushSpr(ZS[z.costume][pose],z.x,z.y,z.boss?.95:.7,0,1,z.hit>0?1:0);
   }
-  const moving=hyp(P.vx,P.vy)>.4,heroPose=G.hurt>.15?7:G.flash>.05&&G.weapon==='shotgun'?6:G.flash>.05&&G.weapon==='pistol'?5:G.punchT>0?4:moving?(Math.floor(G.bobP*1.3)%2?1:2):0;
-  pushSpr(HERO[heroPose],P.x,P.y,.9,0);
+  const moving=hyp(P.vx,P.vy)>.4,heroPose=G.hurt>.15?7:G.flash>.05&&G.weapon==='shotgun'?6:G.flash>.05&&G.weapon==='pistol'?5:moving?(Math.floor(G.bobP*1.3)%2?1:2):0;
+  pushSpr(G.punchT>0?attackSprite(G.attackWeapon||'fists',1-G.punchT/(G.attackDuration||.48)):HERO[heroPose],P.x,P.y,.9,0);
   sprites[sprites.length-1].player=true;
   for(const s of sprites){s.d=(s.x-px)*fx+(s.y-py)*fy;}
   sprites.sort((a,b)=>b.d-a.d);
