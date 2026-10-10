@@ -107,9 +107,9 @@ function buildMap(){
   vline(13,24,29,7);door(13,27,20);
   // 帳場・客室は家具スプライトで表現する
   // 診療所
-  vline(8,9,10,5);vline(10,9,10,5);vline(16,9,10,5);
+  // Medical equipment uses solid meshes instead of full-height generic walls.
   // 雑貨店の棚
-  vline(24,10,12,1);vline(27,10,12,1);
+  // Shop shelving is modeled below.
   // 民家
   vline(39,9,12,2);
   // 事務所の机
@@ -254,6 +254,103 @@ function exteriorFace(mx,my,side,rdx,rdy){
  }
  return null;
 }
+
+// Rooms have independent materials; furniture and architectural details are solid meshes.
+const ROOM_NAMES=['旅館 湯之屋','診療所','雑貨店','民家','鉱山事務所','駐在所','小学校','公民館','郵便局','トタン倉庫','製材所','神社'];
+function roomAt(x,y){for(let i=0;i<BUILDING_BOUNDS.length;i++){const [a,b,c,d]=BUILDING_BOUNDS[i];if(x>=a&&x<c+1&&y>=b&&y<d+1)return i;}return -1;}
+function material(base,style,label){
+ const c=mk(256,256),g=c.getContext('2d');g.fillStyle=base;g.fillRect(0,0,256,256);
+ const random=seeded(347+style.length);
+ for(let i=0;i<1800;i++){g.fillStyle=random()>.5?'rgba(255,255,255,.035)':'rgba(0,0,0,.05)';g.fillRect(random()*256,random()*256,1+random()*5,1+random()*3);}
+ if(style==='tile'){g.strokeStyle='#777e76';g.lineWidth=2;for(let i=0;i<=256;i+=64){g.beginPath();g.moveTo(i,0);g.lineTo(i,256);g.moveTo(0,i);g.lineTo(256,i);g.stroke();}}
+ if(style==='wood'||style==='tatami'){g.strokeStyle='rgba(20,15,9,.45)';for(let i=0;i<256;i+=style==='wood'?32:128){g.fillStyle='rgba(0,0,0,.08)';g.fillRect(i,0,3,256);for(let j=0;j<8;j++){g.beginPath();g.moveTo(i+j*3,0);g.lineTo(i+j*3+random()*6,256);g.stroke();}}}
+ if(style==='metal'){for(let i=0;i<256;i+=16){g.fillStyle=i%32?'#566065':'#70777a';g.fillRect(i,0,4,256);}}
+ if(style==='clinic'){g.fillStyle='#9aaea3';g.fillRect(0,135,256,121);g.fillStyle='#64786d';g.fillRect(0,132,256,5);g.fillStyle='#47655a';g.fillRect(16,227,224,13);}
+ if(style==='wall'){g.fillStyle='rgba(0,0,0,.2)';g.fillRect(0,218,256,38);g.fillRect(0,212,256,5);if(label){g.fillStyle='#c8c8ad';g.fillRect(22,38,212,53);g.fillStyle='#363e36';g.font='bold 22px sans-serif';g.textAlign='center';g.fillText(label,128,72);}}
+ if(style==='sign'){g.fillStyle='#dce4d9';g.fillRect(4,4,248,248);g.strokeStyle='#638779';g.lineWidth=8;g.strokeRect(6,6,244,244);g.fillStyle='#b45f4e';g.fillRect(112,22,32,74);g.fillRect(91,43,74,32);g.fillStyle='#385c50';g.font='bold 28px sans-serif';g.textAlign='center';g.fillText(label,128,143);g.font='16px sans-serif';g.fillText('鉛ヶ沢診療所',128,184);}
+ if(style==='ceiling'){g.strokeStyle='#727d79';for(let i=0;i<256;i+=128){g.strokeRect(i,0,128,128);g.strokeRect(i,128,128,128);}g.fillStyle='#384b49';g.fillRect(58,105,140,42);g.fillStyle='#e9ead5';g.fillRect(62,110,132,32);}
+ return grab(c);
+}
+const ROOM_MATERIALS=[
+ ['#a09776','wood','#a7a076','tatami','#615548','wood'],
+ ['#d2d9cf','clinic','#b4bfb2','tile','#b5c2bd','ceiling'],
+ ['#9b917c','wall','#70604b','wood','#9b917b','wood'],
+ ['#ab9e83','wood','#969268','tatami','#78614c','wood'],
+ ['#9ca399','wall','#777d73','tile','#929a91','ceiling'],
+ ['#a0b5ae','wall','#787f77','tile','#929d99','ceiling'],
+ ['#b8b29d','wall','#997347','wood','#b0ad9d','ceiling'],
+ ['#ada291','wall','#8f895e','tatami','#817762','wood'],
+ ['#b3a998','wall','#88735a','wood','#aaa393','ceiling'],
+ ['#778182','metal','#6b706b','tile','#636c6d','metal'],
+ ['#796547','wood','#786143','wood','#68503c','wood'],
+ ['#6b3a2c','wood','#716546','tatami','#685039','wood']
+].map((v,i)=>({wall:material(v[0],v[1]),floor:material(v[2],v[3]),ceiling:material(v[4],v[5])}));
+const ROOF_TEX=material('#3e444a','metal'),TIMBER_TEX=material('#65503b','wood'),PLASTER_TEX=material('#babbb0','wall');
+const MESH=[];
+function quad(a,b,c,d,color,texture){MESH.push({v:[a,b,c,d],color,texture});}
+function solid(x,y,z,w,d,h,color){const a=[x,y,z],b=[x+w,y,z],c=[x+w,y+d,z],e=[x,y+d,z],A=[x,y,z+h],B=[x+w,y,z+h],C=[x+w,y+d,z+h],E=[x,y+d,z+h];quad(a,b,B,A,color);quad(b,c,C,B,color);quad(c,e,E,C,color);quad(e,a,A,E,color);quad(A,B,C,E,color);}
+for(let i=0;i<BUILDING_BOUNDS.length;i++){
+ const [x0,y0,x1,y1]=BUILDING_BOUNDS[i],front=i>=1&&i<=4||i===8||i===9?y1+1:y0,sign=front===y0?-1:1;
+ const xl=x0-.25,xr=x1+1.25,near=y0-.32,far=y1+1.32,ridge=(near+far)/2,eave=1.65,peak=i===9?1.95:2.3;
+ quad([xl,near,eave],[xr,near,eave],[xr,ridge,peak],[xl,ridge,peak],'#565e65',ROOF_TEX);
+ quad([xl,ridge,peak],[xr,ridge,peak],[xr,far,eave],[xl,far,eave],'#414a53',ROOF_TEX);
+ quad([xl,near,eave],[xl,ridge,peak],[xl,far,eave],[xl,far,1.4],'#777b73',PLASTER_TEX);
+ quad([xr,far,eave],[xr,ridge,peak],[xr,near,eave],[xr,near,1.4],'#777b73',PLASTER_TEX);
+ solid(xl,near,1.42,xr-xl,.13,.12,'#473b30');solid(xl,far-.13,1.42,xr-xl,.13,.12,'#473b30');
+ const landmark=LANDMARKS.find(l=>l.name===ROOM_NAMES[i]||(i===2&&l.name==='商店')||(i===9&&l.name==='トタン倉庫'));const doorX=(landmark?.x||((x0+x1)/2))+.5;
+ // Windows consist of projecting frames, inset glass, mullions and sills.
+ for(let wx=x0+1.15;wx<x1-.5;wx+=2.1){if(Math.abs(wx-doorX)<1.45)continue;
+  const wy=front+sign*.055;
+  solid(wx,wy-.045,.48,1.3,.09,.51,'#574e43');solid(wx+.07,wy-.055,.53,1.16,.11,.39,'#526c71');
+  solid(wx+.61,wy-.065,.51,.055,.13,.45,'#918c75');solid(wx,wy-.07,.73,1.3,.14,.035,'#918c75');solid(wx-.06,wy-.12,.44,1.42,.24,.055,'#a4a18b');
+ }
+ const signTex=material('#c3c7b7','wall',ROOM_NAMES[i]);quad([doorX-.9,front+sign*.09,1.43],[doorX+.9,front+sign*.09,1.43],[doorX+.9,front+sign*.09,1.13],[doorX-.9,front+sign*.09,1.13],'#bec6b9',signTex);
+ solid(doorX-.52,front-.1,1.06,1.04,.2,.34,'#b6bbb0');
+ // Recessed door jambs, lintel, projecting porch roof, posts and steps.
+ const porchY=sign===1?front:front-.8;
+ solid(doorX-1.25,porchY,1.1,2.5,.85,.12,'#514b3e');
+ for(const x of [doorX-1.12,doorX+1.02])solid(x,front+sign*.65-.05,0,.1,.1,1.1,'#66503b');
+ for(let k=0;k<2;k++)solid(doorX-.65,front+sign*(.25+k*.24)-.12,0,1.3,.24,.1-k*.035,'#8b8b7e');
+ for(const x of [doorX-.52,doorX+.48])solid(x,front-.06,0,.055,.12,1.02,'#685a47');solid(doorX-.52,front-.06,1.02,1.055,.12,.055,'#685a47');
+}
+// Clinic: examination beds, sheets, metal rails, IV stands, dispensary, reception and waiting seats.
+for(const [x,y]of [[12,10.8],[16,11.8]]){
+ solid(x,y,.05,.8,1.6,.22,'#657b77');solid(x-.03,y-.03,.27,.86,1.66,.13,'#c5cec6');solid(x+.08,y+.07,.4,.63,.32,.07,'#e2e5d6');solid(x+.02,y+.5,.4,.76,1.05,.035,'#829e99');
+ for(const a of [x-.05,x+.8]){solid(a,y,.35,.035,1.6,.09,'#bec9c8');solid(a,y,.05,.035,.035,.55,'#b9c3bf');}
+ solid(x+1.1,y+.2,0,.035,.035,1.03,'#9caaa7');solid(x+1,y+.12,.97,.25,.025,.025,'#9caaa7');solid(x+1.08,y+.14,.73,.12,.08,.18,'#c9d8d0');
+}
+solid(7.1,8.1,0,1.7,.55,.86,'#d1d6cb');solid(7.16,8.04,.45,1.58,.035,.34,'#7b9997');
+for(let k=0;k<6;k++)solid(7.24+k*.22,8.02,.5,.12,.045,.18,k%2?'#c2b898':'#d4ddd8');
+solid(13.5,8.2,0,2.3,.65,.52,'#a2b9ad');solid(13.45,8.15,.52,2.4,.75,.06,'#d6d8c9');
+for(let k=0;k<3;k++){solid(7.3+k*.75,13.35,.2,.6,.55,.12,'#748f87');solid(7.3+k*.75,13.82,.2,.6,.08,.4,'#748f87');}
+solid(15,8.9,0,.65,.5,.52,'#abb9ae');solid(15.06,8.84,.25,.53,.04,.2,'#597474');
+for(const x of [24,27]){solid(x,10,0,.45,2.3,.12,'#66513c');for(let z=.18;z<.9;z+=.23){solid(x,10,z,.45,2.3,.045,'#9a815f');for(let y=10.1;y<12.2;y+=.3)solid(x+.05,y,z+.05,.23,.19,.13,y%1>.5?'#b6ad7f':'#8eab93');}}
+for(const [x,label]of [[10.5,'診察・処置'],[16.5,'薬品保管']])quad([x,8.02,.92],[x+1,8.02,.92],[x+1,8.02,.55],[x,8.02,.55],'#dce4d9',material('#dce4d9','sign',label));
+solid(17.6,9,.05,.23,.23,.55,'#788e7b');solid(17.69,9.08,.6,.045,.045,.1,'#b0b6a5');
+// Utility-specific solid fittings in the other rooms.
+for(const [room,x,y]of [[2,22,9],[4,47,8],[5,25,24],[6,37,24],[8,3,9],[9,57,9],[10,25,39]]){
+ const color=room===9?'#727b79':room===5?'#7d9690':'#8b7150';solid(x,y,0,.55,1.4,.8,color);for(let z=.2;z<.8;z+=.2)solid(x-.05,y,z,.7,1.45,.035,'#c0ad85');
+}
+const ROOM_TINT=ROOM_NAMES.map((_,i)=>i===1?[.97,1.04,1.02]:i===5?[.9,1,1.06]:i===9?[.85,.95,1.07]:null);
+const meshDepth=new Float32Array(SW*SH);
+function renderMeshes(px,py,fx,fy,hor){
+ const project=v=>{const dx=v[0]-px,dy=v[1]-py,d=dx*fx+dy*fy;return {x:SW/2+(-fy*dx+fx*dy)*FPX/d,y:hor-(v[2]-.5)*FPX/d,d,u:0,v:0};};
+ function triangle(vertices,color,tex){
+  const [a,b,c]=vertices,den=(b.y-c.y)*(a.x-c.x)+(c.x-b.x)*(a.y-c.y);if(Math.abs(den)<.01)return;
+  const xa=Math.max(0,Math.floor(Math.min(a.x,b.x,c.x))),xb=Math.min(SW-1,Math.ceil(Math.max(a.x,b.x,c.x))),ya=Math.max(0,Math.floor(Math.min(a.y,b.y,c.y))),yb=Math.min(SH-1,Math.ceil(Math.max(a.y,b.y,c.y)));
+  for(let y=ya;y<=yb;y++)for(let x=xa;x<=xb;x++){
+   const A=((b.y-c.y)*(x-c.x)+(c.x-b.x)*(y-c.y))/den,B=((c.y-a.y)*(x-c.x)+(a.x-c.x)*(y-c.y))/den,C=1-A-B;if(A<0||B<0||C<0)continue;
+   const inv=A/a.d+B/b.d+C/c.d,d=1/inv,p=y*SW+x;if(d>=meshDepth[p]+.005)continue;
+   let rgb=color;if(tex){const u=(A*a.u/a.d+B*b.u/b.d+C*c.u/c.d)/inv,v=(A*a.v/a.d+B*b.v/b.d+C*c.v/c.d)/inv;const t=tex[(Math.floor(v*256)&255)*256+(Math.floor(u*256)&255)];rgb=[t&255,(t>>8)&255,(t>>16)&255];}
+   const outdoor=roomAt(px,py)<0,bri=(outdoor?.8:.65)+.3*Math.exp(-d*.15),fog=Math.exp(-d*.035);buf[p]=0xff000000|Math.min(255,rgb[0]*bri*fog)|Math.min(255,rgb[1]*bri*fog)<<8|Math.min(255,rgb[2]*bri*fog)<<16;meshDepth[p]=d;
+  }
+ }
+ for(const m of MESH){let poly=m.v.map((v,i)=>{const dx=v[0]-px,dy=v[1]-py;return {lat:-fy*dx+fx*dy,d:dx*fx+dy*fy,z:v[2],u:i===1||i===2?1:0,v:i>=2?1:0};});const clipped=[];
+  for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length];if(a.d>=.08)clipped.push(a);if((a.d>=.08)!==(b.d>=.08)){const t=(.08-a.d)/(b.d-a.d),v={};for(const k of ['lat','d','z','u','v'])v[k]=a[k]+(b[k]-a[k])*t;clipped.push(v);}}
+  if(clipped.length<3)continue;const p=clipped.map(v=>({x:SW/2+v.lat*FPX/v.d,y:hor-(v.z-.5)*FPX/v.d,d:v.d,u:v.u,v:v.v}));const color=m.color.match(/[a-f0-9]{2}/gi).map(v=>parseInt(v,16));for(let i=1;i<p.length-1;i++)triangle([p[0],p[i],p[i+1]],color,m.texture);
+ }
+}
+
 const attackCanvas=mk(256,384),attackCtx=attackCanvas.getContext('2d');
 function attackSprite(id,progress){
  const c=attackCtx;c.clearRect(0,0,256,384);
@@ -827,7 +924,7 @@ function render(){
   for(let d=.1;d<=1.85;d+=.1){if(blockedC(P.x-fx*d,P.y-fy*d,.12))break;back=d;}
   const px=P.x-fx*back,py=P.y-fy*back,torch=G.torch?TORCH:0;
   const bob=Math.sin(G.bobP)*Math.min(1,hyp(P.vx,P.vy)/2)*1.6+(G.kick>0?G.kick*2.5:0)+(G.shake>.3?(rnd()-.5)*G.shake*.4:0);
-  const hor=SH/2+bob;
+  const hor=SH/2+bob;meshDepth.fill(Infinity);const cameraRoom=roomAt(px,py);
   for(let y=0;y<SH;y++){
     const dd=y+.5-hor,dist=dd!==0?FPX*.5/Math.abs(dd):1e3;rowDist[y]=dist;rowTor[y]=torch*Math.exp(-dist*.11);
     for(let a=0;a<AREAS;a++)rowFog[a*SH+y]=Math.exp(-dist*FOGK[a]);
@@ -856,14 +953,15 @@ function render(){
     let wt=WT[hit]||WT[2],texWidth=256,texHeight=256;
     const outside=areaOf(FL[Math.max(0,Math.min(MW*MH-1,lmy*MW+lmx))])===0;
     const face=outside&&hit<7?exteriorFace(mx,my,side,rdx,rdy):null;
-    const wallHeight=face?1.7:1;
-    if(face?.art){wt=face.art.t;texWidth=face.art.w;texHeight=face.art.h;const worldX=px+perp*rdx;tx=Math.max(0,Math.min(texWidth-1,Math.floor((worldX-face.x0)/(face.x1+1-face.x0)*texWidth)));}
+    const wallHeight=face?1.4:1;const wallRoom=roomAt(lmx+.5,lmy+.5);
+    if(!outside&&wallRoom>=0&&!DOORS[ID(mx,my)])wt=ROOM_MATERIALS[wallRoom].wall;
+    if(face)wt=roomAt(mx+.5,my+.5)===9?ROOF_TEX:PLASTER_TEX;
     const top=hor-FPX*(wallHeight-.5)/perp,bot=hor+FPX*.5/perp;
     let y0=Math.ceil(top),y1=Math.floor(bot);if(y0<0)y0=0;if(y1>SH-1)y1=SH-1;
     const li=Math.max(0,Math.min(MW*MH-1,lmy*MW+lmx)),area=areaOf(FL[li]);
     const ff=Math.exp(-perp*FOGK[area]),tor=tcone[x]*torch*Math.exp(-perp*.11);
     let b=AMB[area]+LM[li]+tor;if(b>1.5)b=1.5;if(side===1)b*=.82;
-    const tn=TINT[area],fc=FOGC[area];
+    const tn=ROOM_TINT[wallRoom]||TINT[area],fc=FOGC[area];
     // 毒ガスの緑がかった霧(換気前の坑道は濃い)
     let gr=1,gg=1,gb=1,gfr=0,gfg=0,gfb=0;
     if(area===2&&!G.flags.vent){gr=.9;gg=1.05;gb=.8;gfr=8;gfg=14;gfb=0;}
@@ -872,9 +970,9 @@ function render(){
     for(let y=y0;y<=y1;y++){
       let ty=v|0;if(ty>=texHeight)ty=texHeight-1;v+=vs;
       let c=wt[ty*texWidth+tx];
-      if(face?.art&&(c>>>24)<128){const base=WT[hit]||WT[2];c=ty<texHeight*.5?0xff23282b:base[Math.min(255,Math.floor(ty/texHeight*256))*256+Math.min(255,Math.floor(wallX*256))];}
+      
       let r=(c&255)*mr+fr,g=((c>>8)&255)*mgn+fg,bl=((c>>16)&255)*mb+fb;
-      buf[y*SW+x]=0xFF000000|((bl>255?255:bl)<<16)|((g>255?255:g)<<8)|(r>255?255:r);
+      buf[y*SW+x]=0xFF000000|((bl>255?255:bl)<<16)|((g>255?255:g)<<8)|(r>255?255:r);meshDepth[y*SW+x]=perp;
     }
     // 天井・空
     for(let y=y0-1;y>=0;y--){
@@ -886,30 +984,32 @@ function render(){
         const u=(((colAng[x]*skyBase)%SKYW)+SKYW)%SKYW|0;let vv=(y/(SH*.5)*SKYH*.9)|0;if(vv>SKYH-1)vv=SKYH-1;
         const c=SKY[vv*SKYW+u];r=(c&255)*.95;g=((c>>8)&255)*.95;bl=((c>>16)&255)*.95;
       }else{
-        const ct=fl===3?CT[3]:fl===4?CT[4]:CT[1];
+        const room=roomAt(wx,wy);const ct=room>=0?ROOM_MATERIALS[room].ceiling:fl===3?CT[3]:fl===4?CT[4]:CT[1];
         const c=ct[(((wy*256)|0)&255)*256+(((wx*256)|0)&255)];
-        const f2=rowFog[a*SH+y],bb=Math.min(1.4,AMB[a]+LM[ci]+rowTor[y]*tcone[x])*.7,t2=TINT[a],fc2=FOGC[a];
+        const f2=rowFog[a*SH+y],bb=Math.min(1.4,AMB[a]+LM[ci]+rowTor[y]*tcone[x])*.7,t2=ROOM_TINT[room]||TINT[a],fc2=FOGC[a];
         r=(c&255)*bb*t2[0]*f2+fc2[0]*(1-f2);g=((c>>8)&255)*bb*t2[1]*f2+fc2[1]*(1-f2);bl=((c>>16)&255)*bb*t2[2]*f2+fc2[2]*(1-f2);
       }
-      buf[y*SW+x]=0xFF000000|((bl>255?255:bl)<<16)|((g>255?255:g)<<8)|(r>255?255:r);
+      buf[y*SW+x]=0xFF000000|((bl>255?255:bl)<<16)|((g>255?255:g)<<8)|(r>255?255:r);if(a!==0)meshDepth[y*SW+x]=dist;
     }
     // 床
     for(let y=y1+1;y<SH;y++){
       const dist=rowDist[y];
       const wx=px+rdx*dist,wy=py+rdy*dist,cxx=Math.floor(wx),cyy=Math.floor(wy);
       const ci=(cyy<0?0:cyy>=MH?MH-1:cyy)*MW+(cxx<0?0:cxx>=MW?MW-1:cxx),fl=FL[ci],a=areaOf(fl);
-      const c=FT[fl][(((wy*256)|0)&255)*256+(((wx*256)|0)&255)];
+      const room=roomAt(wx,wy),floor=room>=0?ROOM_MATERIALS[room].floor:FT[fl];
+      const c=floor[(((wy*256)|0)&255)*256+(((wx*256)|0)&255)];
       const f2=rowFog[a*SH+y],bb=Math.min(1.5,AMB[a]+LM[ci]+rowTor[y]*tcone[x]),t2=TINT[a],fc2=FOGC[a];
       let r=(c&255)*bb*t2[0]*f2+fc2[0]*(1-f2),g=((c>>8)&255)*bb*t2[1]*f2+fc2[1]*(1-f2),bl=((c>>16)&255)*bb*t2[2]*f2+fc2[2]*(1-f2);
       if(a===2&&!G.flags.vent){g+=6*(1-f2);}
-      buf[y*SW+x]=0xFF000000|((bl>255?255:bl)<<16)|((g>255?255:g)<<8)|(r>255?255:r);
+      buf[y*SW+x]=0xFF000000|((bl>255?255:bl)<<16)|((g>255?255:g)<<8)|(r>255?255:r);meshDepth[y*SW+x]=dist;
     }
   }
+  renderMeshes(px,py,fx,fy,hor);
   // スプライト収集
   sprites.length=0;
   // Building fronts are rendered by the ray caster on their actual wall planes.
   for(const [tx,ty,ti] of TREE_POS)if(hyp(tx-px,ty-py)<18)pushSpr(TREES[ti],tx,ty,1.9,0);
-  for(const p of PROPS0){const d=hyp(p.x-px,p.y-py);if(d>16)continue;const S=SPR[p.t];if(!S)continue;
+  for(const p of PROPS0){if(p.t==='clinicBed')continue;const d=hyp(p.x-px,p.y-py);if(d>16)continue;const S=SPR[p.t];if(!S)continue;
     const h=p.t==='lamp'?1.8:p.t==='lantern'?.5:p.t==='jizo'?.4:p.t==='barrel'?.32:p.t==='corpse'?.22:p.t==='innDesk'||p.t==='postCounter'||p.t==='shoeCabinet'?.65:p.t==='clinicBed'?.45:p.t==='schoolDesk'||p.t==='lowTable'?.35:p.t==='futon'?.22:p.t==='warehouseCrates'?.7:p.t==='sawBench'?.6:p.t==='shrineAltar'?.45:.3;pushSpr(S,p.x,p.y,h,0);}
   for(const it of G.items){if(it.taken)continue;const d=hyp(it.x-px,it.y-py);if(d>12)continue;const S=SPR[it.t==='weapon'?'weapon-'+it.id:it.t==='shells'?'ammo':it.t];if(!S)continue;
     const h=it.t==='lever'?.55:.2;pushSpr(S,it.x,it.y,h,it.t==='lever'?0:.02+Math.sin(G.t*3+it.x)*.01,1);}
@@ -941,6 +1041,7 @@ function render(){
       for(let y=ya;y<=yb;y++){
         let v=((y-top)/hh*spr.h)|0;if(v<0)v=0;if(v>=spr.h)v=spr.h-1;
         const c=spr.t[v*spr.w+u];if((c>>>24)<128)continue;
+        if(!s.player&&depth>=meshDepth[y*SW+x])continue;
         let r=(c&255)*mr+fr,g=((c>>8)&255)*mgn+fg,bl=((c>>16)&255)*mb+fb;
         if(s.flash){r=r*.4+200;g*=.5;bl*=.5;}
         buf[y*SW+x]=0xFF000000|((bl>255?255:bl)<<16)|((g>255?255:g)<<8)|(r>255?255:r);
@@ -1046,7 +1147,7 @@ function draw(){
   const vg=ctx.createRadialGradient(VW/2,VH/2,VH*.3,VW/2,VH/2,VH*.88);vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.66)');ctx.fillStyle=vg;ctx.fillRect(0,0,VW,VH);
   ctx.fillStyle='rgba(0,0,0,.06)';for(let y=0;y<VH;y+=3)ctx.fillRect(0,y,VW,1);
   if(G.flash>.05&&G.scene==='play'){ctx.fillStyle='rgba(255,230,160,'+G.flash*.5+')';ctx.fillRect(0,0,VW,VH);}
-  drawHUD();
+  drawHUD();const room=roomAt(P.x,P.y);if(room>=0)otext(ROOM_NAMES[room],VW/2,66,16,'#c8d2bf');
   drawIntro();
   if(G.scene==='dead'){
     const a=Math.min(.85,G.deadT*.5);ctx.fillStyle='rgba(60,0,0,'+a+')';ctx.fillRect(0,0,VW,VH);
