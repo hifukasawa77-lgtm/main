@@ -6,7 +6,7 @@ Workers AI を使ったプロキシです。APIキーをブラウザへ配布せ
 
 ## 自動デプロイ（GitHub Actions・推奨）
 
-`.github/workflows/deploy-worker.yml` により、`cloudflare-worker/` 配下の変更が main に push されると自動でデプロイされます（KV namespace `AGENT_MEMORY` の作成・バインドも自動）。
+`.github/workflows/deploy-worker.yml` により、`cloudflare-worker/` 配下の変更が main に push されると自動でデプロイされます（KV namespace `AGENT_MEMORY` の作成・バインドも自動。取れなければ KV 無しで続行）。
 
 **初回のみ、以下の1回だけの設定が必要です:**
 
@@ -19,7 +19,11 @@ Workers AI を使ったプロキシです。APIキーをブラウザへ配布せ
 2. **GitHubにシークレットを登録**
    - このリポジトリの Settings → Secrets and variables → Actions →「New repository secret」
    - Name: `CLOUDFLARE_API_TOKEN` / Secret: コピーしたトークン
-   - （トークンが複数のCloudflareアカウントに属する場合のみ `CLOUDFLARE_ACCOUNT_ID` も追加）
+   - **`CLOUDFLARE_ACCOUNT_ID` も登録する**（ダッシュボードの Workers & Pages 画面右側の「Account ID」）。
+     上の2権限だけのトークンはアカウント一覧を読めないため、ID が無いと wrangler が
+     「A request to the Cloudflare API failed.」で止まる（2026-10-10 の run #20 がこれ）
+   - KV の作成・取得に失敗しても、デプロイは KV 無しで続行する（KV は任意の学習メモリ。
+     失敗理由は Actions のログに出る）
 3. **ワークフローを実行**
    - リポジトリの Actions タブ →「Deploy Cloudflare Worker (ai-proxy)」→「Run workflow」
    - 末尾の Smoke test が `OK` になれば本番反映完了
