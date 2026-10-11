@@ -469,6 +469,8 @@ HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用
   `node scripts/setup-airtouch.mjs` / `setup-wakeword.mjs` で `public/wasm` と `models` を用意しないと、
   ビルドに入らず `/wasm` が404になる。実ブラウザは `/opt/node-tools/node_modules/playwright-core`
   ＋ `/opt/pw-browsers/chromium`（`--no-sandbox`）。コミットは向こうの `npm run check` を通してから
+  向こうは `main` だけの浅いクローンになるので、**push したブランチは追跡参照が無く、Stop フックが「リモートブランチなし・Nコミット未push」と誤報する**。
+  `git fetch origin +refs/heads/<ブランチ>:refs/remotes/origin/<ブランチ>` で直る（push 自体は済んでいる。`git ls-remote origin <ブランチ>` で確かめる）
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
