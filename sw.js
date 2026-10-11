@@ -3,7 +3,7 @@
 // 静的アセットは cache-first（速度維持）。バージョン更新で旧キャッシュを破棄する。
 //
 // ★このSWが見るのは**同じオリジンの通信だけ**。別オリジンへは一切触らない（下の理由を参照）。
-const CACHE_NAME = 'hide-portfolio-v6';
+const CACHE_NAME = 'hide-portfolio-v7';
 const SITE_SCOPE = new URL('./', self.location.href);
 
 // ★パスは必ず相対で書く。このサイトは https://…github.io/main/ 配下にあり、
@@ -28,7 +28,10 @@ const PRECACHE_URLS = [
   // 端末内ツール層とサイトの知識。これが取れないと ZERO-1 は起動しない
   // （import が解決できずモジュールごと落ちる）。圏外で使う前提なので必ず先に確保する
   './assets/js/zero1-tools.js',
-  './assets/js/agent-data.js'
+  './assets/js/agent-data.js',
+  // 全ページの <head> が読むクリックジャッキング対策。圏外で取れないと
+  // ページごとに読み込み失敗のエラーが残る（scripts/security-baseline.mjs が挿入）
+  './assets/js/frame-guard.js'
 ];
 
 self.addEventListener('install', event => {
