@@ -71,6 +71,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[native-dialog-toplayer-pitfall]] — ネイティブ`<dialog>`のトップレイヤーがposition:fixed要素を隠す不具合と対処
 - [[verification-counts-the-wrong-thing]] — 検査が数える対象を間違えると故障注入をすり抜ける
 - [[false-red-checks-are-worse-than-none]] — 偽の赤は検査が無いより悪い（必須検査が常に赤いなら、まず検査を疑う）
+- [[claim-needs-evidence-before-reporting]] — 報告・コメントに書く「事実」は書く前に確かめる（PRの「入っていそう」・偽の根拠コメント・pkill -f の自爆）
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール

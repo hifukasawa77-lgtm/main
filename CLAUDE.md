@@ -463,6 +463,12 @@ HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用
   （PCのWebカメラは前面/背面の区別を持たず `OverconstrainedError` で掴めない）。
   検査#49〜54 がデスクトップ幅（1440×900）で通し確認する。
   なお **PC版 ZERO-1 は別リポジトリ `zero-1-local-ai`（Ollama）** で、こことは別実装
+  **PC版を触る依頼（「デスクトップ版ZERO-1」等）はこのリポジトリでは何も変わらない。**
+  `mcp__claude-code-remote__add_repo` で取り込み → クローン → `register_repo_root`。先に向こうの
+  `CLAUDE.md` と `docs/開発の注意.md` を読む（検査の書き方・大きさの上限が違う）。`npm ci --ignore-scripts` のあと
+  `node scripts/setup-airtouch.mjs` / `setup-wakeword.mjs` で `public/wasm` と `models` を用意しないと、
+  ビルドに入らず `/wasm` が404になる。実ブラウザは `/opt/node-tools/node_modules/playwright-core`
+  ＋ `/opt/pw-browsers/chromium`（`--no-sandbox`）。コミットは向こうの `npm run check` を通してから
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
