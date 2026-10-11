@@ -1,0 +1,45 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
+const cryptoSource = fs.readFileSync(new URL('../assets/js/receipt-crypto.js', import.meta.url),'utf8');
+const vaultSource = fs.readFileSync(new URL('../assets/js/receipt-vault.js', import.meta.url),'utf8');
+const base = { crypto:webcrypto, TextEncoder, TextDecoder, Uint8Array, btoa, atob, console };
+const ctx = vm.createContext({...base}); vm.runInContext(cryptoSource,ctx);
+const C = ctx.ReceiptCrypto, password='household-test-passphrase';
+const salt = webcrypto.getRandomValues(new Uint8Array(16)), key=await C.derive(password,salt);
+const state={app:'receipt-ocr-ledger',version:2,values:{'receiptOCR.ledger.v1':JSON.stringify([{store:'秘密の店',items:[{name:'牛乳',price:238}]}]),'receiptOCR.draft.v1':'{"name":"秘密の下書き"}'}};
+let count=0; const pass=name=>{count++;console.log('PASS '+name);};
+const encrypted=await C.seal(state,key,salt);
+assert.ok(!JSON.stringify(encrypted).includes('秘密'));pass('暗号化ファイルに店名・下書きの平文がない');
+assert.equal(key.extractable,false);pass('暗号鍵をエクスポートできない');
+assert.deepEqual(JSON.parse(JSON.stringify((await C.unlock(encrypted,password)).state)),state);pass('同じパスワードでバックアップを復元');
+await assert.rejects(C.unlock(encrypted,'incorrect-password'));pass('間違ったパスワードを拒否');
+const altered={...encrypted,data:encrypted.data.slice(0,8)+(encrypted.data[8]==='A'?'B':'A')+encrypted.data.slice(9)};
+await assert.rejects(C.unlock(altered,password));pass('暗号文の改ざんを拒否');
+const other=await C.seal(state,key,salt);assert.notEqual(other.iv,encrypted.iv);assert.notEqual(other.data,encrypted.data);pass('保存のたびに異なるIVと暗号文');
+await assert.rejects(C.unlock({...encrypted,iterations:1},password));pass('不正な鍵導出設定を拒否');
+await assert.rejects(C.unlock({...encrypted,iv:'AA=='},password));pass('不正なIVを拒否');
+function harness(initial={}) {
+ const data=new Map(Object.entries(initial)), nodes=new Map(), documentEvents={};let failWrites=false,reloads=0;
+ const $=id=>{if(!nodes.has(id))nodes.set(id,{value:'',hidden:false,textContent:'',disabled:false,handlers:{},addEventListener(n,f){this.handlers[n]=f;}});return nodes.get(id);};
+ const document={getElementById:$,querySelectorAll:()=>[],body:{classList:{add(){},remove(){}}},addEventListener(n,f){documentEvents[n]=f;}};
+ const runtime=vm.createContext({...base,document,localStorage:{getItem:k=>data.get(k)??null,setItem(k,v){if(failWrites)throw new Error('QuotaExceeded');data.set(k,v);},removeItem:k=>data.delete(k)},setTimeout:()=>1,clearTimeout(){},location:{reload(){reloads++;}}});
+ runtime.window=runtime;runtime.addEventListener=()=>{};vm.runInContext(cryptoSource,runtime);vm.runInContext(vaultSource,runtime);
+ return {runtime,data,$,documentEvents,failWrites(v){failWrites=v;},get reloads(){return reloads;}};
+}
+const h=harness({'receiptOCR.ledger.v1':state.values['receiptOCR.ledger.v1'],'receiptOCR.draft.v1':state.values['receiptOCR.draft.v1'],'receiptOCR.budget.v1':'60000'});
+const opening=h.runtime.ReceiptVault.open();h.$('vault-password').value=password;h.$('vault-confirm').value=password;
+await h.$('vault-form').handlers.submit({preventDefault(){}});const adapter=await opening;
+assert.equal(h.data.has('receiptOCR.ledger.v1'),false);assert.equal(h.data.has('receiptOCR.draft.v1'),false);assert.equal(h.data.has('receiptOCR.budget.v1'),false);pass('既存の平文記録・下書き・予算を暗号化へ移行');
+assert.equal(adapter.getItem('receiptOCR.budget.v1'),'60000');pass('移行後も予算を引き継ぐ');
+const persisted=JSON.parse(h.data.get('receiptOCR.encrypted.v2'));assert.equal((await C.unlock(persisted,password)).state.values['receiptOCR.ledger.v1'],state.values['receiptOCR.ledger.v1']);pass('移行データを実際に復号して一致を確認');
+for(let i=0;i<5;i++)adapter.setItem('receiptOCR.budget.v1',String(i));await adapter.flush();assert.equal((await C.unlock(JSON.parse(h.data.get('receiptOCR.encrypted.v2')),password)).state.values['receiptOCR.budget.v1'],'4');pass('連続保存の最後の値を保持');
+const backup=await adapter.backup();assert.equal((await C.unlock(JSON.parse(backup),password)).state.values['receiptOCR.budget.v1'],'4');pass('バックアップにも暗号化済みの最新値を保存');
+h.failWrites(true);adapter.setItem('receiptOCR.budget.v1','5');await assert.rejects(adapter.flush());assert.match(h.$('vault-save-status').textContent,/失敗/);pass('保存失敗を通知し成功扱いにしない');
+const failed=harness({'receiptOCR.ledger.v1':'[]'});failed.failWrites(true);failed.runtime.ReceiptVault.open();failed.$('vault-password').value=password;failed.$('vault-confirm').value=password;await failed.$('vault-form').handlers.submit({preventDefault(){}});assert.equal(failed.data.get('receiptOCR.ledger.v1'),'[]');pass('初回暗号化が失敗しても既存の平文記録を削除しない');
+const locked=harness({'receiptOCR.encrypted.v2':backup});const reopened=locked.runtime.ReceiptVault.open();locked.$('vault-password').value='wrong';await locked.$('vault-form').handlers.submit({preventDefault(){}});assert.notEqual(locked.$('vault-gate').hidden,true);pass('不正なパスワードでは画面を開かない');locked.$('vault-password').value=password;await locked.$('vault-form').handlers.submit({preventDefault(){}});const restored=await reopened;assert.equal(restored.getItem('receiptOCR.budget.v1'),'4');pass('再起動して正しいパスワードで解除');
+await locked.$('vault-lock').handlers.click();assert.equal(locked.reloads,1);assert.equal(restored.getItem('receiptOCR.budget.v1'),null);pass('手動ロックでメモリー中の復号データを破棄');
+const conflict=harness({'receiptOCR.encrypted.v2':backup});const conflictOpen=conflict.runtime.ReceiptVault.open();conflict.$('vault-password').value=password;await conflict.$('vault-form').handlers.submit({preventDefault(){}});const conflictAdapter=await conflictOpen;conflict.data.set('receiptOCR.encrypted.v2','another-tab-value');conflictAdapter.setItem('receiptOCR.budget.v1','99');await assert.rejects(conflictAdapter.flush());assert.equal(conflict.data.get('receiptOCR.encrypted.v2'),'another-tab-value');pass('別タブの更新を検出し上書きしない');
+console.log(`PASS ${count} encryption/storage checks`);

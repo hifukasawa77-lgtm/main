@@ -3,7 +3,9 @@ name: Deploy Cloudflare Worker (ai-proxy)
 # cloudflare-worker/ 配下の変更が main に push されたら自動デプロイする。
 # 必要なシークレット（リポジトリの Settings → Secrets and variables → Actions）:
 #   CLOUDFLARE_API_TOKEN  … 必須。権限: Workers Scripts:Edit / Workers KV Storage:Edit
-#   CLOUDFLARE_ACCOUNT_ID … 任意。トークンが複数アカウントに属する場合のみ必要
+#   CLOUDFLARE_ACCOUNT_ID … 必須。上の2権限だけのトークンはアカウント一覧を読めず、
+#                           ID が無いと wrangler が「A request to the Cloudflare API failed.」で止まる
+#   SECURITY_ALERT_WEBHOOK_URL … 任意。攻撃検知の通知先（Slack Incoming Webhook）
 
 on:
   push:
@@ -42,9 +44,23 @@ jobs:
       - name: Check secret
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "::error::CLOUDFLARE_API_TOKEN シークレットが未設定です。リポジトリの Settings → Secrets and variables → Actions で登録してください（cloudflare-worker/README.md 参照）"
+            exit 1
+          fi
+          # 値に改行・空白が混ざっていると wrangler は「Headers.set: ... is an invalid header value」
+          # という分かりにくいエラーで止まる（2026-10-11 run #21。2行貼り付けで実際に踏んだ）。
+          # 値そのものは出さず、形だけを確かめて日本語で次の一手を出す
+          case "$CLOUDFLARE_API_TOKEN" in
+            *[[:space:]]*)
+              echo "::error::CLOUDFLARE_API_TOKEN に改行または空白が含まれています（$(printf '%s' "$CLOUDFLARE_API_TOKEN" | wc -l | tr -d ' ')個の改行）。トークン1行だけを貼り直してください（Settings → Secrets and variables → Actions → CLOUDFLARE_API_TOKEN → Update）"
+              exit 1;;
+          esac
+          # grep は行ごとに当てるので「正しいID＋余分な行」を素通しする。文字列全体で判定する
+          if [ -n "$CLOUDFLARE_ACCOUNT_ID" ] && ! [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID の形が違います（32桁の英数字 0-9a-f の1行）。前後の空白・改行や、別の値を貼っていないか確認してください"
             exit 1
           fi
 
@@ -55,20 +71,30 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -e
+          # KV（共有学習メモリ）は任意。2026-09-14 以降は会話の自動共有を止めており、
+          # Worker は KV が無くても動く（/stats は0件・管理画面は空になるだけ）。
+          # ここで失敗してもデプロイ全体（攻撃の遮断・通知を含む）を止めない。
+          # 失敗理由は握り潰さずに表示する（以前は 2>/dev/null で消えていて原因が分からなかった）
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::CLOUDFLARE_ACCOUNT_ID が未設定です。トークンが複数アカウントを見られる、またはアカウント一覧の読み取り権限が無いと Cloudflare API が失敗します（cloudflare-worker/README.md 参照）"
+          fi
+          LIST_ERR=$(mktemp)
           find_id() {
-            npx --yes wrangler@4 kv namespace list 2>/dev/null \
+            npx --yes wrangler@4 kv namespace list 2>"$LIST_ERR" \
               | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const a=JSON.parse(s);const n=a.find(x=>x.title&&x.title.includes('AGENT_MEMORY'));process.stdout.write(n?n.id:'')}catch(e){process.stdout.write('')}})"
           }
-          ID=$(find_id)
+          ID=$(find_id || true)
           if [ -z "$ID" ]; then
-            echo "KV namespace AGENT_MEMORY が無いため作成します"
+            echo "KV namespace AGENT_MEMORY が見つからないため作成を試みます"
             npx --yes wrangler@4 kv namespace create AGENT_MEMORY || true
-            ID=$(find_id)
+            ID=$(find_id || true)
           fi
           if [ -z "$ID" ]; then
-            echo "::error::KV namespace の取得/作成に失敗しました"
-            exit 1
+            echo "--- wrangler kv namespace list の出力（失敗理由） ---"
+            cat "$LIST_ERR" || true
+            echo "::warning::KV namespace を取得/作成できませんでした。KV無しでデプロイを続けます（学習メモリの管理画面だけが空になります）。トークンに Workers KV Storage:Edit 権限と CLOUDFLARE_ACCOUNT_ID があるか確認してください"
+            echo "id=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "KV namespace id: $ID"
           echo "id=$ID" >> "$GITHUB_OUTPUT"
@@ -86,11 +112,30 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -e
-          # KVバインディングを wrangler.toml に追記してからデプロイ
-          printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "${{ steps.kv.outputs.id }}" >> wrangler.toml
+          # KVバインディングは取得できたときだけ追記する（任意。無くても Worker は動く）
+          if [ -n "${{ steps.kv.outputs.id }}" ]; then
+            printf '\n[[kv_namespaces]]\nbinding = "KV"\nid = "%s"\n' "${{ steps.kv.outputs.id }}" >> wrangler.toml
+          else
+            echo "::warning::KV無しでデプロイします"
+          fi
           echo "--- wrangler.toml ---"
           cat wrangler.toml
           npx --yes wrangler@4 deploy
+
+      - name: Security alert webhook (optional)
+        # 攻撃検知の通知先（Slack Incoming Webhook）。GitHub Secret があれば Worker の secret へ反映する。
+        # 無くてもデプロイは止めない（ログ＝シスログは残る。通知だけが届かない）
+        working-directory: cloudflare-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SECURITY_ALERT_WEBHOOK_URL: ${{ secrets.SECURITY_ALERT_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SECURITY_ALERT_WEBHOOK_URL" ]; then
+            echo "::warning::SECURITY_ALERT_WEBHOOK_URL が未設定のため、攻撃の通知は送られません（ログには残ります）"
+            exit 0
+          fi
+          printf '%s' "$SECURITY_ALERT_WEBHOOK_URL" | npx --yes wrangler@4 secret put SECURITY_ALERT_WEBHOOK_URL
 
       - name: Smoke test
         run: |
@@ -110,3 +155,9 @@ jobs:
             -H 'Content-Type: application/json' -H 'Origin: https://hifukasawa77-lgtm.github.io' -d '{"names":["テスト"]}')
           echo "/oshi/research http_code: $RS_CODE"
           { [ "$RS_CODE" = "200" ] || [ "$RS_CODE" = "502" ]; } || { echo "::error::/oshi/research が 200/502 以外（$RS_CODE）。ルートが未反映の可能性"; exit 1; }
+          # 攻撃の遮断（security-monitor.js）が本番で効いているか: 典型的な探索リクエストが 403 になること。
+          # 自己検査用の接頭辞（SELFTEST_PREFIX）の下で叩く＝遮断・記録はされるが通知はしない
+          # （素の /.env だとデプロイのたびに偽の攻撃通知が飛び、本物の通知を10分抑止してしまう）
+          PROBE_CODE=$(curl -s -m 30 -o /dev/null -w '%{http_code}' 'https://ai-proxy.hi-fukasawa77.workers.dev/__security-selftest/.env')
+          echo "selftest /.env probe http_code: $PROBE_CODE"
+          [ "$PROBE_CODE" = "403" ] || { echo "::error::攻撃パターンが遮断されていません（/__security-selftest/.env → $PROBE_CODE）"; exit 1; }

@@ -1,4 +1,5 @@
 import { allowedOrigin, publicHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
+import { withSecurityGate } from './security-monitor.js';
 const MAX_SOURCE_CHARS = 8000;
 const MAX_SOURCES = 5;
 const MAX_TOTAL_CHARS = 20000;
@@ -34,7 +35,7 @@ async function runAI(env, prompt) {
   return res?.response ?? '';
 }
 
-export default {
+export default withSecurityGate('notebook-proxy', {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') ?? '';
     if (!allowedOrigin(origin, env)) return errorResponse(403, 'Forbidden');
@@ -87,4 +88,4 @@ export default {
       return errorResponse(502, 'AI generation failed', headers);
     }
   },
-};
+});

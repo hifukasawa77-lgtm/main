@@ -118,6 +118,15 @@ const fakeEngine = (passes) => `
     });
   };`;
 
+async function unlockPage(page) {
+  await page.waitForFunction(() => document.getElementById('vault-title').textContent.length > 0);
+  if (await page.locator('#vault-submit').isDisabled()) return;
+  await page.fill('#vault-password', 'receipt-browser-test-passphrase');
+  if (await page.locator('#vault-confirm').isVisible()) await page.fill('#vault-confirm', 'receipt-browser-test-passphrase');
+  await page.click('#vault-submit');
+  await page.waitForFunction(() => !!window.__receiptOCR);
+}
+
 async function newPage(init = '') {
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
   const errors = [];
@@ -127,12 +136,13 @@ async function newPage(init = '') {
   await page.route(/^https:\/\/(cdn\.jsdelivr\.net|unpkg\.com|tessdata\.projectnaptha\.com)\//, (r) => r.fulfill({ status: 404, body: '' }));
   if (init) await page.addInitScript(init);
   await page.goto(`${BASE}/receipt-ocr.html`, { waitUntil: 'load' });
+  await unlockPage(page);
   return { page, errors };
 }
 
 // 合成レシート画像（canvas で描いて傾け・影を付ける）を PNG の Buffer で返す
-async function makeReceiptImage(page, { rot = 0, shade = 0, bg = true, blur = 0, desk = '#4a3a2c' }) {
-  const b64 = await page.evaluate(async ({ rot, shade, bg, blur, desk }) => {
+async function makeReceiptImage(page, { rot = 0, shade = 0, bg = true, blur = 0, desk = '#4a3a2c', clutter = false }) {
+  const b64 = await page.evaluate(async ({ rot, shade, bg, blur, desk, clutter }) => {
     const lines = ['テストマート', '2026年9月20日 18:32', '------------------------', '牛乳 1000ml            ¥238',
       '食パン 6枚切           ¥158', 'バナナ                 ¥198', '豚こま切落し           ¥498', 'キャベツ               ¥178',
       '醤油 1L                ¥328', 'たまご 10個            ¥258', '------------------------', '小計                 ¥1,856',
@@ -151,6 +161,14 @@ async function makeReceiptImage(page, { rot = 0, shade = 0, bg = true, blur = 0,
     const c = document.createElement('canvas'); c.width = W; c.height = H;
     const y = c.getContext('2d');
     y.fillStyle = bg ? desk : '#fdfdfb'; y.fillRect(0, 0, W, H);
+    if (clutter) {
+      // 明るい木目の机＋黒いキーボード＋照り返す袋（2026-10-08 深澤報告の写真の再現）
+      let sd = 7; const rnd = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
+      for (let yy = 0; yy < H; yy += 3) { y.strokeStyle = `rgba(90,70,50,${0.08 + rnd() * 0.18})`; y.lineWidth = 1 + rnd() * 2; y.beginPath(); y.moveTo(0, yy + rnd() * 3); y.bezierCurveTo(W / 3, yy + rnd() * 10 - 5, W * 2 / 3, yy + rnd() * 10 - 5, W, yy + rnd() * 6); y.stroke(); }
+      y.fillStyle = '#1a1a1c'; y.fillRect(0, 0, W * 0.3, H * 0.12);
+      for (let k = 0; k < 18; k++) { y.fillStyle = '#d8d8dc'; y.fillRect(10 + (k % 6) * 40, 8 + Math.floor(k / 6) * 30, 30, 20); }
+      for (let k = 0; k < 400; k++) { y.fillStyle = `rgba(${rnd() < .5 ? '255,255,255' : '120,120,130'},${0.3 + rnd() * 0.5})`; y.fillRect(W * 0.72 + rnd() * W * 0.28, rnd() * H * 0.45, 4 + rnd() * 40, 2 + rnd() * 8); }
+    }
     y.save(); y.translate(W / 2, H / 2); y.rotate(rot * Math.PI / 180);
     if (blur) y.filter = `blur(${blur}px)`;
     y.drawImage(r, -r.width / 2, -r.height / 2); y.restore(); y.filter = 'none';
@@ -160,7 +178,7 @@ async function makeReceiptImage(page, { rot = 0, shade = 0, bg = true, blur = 0,
       y.fillStyle = g; y.fillRect(0, 0, W, H);
     }
     return c.toDataURL('image/png').split(',')[1];
-  }, { rot, shade, bg, blur, desk });
+  }, { rot, shade, bg, blur, desk, clutter });
   return Buffer.from(b64, 'base64');
 }
 
@@ -229,6 +247,18 @@ console.log('\n── 2. 画像補正（紙の検出・傾き・文字の高さ�
     else check(`${c.name}: 影があっても紙を1枚として検出`, an.paperRatio > 0.2 && an.paperRatio < 0.8, `paper=${an.paperRatio.toFixed(2)}`);
     check(`${c.name}: 文字の高さを測れる`, an.charH > 10 && an.charH < 60, `charH=${an.charH && an.charH.toFixed(1)}`);
   }
+  // 明るい机（白木）＋キーボード＋袋: 机が大津の閾値より明るく外周から辿れず、紙を見つけられないまま
+  // 机の模様ごとOCRへ渡して0品目になっていた（2026-10-08 深澤報告）。紙は全体の約32%
+  for (const desk of ['#d8d2c8', '#cfc9c0']) {
+    const png = await makeReceiptImage(page, { rot: 3, desk, clutter: true });
+    const an = await page.evaluate(async (b64) => {
+      const img = new Image(); img.src = 'data:image/png;base64,' + b64; await img.decode();
+      const a = window.__receiptOCR.analyzeImage(img);
+      return { phi: a.phi, sideways: a.sideways, paperRatio: a.paperRatio, charH: a.charH };
+    }, png.toString('base64'));
+    check(`明るい机${desk}・小物あり: レシートだけを紙として検出`, an.paperRatio > 0.27 && an.paperRatio < 0.37, `paper=${an.paperRatio.toFixed(2)}`);
+    check(`明るい机${desk}・小物あり: 角度と文字の高さ`, Math.abs(an.phi + 3) <= 0.6 && !an.sideways && an.charH > 15 && an.charH < 35, `phi=${an.phi} charH=${an.charH && an.charH.toFixed(1)}`);
+  }
   // 価格の列（右端）が補正後も残っているか。紙マスクで塗ると濃い影の所で列ごと白く消えていた。
   // 影あり/なしの比較だけだと、両方とも同じだけ消える壊れ方を見逃すので、右端の列に文字が
   // 「全体のインクの一定割合ある」ことを影なしでも確かめる
@@ -258,6 +288,7 @@ console.log('\n── 3. 画面: 取り込み→自動読取→検算→家計�
   const { page, errors } = await newPage(fakeEngine([BAD, XSS]));
   await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
   await page.reload();
+  await unlockPage(page);
   const png = await makeReceiptImage(page, { rot: 3, shade: 0.4 });
   await page.setInputFiles('#file', { name: 'r.png', mimeType: 'image/png', buffer: png });
   await page.waitForFunction(() => /完了|失敗/.test(document.getElementById('status').textContent), null, { timeout: 30000 });
@@ -287,7 +318,7 @@ console.log('\n── 3. 画面: 取り込み→自動読取→検算→家計�
     total: document.getElementById('st-total').textContent,
     entries: document.querySelectorAll('#entries .entry').length,
     cats: [...document.querySelectorAll('#cat-list .cat-row')].map((r) => r.textContent),
-    stored: JSON.parse(localStorage.getItem('receiptOCR.ledger.v1') || '[]'),
+    stored: window.__receiptOCR.loadLedger(),
     rowsAfter: document.querySelectorAll('#rows tr').length,
     csv: window.__receiptOCR.ledgerCSV('2026-09').csv
   }));
@@ -305,20 +336,57 @@ console.log('\n── 3. 画面: 取り込み→自動読取→検算→家計�
   await page.fill('#meta-store', '編集後ストア');
   await page.click('#save-ledger');
   await page.waitForTimeout(200);
-  const ed = await page.evaluate(() => ({ n: JSON.parse(localStorage.getItem('receiptOCR.ledger.v1')).length, store: JSON.parse(localStorage.getItem('receiptOCR.ledger.v1'))[0].store }));
+  const ed = await page.evaluate(() => ({ n: window.__receiptOCR.loadLedger().length, store: window.__receiptOCR.loadLedger()[0].store }));
   check('編集して更新しても記録は1件のまま', ed.n === 1 && ed.store === '編集後ストア', JSON.stringify(ed));
 
   // 再読込しても残る
   await page.reload();
+  await unlockPage(page);
+  await page.click('#nav-ledger');
+  // テストレシートは2026年9月。実行月に依存せず保存月の履歴を確認する。
+  const monthOffset = await page.evaluate(() => {
+    const now = new Date(); return (now.getFullYear() - 2026) * 12 + now.getMonth() - 8;
+  });
+  for (let i = 0; i < Math.abs(monthOffset); i++) await page.click(monthOffset > 0 ? '#m-prev' : '#m-next');
   const kept = await page.evaluate(() => document.querySelectorAll('#entries .entry').length);
   check('再読込後も家計簿が残る', kept === 1);
 
-  // 削除
+  // 削除（再読込後は読み取りタブで起動）
+  await page.click('#nav-ledger');
   await page.click('#entries .entry summary');
   await page.click('#entries .entry .chip.danger');
   await page.waitForTimeout(100);
-  const del = await page.evaluate(() => JSON.parse(localStorage.getItem('receiptOCR.ledger.v1')).length);
+  const del = await page.evaluate(() => window.__receiptOCR.loadLedger().length);
   check('削除できる', del === 0);
+  check('例外0件', errors.length === 0, errors.slice(0, 2).join(' | '));
+  await page.close();
+}
+
+/* ───────────────────────── 3b. スマホ・文字取り込み・グラフ ───────────────────────── */
+console.log('\n── 3b. スマホ・文字取り込み・グラフ ─────');
+{
+  const { page, errors } = await newPage();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.click('#nav-scan');
+  await page.locator('.text-import summary').click();
+  await page.fill('#ocr-input', RAW_A);
+  await page.click('#parse-text');
+  check('文字の貼り付けから8明細・支払合計を抽出',
+    await page.locator('#rows tr').count() === 8 && await page.locator('#sum-total').textContent() === '¥2,175');
+  check('スマホで明細がカード配置になる', await page.locator('#rows tr').first().evaluate(e => getComputedStyle(e).display === 'grid'));
+  check('スマホでページの横はみ出しがない', await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.click('#save-ledger');
+  await page.waitForFunction(() => document.body.dataset.view === 'ledger');
+  check('保存後に家計簿タブへ切り替え', await page.evaluate(() => document.body.dataset.view === 'ledger'));
+  check('グラフが実際の支出カテゴリーを表示', await page.locator('#category-chart').evaluate(e => e.style.background.includes('conic-gradient') && /肉類/.test(e.getAttribute('aria-label'))));
+  const budget = page.locator('#budget'); await budget.fill('3000'); await budget.dispatchEvent('change');
+  check('予算3000円の残り825円を表示', await page.locator('#st-budget').textContent() === '¥825');
+  await page.click('#m-next');
+  check('記録のない月ではグラフと履歴が空になる', await page.locator('#chart-count').textContent() === '¥0' && await page.locator('#entries .entry').count() === 0);
+  await page.click('#nav-scan');
+  check('読み取りタブへ戻れる', await page.locator('#capture-card').isVisible());
+  await page.fill('#ocr-input', '品目だけ'); await page.click('#parse-text');
+  check('価格なしの文字は保存可能な明細にしない', /識別できません/.test(await page.locator('#text-status').textContent()));
   check('例外0件', errors.length === 0, errors.slice(0, 2).join(' | '));
   await page.close();
 }
@@ -329,8 +397,8 @@ console.log('\n── 4. localStorage が使えない端末 ──────�
   const { page, errors } = await newPage(`
     Object.defineProperty(window, 'localStorage', { get: function () { throw new Error('SecurityError'); } });
     ${fakeEngine([RAW_A])}`);
-  const ok = await page.evaluate(() => !!window.__receiptOCR && document.getElementById('m-label').textContent.length > 0);
-  check('localStorage が例外を投げても起動する（シークレットタブ等）', ok && errors.length === 0, errors.slice(0, 2).join(' | '));
+  const ok = await page.evaluate(() => !window.__receiptOCR && document.body.classList.contains('vault-locked') && document.getElementById('vault-submit').disabled);
+  check('保存領域が使えない場合は平文へ戻さずロック画面で停止する', ok && errors.length === 0, errors.slice(0, 2).join(' | '));
   await page.close();
 }
 
@@ -362,10 +430,11 @@ if (REAL_OCR) {
       'Content-Type': f.endsWith('.js') ? 'application/javascript' : f.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream' } });
   });
   await page.goto(`${BASE}/receipt-ocr.html`);
-  for (const c of [{ name: '机の上・傾き3°・影', rot: 3, shade: 0.45 }, { name: 'スキャン', rot: 0, bg: false }]) {
+  for (const c of [{ name: '机の上・傾き3°・影', rot: 3, shade: 0.45 }, { name: 'スキャン', rot: 0, bg: false }, { name: '明るい木目の机・小物あり', rot: 3, desk: '#d8d2c8', clutter: true }]) {
     await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
     await page.reload();
-    const png = await makeReceiptImage(page, { rot: c.rot, shade: c.shade || 0, bg: c.bg !== false });
+  await unlockPage(page);
+    const png = await makeReceiptImage(page, { rot: c.rot, shade: c.shade || 0, bg: c.bg !== false, desk: c.desk, clutter: !!c.clutter });
     await page.setInputFiles('#file', { name: 'r.png', mimeType: 'image/png', buffer: png });
     await page.waitForFunction(() => /完了|失敗/.test(document.getElementById('status').textContent), null, { timeout: 300000 });
     const r = await page.evaluate(() => ({

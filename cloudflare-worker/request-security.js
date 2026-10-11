@@ -17,6 +17,28 @@ export const securityHeaders = {
   'Vary': 'Origin',
 };
 
+// Every reply gets these, including plain-text errors and streamed bodies that do not
+// go through errorResponse/jsonResponse. JSON APIs never need to be framed, sniffed
+// or to run scripts, so the strictest values cost nothing here.
+export const hardeningHeaders = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+};
+
+// Adds missing hardening headers; values a handler set on purpose are kept.
+export function hardenResponse(response) {
+  const out = new Response(response.body, response);
+  for (const [name, value] of Object.entries(hardeningHeaders)) {
+    if (!out.headers.has(name)) out.headers.set(name, value);
+  }
+  return out;
+}
+
 export function publicHeaders(origin) {
   return { ...securityHeaders,
     ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
