@@ -471,6 +471,9 @@ HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用
   ＋ `/opt/pw-browsers/chromium`（`--no-sandbox`）。コミットは向こうの `npm run check` を通してから
   向こうは `main` だけの浅いクローンになるので、**push したブランチは追跡参照が無く、Stop フックが「リモートブランチなし・Nコミット未push」と誤報する**。
   `git fetch origin +refs/heads/<ブランチ>:refs/remotes/origin/<ブランチ>` で直る（push 自体は済んでいる。`git ls-remote origin <ブランチ>` で確かめる）
+  向こうの**開発サーバ（`npm run dev`）はファイル・SQLite・statfs に触れず**「operation not permitted」・ディスク0GBになる（既存機能も同じ）。
+  画面の確認は `npm run build && npm start` で行う。カメラを使う機能は Chromium の `--use-fake-device-for-media-stream
+  --use-file-for-fake-video-capture=<写真から ffmpeg で作った .y4m>` で本物のモデルに映像を見せて確かめられる
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
