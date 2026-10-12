@@ -152,6 +152,7 @@ async function newPage(browser, pageErrors, init) {
         { q: 'おすすめの投資信託は',           off: true },
         { q: '近くのおすすめ居酒屋',           off: true },
         { q: 'サッカーのルール教えて',         off: true },
+        { q: 'サッカーのゲームある？',         off: false },   // 題材の語でゲームを探すのは従来どおり（クラブロード）
         { q: 'おすすめの旅行先を教えて',       off: true },
         { q: 'recommend a good ramen shop',    off: true, lang: 'en' },
         { q: 'how to play the guitar',         off: true, lang: 'en' },

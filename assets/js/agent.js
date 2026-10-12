@@ -310,12 +310,21 @@
         return false;
       }
 
+      // 題材の語（GAMES[].themes）。「サッカーのゲームある？」でクラブロードを見つけるのには使うが、
+      // 「サッカーのルール教えて」はサッカーそのものの質問で、サイトのゲームはサッカーのルールを教えない。
+      // ★別名から外すと探せなくなるので、ルール・遊び方を聞かれたときだけサイトの語彙として数えない
+      //   （2026-10-12: クラブロードの別名「サッカー」が入って、この質問がゲーム紹介になっていた）
+      const THEME_WORDS = new Set(GAMES.flatMap(g => [...((g.themes && g.themes.ja) || []), ...((g.themes && g.themes.en) || [])])
+        .map(w => normalize(w)).filter(Boolean));
+      const ASKS_RULES = /ルール|遊び方|やり方|規則|how to play|\brules?\b/i;
+
       // 話題を持たないintentが当たったとき、サイト語彙に無い内容語が1つでもあれば off-topic。
       function isOffTopic(intentName, text) {
         if (!intentName || TOPIC_GENERIC_INTENTS.indexOf(intentName) === -1) return false;
         const tokens = contentTokens(text);
         if (!tokens.length) return false;         // 「おすすめは？」等は内容語ゼロ＝サイト内の話題
-        return tokens.some(tk => !isKnownTopicWord(tk));
+        const asksRules = ASKS_RULES.test(String(text || ''));
+        return tokens.some(tk => !isKnownTopicWord(tk) || (asksRules && THEME_WORDS.has(tk)));
       }
 
       // ゲームエイリアスは起動時に正規化しておく（カナ折り畳み・長音展開を辞書側にも適用）

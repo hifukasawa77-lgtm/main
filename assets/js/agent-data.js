@@ -197,6 +197,7 @@
         { slug:'club-road', href:'club_road.html', cat:'sim',
           title:{ja:'クラブロード',en:'Club Road'}, emoji:'⚽',
           desc:{ja:'3部の小さなサッカークラブのGMになり、育成・補強・施設・戦術で1部優勝を目指す経営シミュレーション',en:'Football club management sim — rise from the third division to the top with scouting, training, facilities and tactics'},
+          themes:{ja:['サッカー','サッカークラブ'],en:['soccer','football']},
           aliases:{ja:['クラブロード','サッカー','サッカークラブ','クラブ経営','経営','経営シミュレーション','育成','サッカー経営','サカつく風'],en:['club road','soccer','football','club management','manager','management sim']} },
         { slug:'bakumatsu', href:'bakumatsu.html', cat:'sim', thumb:'assets/maps/strategic-japan.png',
           title:{ja:'幕末風雲記',en:'Bakumatsu Fuunki'}, emoji:'⚓',
