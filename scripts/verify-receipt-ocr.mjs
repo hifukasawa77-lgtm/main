@@ -141,8 +141,8 @@ async function newPage(init = '') {
 }
 
 // 合成レシート画像（canvas で描いて傾け・影を付ける）を PNG の Buffer で返す
-async function makeReceiptImage(page, { rot = 0, shade = 0, bg = true, blur = 0, desk = '#4a3a2c' }) {
-  const b64 = await page.evaluate(async ({ rot, shade, bg, blur, desk }) => {
+async function makeReceiptImage(page, { rot = 0, shade = 0, bg = true, blur = 0, desk = '#4a3a2c', clutter = false }) {
+  const b64 = await page.evaluate(async ({ rot, shade, bg, blur, desk, clutter }) => {
     const lines = ['テストマート', '2026年9月20日 18:32', '------------------------', '牛乳 1000ml            ¥238',
       '食パン 6枚切           ¥158', 'バナナ                 ¥198', '豚こま切落し           ¥498', 'キャベツ               ¥178',
       '醤油 1L                ¥328', 'たまご 10個            ¥258', '------------------------', '小計                 ¥1,856',
@@ -161,6 +161,14 @@ async function makeReceiptImage(page, { rot = 0, shade = 0, bg = true, blur = 0,
     const c = document.createElement('canvas'); c.width = W; c.height = H;
     const y = c.getContext('2d');
     y.fillStyle = bg ? desk : '#fdfdfb'; y.fillRect(0, 0, W, H);
+    if (clutter) {
+      // 明るい木目の机＋黒いキーボード＋照り返す袋（2026-10-08 深澤報告の写真の再現）
+      let sd = 7; const rnd = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
+      for (let yy = 0; yy < H; yy += 3) { y.strokeStyle = `rgba(90,70,50,${0.08 + rnd() * 0.18})`; y.lineWidth = 1 + rnd() * 2; y.beginPath(); y.moveTo(0, yy + rnd() * 3); y.bezierCurveTo(W / 3, yy + rnd() * 10 - 5, W * 2 / 3, yy + rnd() * 10 - 5, W, yy + rnd() * 6); y.stroke(); }
+      y.fillStyle = '#1a1a1c'; y.fillRect(0, 0, W * 0.3, H * 0.12);
+      for (let k = 0; k < 18; k++) { y.fillStyle = '#d8d8dc'; y.fillRect(10 + (k % 6) * 40, 8 + Math.floor(k / 6) * 30, 30, 20); }
+      for (let k = 0; k < 400; k++) { y.fillStyle = `rgba(${rnd() < .5 ? '255,255,255' : '120,120,130'},${0.3 + rnd() * 0.5})`; y.fillRect(W * 0.72 + rnd() * W * 0.28, rnd() * H * 0.45, 4 + rnd() * 40, 2 + rnd() * 8); }
+    }
     y.save(); y.translate(W / 2, H / 2); y.rotate(rot * Math.PI / 180);
     if (blur) y.filter = `blur(${blur}px)`;
     y.drawImage(r, -r.width / 2, -r.height / 2); y.restore(); y.filter = 'none';
@@ -170,7 +178,7 @@ async function makeReceiptImage(page, { rot = 0, shade = 0, bg = true, blur = 0,
       y.fillStyle = g; y.fillRect(0, 0, W, H);
     }
     return c.toDataURL('image/png').split(',')[1];
-  }, { rot, shade, bg, blur, desk });
+  }, { rot, shade, bg, blur, desk, clutter });
   return Buffer.from(b64, 'base64');
 }
 
@@ -238,6 +246,18 @@ console.log('\n── 2. 画像補正（紙の検出・傾き・文字の高さ�
     if (c.scan) check(`${c.name}: 切り抜かない（紙=100%）`, an.paperRatio === 1, `paper=${an.paperRatio}`);
     else check(`${c.name}: 影があっても紙を1枚として検出`, an.paperRatio > 0.2 && an.paperRatio < 0.8, `paper=${an.paperRatio.toFixed(2)}`);
     check(`${c.name}: 文字の高さを測れる`, an.charH > 10 && an.charH < 60, `charH=${an.charH && an.charH.toFixed(1)}`);
+  }
+  // 明るい机（白木）＋キーボード＋袋: 机が大津の閾値より明るく外周から辿れず、紙を見つけられないまま
+  // 机の模様ごとOCRへ渡して0品目になっていた（2026-10-08 深澤報告）。紙は全体の約32%
+  for (const desk of ['#d8d2c8', '#cfc9c0']) {
+    const png = await makeReceiptImage(page, { rot: 3, desk, clutter: true });
+    const an = await page.evaluate(async (b64) => {
+      const img = new Image(); img.src = 'data:image/png;base64,' + b64; await img.decode();
+      const a = window.__receiptOCR.analyzeImage(img);
+      return { phi: a.phi, sideways: a.sideways, paperRatio: a.paperRatio, charH: a.charH };
+    }, png.toString('base64'));
+    check(`明るい机${desk}・小物あり: レシートだけを紙として検出`, an.paperRatio > 0.27 && an.paperRatio < 0.37, `paper=${an.paperRatio.toFixed(2)}`);
+    check(`明るい机${desk}・小物あり: 角度と文字の高さ`, Math.abs(an.phi + 3) <= 0.6 && !an.sideways && an.charH > 15 && an.charH < 35, `phi=${an.phi} charH=${an.charH && an.charH.toFixed(1)}`);
   }
   // 価格の列（右端）が補正後も残っているか。紙マスクで塗ると濃い影の所で列ごと白く消えていた。
   // 影あり/なしの比較だけだと、両方とも同じだけ消える壊れ方を見逃すので、右端の列に文字が
@@ -410,11 +430,11 @@ if (REAL_OCR) {
       'Content-Type': f.endsWith('.js') ? 'application/javascript' : f.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream' } });
   });
   await page.goto(`${BASE}/receipt-ocr.html`);
-  for (const c of [{ name: '机の上・傾き3°・影', rot: 3, shade: 0.45 }, { name: 'スキャン', rot: 0, bg: false }]) {
+  for (const c of [{ name: '机の上・傾き3°・影', rot: 3, shade: 0.45 }, { name: 'スキャン', rot: 0, bg: false }, { name: '明るい木目の机・小物あり', rot: 3, desk: '#d8d2c8', clutter: true }]) {
     await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
     await page.reload();
   await unlockPage(page);
-    const png = await makeReceiptImage(page, { rot: c.rot, shade: c.shade || 0, bg: c.bg !== false });
+    const png = await makeReceiptImage(page, { rot: c.rot, shade: c.shade || 0, bg: c.bg !== false, desk: c.desk, clutter: !!c.clutter });
     await page.setInputFiles('#file', { name: 'r.png', mimeType: 'image/png', buffer: png });
     await page.waitForFunction(() => /完了|失敗/.test(document.getElementById('status').textContent), null, { timeout: 300000 });
     const r = await page.evaluate(() => ({
