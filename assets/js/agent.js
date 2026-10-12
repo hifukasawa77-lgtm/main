@@ -328,24 +328,28 @@
       }
 
       // ゲームエイリアスは起動時に正規化しておく（カナ折り畳み・長音展開を辞書側にも適用）
-      const GAME_ALIAS_NORM = GAMES.map(g => ({
-        g,
-        aliases: [...(g.aliases.ja || []), ...(g.aliases.en || []), g.title.ja, g.title.en]
-          .filter(Boolean).map(a => normalize(a)).filter(a => a.length >= 2)
-      }));
+      // themeFree: 題材の語（themes）を除いた別名。ルール・遊び方の質問ではこちらで照合する
+      const GAME_ALIAS_NORM = GAMES.map(g => {
+        const aliases = [...(g.aliases.ja || []), ...(g.aliases.en || []), g.title.ja, g.title.en]
+          .filter(Boolean).map(a => normalize(a)).filter(a => a.length >= 2);
+        return { g, aliases, themeFree: aliases.filter(a => !THEME_WORDS.has(a)) };
+      });
 
-      function detectGame(text) {
+      // ★opts.excludeThemes: 「サッカーのルール教えて」で別名「サッカー」からクラブロードを出さない。
+      //   話題の判定（isOffTopic）だけ直しても、ここが先にカードを返すので画面では直らない（2026-10-12）
+      function detectGame(text, opts) {
         const t = normalize(text);
         if (!t) return [];
+        const pick = (e) => (opts && opts.excludeThemes ? e.themeFree : e.aliases);
         const hits = [];
         for (const e of GAME_ALIAS_NORM) {
-          if (e.aliases.some(a => t.indexOf(a) !== -1)) hits.push(e.g);
+          if (pick(e).some(a => t.indexOf(a) !== -1)) hits.push(e.g);
         }
         if (hits.length) return hits;
         // ファジー第2パス（タイポ耐性）: 最も近い1件のみ、閾値0.78
         let best = null, bestSim = 0;
         for (const e of GAME_ALIAS_NORM) {
-          for (const a of e.aliases) {
+          for (const a of pick(e)) {
             if (a.length < 3) continue;
             const s = fuzzyScore(t, a);
             if (s > bestSim) { bestSim = s; best = e.g; }
@@ -1063,7 +1067,7 @@
         if (intent0.name === 'clear' && intent0.score >= 2)   { doClear(); return; }
 
         // game match has priority
-        const gameHits = detectGame(text);
+        const gameHits = detectGame(text, { excludeThemes: ASKS_RULES.test(text) });
         if (gameHits.length === 1) {
           State.lastIntent = 'open_game';
           State.slots.game = gameHits[0].slug;
