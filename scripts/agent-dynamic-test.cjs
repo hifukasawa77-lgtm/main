@@ -152,6 +152,7 @@ async function newPage(browser, pageErrors, init) {
         { q: 'おすすめの投資信託は',           off: true },
         { q: '近くのおすすめ居酒屋',           off: true },
         { q: 'サッカーのルール教えて',         off: true },
+        { q: 'サッカーのゲームある？',         off: false },   // 題材の語でゲームを探すのは従来どおり（クラブロード）
         { q: 'おすすめの旅行先を教えて',       off: true },
         { q: 'recommend a good ramen shop',    off: true, lang: 'en' },
         { q: 'how to play the guitar',         off: true, lang: 'en' },
@@ -200,6 +201,24 @@ async function newPage(browser, pageErrors, init) {
       await askAgent(page, 'おすすめは？');
       const afterOn = await page.evaluate(() => document.querySelectorAll('#agent-messages .game-card-mini').length);
       report('7c. サイト内の「おすすめは？」は従来どおり推薦', afterOn > afterOff, `cards ${afterOff}→${afterOn}`);
+
+      // 実挙動: 題材の語（GAMES[].themes）のルールを聞かれたら、そのゲームを出さない。
+      // ★判定関数（7a）だけを見ると、その手前のゲーム名照合（detectGame）がカードを返す経路を見逃す
+      //   （2026-10-12、7a は通るのに画面では「サッカーのルール教えて」にクラブロードが出ていた）
+      const msgText = () => page.evaluate(() => document.getElementById('agent-messages').innerText || '');
+      const beforeRules = await page.evaluate(() => document.querySelectorAll('#agent-messages .game-card-mini').length);
+      const textBeforeRules = await msgText();
+      await askAgent(page, 'サッカーのルール教えて');
+      const afterRules = await page.evaluate(() => document.querySelectorAll('#agent-messages .game-card-mini').length);
+      const rulesReply = (await msgText()).slice(textBeforeRules.length);
+      report('7d. 題材のルールの質問でゲームを出さない（サッカーのルール）', afterRules === beforeRules && !/クラブロード/.test(rulesReply),
+        `cards ${beforeRules}→${afterRules}${/クラブロード/.test(rulesReply) ? '・クラブロードを案内した' : ''}`);
+
+      // 反対側: 題材の語でゲームを探すのは従来どおり（過剰ブロックの検出）
+      const textBeforeFind = await msgText();
+      await askAgent(page, 'サッカーのゲームある？');
+      const findReply = (await msgText()).slice(textBeforeFind.length);
+      report('7e. 題材の語でゲームを探すのは従来どおり（サッカーのゲーム）', /クラブロード/.test(findReply), findReply.slice(0, 60).replace(/\s+/g, ' '));
       await ctx.close();
     }
 

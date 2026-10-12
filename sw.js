@@ -3,7 +3,7 @@
 // 静的アセットは cache-first（速度維持）。バージョン更新で旧キャッシュを破棄する。
 //
 // ★このSWが見るのは**同じオリジンの通信だけ**。別オリジンへは一切触らない（下の理由を参照）。
-const CACHE_NAME = 'hide-portfolio-v7';
+const CACHE_NAME = 'hide-portfolio-v8';
 const SITE_SCOPE = new URL('./', self.location.href);
 
 // ★パスは必ず相対で書く。このサイトは https://…github.io/main/ 配下にあり、

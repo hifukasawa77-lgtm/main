@@ -463,6 +463,17 @@ HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用
   （PCのWebカメラは前面/背面の区別を持たず `OverconstrainedError` で掴めない）。
   検査#49〜54 がデスクトップ幅（1440×900）で通し確認する。
   なお **PC版 ZERO-1 は別リポジトリ `zero-1-local-ai`（Ollama）** で、こことは別実装
+  **PC版を触る依頼（「デスクトップ版ZERO-1」等）はこのリポジトリでは何も変わらない。**
+  `mcp__claude-code-remote__add_repo` で取り込み → クローン → `register_repo_root`。先に向こうの
+  `CLAUDE.md` と `docs/開発の注意.md` を読む（検査の書き方・大きさの上限が違う）。`npm ci --ignore-scripts` のあと
+  `node scripts/setup-airtouch.mjs` / `setup-wakeword.mjs` で `public/wasm` と `models` を用意しないと、
+  ビルドに入らず `/wasm` が404になる。実ブラウザは `/opt/node-tools/node_modules/playwright-core`
+  ＋ `/opt/pw-browsers/chromium`（`--no-sandbox`）。コミットは向こうの `npm run check` を通してから
+  向こうは `main` だけの浅いクローンになるので、**push したブランチは追跡参照が無く、Stop フックが「リモートブランチなし・Nコミット未push」と誤報する**。
+  `git fetch origin +refs/heads/<ブランチ>:refs/remotes/origin/<ブランチ>` で直る（push 自体は済んでいる。`git ls-remote origin <ブランチ>` で確かめる）
+  向こうの**開発サーバ（`npm run dev`）はファイル・SQLite・statfs に触れず**「operation not permitted」・ディスク0GBになる（既存機能も同じ）。
+  画面の確認は `npm run build && npm start` で行う。カメラを使う機能は Chromium の `--use-fake-device-for-media-stream
+  --use-file-for-fake-video-capture=<写真から ffmpeg で作った .y4m>` で本物のモデルに映像を見せて確かめられる
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
@@ -642,8 +653,8 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 
 | スキル | スケジュール（JST） | 成果物 | mainへの直接push |
 |---|---|---|---|
-| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve` | 禁止（深澤承認制） |
-| `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ | 禁止（コード変更なし） |
+| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-09-30`・PR #363） | 禁止（深澤承認制） |
+| `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ。Vaultの写しと痕跡は `claude/site-proposal-vault` | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
 | `/note-post` | 毎週水曜 06:00 | ローリングPR `claude/note-post`（note記事1本） | 禁止（深澤承認制） |
@@ -664,6 +675,9 @@ node scripts/verify-routine-delivery.mjs   # 表の各Routineが成果物を出�
   パラメータが無い。MCP経由で作ったRoutineは**リポジトリ無しのコンテナで起動する**
 - **表に載っているなら、動いている証跡があること。動かないなら表から外して停止する。**
   検査はこの原則で判定する（「起動はしている」を成功と呼ばせないため）
+- **成果物の置き場所は全部この表に書く**（検査は書かれたブランチを全部見て、最も新しいものを採る）。
+  2026-10-12、実際の置き場所（`claude/site-proposal-vault`・`claude/agent-evolve-2026-09-30`）が表に無かったため、
+  毎週動いていた2本を「15日・82日止まっている」と**偽の赤**で報告していた
 - harness-lint 検査#15 は同じ内容を**△警告**で出す（✗にしない理由は検査#15のコメント参照。
   Routineが動くかはAPI側の設定に依存し、リポジトリのコードでは直せないため）。
   **△が出たら必ず中身を見ること**
