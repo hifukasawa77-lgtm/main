@@ -3,7 +3,12 @@ import readline from "node:readline/promises";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { chat, ping } from "./lib/ollama.js";
+import { chat, chatStream, ping, getRunning, formatStats, formatVram, listModels, supportsTools, DEFAULT_HOST, DEFAULT_MODEL_OPTIONS } from "./lib/ollama.js";
+import { buildIndex, search, formatContext } from "./lib/rag.js";
+import { composeSystem, extractSummary, compactIfNeeded, estimateTokens } from "./lib/memory.js";
+import { chooseModel } from "./lib/router.js";
+import { runDiagnosis, formatDiagnosis, hasFailure } from "./lib/diagnose.js";
+import { tryLocalTool } from "./lib/localtools.js";
 import { TOOL_DEFS, READ_ONLY_TOOLS, makeToolImpls } from "./lib/tools.js";
 import { assessShellCommand } from "./lib/sandbox.js";
 import { formatDiff } from "./lib/diff.js";
@@ -23,6 +28,10 @@ function parseArgs(argv) {
     numCtx: undefined,
     session: null,
     skipToolCheck: false,
+    diagnose: false,
+    stream: true,
+    rag: [],
+    maxModelGB: 10,
   };
   const rest = [];
   for (const arg of argv) {
@@ -32,6 +41,10 @@ function parseArgs(argv) {
     else if (arg.startsWith("--num-ctx=")) opts.numCtx = Number(arg.slice("--num-ctx=".length));
     else if (arg.startsWith("--session=")) opts.session = arg.slice("--session=".length);
     else if (arg === "--skip-tool-check") opts.skipToolCheck = true;
+    else if (arg === "--diagnose") opts.diagnose = true;
+    else if (arg === "--no-stream") opts.stream = false;
+    else if (arg.startsWith("--rag=")) opts.rag.push(...arg.slice("--rag=".length).split(",").filter(Boolean).map((d) => path.resolve(d)));
+    else if (arg.startsWith("--max-model-gb=")) opts.maxModelGB = Number(arg.slice("--max-model-gb=".length));
     else rest.push(arg);
   }
   if (rest.length) opts.task = rest.join(" ");
@@ -113,14 +126,66 @@ async function confirm(rl, name, args, root) {
   return requireFullYes ? /^yes$/i.test(normalized) : /^y(es)?$/i.test(normalized);
 }
 
-async function runTurn({ messages, model, root, tools, rl, modelOptions, onSave }) {
-  for (let i = 0; i < MAX_TURN_ITERATIONS; i++) {
+// 生成中の Ctrl+C は「アプリを終了」ではなく「この返答を止める」。
+// それまでに書けた分は捨てない（捨てると止める＝やり直しになり、結局みんな待つ）。
+async function generate({ model, messages, modelOptions, rl, stream }) {
+  if (!stream) {
     const message = await chat({ model, messages, tools: TOOL_DEFS, options: modelOptions });
+    console.log(`\n${message.content}`);
+    return { message, aborted: false, stats: null };
+  }
+  const ac = new AbortController();
+  const onSigint = () => ac.abort();
+  rl.on("SIGINT", onSigint);
+  console.log("\x1b[2m（Ctrl+C でこの返答を止められます）\x1b[0m");
+  try {
+    return await chatStream({
+      model,
+      messages,
+      tools: TOOL_DEFS,
+      options: modelOptions,
+      signal: ac.signal,
+      onToken: (t) => process.stdout.write(t),
+    });
+  } finally {
+    rl.off("SIGINT", onSigint);
+  }
+}
+
+// 端末内ツールで確定できるものは、モデルを呼ばずに答える（GPUを回さない＝即答・電池を食わない・言い間違えない）。
+// 会話履歴には残す。残さないと「さっきの計算の答えに2を足して」が繋がらない。
+// 画面でも「ツールが答えた」と分かるようにする（AIが時計を読めた、と誤解されないため）。
+async function answerLocally(text, messages, onSave) {
+  const hit = tryLocalTool(text);
+  if (!hit) return false;
+  console.log(`\n\x1b[36m[端末内ツール: ${hit.label}]\x1b[0m ${hit.text}\n`);
+  messages.push({ role: "user", content: text });
+  messages.push({ role: "assistant", content: `[端末内ツール: ${hit.label}] ${hit.text}` });
+  if (onSave) await onSave(messages);
+  return true;
+}
+
+async function runTurn({ messages, model, root, tools, rl, modelOptions, onSave, stream = true }) {
+  for (let i = 0; i < MAX_TURN_ITERATIONS; i++) {
+    const { message, aborted, stats } = await generate({ model, messages, modelOptions, rl, stream });
+
+    if (aborted) {
+      console.log("\n\x1b[33m（止めました）\x1b[0m\n");
+      if (message.content.trim()) {
+        messages.push({ role: "assistant", content: message.content });
+        if (onSave) await onSave(messages);
+      }
+      return;
+    }
+
     messages.push(message);
     if (onSave) await onSave(messages);
 
     if (!message.tool_calls || message.tool_calls.length === 0) {
-      console.log(`\n${message.content}\n`);
+      console.log("");
+      const line = [formatStats(stats), formatVram(await getRunning(), model)].filter(Boolean).join(" ｜ ");
+      if (line) console.log(`\x1b[2m${line}\x1b[0m`);
+      console.log("");
       return;
     }
 
@@ -205,10 +270,15 @@ async function saveSession(name, messages) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
+  if (opts.diagnose) {
+    const results = await runDiagnosis({ host: DEFAULT_HOST, model: opts.model === "auto" ? "qwen2.5" : opts.model });
+    console.log(formatDiagnosis(results));
+    process.exit(hasFailure(results) ? 1 : 0);
+  }
+
   if (!(await ping())) {
-    console.error(
-      "Ollamaに接続できません。'ollama serve' が起動しているか確認してください（既定: http://localhost:11434）。"
-    );
+    // 「接続できません」だけで終わらせず、どこで止まっているかと次の一手まで出す
+    console.error(formatDiagnosis(await runDiagnosis({ host: DEFAULT_HOST, model: opts.model === "auto" ? "qwen2.5" : opts.model })));
     process.exit(1);
   }
 
@@ -219,7 +289,7 @@ async function main() {
     ...(opts.numCtx !== undefined && { num_ctx: opts.numCtx }),
   };
 
-  console.log(`local-agent — model: ${opts.model} / root: ${opts.root}`);
+  console.log(`local-agent — model: ${opts.model === "auto" ? "auto（自動切替）" : opts.model} / root: ${opts.root}`);
 
   if (opts.session && /[\\/]/.test(opts.session)) {
     console.error("--session の名前にパス区切り文字は使えません。");
@@ -227,7 +297,8 @@ async function main() {
     process.exit(1);
   }
 
-  if (!opts.skipToolCheck) {
+  // auto のときは切替先ごとに実挙動を確かめる（routeModel）ので、ここでは確かめない
+  if (!opts.skipToolCheck && opts.model !== "auto") {
     process.stdout.write("モデルのtool calling対応を確認中...");
     const check = await verifyToolCalling(opts.model, modelOptions);
     if (check.inconclusive) {
@@ -255,7 +326,11 @@ async function main() {
     const suffix = projectContext.truncated ? `（先頭${PROJECT_CONTEXT_MAX_CHARS}文字のみ）` : "";
     console.log(`プロジェクト規約を読み込みました: ${projectContext.file}${suffix}`);
   }
-  const systemPrompt = buildSystemPrompt(opts.root, projectContext);
+  const baseSystem = buildSystemPrompt(opts.root, projectContext);
+  const numCtx = modelOptions.num_ctx ?? DEFAULT_MODEL_OPTIONS.num_ctx;
+
+  // 会話の状態。system は「基本＋要約＋参考資料」を毎ターン組み直す（会話の途中に system を挟まない）。
+  const state = { summary: "", ragIndex: null, ragSources: [], model: opts.model === "auto" ? null : opts.model };
 
   let messages;
   const onSave = opts.session ? (msgs) => saveSession(opts.session, msgs) : null;
@@ -263,34 +338,151 @@ async function main() {
     const loaded = await loadSession(opts.session);
     if (loaded && loaded.length) {
       messages = loaded;
-      if (messages[0]?.role === "system") messages[0].content = systemPrompt;
-      else messages.unshift({ role: "system", content: systemPrompt });
-      console.log(`セッション "${opts.session}" を再開します（${messages.length}件のメッセージ）`);
+      // systemPrompt は毎回作り直すので、上書きする前に要約だけ取り戻す（取り戻さないと再開のたびに忘れる）
+      if (messages[0]?.role === "system") state.summary = extractSummary(messages[0].content);
+      const sys = composeSystem(baseSystem, state.summary, "");
+      if (messages[0]?.role === "system") messages[0].content = sys;
+      else messages.unshift({ role: "system", content: sys });
+      console.log(`セッション "${opts.session}" を再開します（${messages.length}件のメッセージ${state.summary ? "・要約あり" : ""}）`);
     } else {
-      messages = [{ role: "system", content: systemPrompt }];
+      messages = [{ role: "system", content: baseSystem }];
     }
     console.log(`セッション保存先: ${sessionPath(opts.session)}`);
   } else {
-    messages = [{ role: "system", content: systemPrompt }];
+    messages = [{ role: "system", content: baseSystem }];
   }
 
-  console.log(`終了するには exit または Ctrl+C\n`);
+  if (opts.rag.length) {
+    process.stdout.write(`資料を索引化中: ${opts.rag.join(", ")} ...`);
+    const { index, stats } = await buildIndex(opts.rag);
+    state.ragIndex = index;
+    console.log(` ${stats.files}ファイル・${stats.chunks}抜粋`);
+    const notes = [];
+    if (stats.truncated) notes.push("上限に達したため一部のみ");
+    if (stats.skippedBig) notes.push(`1MB超 ${stats.skippedBig}件を除外`);
+    if (stats.skippedSecret) notes.push(`秘密っぽい名前 ${stats.skippedSecret}件を除外`);
+    if (stats.unreadable) notes.push(`読めない ${stats.unreadable}件`);
+    if (notes.length) console.log(`  ※ ${notes.join(" / ")}`);
+    if (!stats.chunks) console.log("  ※ 索引が空です。フォルダのパスと拡張子（.md .txt .js など）を確認してください。");
+  }
+
+  // ---- モデル自動切替 ----
+  const routing = { candidates: null, excluded: new Set(), verified: new Set() };
+  async function routeModel(userText, ragChars) {
+    if (opts.model !== "auto") return;
+    if (!routing.candidates) {
+      const all = await listModels();
+      routing.candidates = await Promise.all(all.map(async (m) => ({ ...m, tools: await supportsTools(m.name) })));
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const running = (await getRunning()).map((r) => r.name);
+      const pick = chooseModel(userText, routing.candidates, {
+        maxGB: opts.maxModelGB,
+        current: state.model,
+        loaded: running,
+        excluded: routing.excluded,
+        contextChars: ragChars,
+      });
+      if (!pick.model) throw new Error("使えるモデルがありません。--diagnose で確認するか、--model= で指定してください。");
+      // 切替先は実際に tool_calls を返すかを一度だけ確かめる（capabilities は嘘をつくことがある）
+      if (!opts.skipToolCheck && !routing.verified.has(pick.model)) {
+        process.stdout.write(`モデル ${pick.model} のtool calling対応を確認中...`);
+        const check = await verifyToolCalling(pick.model, modelOptions);
+        if (!check.ok && !check.inconclusive) {
+          console.log(" NG（候補から外します）");
+          routing.excluded.add(pick.model);
+          if (state.model === pick.model) state.model = null;
+          continue;
+        }
+        console.log(check.inconclusive ? " 確認できませんでした（続行）" : " OK");
+        routing.verified.add(pick.model);
+      }
+      if (pick.model !== state.model) console.log(`\x1b[36m[モデル: ${pick.model}]\x1b[0m ${pick.reason}`);
+      state.model = pick.model;
+      return;
+    }
+    throw new Error("tool calling に対応するモデルが見つかりませんでした。--model= で指定してください。");
+  }
+
+  // ---- 1ターンの準備: 資料検索 → モデル選択 → 要約 → system 組み直し ----
+  async function prepareTurn(userText) {
+    let ragText = "";
+    if (state.ragIndex) {
+      const { text, sources } = formatContext(search(state.ragIndex, userText));
+      ragText = text;
+      state.ragSources = sources;
+      if (sources.length) console.log(`\x1b[2m参照: ${sources.map((x, i) => `[${i + 1}] ${x.path}:${x.line}`).join("  ")}\x1b[0m`);
+    }
+    await routeModel(userText, ragText.length);
+
+    const result = await compactIfNeeded(
+      messages,
+      state.summary,
+      async (msgs) => {
+        process.stdout.write("\x1b[2m古い会話を要約中...\x1b[0m");
+        const reply = await chat({ model: state.model, messages: msgs, options: { ...modelOptions, temperature: 0.1, num_predict: 500 } });
+        console.log("");
+        return reply;
+      },
+      { numCtx, systemChars: composeSystem(baseSystem, state.summary, ragText).length }
+    );
+    if (result) {
+      state.summary = result.summary;
+      console.log(
+        `\x1b[33m── 古い会話${result.folded}件を要約に置き換えました。ここより前の細部は覚えていません${result.fallback ? "（要約に失敗したため、発言の要点だけ残しました）" : ""} ──\x1b[0m`
+      );
+    }
+    messages[0].content = composeSystem(baseSystem, state.summary, ragText);
+    if (onSave) await onSave(messages);
+  }
+
+  async function submit(text) {
+    if (await answerLocally(text, messages, onSave)) return;
+    messages.push({ role: "user", content: text });
+    if (onSave) await onSave(messages);
+    await prepareTurn(text);
+    await runTurn({ messages, model: state.model, root: opts.root, tools, rl, modelOptions, onSave, stream: opts.stream });
+  }
+
+  function slashCommand(input) {
+    const cmd = input.trim().split(/\s+/)[0];
+    if (cmd === "/memory") {
+      const used = estimateTokens(messages.reduce((n, m) => n + (m.content?.length ?? 0), 0));
+      console.log(`\n会話: ${messages.length - 1}件（約${used}トークン / 窓 ${numCtx}）`);
+      console.log(state.summary ? `要約:\n${state.summary}\n` : "要約はまだありません（窓に余裕があるうちは全文を覚えています）。\n");
+    } else if (cmd === "/rag") {
+      console.log(
+        state.ragIndex
+          ? `\n資料: ${state.ragIndex.n}抜粋（${opts.rag.join(", ")}）\n直近の参照: ${state.ragSources.map((x) => `${x.path}:${x.line}`).join(", ") || "なし"}\n`
+          : "\n資料は指定されていません（--rag=フォルダ で指定）。\n"
+      );
+    } else if (cmd === "/model") {
+      console.log(`\nモデル: ${state.model ?? "（未選択・自動切替）"}${opts.model === "auto" ? `（自動切替・上限 ${opts.maxModelGB}GB）` : ""}\n`);
+    } else return false;
+    return true;
+  }
+
+  console.log(`終了するには exit または Ctrl+C（/memory /rag /model で状態を確認）\n`);
 
   if (opts.task) {
-    messages.push({ role: "user", content: opts.task });
-    if (onSave) await onSave(messages);
-    await runTurn({ messages, model: opts.model, root: opts.root, tools, rl, modelOptions, onSave });
+    await submit(opts.task);
     rl.close();
     return;
   }
 
   while (true) {
-    const input = await rl.question("> ");
+    let input;
+    try {
+      input = await rl.question("> ");
+    } catch (err) {
+      // 入力が閉じた（パイプ入力の終端・端末が閉じた）。例外で落とさず、静かに終わる
+      if (err?.code === "ERR_USE_AFTER_CLOSE") break;
+      throw err;
+    }
     if (["exit", "quit"].includes(input.trim().toLowerCase())) break;
     if (!input.trim()) continue;
-    messages.push({ role: "user", content: input });
-    if (onSave) await onSave(messages);
-    await runTurn({ messages, model: opts.model, root: opts.root, tools, rl, modelOptions, onSave });
+    if (slashCommand(input)) continue;
+    await submit(input);
   }
   rl.close();
 }
