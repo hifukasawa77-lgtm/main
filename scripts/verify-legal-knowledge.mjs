@@ -73,6 +73,14 @@ export const ANCHORS = [
 /** 条数の下限（取得が途中で切れた／構造が変わって条が拾えなくなった、を検出）。 */
 export const FLOORS = { kenpo: 103, minpo: 1000, keiho: 250, shoho: 200, minso: 400, keiso: 600, chosakuken: 200 };
 
+/**
+ * ハッシュは改行を LF に正規化して計算する。
+ * MANIFEST の sha256 は LF の本文で計算してある。git の autocrlf=true（このPCの設定）では
+ * チェックアウトで JSON が CRLF に変換されるため、生バイトで比べると**全法令が偽の赤**になる
+ * （ブランチを切り替えた瞬間に全件落ちた）。内容の改ざん検出は LF 正規化後でも変わらない。
+ */
+export const normEolBuf = (buf) => Buffer.from(Buffer.from(buf).toString('utf8').replace(/\r\n/g, '\n'));
+
 export function checkCorpus({ manifest, readFile = (p) => readFileSync(p), exists = existsSync, loadLawFn = loadLaw } = {}) {
   const out = [];
   if (!manifest) return [P('fail', 'legal/corpus/MANIFEST.json が無い。node scripts/legal-corpus.mjs --fetch')];
@@ -82,7 +90,7 @@ export function checkCorpus({ manifest, readFile = (p) => readFileSync(p), exist
     const file = path.join(CORPUS_DIR, `${e.slug}.json`);
     if (!m) { out.push(P('fail', `登録簿の ${e.title} が MANIFEST に無い（--fetch）`)); continue; }
     if (!exists(file)) { out.push(P('fail', `${e.title} のコーパスファイルが無い: ${path.relative(ROOT, file)}`)); continue; }
-    const sha = createHash('sha256').update(readFile(file)).digest('hex');
+    const sha = createHash('sha256').update(normEolBuf(readFile(file))).digest('hex');
     if (sha !== m.sha256) out.push(P('fail', `${e.title}: sha256 が MANIFEST と一致しない（手で編集された／壊れた。--fetch --only ${e.slug}）`));
     const L = loadLawFn(e);
     if (!L) { out.push(P('fail', `${e.title}: 読めない`)); continue; }
@@ -390,6 +398,12 @@ function inject() {
     console.log(`  ${failed ? '✓' : '✗ 素通り'} ${name}`);
     if (!failed) bad++;
   }
+  // 陽性対照（これは ✗ になってはいけない）: 全ファイルが CRLF の作業コピーでも偽の赤にならない
+  clearCache();
+  const crlfOk = checkCorpus({ manifest, readFile: (p) => Buffer.from(readFileSync(p, 'utf8').replace(/\r?\n/g, '\r\n')) });
+  const crlfFail = crlfOk.some(p => p.level === 'fail');
+  console.log(`  ${crlfFail ? '✗ 偽の赤' : '✓'} 陽性対照: CRLF の作業コピー（autocrlf=true）でも sha256 検査が通る`);
+  if (crlfFail) bad++;
   clearCache();
   return bad;
 }
