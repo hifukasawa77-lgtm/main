@@ -75,6 +75,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[rokuho-overview]] — **六法（憲法・民法・刑法・商法・民訴・刑訴）の条文地図ハブ**。引いてから書く・改正の罠・弁護士へ回す線。個別: [[rokuho-kenpo]] / [[rokuho-minpo]] / [[rokuho-keiho]] / [[rokuho-shoho]] / [[rokuho-minso]] / [[rokuho-keiso]]
 - [[claim-needs-evidence-before-reporting]] — 報告・コメントに書く「事実」は書く前に確かめる（PRの「入っていそう」・偽の根拠コメント・pkill -f の自爆）
 - [[ui-path-hides-what-unit-tests-pass]] — 単体検査とサーバ直叩きが緑でも画面の経路で壊れる（答えの点検・熟考の口・声の振り分け・起動直後の露出）
+- [[brute-force-finds-meaning-in-noise]] — 総当たりは、でたらめの中にも意味を見つける（解読・照合は「読めなかった」と言える関門と誤り率の測定が要る）
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール

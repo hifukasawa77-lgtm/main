@@ -1,9 +1,9 @@
 'use strict';
 // Visual layer: the original 480 x 540 simulation and collision geometry stay intact.
 const cosmosArt=new Image();
-cosmosArt.src='assets/cosmos-v2.png';
+cosmosArt.src='assets/cosmos-v2.webp';
 const volcanoArt=new Image();
-volcanoArt.src='assets/volcano-v2.png';
+volcanoArt.src='assets/volcano-v2.webp';
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const startButton=document.getElementById('startGame');
 const difficultyPicker=document.getElementById('difficultyPicker');
