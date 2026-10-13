@@ -21,6 +21,7 @@ Obsidian Vault（`obsidian-vault/`）をClaude Codeの第二の脳として運�
 - 2026-07-09: recall hook の mtime 依存バグ（フレッシュクローンで全ファイル同一mtime → `ls -t` が不定）を修正。日付はファイル名で比較する方式へ → [[0011-mtime-free-file-selection]]
 - 2026-07-16: Daily圧縮ルール（recallは直近Dailyを全文投入するため肥大化がコンテキストを圧迫）と昇格マーカー規約を second-brain スキルへ明文化 → [[0009-daily-hygiene-rule]] / [[0015-unpromoted-learning-lint]]
 - 2026-07-25: 記録の空白（7営業日）が別セッション作業で発生することが判明し、`/self-improve` を週次Routine化して検知頻度を担保 → [[0020-perf-cost-placement-and-canvas-layout-promotion]] / [[0021-routine-schedule-single-source]]
+- 2026-10-13: 六法（憲法・民法・刑法・商法・民訴・刑訴）を e-Gov 現行条文で全条取り込み、実読して `04-Knowledge/rokuho-*` に条文地図として記憶。引用は検査で実条文と機械照合 → [[0036-legal-corpus-and-legal-checker-upgrade]] / [[rokuho-overview]]
 
 ## 既知の課題・TODO
 - Daily Noteへの書き込みはClaudeの自律判断に依存する手動運用（Stop hookではLLM生成ができないため、完全自動化は不可）。
