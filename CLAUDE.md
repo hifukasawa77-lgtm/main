@@ -463,6 +463,17 @@ HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用
   （PCのWebカメラは前面/背面の区別を持たず `OverconstrainedError` で掴めない）。
   検査#49〜54 がデスクトップ幅（1440×900）で通し確認する。
   なお **PC版 ZERO-1 は別リポジトリ `zero-1-local-ai`（Ollama）** で、こことは別実装
+  **PC版を触る依頼（「デスクトップ版ZERO-1」等）はこのリポジトリでは何も変わらない。**
+  `mcp__claude-code-remote__add_repo` で取り込み → クローン → `register_repo_root`。先に向こうの
+  `CLAUDE.md` と `docs/開発の注意.md` を読む（検査の書き方・大きさの上限が違う）。`npm ci --ignore-scripts` のあと
+  `node scripts/setup-airtouch.mjs` / `setup-wakeword.mjs` で `public/wasm` と `models` を用意しないと、
+  ビルドに入らず `/wasm` が404になる。実ブラウザは `/opt/node-tools/node_modules/playwright-core`
+  ＋ `/opt/pw-browsers/chromium`（`--no-sandbox`）。コミットは向こうの `npm run check` を通してから
+  向こうは `main` だけの浅いクローンになるので、**push したブランチは追跡参照が無く、Stop フックが「リモートブランチなし・Nコミット未push」と誤報する**。
+  `git fetch origin +refs/heads/<ブランチ>:refs/remotes/origin/<ブランチ>` で直る（push 自体は済んでいる。`git ls-remote origin <ブランチ>` で確かめる）
+  向こうの**開発サーバ（`npm run dev`）はファイル・SQLite・statfs に触れず**「operation not permitted」・ディスク0GBになる（既存機能も同じ）。
+  画面の確認は `npm run build && npm start` で行う。カメラを使う機能は Chromium の `--use-fake-device-for-media-stream
+  --use-file-for-fake-video-capture=<写真から ffmpeg で作った .y4m>` で本物のモデルに映像を見せて確かめられる
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
@@ -506,6 +517,10 @@ node scripts/verify-receipt-ocr.mjs --ocr   # 実物のTesseractで読む（npm�
   偽のピークになり、傾いた写真を「0°」と判定していた
 - **紙の検出に大津の閾値を使わない**。影の掛かった紙が机側に落ちて切り捨てられる。
   外周（机）から「なだらかに続く・机の色の画素」をたどり、明るさが跳ぶ紙の縁で止める
+- **明るい机（白木・白いテーブル）では、大津の閾値が「黒い小物 対 それ以外」を分けて机が辿れなくなる**。
+  外周の大半が閾値より明るいときは明るい側だけで引き直し、紙は「明るい画素の最大の連結成分＋その穴（文字）」とする。
+  キーボードのキーや袋の照り返しを紙に数えると外接矩形が画面いっぱいに広がり、机の模様ごとOCRへ渡って
+  **例外も出ずに0品目**になる（2026-10-08 深澤報告。検査は「明るい木目の机・小物あり」）
 - **机を白く塗るのは「傾き補正後の紙の外接矩形」の外だけ**。画素単位の紙マスクで塗ると、
   濃い影の所でマスクが紙へ食い込み**価格の列ごと無言で消える**（机が灰色だと色でも区別できない）。
   検査は灰色の机＋濃い影で「右端の列のインク比率」を見る（影あり/なしの比較だけだと、両方同じだけ
@@ -638,8 +653,8 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 
 | スキル | スケジュール（JST） | 成果物 | mainへの直接push |
 |---|---|---|---|
-| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve` | 禁止（深澤承認制） |
-| `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ | 禁止（コード変更なし） |
+| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-09-30`・PR #363） | 禁止（深澤承認制） |
+| `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ。Vaultの写しと痕跡は `claude/site-proposal-vault` | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
 | `/note-post` | 毎週水曜 06:00 | ローリングPR `claude/note-post`（note記事1本） | 禁止（深澤承認制） |
@@ -660,6 +675,9 @@ node scripts/verify-routine-delivery.mjs   # 表の各Routineが成果物を出�
   パラメータが無い。MCP経由で作ったRoutineは**リポジトリ無しのコンテナで起動する**
 - **表に載っているなら、動いている証跡があること。動かないなら表から外して停止する。**
   検査はこの原則で判定する（「起動はしている」を成功と呼ばせないため）
+- **成果物の置き場所は全部この表に書く**（検査は書かれたブランチを全部見て、最も新しいものを採る）。
+  2026-10-12、実際の置き場所（`claude/site-proposal-vault`・`claude/agent-evolve-2026-09-30`）が表に無かったため、
+  毎週動いていた2本を「15日・82日止まっている」と**偽の赤**で報告していた
 - harness-lint 検査#15 は同じ内容を**△警告**で出す（✗にしない理由は検査#15のコメント参照。
   Routineが動くかはAPI側の設定に依存し、リポジトリのコードでは直せないため）。
   **△が出たら必ず中身を見ること**
@@ -980,6 +998,51 @@ openssl dgst -sha384 -binary package/<CDNパスと同じファイル> | openssl 
 - そのため FAQ の文言を1文字変えただけで CSP が古くなる。ブラウザは JSON-LD を実行しないので
   **画面は壊れず dynamic-test も素通りし、GitHub Actions の security が赤くなって初めて気づく**（2026-09-26）
 - インラインscript（JSON-LD含む）を触ったら `node scripts/security-csp.mjs --write` で再生成する
+
+### 全ページのセキュリティ基礎線（2026-10-08 新設）
+
+```bash
+node scripts/security-baseline.mjs           # 全HTML（直下107ページ）: CSP基礎線・frame-guard・referrer・noopener・http://読込なし
+node scripts/security-baseline.mjs --write   # 不足を補う（既存CSPの値は変えず、足りない指令だけ足す）
+node scripts/verify-frame-guard.mjs          # 実ブラウザで「別オリジンの枠に入れられたら遮る／同オリジンの枠は邪魔しない」
+node --test tests/security.test.mjs          # Worker: 全応答に nosniff / CSP / X-Frame-Options / HSTS
+```
+
+- **新しいページを足したら `--write` を1回かける**（CIの `security.yml` が全ページを見ているので、忘れると赤くなる）
+- 基礎線のCSPは `object-src 'none'; base-uri 'self'; form-action 'self'` だけ。**`script-src` は触らない**——
+  インラインの `onclick` を多用するゲームが無言で動かなくなる。厳格なCSP（ハッシュ固定）は上記5ページのみ
+- **旧インラインのフレームバスター `if (self !== top) top.location = …` は効いていなかった**。Chrome は
+  「操作の無い別オリジンの枠から最上位を遷移させる」のを**例外も出さずに黙って止める**ため、
+  index.html は埋め込まれても素通しだった（2026-10-08 実ブラウザで確認）。`assets/js/frame-guard.js` は
+  抜け出しを試みたうえで**常に操作を全面で遮る**。同じオリジンの枠（`taihei-ui-preview.html`）は許可する
+- `frame-guard.js` は `sw.js` の事前キャッシュに入れてある（圏外で取れないと全ページに読込失敗が残る）
+- **`frame-ancestors` / `X-Frame-Options` / `Permissions-Policy` を `<meta>` に書かない**。meta では無視されるので、
+  書くと「対応済み」に見えるだけで何も守らない。HTTPヘッダで付けられるのは Worker の応答だけ
+  （`cloudflare-worker/security-monitor.js` の `withSecurityGate` → `hardenResponse`）
+
+### 攻撃の遮断・シスログ・深澤への通知（2026-10-08 新設）
+
+**遮断→記録→通知の3段は `cloudflare-worker/security-monitor.js`（両Workerの入口 `withSecurityGate`）に一本化**。
+詳細と通知の設定手順は `cloudflare-worker/README.md`「攻撃の遮断・シスログ・通知」。
+
+- **遮断**: 攻撃パターン（パストラバーサル・`/.env` 等の探索・URL中のスクリプト/SQL/テンプレート注入）はハンドラ前に403。
+  拒否を IP ごとに `ABUSE_LIMITER` で数え、60秒10回超で15分間遮断（Cache API に置く＝KVの書き込み枠を攻撃者に使わせない）
+- **記録**: 全拒否を RFC 5424 のシスログ行（`<PRI>1 … SECURITY [sec@32473 kind=… ip=…]`）で Worker ログへ。
+  **SD値は `"` `\` `]` をエスケープし改行を潰す**（URLに改行を仕込んで偽のログ行を作らせない。検査が実際に流し込む）
+- **通知**: err 以上だけ Slack（`SECURITY_ALERT_WEBHOOK_URL`）へ。**同じ種別は10分に1通**。403（Originなしのボット）は
+  毎日大量に来るので notice（記録と遮断カウントだけ）——全部通知すると本物が埋もれて誰も見なくなる
+- **ページ側**: `frame-guard.js` が枠への埋め込み・CSPが遮断した外部スクリプト/イベント属性を `POST /security/report` へ送る。
+  **インライン `<script>` の遮断は送らない**（拡張機能が日常的に起こす雑音）。`connect-src` を絞ったページは通報先の
+  1ホストだけ足す（`security-baseline.mjs` が検査・補完。https: 全体へは広げない）
+- 本番で効いているかは `deploy-worker.yml` のスモークテストが `/__security-selftest/.env` → 403 で確かめる。
+  **素の `/.env` を叩かない**——デプロイのたびに偽の攻撃通知が飛び、同種の通知を10分抑止して本物を隠す
+  （自己検査の接頭辞 `SELFTEST_PREFIX` の下は遮断・記録するが通知しない）
+- **401 は既定で「利用者のアクセスコード打ち間違い」（notice＝通知しない・遮断カウントのみ）**。
+  通知するのは `/admin/` の 401（管理トークンの総当たり）だけ。全401を攻撃扱いすると、打ち間違えた利用者が通報・遮断される
+- **ページからの通報は Origin を偽装できるので「未検証」として扱う**（通知に明記・通報も遮断カウントに入れる＝偽の洪水は送信元ごと遮断）
+- **「必ず防ぎきる」は仕組みで近づけるもので、保証はできない**。静的ページ（GitHub Pages）への大量アクセスや
+  未知の手口は、この層では止められない。限界は `SECURITY.md` に書いてある
+- 脆弱性の報告窓口は `SECURITY.md` と `.well-known/security.txt`（`Expires` は1年以内に更新すること）
 
 - **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。
   `--depth 1 --filter=blob:none --sparse` で18MBまで落ち、触るゲームのassetsだけ後から足せる。

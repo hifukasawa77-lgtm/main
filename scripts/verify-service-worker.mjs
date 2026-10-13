@@ -21,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SW = path.join(ROOT, 'sw.js');
+// 現在のキャッシュ名は sw.js から読む（版を上げるたびに検査が偽の赤になるのを防ぐ）
+const CURRENT_CACHE = (fs.readFileSync(SW, 'utf8').match(/CACHE_NAME\s*=\s*'([^']+)'/) || [])[1] || 'hide-portfolio-v6';
 const SCOPE = 'https://hifukasawa77-lgtm.github.io/main/';
 
 let pass = 0, fail = 0;
@@ -59,7 +61,7 @@ function boot(opts = {}) {
     self, URL, Headers, Response, Request, console, setTimeout, Promise,
     caches: {
       open: async (name) => { calls.opened.push(name); return cache; },
-      keys: async () => ['hide-portfolio-v1', 'hide-portfolio-v6', 'webllm-models', 'other-project'],
+      keys: async () => ['hide-portfolio-v1', CURRENT_CACHE, 'webllm-models', 'other-project'],
       delete: async (name) => { calls.deleted.push(name); return true; },
       match: async () => { throw new Error('Cross-cache lookup prohibited'); },
     },
