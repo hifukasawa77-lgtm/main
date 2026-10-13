@@ -197,7 +197,21 @@
         { slug:'club-road', href:'club_road.html', cat:'sim',
           title:{ja:'クラブロード',en:'Club Road'}, emoji:'⚽',
           desc:{ja:'3部の小さなサッカークラブのGMになり、育成・補強・施設・戦術で1部優勝を目指す経営シミュレーション',en:'Football club management sim — rise from the third division to the top with scouting, training, facilities and tactics'},
+          themes:{ja:['サッカー','サッカークラブ'],en:['soccer','football']},
           aliases:{ja:['クラブロード','サッカー','サッカークラブ','クラブ経営','経営','経営シミュレーション','育成','サッカー経営','サカつく風'],en:['club road','soccer','football','club management','manager','management sim']} },
+        { slug:'bakumatsu', href:'bakumatsu.html', cat:'sim', thumb:'assets/maps/strategic-japan.png',
+          title:{ja:'幕末風雲記',en:'Bakumatsu Fuunki'}, emoji:'⚓',
+          desc:{ja:'嘉永6年の黒船来航〜明治元年の戊辰戦争まで6シナリオ。幕府・雄藩を率いて内政・外交・軍事と近代化を進める幕末戦略シミュレーション',en:'Bakumatsu-era strategy sim: 6 scenarios from Perry\'s arrival to the Boshin War, modernize a han through politics, diplomacy and military'},
+          aliases:{ja:['幕末','ばくまつ','幕末風雲記','黒船','ペリー','薩摩藩','長州藩','徳川幕府','戊辰戦争','明治維新'],
+                   en:['bakumatsu','black ships','meiji restoration','boshin war','satsuma','choshu','shogunate']} },
+        { slug:'catan', href:'catan.html', cat:'board',
+          title:{ja:'HEXLAN AI',en:'HEXLAN AI'}, emoji:'🏝️',
+          desc:{ja:'カタン風ボードゲーム。1人vsAI3体で資源収集・開拓地建設・開発カードを駆使しVP10点を目指す',en:'Catan-style board game vs 3 AI opponents — gather resources, build settlements and race to 10 victory points'},
+          aliases:{ja:['カタン','かたん','HEXLAN','ヘックスラン','資源ゲーム','開拓','開発カード'],en:['catan','hexlan','settlers','resource game']} },
+        { slug:'blokus', href:'blokus.html', cat:'board',
+          title:{ja:'テトラ陣地',en:'Tetra Territory'}, emoji:'🧩',
+          desc:{ja:'ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦',en:'Blokus-style board game — place polyomino pieces on a 20x20 grid, corner-touch rule, vs AI'},
+          aliases:{ja:['ブロックス','ぶろっくす','テトラ陣地','ポリオミノ','陣取りゲーム'],en:['blokus','polyomino','territory game']} },
       ];
       const RECOMMENDS = ['zelda','shogi','mahjong'];
 

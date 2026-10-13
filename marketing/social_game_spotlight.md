@@ -1545,3 +1545,143 @@ Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/eclipse_castle.html
 #ブラウザゲーム #個人開発 #アクションゲーム
 ```
+
+## クラブロード / Club Road (`club-road`)
+
+### game-club-road-x-ja
+```
+⚽ クラブロード
+
+3部の小さなサッカークラブのGMになり、育成・補強・施設・戦術で1部優勝を目指す経営シミュレーション
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/club_road.html
+
+#個人開発 #ブラウザゲーム #シミュレーションゲーム
+```
+
+### game-club-road-x-en
+```
+⚽ Club Road
+
+Football club management sim — rise from the third division to the top with scouting, training, facilities and tactics
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/club_road.html
+
+#indiedev #browsergames #strategygame
+```
+
+### game-club-road-bsky-ja
+```
+⚽ クラブロード
+3部の小さなサッカークラブのGMになり、育成・補強・施設・戦術で1部優勝を目指す経営シミュレーション
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/club_road.html
+#ブラウザゲーム #個人開発 #シミュレーションゲーム
+```
+
+## 幕末風雲記 / Bakumatsu Fuunki (`bakumatsu`)
+
+### game-bakumatsu-x-ja
+```
+⚓ 幕末風雲記
+
+嘉永6年の黒船来航〜明治元年の戊辰戦争まで6シナリオ。幕府・雄藩を率いて内政・外交・軍事と近代化を進める幕末戦略シミュレーション
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bakumatsu.html
+
+#個人開発 #ブラウザゲーム #シミュレーションゲーム
+```
+
+### game-bakumatsu-x-en
+```
+⚓ Bakumatsu Fuunki
+
+Bakumatsu-era strategy sim: 6 scenarios from Perry's arrival to the Boshin War, modernize a han through politics, diplomacy and military
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bakumatsu.html
+
+#indiedev #browsergames #strategygame
+```
+
+### game-bakumatsu-bsky-ja
+```
+⚓ 幕末風雲記
+嘉永6年の黒船来航〜明治元年の戊辰戦争まで6シナリオ。幕府・雄藩を率いて内政・外交・軍事と近代化を進める幕末戦略シミュレーション
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bakumatsu.html
+#ブラウザゲーム #個人開発 #シミュレーションゲーム
+```
+
+## HEXLAN AI / HEXLAN AI (`catan`)
+
+### game-catan-x-ja
+```
+🏝️ HEXLAN AI
+
+カタン風ボードゲーム。1人vsAI3体で資源収集・開拓地建設・開発カードを駆使しVP10点を目指す
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+
+#個人開発 #ブラウザゲーム #ボードゲーム
+```
+
+### game-catan-x-en
+```
+🏝️ HEXLAN AI
+
+Catan-style board game vs 3 AI opponents — gather resources, build settlements and race to 10 victory points
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+
+#indiedev #browsergames #boardgame
+```
+
+### game-catan-bsky-ja
+```
+🏝️ HEXLAN AI
+カタン風ボードゲーム。1人vsAI3体で資源収集・開拓地建設・開発カードを駆使しVP10点を目指す
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+#ブラウザゲーム #個人開発 #ボードゲーム
+```
+
+## テトラ陣地 / Tetra Territory (`blokus`)
+
+### game-blokus-x-ja
+```
+🧩 テトラ陣地
+
+ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+
+#個人開発 #ブラウザゲーム #ボードゲーム
+```
+
+### game-blokus-x-en
+```
+🧩 Tetra Territory
+
+Blokus-style board game — place polyomino pieces on a 20x20 grid, corner-touch rule, vs AI
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+
+#indiedev #browsergames #boardgame
+```
+
+### game-blokus-bsky-ja
+```
+🧩 テトラ陣地
+ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+#ブラウザゲーム #個人開発 #ボードゲーム
+```
