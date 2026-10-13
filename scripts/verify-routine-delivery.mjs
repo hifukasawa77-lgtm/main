@@ -62,8 +62,18 @@ export function toleranceDays(schedule) {
 
 /** 成果物の欄からブランチ名を取り出す（`claude/xxx` のバッククォート表記）。無ければ null。 */
 export function artifactBranch(artifact) {
-  const m = /`(claude\/[A-Za-z0-9._\/-]+)`/.exec(artifact);
-  return m ? m[1] : null;
+  return artifactBranches(artifact)[0] ?? null;
+}
+
+/**
+ * 成果物の欄に書かれたブランチを**全部**取り出す。
+ * ★1本目しか見ないと、実際の置き場所が別のブランチのRoutineを「動いていない」と誤報する
+ *   （2026-10-12: /site-proposal は Vault の写しを `claude/site-proposal-vault` へ、/agent-evolve は常駐セッションの
+ *   書き込み先 `claude/agent-evolve-2026-09-30` へ毎週積んでいたのに、それぞれ 15日・82日止まっていると出ていた）。
+ *   置き場所が複数あるときは表に全部書き、検査はその中で最も新しいものを採る。
+ */
+export function artifactBranches(artifact) {
+  return [...String(artifact ?? '').matchAll(/`(claude\/[A-Za-z0-9._\/-]+)`/g)].map((m) => m[1]);
 }
 
 /** Daily 内の `<!-- routine:<skill> -->` のうち最も新しい日付を返す（ファイル名の日付を使う）。 */
@@ -138,23 +148,26 @@ console.log(`CLAUDE.md の Routine ${rows.length}本の成果物を検査する`
 console.log('（表に載っているなら動いている証跡があること。動かないなら表から外して停止する）\n');
 
 // ブランチのSHAは A・B 両方で使うので先に一度だけ解決する（B側の git fetch を使い回す）。
+// 1つのRoutineに置き場所が複数書かれていれば全部解決する（skill → [{ br, sha }]）。
 let offline = false;
-const branchSha = new Map();
+const branchShas = new Map();
 for (const r of rows) {
-  const br = artifactBranch(r.artifact);
-  if (!br) continue;
-  const sha = remoteBranch(br);
-  if (sha === undefined) offline = true;
-  branchSha.set(r.skill, sha);
-  if (sha) { try { execFileSync('git', ['fetch', '-q', 'origin', sha], { cwd: ROOT, timeout: 30000, stdio: 'ignore' }); } catch {} }
+  const resolved = [];
+  for (const br of artifactBranches(r.artifact)) {
+    const sha = remoteBranch(br);
+    if (sha === undefined) offline = true;
+    resolved.push({ br, sha });
+    if (sha) { try { execFileSync('git', ['fetch', '-q', 'origin', sha], { cwd: ROOT, timeout: 30000, stdio: 'ignore' }); } catch {} }
+  }
+  branchShas.set(r.skill, resolved);
 }
 
 console.log('== A. Daily の実行痕跡マーカーの鮮度（main + 未マージの成果物ブランチ）==');
 for (const r of rows) {
   const tol = toleranceDays(r.schedule);
-  const sha = branchSha.get(r.skill);
   const dLocal = newestMarkerDate(r.skill);
-  const dBranch = sha ? newestMarkerDateInBranch(sha, r.skill) : null;
+  const dBranch = (branchShas.get(r.skill) ?? [])
+    .map(({ sha }) => (sha ? newestMarkerDateInBranch(sha, r.skill) : null)).filter(Boolean).sort().pop() || null;
   const d = [dLocal, dBranch].filter(Boolean).sort().pop() || null;
   if (!d) {
     bad(`/${r.skill}: 実行痕跡マーカー <!-- routine:${r.skill} --> がDailyに一度も無い（main・成果物ブランチとも）（起動しても何も出していない／マーカーを書かせていない）`);
@@ -169,16 +182,19 @@ for (const r of rows) {
 
 console.log('== B. 成果物ブランチの実在と鮮度 ==');
 for (const r of rows) {
-  const br = artifactBranch(r.artifact);
-  if (!br) { ok(`/${r.skill}: 成果物がブランチではない（${r.artifact.slice(0, 32)}…）— Aの痕跡で判定`); continue; }
-  const sha = branchSha.get(r.skill);
-  if (sha === undefined) { warn(`/${r.skill}: origin に問い合わせできない（ネットワーク無し）— 判定を保留`); continue; }
-  if (sha === null) { bad(`/${r.skill}: 成果物ブランチ ${br} が origin に存在しない`); continue; }
-  const cd = commitDate(sha);
+  const resolved = branchShas.get(r.skill) ?? [];
+  if (!resolved.length) { ok(`/${r.skill}: 成果物がブランチではない（${r.artifact.slice(0, 32)}…）— Aの痕跡で判定`); continue; }
+  if (resolved.some(({ sha }) => sha === undefined)) { warn(`/${r.skill}: origin に問い合わせできない（ネットワーク無し）— 判定を保留`); continue; }
+  const names = resolved.map(({ br }) => br).join(' / ');
+  const existing = resolved.filter(({ sha }) => sha);
+  if (!existing.length) { bad(`/${r.skill}: 成果物ブランチ ${names} がどれも origin に存在しない`); continue; }
+  // 置き場所が複数あるときは、いちばん新しく進んだものを採る
+  const dated = existing.map(({ br, sha }) => ({ br, cd: commitDate(sha) })).filter(({ cd }) => cd).sort((a, b) => (a.cd < b.cd ? 1 : -1));
   const tol = toleranceDays(r.schedule);
-  if (!cd) { warn(`/${r.skill}: ${br} は在るが日付を取得できない`); continue; }
-  if (daysAgo(cd) > tol) bad(`/${r.skill}: ${br} の最終コミットが ${cd}（${daysAgo(cd)}日前、許容 ${tol}日）`);
-  else ok(`/${r.skill}: ${br} は ${cd}（${daysAgo(cd)}日前）`);
+  if (!dated.length) { warn(`/${r.skill}: ${names} は在るが日付を取得できない`); continue; }
+  const { br, cd } = dated[0];
+  if (daysAgo(cd) > tol) bad(`/${r.skill}: ${names} の最終コミットが最も新しいもので ${cd}（${br}・${daysAgo(cd)}日前、許容 ${tol}日）`);
+  else ok(`/${r.skill}: ${br} は ${cd}（${daysAgo(cd)}日前）${resolved.length > 1 ? `（置き場所${resolved.length}本のうち最新）` : ''}`);
 }
 
 if (offline) console.log('  ※ ネットワークが無い環境では B は保留になる。A（痕跡）だけでも故障は捕まる');
