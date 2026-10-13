@@ -62,6 +62,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0033-note-monetization-automation-boundary]] — noteの自動化境界を「書くまで」に置く（規約リスク＞収益）
 - [[0034-agent-contract-and-least-privilege]] — 全エージェントに契約・最小権限・必須検査を導入し検査#14で強制（19体→22体）
 - [[0035-self-improve-2026-09-27-promotions]] — Routine修正後初の/self-improve実行。検査#15の盲点修正（ブランチ側成果物を見ていなかった）＋学び5件をverifier/design/seo-audit/CLAUDE.mdへ昇格＋未マージPRバックログ発見
+- [[0036-legal-corpus-and-legal-checker-upgrade]] — リーガルチェッカーを法令コーパス（e-Gov・26法令5,297条）＋検査可能な知識ベースで強化。「引いてから書く」・引用を実条文と機械照合・改正ダイジェスト
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
@@ -71,6 +72,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[native-dialog-toplayer-pitfall]] — ネイティブ`<dialog>`のトップレイヤーがposition:fixed要素を隠す不具合と対処
 - [[verification-counts-the-wrong-thing]] — 検査が数える対象を間違えると故障注入をすり抜ける
 - [[false-red-checks-are-worse-than-none]] — 偽の赤は検査が無いより悪い（必須検査が常に赤いなら、まず検査を疑う）
+- [[rokuho-overview]] — **六法（憲法・民法・刑法・商法・民訴・刑訴）の条文地図ハブ**。引いてから書く・改正の罠・弁護士へ回す線。個別: [[rokuho-kenpo]] / [[rokuho-minpo]] / [[rokuho-keiho]] / [[rokuho-shoho]] / [[rokuho-minso]] / [[rokuho-keiso]]
 
 ## 🔗 関連
 - リポジトリルートの `CLAUDE.md` — プロジェクト全体ルール
