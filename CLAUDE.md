@@ -267,6 +267,7 @@ node scripts/legal-corpus.mjs --status | --check-online | --fetch | --amendments
   **条文は `legal-lookup` で引いてから書く**。知識ファイルの引用は `【法令名 条番号｜キーワード】` の記法で書き、検査が実条文と照合する（初回で私のノートの誤り5件を検出）
 - **コーパスは取得物＝手で直さない**（sha256 を MANIFEST と照合）。**sha256 は改行を LF に正規化して比べる**（このPCは `autocrlf=true` で、ブランチ切替の瞬間に JSON が CRLF になり、生バイト比較だと**全30法令が偽の赤**になった。検査の故障注入に「CRLF でも通る」陽性対照を持つ）。`legal/corpus/` は `.claudeignore` 対象なので **Read しない**（4MB超）。引く道具は lookup
 - **施行日を過ぎた改正が未取込なら検査が落ちる**（30日超は✗、以内は△）。`--fetch` で更新→`--amendments` でダイジェスト再生成→検査。**引用した条が改正対象なら△で日付が出る**
+- **取得の失敗は黙って成功にしない**: `--check-online` は確認できなかった法令が1つでもあれば非0で終わり成功メッセージを出さない。`--amendments` は1法令でも失敗したら既存の AMENDMENTS を上書きしない（欠けた法令の改正警告が黙って消えるため）。鮮度は**法令ごとの `fetched_at`** で見る（`--fetch --only` の部分取得で全体の日付が新しくなり、古い法令を隠すのを防ぐ）。いずれも偽の取得関数での自己検査と、実装を壊して検出されることの確認済み（2026-10-13 Codexレビュー指摘）
 - **判例は一次データを取得できないので記憶ベース**。報告に使う前に裁判所HP等で原典確認し、未確認は「要原典確認」を付す。ToS・ガイドライン・告示は検査時点の原文を WebFetch で確認し URL と取得日を残す
 - **標章の登録有無・区分は J-PlatPat（人手）**。台帳（`legal/knowledge/data/third-party-marks.json`）は confidence を high（著名）/ verify（要確認）の2値に限り、**登録番号・登録の有無を断定する欄を持たない**（検査が見張る）
 - **改称は title だけで終わらせない**: `zelda_like.html`・`gradius-1.html` は title/og を改称済みなのにファイル名/URL に旧名が残った。`legal-scan.mjs --only mark` で URL・description・カタログまで見る

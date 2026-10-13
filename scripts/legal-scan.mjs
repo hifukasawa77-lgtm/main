@@ -80,11 +80,11 @@ export function discover(root) {
     if (!e.isFile()) continue;
     const p = path.join(root, e.name);
     if (/\.html$/i.test(e.name)) pages.push(p);
-    else if (/\.(js|mjs|cjs|css)$/i.test(e.name)) code.push(p);
+    else if (/\.(js|mjs|cjs|css|jsx|tsx|ts)$/i.test(e.name)) code.push(p);
     else if (/\.(webmanifest)$/i.test(e.name) || e.name === 'manifest.json') code.push(p);
     else if (e.name === 'README.md') docs.push(p);
   }
-  walk(path.join(root, 'assets', 'js'), n => /\.js$/.test(n), 0, 2, code);
+  walk(path.join(root, 'assets', 'js'), n => /\.(js|jsx)$/.test(n), 0, 2, code);
   walk(path.join(root, 'assets', 'css'), n => /\.css$/.test(n), 0, 2, code);
   walk(path.join(root, 'gamekit'), n => /\.js$/.test(n), 0, 1, code);
   walk(path.join(root, 'cloudflare-worker'), n => /\.(js|html)$/.test(n), 0, 1, code);
@@ -180,7 +180,7 @@ function ruleMark(ctx, f) {
   return out;
 }
 
-const LOAD_PRE = /(fetch|import|importScripts|WebSocket|sendBeacon|Worker|\.open|\.src\s*=|src\s*:|url\s*:|API|ENDPOINT|BASE_?URL|WORKER|PROXY|WASM|MODEL|CDN|ORIGIN|[Uu]rl\s*=|URL\s*=)[^\n]{0,60}$/;
+const LOAD_PRE = /(fetch|import|importScripts|WebSocket|sendBeacon|Worker|\.open|\.src\s*=|src\s*:|API|ENDPOINT|BASE_?URL|WORKER|PROXY|WASM|MODEL|CDN|ORIGIN|[Uu]rl\s*=|URL\s*=)[^\n]{0,60}$/;
 
 /** ページ・コードが「読み込む／通信する」外部URLを (host, kind, line) で返す。リンク（<a>）は含めない。 */
 export function extractExternal(f) {

@@ -9,5 +9,5 @@
 | `MANIFEST.json` | 取得日・版（施行日）・条数・sha256・施行予定の改正 |
 | `AMENDMENTS.md` / `.json` | 直近の改正と施行予定の改正で変わる条（自動生成） |
 
-更新: `node scripts/legal-corpus.mjs --check-online`（古ければ△）→ `--fetch` → `--amendments` → `node scripts/verify-legal-knowledge.mjs`。
+更新: `node scripts/legal-corpus.mjs --check-online`（古ければ△。**確認できなかった法令があれば非0**）→ `--fetch` → `--amendments` → `node scripts/verify-legal-knowledge.mjs`。
 法令を足す: `scripts/legal-lib.mjs` の LAWS に追記して `--fetch --only <slug>`。

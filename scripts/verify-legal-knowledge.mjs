@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { scan, RULES, loadData } from './legal-scan.mjs';
+import { doCheckOnline, doAmendments } from './legal-corpus.mjs';
 import {
   ROOT, CORPUS_DIR, LAWS, norm, lawByName, loadLaw, clearCache, loadManifest,
   extractCitations, checkCitation, displayArticleNum, allLawNames,
@@ -112,8 +113,11 @@ export function checkCorpus({ manifest, readFile = (p) => readFileSync(p), exist
 export function checkFreshness(manifest, today = JST_TODAY()) {
   const out = [];
   if (!manifest) return out;
-  const age = daysBetween(manifest.fetched_at.slice(0, 10), today);
-  if (age > 60) out.push(P('warn', `コーパスの取得から ${age} 日。node scripts/legal-corpus.mjs --check-online で最新か確認（改正は黙って入る）`));
+  // 法令ごとの取得日で見る（--fetch --only の部分取得で全体の日付が新しくなっても、古い法令を隠さない）
+  const stale = manifest.laws
+    .map(l => ({ l, age: daysBetween(String(l.fetched_at || manifest.fetched_at).slice(0, 10), today) }))
+    .filter(x => x.age > 60);
+  if (stale.length) out.push(P('warn', `${stale.length}法令の取得から60日超（${stale.slice(0, 5).map(x => `${x.l.title} ${x.age}日`).join('・')}${stale.length > 5 ? ' ほか' : ''}）。node scripts/legal-corpus.mjs --check-online で最新か確認（改正は黙って入る）`));
   for (const l of manifest.laws) {
     for (const u of l.upcoming || []) {
       if (u.date <= today) {
@@ -144,6 +148,7 @@ export function checkCitations(text, label, amend) {
   for (const b of looseBrackets(text)) {
     if (okRaw.has(b.raw)) continue;
     if (!lawByName(b.name)) out.push(P('fail', `${label}: 未登録の法令名または解釈できない引用 ${b.raw}（legal-lib.mjs の LAWS に無い）`));
+    else out.push(P('fail', `${label}: 引用の書式が不正で検証されない ${b.raw}（条は「32条」「30条の4」、項は半角数字の「第N項」。全角数字・漢数字の項や誤記は解釈されず、検証をすり抜ける）`));
   }
   for (const c of cites) {
     if (!c.article) { out.push(P('fail', `${label}: 条番号を解釈できない ${c.raw}`)); continue; }
@@ -250,9 +255,10 @@ export function selfTestScanner(data = null) {
     w('camera.html', '<!doctype html><title>独自カメラ</title><input type="email" name="mail"><script>navigator.mediaDevices.getUserMedia({video:true});</script>');
     w('casino.html', '<!doctype html><title>独自カード</title><p>ブラックジャックの景品ガチャ</p>');
     w('assets/foo/img-gpt-image-1.png', 'x');
+    w('app.jsx', 'import "https://unpkg.com/howler@2.2.4/dist/howler.min.js";\nexport default function App() { return null; }');
     w('model.html', '<!doctype html><title>独自モデル</title><script>const M = { id: "Qwen2.5-3B-Instruct-q4f16_1-MLC" };</script>');
     // 拾ってはいけないもの（clean）— 誤検知の防止
-    w('clean.html', '<!doctype html><!-- <ins class="adsbygoogle"></ins> --><title>オリジナル戦略ゲーム</title><meta name="description" content="自作の戦略ゲーム"><script>const nMap = new Map(); const pr = 1; const payload = {};</script><a href="https://www.youtube.com/watch?v=x">link</a><p>三国志の時代を舞台にした説明</p>');
+    w('clean.html', '<!doctype html><!-- <ins class="adsbygoogle"></ins> --><title>オリジナル戦略ゲーム</title><meta name="description" content="自作の戦略ゲーム"><script>const nMap = new Map(); const pr = 1; const payload = {};</script><a href="https://www.youtube.com/watch?v=x">link</a><p>三国志の時代を舞台にした説明</p><script>const LINKS = [{ name: "yt", url: "https://www.youtube.com/" }, { name: "gh", url: "https://github.com/" }];</script>');
     w('privacy.html', '<!doctype html><title>privacy</title><p>外部送信はありません。</p>');
     w('index.html', '<!doctype html><a href="privacy.html">privacy</a>');
     const r = scan({ root: tmp, data });
@@ -262,6 +268,7 @@ export function selfTestScanner(data = null) {
     need('解析タグ（googletagmanager）', has('external-send', f => /googletagmanager/.test(f.text) && f.severity === 'RED候補'));
     need('privacy未記載の外部送信（Google Fonts）を台帳で分類して', has('external-send', f => f.host === 'fonts.googleapis.com' && f.severity === 'YELLOW候補' && f.known === true && /Google Fonts/.test(f.text)));
     need('CDNライブラリ（three）をライセンス台帳へ突合して（MIT）', has('oss-libs', f => f.pkg === 'three' && /MIT/.test(f.license || '')));
+    need('JSXファイルのCDN読込（howler）', has('oss-libs', f => f.pkg === 'howler' && /app\.jsx/.test(f.file)));
     need('AIモデル（Qwen2.5-3B）を非商用限定として', has('ai-models', f => f.model === 'qwen2.5-3b' && /非商用/.test(f.text)));
     need('カメラ利用', has('pii-collection', f => /カメラ/.test(f.text)));
     need('email入力欄', has('pii-collection', f => /email/.test(f.text)));
@@ -274,7 +281,35 @@ export function selfTestScanner(data = null) {
     noise('コメントアウトされた AdSense を解析タグとして RED にした', r.findings.some(f => f.rule === 'external-send' && f.file === 'clean.html' && f.severity === 'RED候補'));
     noise('変数名 nMap をセキュリティ語として拾った', r.findings.some(f => f.rule === 'security-tools' && f.file === 'clean.html'));
     noise('一般の <a href> リンク先（youtube）を外部送信として拾った', r.findings.some(f => f.rule === 'external-send' && /youtube/.test(f.text)));
+    noise('リンク集の url: プロパティ（<a href>へ流れるだけ）を外部送信として拾った', r.findings.some(f => f.rule === 'external-send' && /(youtube|github)\.com/.test(f.text)));
     noise('説明的言及（三国志）を RED にした', r.findings.some(f => f.rule === 'mark' && f.file === 'clean.html' && f.severity === 'RED候補'));
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+  return out;
+}
+
+/** コーパスCLI（--check-online / --amendments）が障害時に黙って成功しないこと。API は偽の取得関数で差し替える。 */
+export async function selfTestCorpusCli() {
+  const out = [];
+  const offline = async () => { throw new Error('offline'); };
+  const logs = [];
+  const code1 = await doCheckOnline(['kenpo'], { getJson: offline, log: (x) => logs.push(String(x)) });
+  if (code1 === 0) out.push(P('fail', '--check-online: 1法令も確認できなかったのに終了コード0（障害時に「最新」と誤認させる）'));
+  if (logs.some(l => l.includes('全件最新'))) out.push(P('fail', '--check-online: 確認できなかったのに「全件最新」と表示した'));
+  // 陽性対照: 現行版が MANIFEST と一致するなら「全件最新」で成功する（厳しすぎて常に落ちる検査にしない）
+  const m = loadManifest().laws.find(l => l.slug === 'kenpo');
+  const okLogs = [];
+  const okCode = await doCheckOnline(['kenpo'], {
+    getJson: async () => ({ revisions: [{ law_revision_id: m.revision_id, amendment_enforcement_date: m.enforcement_date, amendment_law_title: '', current_revision_status: 'CurrentEnforced' }] }),
+    log: (x) => okLogs.push(String(x)),
+  });
+  if (okCode !== 0 || !okLogs.some(l => l.includes('全件最新'))) out.push(P('fail', '--check-online: 版が一致しているのに成功と表示されない（検査が厳しすぎる）'));
+  const tmp = mkdtempSync(path.join(tmpdir(), 'legal-amend-'));
+  try {
+    const code2 = await doAmendments(['kenpo'], tmp, { getJson: offline, log: () => {} });
+    if (code2 === 0) out.push(P('fail', '--amendments: 取得に失敗したのに終了コード0'));
+    if (existsSync(path.join(tmp, 'AMENDMENTS.json')) || existsSync(path.join(tmp, 'AMENDMENTS.md'))) out.push(P('fail', '--amendments: 失敗したのに不完全な AMENDMENTS を書き出した（改正の警告が黙って消える）'));
+    const code3 = await doAmendments(['kenpo'], null, { getJson: offline, log: () => {} });
+    if (code3 === 0) out.push(P('fail', '--amendments: --only を --out 無しで受け付けた（既定の出力を部分的な内容で壊しうる）'));
   } finally { rmSync(tmp, { recursive: true, force: true }); }
   return out;
 }
@@ -303,7 +338,7 @@ export function checkAgent({ text, exists = (p) => existsSync(path.join(ROOT, p)
 }
 
 const AGENT_TEXT = () => readFileSync(path.join(ROOT, '.claude', 'agents', 'legal-checker.md'), 'utf8');
-EXTRA_CHECKS.push(() => {
+EXTRA_CHECKS.push(async () => {
   const out = [];
   const files = existsSync(KNOW) ? readdirSync(KNOW).filter(n => n.endsWith('.md') && n !== 'INDEX.md') : [];
   const idx = path.join(KNOW, 'INDEX.md');
@@ -312,6 +347,7 @@ EXTRA_CHECKS.push(() => {
     out.push(...checkData({ marks: loadData('third-party-marks.json').marks, hosts: loadData('external-hosts.json').hosts, oss: loadData('oss-licenses.json').packages, models: loadData('ai-model-licenses.json').models }));
   } catch (e) { out.push(P('fail', `データ台帳を読めない: ${e.message}`)); }
   out.push(...selfTestScanner());
+  out.push(...await selfTestCorpusCli());
   out.push(...checkRuleCites(loadAmend()));
   const ag = path.join(ROOT, '.claude', 'agents', 'legal-checker.md');
   out.push(...checkAgent({ text: existsSync(ag) ? readFileSync(ag, 'utf8') : null }));
@@ -320,6 +356,14 @@ EXTRA_CHECKS.push(() => {
 
 // F/G の故障注入ケース（inject() が参照する）
 export const EXTRA_INJECT = [
+  ['引用の項が全角数字（検証をすり抜ける書式）', () => checkCitations('【著作権法32条第１項｜引用】', 'inj', null)],
+  ['引用の項が漢数字（検証をすり抜ける書式）', () => checkCitations('【著作権法第三十二条第一項｜引用】', 'inj', null)],
+  ['部分取得で全体の取得日だけ新しい（古い法令を隠さない）', () => {
+    const m = JSON.parse(JSON.stringify(loadManifest()));
+    m.fetched_at = new Date().toISOString();
+    m.laws[0].fetched_at = '2000-01-01T00:00:00.000Z';
+    return checkFreshness(m);
+  }, 'warn'],
   ['INDEX が新しいノートを案内していない', () => checkIndex({ indexText: '# index', files: ['99-new.md'] })],
   ['INDEX のリンク先が実在しない', () => checkIndex({ indexText: '[x](nonexistent-file.md)', files: [] })],
   ['台帳: 不明な confidence（登録有無の断定語彙）', () => { const m = JSON.parse(JSON.stringify(loadData('third-party-marks.json').marks)); m[0].confidence = 'registered'; return checkData({ marks: m, hosts: {}, oss: {}, models: [] }); }],
@@ -332,7 +376,7 @@ export const EXTRA_INJECT = [
   ['エージェント定義が実在しない知識ファイルを参照', () => checkAgent({ text: AGENT_TEXT() + '\nlegal/knowledge/99-missing.md' })],
 ];
 
-export function runAll() {
+export async function runAll() {
   const out = [];
   const manifest = loadManifest();
   out.push(...checkCorpus({ manifest }));
@@ -349,12 +393,12 @@ export function runAll() {
     out.push(...checkCoverage(f, text));
   }
   if (unverified) out.push(P('warn', `【】なしの条文言及が ${unverified} 件（検証されない書き方）。重要な主張の根拠は【法令名 条｜語】にする`));
-  for (const fn of EXTRA_CHECKS) out.push(...fn());
+  for (const fn of EXTRA_CHECKS) out.push(...await fn());
   return { problems: out, totalCites };
 }
 
 // ── 故障注入 ─────────────────────────────────────────────
-function inject() {
+async function inject() {
   const manifest = loadManifest();
   const amend = loadAmend();
   const cases = [];
@@ -391,12 +435,12 @@ function inject() {
   for (const c of EXTRA_INJECT) cases.push(c);
   let bad = 0;
   console.log('\n故障注入（すべて ✗ が出れば検査は生きている）:');
-  for (const [name, fn] of cases) {
+  for (const [name, fn, expect = 'fail'] of cases) {
     clearCache();
-    const r = fn();
-    const failed = r.some(p => p.level === 'fail');
-    console.log(`  ${failed ? '✓' : '✗ 素通り'} ${name}`);
-    if (!failed) bad++;
+    const r = await fn();
+    const hit = r.some(p => p.level === expect);
+    console.log(`  ${hit ? '✓' : '✗ 素通り'} ${name}${expect === 'warn' ? '（△が出ること）' : ''}`);
+    if (!hit) bad++;
   }
   // 陽性対照（これは ✗ になってはいけない）: 全ファイルが CRLF の作業コピーでも偽の赤にならない
   clearCache();
@@ -411,7 +455,7 @@ function inject() {
 // ── main ─────────────────────────────────────────────────
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const injectMode = process.argv.includes('--inject');
-  const { problems, totalCites } = runAll();
+  const { problems, totalCites } = await runAll();
   const fails = problems.filter(p => p.level === 'fail');
   const warns = problems.filter(p => p.level === 'warn');
   console.log(`法令知識の検査 — 検証した引用 ${totalCites} 件／法令 ${LAWS.length} 本`);
@@ -420,6 +464,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   for (const p of warns.slice(0, 40)) console.log(`  △ ${p.msg}`);
   if (warns.length > 40) console.log(`  △ …ほか ${warns.length - 40} 件`);
   let code = fails.length ? 1 : 0;
-  if (injectMode) { if (inject() > 0) code = 1; }
+  if (injectMode) { if (await inject() > 0) code = 1; }
   process.exit(code);
 }
