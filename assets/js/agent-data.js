@@ -212,6 +212,18 @@
           title:{ja:'テトラ陣地',en:'Tetra Territory'}, emoji:'🧩',
           desc:{ja:'ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦',en:'Blokus-style board game — place polyomino pieces on a 20x20 grid, corner-touch rule, vs AI'},
           aliases:{ja:['ブロックス','ぶろっくす','テトラ陣地','ポリオミノ','陣取りゲーム'],en:['blokus','polyomino','territory game']} },
+        { slug:'pinball', href:'pinball.html', cat:'action',
+          title:{ja:'NEON PINBALL',en:'Neon Pinball'}, emoji:'🪩',
+          desc:{ja:'GameKit製の縦型ピンボール。重力と反射の物理エンジンで、左右フリッパーを操りバンパー・スリングショット・ドロップターゲットを狙う。プランジャー長押しで発射、残ボール3、ハイスコア記録',en:'A neon-styled physics pinball built on GameKit — flip the flippers, hit bumpers and slingshots, launch with the plunger'},
+          aliases:{ja:['ネオンピンボール','ぴんぼーる','フリッパー','プランジャー'],en:['neon pinball','pinball','flipper']} },
+        { slug:'kage-shura-den', href:'kage_shura_den.html', cat:'action',
+          title:{ja:'影修羅伝',en:'Kage Shura Den'}, emoji:'🥷',
+          desc:{ja:'明王の力を宿した忍者が戦国の街道を駆ける、色彩豊かな和風伝奇2Dアクション。超大跳躍・斬撃・必殺技3種（火界呪・風斬・雷鼓）で戦う。全2ステージ＋大鬼ボス戦',en:'Colorful Japanese period 2D action — a ninja with Myo-o power dashes through the Sengoku era with huge jumps, slashes and 3 special moves'},
+          aliases:{ja:['影修羅伝','かげしゅらでん','忍者アクション','和風アクション'],en:['kage shura den','ninja action']} },
+        { slug:'kart-racer', href:'kart_racer.html', cat:'action',
+          title:{ja:'ターボカート・グランプリ',en:'Turbo Kart Grand Prix'}, emoji:'🏎️',
+          desc:{ja:'オリジナルキャラのカートで3周レース。擬似3D三人称視点、ドリフトでミニターボ発動、ニトロ・オイル缶・スターショット等のアイテムでライバル5台を抜き去る',en:'3-lap kart race with original characters, pseudo-3D third-person view — drift for mini-turbos and use items to pass 5 rivals'},
+          aliases:{ja:['ターボカート','カートレース','グランプリ','ドリフト','ミニターボ'],en:['turbo kart','kart racer','grand prix','drift']} },
       ];
       const RECOMMENDS = ['zelda','shogi','mahjong'];
 
