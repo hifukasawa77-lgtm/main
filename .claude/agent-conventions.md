@@ -94,6 +94,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | CLAUDE.md の「定期実行（Routine）一覧」（Routineの新設・変更・停止） | `node scripts/verify-routine-delivery.mjs` |
 | 上記以外のHTML（新規ゲーム含む） | `bash .claude/skills/dynamic-test/run.sh --changed` |
 | HTMLの `<head>` を足した・新規ページ（全ページ共通のCSP／frame-guard／referrer） | `node scripts/security-baseline.mjs`（不足は `--write` で補う） |
+| 新規ページ・新作ゲーム・トップのカード追加（検索・共有用タグ／サイトマップ／構造化データ） | `node scripts/seo-tags.mjs`（不足は `--write` で補う。`--inject` で故障注入） |
 | コミット直前（全変更共通） | `bash .claude/skills/release-check/release-check.sh` |
 
 - **表に無いファイルでも、CLAUDE.md に検査の記載があればそちらが優先**（CLAUDE.md が正、この表は索引）。

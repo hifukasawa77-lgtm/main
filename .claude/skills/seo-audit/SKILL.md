@@ -14,6 +14,14 @@ bash .claude/skills/seo-audit/seo-audit.sh zelda_like.html # 指定ファイル�
 
 終了コード: 欠落なし=0 / 欠落あり=1。admin系・テスト用HTMLは除外済み。
 
+## まず道具で補う（手で書く前に）
+
+```bash
+node scripts/seo-tags.mjs --write   # 公開ページ全部の不足タグ・サイトマップ・トップの構造化データを補う
+node scripts/seo-tags.mjs           # 検査（release-check 検査#12・CI seo.yml と同じ）
+```
+下のテンプレは、道具が材料不足で止まったページ（GAMES にもトップのカードにも説明が無い）を手で書くときの書式。
+
 ## 本サイト標準のOGPテンプレ
 
 `<head>` 内に以下を追記する（値はページごとに差し替え）:
