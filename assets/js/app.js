@@ -7396,7 +7396,18 @@ document.addEventListener('click', event => {
           return false;
         }
       }
-      // Clipboard API は http・権限拒否・古い端末で失敗する。落ちたら execCommand へ、それも駄目なら false
+      const isEn = () => document.documentElement.lang === 'en';
+      const igLabel = card => {
+        const t = card.querySelector('h3')?.textContent?.trim() || (isEn() ? 'Game' : 'ゲーム');
+        return isEn()
+          ? `Share ${t} on Instagram (copies the link, then opens Instagram)`
+          : `${t}をInstagramでシェア（リンクをコピーして開く）`;
+      };
+      const igButtons = [];
+
+      // Clipboard API は http・権限拒否・古い端末で失敗する。落ちたら execCommand へ、それも駄目なら false。
+      // API が無い端末の execCommand はこの呼び出しの中で同期に走る（＝クリックの持ち分の内側）。
+      // writeText が拒否されたあとの再試行は持ち分の外になるので、あくまで最後の手段。
       function copyText(text) {
         if (navigator.clipboard && window.isSecureContext) {
           return navigator.clipboard.writeText(text).then(() => true, () => legacyCopy(text));
@@ -7426,26 +7437,37 @@ document.addEventListener('click', event => {
         const igBtn = document.createElement('button');
         igBtn.type = 'button';
         igBtn.className = 'work-share-btn work-share-ig';
-        igBtn.setAttribute('aria-label', `${title}をInstagramでシェア（リンクをコピーして開く）`);
+        igBtn.setAttribute('aria-label', igLabel(card));
         igBtn.innerHTML = IG_ICON + 'Instagram';
         igBtn.addEventListener('click', e => {
           e.preventDefault();
           e.stopPropagation();
-          // window.open はクリックと同じ同期の流れで呼ぶ（コピー完了を待つとポップアップとして遮られる）
+          // クリップボードへの書き込みは、クリックの「ユーザー操作の持ち分」が残っているうちに始める。
+          // window.open を先に呼ぶと Safari/WebKit ではその持ち分が消費され、writeText が拒否される
+          // （新しいタブが開くだけでURLがコピーされない）。コピーの完了は待たない（開く側が遮られるため）。
+          // 見出しは言語切替で書き換わるので、生成時に控えた title ではなくクリック時点のものを使う
+          const liveTitle = card.querySelector('h3')?.textContent?.trim() || title;
+          const copying = copyText(`「${liveTitle}」ブラウザで無料プレイ！ #hideの部屋\n${pageUrl}`);
           window.open(INSTAGRAM_URL, '_blank', 'noopener,noreferrer');
-          const en = document.documentElement.lang === 'en';
-          copyText(`「${title}」ブラウザで無料プレイ！ #hideの部屋\n${pageUrl}`).then(ok => {
+          const en = isEn();
+          copying.then(ok => {
             showToast(ok
               ? (en ? 'Link copied. Paste it into your Instagram story or DM.' : 'リンクをコピーしました。InstagramのストーリーズやDMに貼り付けてください')
               : (en ? `Could not copy. Please copy this link: ${pageUrl}` : `コピーできませんでした。このリンクを手動でコピーしてください: ${pageUrl}`));
           });
         });
+        igButtons.push([card, igBtn]);
 
         const body = card.querySelector('.work-body');
         if (body) {
           body.appendChild(btn);
           body.appendChild(igBtn);
         }
+      });
+
+      // 言語切替（applyLang が発火する site-lang-change）でも読み上げ用ラベルを追従させる
+      window.addEventListener('site-lang-change', () => {
+        igButtons.forEach(([card, b]) => b.setAttribute('aria-label', igLabel(card)));
       });
     })();
 
