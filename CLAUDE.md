@@ -1004,7 +1004,7 @@ openssl dgst -sha384 -binary package/<CDNパスと同じファイル> | openssl 
 ```bash
 node scripts/seo-tags.mjs            # 検査: 公開ページ全部（トップからのリンク＋サイトマップ）と構造化データ
 node scripts/seo-tags.mjs --write    # 不足を補う（既存タグは上書きしない。サイトマップへの追加・ItemList の同期も行う）
-node scripts/seo-tags.mjs --inject   # 故障注入（6種の壊し方を全部検出するか）
+node scripts/seo-tags.mjs --inject   # 故障注入（8種の壊し方を全部検出するか）
 ```
 
 - **新しいページ・新作ゲームを公開したら `--write` を1回かける**。2026-10-15 に92ページのタグを全部そろえたのに、

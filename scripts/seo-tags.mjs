@@ -9,7 +9,7 @@
 // 1ページごとに見るもの:
 //   title にサイト名「hideの部屋」／meta description／canonical（＝サイトマップのURL）／
 //   og:title・og:description・og:url・og:image・og:site_name／twitter:card／sitemap.xml に載っている
-// サイト全体で見るもの:
+// サイト全体で見るもの（トップページ自身の title・OGP・canonical もここで検査する。実体の無いページ参照も報告する）:
 //   トップの構造化データ（ItemList）にゲーム欄の全作品が載り、numberOfItems が実数と一致する
 //
 // なぜ検査にしたか（2026-10-16）:
@@ -43,7 +43,7 @@ const EXCLUDE = {
 const read = (f) => fs.readFileSync(f, 'utf8');
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const unesc = (s) => String(s).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-const urlOf = (rel) => BASE + rel.split('/').map(encodeURIComponent).join('/');
+const urlOf = (rel) => (rel === 'index.html' ? BASE : BASE + rel.split('/').map(encodeURIComponent).join('/'));
 const strip = (s) => unesc(s.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
 
 // ── 説明文の材料: ゲーム一覧データ → トップのカード説明 ─────────
@@ -67,8 +67,12 @@ const sitemap = read('sitemap.xml');
 const inSitemap = new Set([...sitemap.matchAll(/<loc>https:\/\/hifukasawa77-lgtm\.github\.io\/main\/([^<]*)<\/loc>/g)]
   .map((m) => decodeURIComponent(m[1]) || 'index.html'));
 const linked = new Set([...indexHtml.matchAll(/href="([^"#?:]+\.html)"/g)].map((m) => decodeURIComponent(m[1])));
-const targets = [...new Set([...inSitemap, ...linked])]
-  .filter((f) => f !== 'index.html' && fs.existsSync(f) && !EXCLUDE[f])
+const candidates = [...new Set([...inSitemap, ...linked, 'index.html'])].filter((f) => !EXCLUDE[f]);
+// 実体が無いページは targets から外さず「欠落」として報告する（消す・改名するだけで両方の検査が緑のまま
+// トップのリンク切れ・サイトマップの古いURLが公開される。例外もエラーも出ない）
+const missingFiles = candidates.filter((f) => !fs.existsSync(f)).sort();
+const targets = candidates
+  .filter((f) => fs.existsSync(f))
   .filter((f) => !/<meta name="robots"[^>]*noindex/i.test(read(f)))
   .sort();
 
@@ -167,6 +171,12 @@ function workCards(html) {
   }
   return out;
 }
+function toolLinks(html) {
+  const i = html.indexOf('<section id="tools"');
+  if (i < 0) return [];
+  const sec = html.slice(i);
+  return [...new Set([...sec.slice(0, sec.indexOf('</section>')).matchAll(/href="([^"#]+\.html)"/g)].map((m) => decodeURIComponent(m[1])))];
+}
 function itemList(html) {
   const m = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
   const data = JSON.parse(m[1]);
@@ -175,13 +185,22 @@ function itemList(html) {
 function checkItemList(html) {
   const { list } = itemList(html);
   const listed = new Set(list.itemListElement.map((e) => decodeURIComponent((e.item?.url || '').replace(BASE, ''))));
+  const shown = new Set([...workCards(html), ...toolLinks(html)]);
   const missing = workCards(html).filter((h) => !listed.has(h));
   const issues = missing.map((h) => `構造化データ（ItemList）に ${h} が無い`);
+  // 画面に出ていない作品を申告すると、構造化データが「見えない内容」を主張することになる（FAQPage と同じ不整合）
+  for (const u of listed) if (u && !shown.has(u)) issues.push(`ItemList の ${u} がトップのゲーム欄・ツール欄に出ていない（トップにカードを足すか、構造化データから外す）`);
   if (list.numberOfItems !== list.itemListElement.length) issues.push(`ItemList の numberOfItems（${list.numberOfItems}）が実数（${list.itemListElement.length}）と違う`);
   return issues;
 }
 function fillItemList(html) {
   const { m, data, list } = itemList(html);
+  // 画面に出ていない作品の申告は外す（トップへ載せるかは掲載方針なので、自動では足さない）。ページ自体は残す
+  const shown = new Set([...workCards(html), ...toolLinks(html)]);
+  const dropped = list.itemListElement.filter((e) => !shown.has(decodeURIComponent((e.item?.url || '').replace(BASE, ''))));
+  for (const e of dropped) console.log(`－ ItemList から外す（トップに出ていない）: ${e.item?.url}`);
+  list.itemListElement = list.itemListElement.filter((e) => !dropped.includes(e));
+  list.itemListElement.forEach((e, i) => { e.position = i + 1; });
   const listed = new Set(list.itemListElement.map((e) => decodeURIComponent((e.item?.url || '').replace(BASE, ''))));
   for (const h of workCards(html).filter((x) => !listed.has(x))) {
     const g = catalog.get(h);
@@ -232,12 +251,27 @@ if (INJECT) {
   list.numberOfItems = list.itemListElement.length;
   const broken = indexHtml.replace(ld[1], JSON.stringify(data));
   const caughtList = checkItemList(broken).length > 0;
+  // 画面に無い作品を ItemList へ足す（余分な項目）
+  const { m: ld2, data: data2 } = itemList(indexHtml);
+  const list2 = data2['@graph'].find((g) => g['@type'] === 'ItemList');
+  list2.itemListElement.push({ '@type': 'ListItem', position: list2.itemListElement.length + 1, item: { '@type': 'SoftwareApplication', name: 'x', url: BASE + 'no-such-page.html' } });
+  list2.numberOfItems = list2.itemListElement.length;
+  const caughtExtra = checkItemList(indexHtml.replace(ld2[1], JSON.stringify(data2))).some((i) => i.includes('no-such-page.html'));
+  console.log(`${caughtExtra ? '✓' : '✗'} ItemList に画面に無い作品を足す → ${caughtExtra ? '検出した' : 'すり抜けた'}`);
+  // トップの検査: 正規URLを壊す
+  const topBroken = indexHtml.replace(/(<link rel="canonical" href=")[^"]+/, '$1https://example.com/');
+  const caughtTop = checkPage('index.html', topBroken).length > 0;
+  console.log(`${caughtTop ? '✓' : '✗'} トップの canonical を壊す → ${caughtTop ? '検出した' : 'すり抜けた'}`);
   console.log(`${caughtList ? '✓' : '✗'} ItemList から1件消す → ${caughtList ? '検出した' : 'すり抜けた'}`);
-  process.exit(ok && caughtList ? 0 : 1);
+  process.exit(ok && caughtList && caughtExtra && caughtTop ? 0 : 1);
 }
 
 // ── 本体 ────────────────────────────────────────────────────
 let problems = 0;
+for (const f of missingFiles) {
+  problems++;
+  console.log(`✗ ${f}: ファイルが無い（${[inSitemap.has(f) && 'sitemap.xml', linked.has(f) && 'トップのリンク'].filter(Boolean).join('・')} がまだ指している。消した・改名したなら参照も直す）`);
+}
 const toSitemap = [];
 for (const rel of targets) {
   let html = read(rel);
