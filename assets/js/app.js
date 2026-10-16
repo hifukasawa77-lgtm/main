@@ -7358,65 +7358,17 @@ document.addEventListener('click', event => {
     // ── ゲームシェアボタン（動的生成） ──
     (function() {
       const BASE = 'https://hifukasawa77-lgtm.github.io/main/';
-      const INSTAGRAM_URL = 'https://www.instagram.com/';
-
-      // Instagram には X の intent/tweet のような「投稿内容つきで開く」Web URL が無い。
-      // そのため「リンクをコピー → Instagram を開く → 利用者がストーリーズ/DMへ貼る」の2手にする。
-      let toastEl = null;
-      let toastTimer = 0;
-      function showToast(message) {
-        if (!toastEl) {
-          toastEl = document.createElement('div');
-          toastEl.className = 'share-toast';
-          toastEl.setAttribute('role', 'status');
-          toastEl.setAttribute('aria-live', 'polite');
-          document.body.appendChild(toastEl);
-        }
-        toastEl.textContent = message; // 外部由来ではないが、DOM組み立ては textContent に統一
-        // 再表示でも transition が走るよう、いったん外してから付ける
-        toastEl.classList.remove('show');
-        void toastEl.offsetWidth;
-        toastEl.classList.add('show');
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => toastEl.classList.remove('show'), 5000);
-      }
-
-      function legacyCopy(text) {
-        try {
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          ta.setAttribute('readonly', '');
-          ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
-          document.body.appendChild(ta);
-          ta.select();
-          const ok = document.execCommand('copy');
-          ta.remove();
-          return ok;
-        } catch (_) {
-          return false;
-        }
-      }
       const isEn = () => document.documentElement.lang === 'en';
-      const igLabel = card => {
-        const t = card.querySelector('h3')?.textContent?.trim() || (isEn() ? 'Game' : 'ゲーム');
-        return isEn()
-          ? `Share ${t} on Instagram (copies the link, then opens Instagram)`
-          : `${t}をInstagramでシェア（リンクをコピーして開く）`;
-      };
-      const igButtons = [];
-
-      // Clipboard API は http・権限拒否・古い端末で失敗する。落ちたら execCommand へ、それも駄目なら false。
-      // API が無い端末の execCommand はこの呼び出しの中で同期に走る（＝クリックの持ち分の内側）。
-      // writeText が拒否されたあとの再試行は持ち分の外になるので、あくまで最後の手段。
-      function copyText(text) {
-        if (navigator.clipboard && window.isSecureContext) {
-          return navigator.clipboard.writeText(text).then(() => true, () => legacyCopy(text));
-        }
-        return Promise.resolve(legacyCopy(text));
-      }
+      // 見出し（h3）は言語切替で書き換わるので、生成時に控えず、使う時点で読む
+      const titleOf = card => card.querySelector('h3')?.textContent?.trim() || (isEn() ? 'Game' : 'ゲーム');
+      const threadsLabel = card => isEn()
+        ? `Share ${titleOf(card)} on Threads`
+        : `${titleOf(card)}をThreadsでシェア`;
+      const threadsButtons = [];
 
       const X_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.734-8.857L1.254 2.25H8.08l4.257 5.629L18.244 2.25zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>';
-      const IG_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1" fill="currentColor" stroke="none"/></svg>';
+      // Threads のロゴ（Simple Icons・CC0 のパスデータ）
+      const THREADS_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.186 24h-.007c-3.581-.024-6.334-1.205-8.184-3.509C2.35 18.44 1.5 15.586 1.472 12.01v-.017c.03-3.579.879-6.43 2.525-8.482C5.845 1.205 8.6.024 12.18 0h.014c2.746.02 5.043.725 6.826 2.098 1.677 1.29 2.858 3.13 3.509 5.467l-2.04.569c-1.104-3.96-3.898-5.984-8.304-6.015-2.91.022-5.11.936-6.54 2.717C4.307 6.504 3.616 8.914 3.589 12c.027 3.086.718 5.496 2.057 7.164 1.43 1.783 3.631 2.698 6.54 2.717 2.623-.02 4.358-.631 5.8-2.045 1.647-1.613 1.618-3.593 1.09-4.798-.31-.71-.873-1.3-1.634-1.75-.192 1.352-.622 2.446-1.284 3.272-.886 1.102-2.14 1.704-3.73 1.79-1.202.065-2.361-.218-3.259-.801-1.063-.689-1.685-1.74-1.752-2.964-.065-1.19.408-2.285 1.33-3.082.88-.76 2.119-1.207 3.583-1.291a13.853 13.853 0 0 1 3.02.142c-.126-.742-.375-1.332-.75-1.757-.513-.586-1.308-.883-2.359-.89h-.029c-.844 0-1.992.232-2.721 1.32L7.734 7.847c.98-1.454 2.568-2.256 4.478-2.256h.044c3.194.02 5.097 1.975 5.287 5.388.108.046.216.094.321.142 1.49.7 2.58 1.761 3.154 3.07.797 1.82.871 4.79-1.548 7.158-1.85 1.81-4.094 2.628-7.277 2.65Zm1.003-11.69c-.242 0-.487.007-.739.021-1.836.103-2.98.946-2.916 2.143.067 1.256 1.452 1.839 2.784 1.767 1.224-.065 2.818-.543 3.086-3.71a10.5 10.5 0 0 0-2.215-.221z"/></svg>';
 
       document.querySelectorAll('.work-card[data-category]').forEach(card => {
         const title = card.querySelector('h3')?.textContent?.trim() || 'ゲーム';
@@ -7434,40 +7386,32 @@ document.addEventListener('click', event => {
           window.open(tweetUrl, '_blank', 'noopener,noreferrer,width=560,height=360');
         });
 
-        const igBtn = document.createElement('button');
-        igBtn.type = 'button';
-        igBtn.className = 'work-share-btn work-share-ig';
-        igBtn.setAttribute('aria-label', igLabel(card));
-        igBtn.innerHTML = IG_ICON + 'Instagram';
-        igBtn.addEventListener('click', e => {
+        // Threads は公式の Web intent で、投稿文・リンク・トピックタグを埋めて作成画面を開ける
+        // （https://developers.facebook.com/docs/threads/threads-web-intents）。値は percent-encode が必須
+        const threadsBtn = document.createElement('button');
+        threadsBtn.type = 'button';
+        threadsBtn.className = 'work-share-btn work-share-threads';
+        threadsBtn.setAttribute('aria-label', threadsLabel(card));
+        threadsBtn.innerHTML = THREADS_ICON + 'Threads';
+        threadsBtn.addEventListener('click', e => {
           e.preventDefault();
           e.stopPropagation();
-          // クリップボードへの書き込みは、クリックの「ユーザー操作の持ち分」が残っているうちに始める。
-          // window.open を先に呼ぶと Safari/WebKit ではその持ち分が消費され、writeText が拒否される
-          // （新しいタブが開くだけでURLがコピーされない）。コピーの完了は待たない（開く側が遮られるため）。
-          // 見出しは言語切替で書き換わるので、生成時に控えた title ではなくクリック時点のものを使う
-          const liveTitle = card.querySelector('h3')?.textContent?.trim() || title;
-          const copying = copyText(`「${liveTitle}」ブラウザで無料プレイ！ #hideの部屋\n${pageUrl}`);
-          window.open(INSTAGRAM_URL, '_blank', 'noopener,noreferrer');
-          const en = isEn();
-          copying.then(ok => {
-            showToast(ok
-              ? (en ? 'Link copied. Paste it into your Instagram story or DM.' : 'リンクをコピーしました。InstagramのストーリーズやDMに貼り付けてください')
-              : (en ? `Could not copy. Please copy this link: ${pageUrl}` : `コピーできませんでした。このリンクを手動でコピーしてください: ${pageUrl}`));
-          });
+          const text = encodeURIComponent(`「${titleOf(card)}」ブラウザで無料プレイ！`);
+          const intentUrl = `https://www.threads.com/intent/post?text=${text}&url=${encodeURIComponent(pageUrl)}&tag=${encodeURIComponent('hideの部屋')}`;
+          window.open(intentUrl, '_blank', 'noopener,noreferrer,width=560,height=640');
         });
-        igButtons.push([card, igBtn]);
+        threadsButtons.push([card, threadsBtn]);
 
         const body = card.querySelector('.work-body');
         if (body) {
           body.appendChild(btn);
-          body.appendChild(igBtn);
+          body.appendChild(threadsBtn);
         }
       });
 
       // 言語切替（applyLang が発火する site-lang-change）でも読み上げ用ラベルを追従させる
       window.addEventListener('site-lang-change', () => {
-        igButtons.forEach(([card, b]) => b.setAttribute('aria-label', igLabel(card)));
+        threadsButtons.forEach(([card, b]) => b.setAttribute('aria-label', threadsLabel(card)));
       });
     })();
 
