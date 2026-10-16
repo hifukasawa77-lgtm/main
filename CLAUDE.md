@@ -1027,6 +1027,25 @@ openssl dgst -sha384 -binary package/<CDNパスと同じファイル> | openssl 
   **画面は壊れず dynamic-test も素通りし、GitHub Actions の security が赤くなって初めて気づく**（2026-09-26）
 - インラインscript（JSON-LD含む）を触ったら `node scripts/security-csp.mjs --write` で再生成する
 
+### 検索・共有用タグとサイトマップ（`release-check` 検査#12・CI `seo.yml` が機械検査する）
+
+```bash
+node scripts/seo-tags.mjs            # 検査: 公開ページ全部（トップからのリンク＋サイトマップ）と構造化データ
+node scripts/seo-tags.mjs --write    # 不足を補う（既存タグは上書きしない。サイトマップへの追加・ItemList の同期も行う）
+node scripts/seo-tags.mjs --inject   # 故障注入（8種の壊し方を全部検出するか）
+```
+
+- **新しいページ・新作ゲームを公開したら `--write` を1回かける**。2026-10-15 に92ページのタグを全部そろえたのに、
+  前後に公開された新作8本が**タグ無し・サイトマップ外**のまま出ていた（例外もエラーも出ない）
+- 見るもの: title のサイト名「hideの部屋」／description／canonical（＝サイトマップのURL）／OGP 5種／Twitterカード／
+  サイトマップ掲載／トップの構造化データ（ItemList）に全作品が載り件数の申告が実数と一致
+- 説明文は `assets/js/agent-data.js` の GAMES → トップのカード説明から作る。**どちらにも無いページは止まる**ので手で書く
+  （新作は GAMES にも足すこと。案内チャットボットにも載らないままになる。2026-10-16 時点でピンボールが未登録）
+- `--write` で ItemList を同期したら **CSPハッシュが変わる**（JSON-LD もハッシュの対象）→ `node scripts/security-csp.mjs --write`
+- 共通のOG画像は `assets/og/og-default.jpg`（`node scripts/gen-site-og.mjs`）。**OG画像は書き出したら必ず目で見る**
+  （旧 `og-image.webp` は日本語が全部「□」のまま公開されていた）
+- 日本語ディレクトリ（`浮き沈みゲーム/`）のパスは、サイトマップでは `%E6…`、git では `\346…` で出る。照合は必ず元に戻してから
+
 ### 全ページのセキュリティ基礎線（2026-10-08 新設）
 
 ```bash
