@@ -341,10 +341,15 @@
         const t = normalize(text);
         if (!t) return [];
         const pick = (e) => (opts && opts.excludeThemes ? e.themeFree : e.aliases);
-        const hits = [];
+        const found = [];
         for (const e of GAME_ALIAS_NORM) {
-          if (pick(e).some(a => t.indexOf(a) !== -1)) hits.push(e.g);
+          const matched = pick(e).filter(a => t.indexOf(a) !== -1);
+          if (matched.length) found.push({ g: e.g, longest: matched.reduce((x, y) => (y.length > x.length ? y : x)) });
         }
+        // ★当たった語が、別のゲームの当たった語の一部にすぎないなら外す。
+        //   「いろはかるた」が百人一首の別名「かるた」にも当たり、題名どおりに聞いても聞き返しになっていた（2026-10-17）。
+        //   「かるた」だけなら両方とも同じ語で当たるので、従来どおり聞き返す
+        const hits = found.filter(h => !found.some(o => o !== h && o.longest.length > h.longest.length && o.longest.indexOf(h.longest) !== -1)).map(h => h.g);
         if (hits.length) return hits;
         // ファジー第2パス（タイポ耐性）: 最も近い1件のみ、閾値0.78
         let best = null, bestSim = 0;
