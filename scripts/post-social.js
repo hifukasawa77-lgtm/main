@@ -17,15 +17,15 @@ const DRY_RUN = process.argv.includes('--dry-run');
 // 手書きのコア投稿（サイト全体紹介）。文面の正本は marketing/social_2026-08_x_instagram.md。
 // ここは実行用の写し（変更時は両方直す。verify-social-posts.mjs の検査#6が一致を機械確認する）
 const BLUESKY_POSTS_CORE = [
-  { id: 'core-overview-ja', text: `将棋・麻雀・バックギャモン・ベルトスクロールアクション・シューティング…\nブラウザだけで遊べる本格ゲームを48本無料公開中。インストール不要で今すぐプレイ！\n▶ hideの部屋 ${SITE_URL}\n#ブラウザゲーム #無料ゲーム #個人開発` },
-  { id: 'core-claude-ja',   text: `Claude AIとのペアプログラミングだけでブラウザゲームを48本作りました。素のHTML/CSS/JavaScript（Canvas API）のみ。フレームワーク・ビルドツール一切なし。\n▶ hideの部屋 ${SITE_URL}\n#Claude #AI駆動開発 #JavaScript #CanvasAPI` },
-  { id: 'core-free-ja',     text: `アプリのインストール不要！ブラウザを開くだけで将棋・麻雀・ポーカー・アクションゲームが全部タダで遊べます。48本収録、随時追加中。\n▶ hideの部屋 ${SITE_URL}\n#暇つぶし #無料ゲーム #ブラウザゲーム #将棋` },
+  { id: 'core-overview-ja', text: `将棋・麻雀・バックギャモン・ベルトスクロールアクション・シューティング…\nブラウザだけで遊べる本格ゲームを53本無料公開中。インストール不要で今すぐプレイ！\n▶ hideの部屋 ${SITE_URL}\n#ブラウザゲーム #無料ゲーム #個人開発` },
+  { id: 'core-claude-ja',   text: `Claude AIとのペアプログラミングだけでブラウザゲームを53本作りました。素のHTML/CSS/JavaScript（Canvas API）のみ。フレームワーク・ビルドツール一切なし。\n▶ hideの部屋 ${SITE_URL}\n#Claude #AI駆動開発 #JavaScript #CanvasAPI` },
+  { id: 'core-free-ja',     text: `アプリのインストール不要！ブラウザを開くだけで将棋・麻雀・ポーカー・アクションゲームが全部タダで遊べます。53本収録、随時追加中。\n▶ hideの部屋 ${SITE_URL}\n#暇つぶし #無料ゲーム #ブラウザゲーム #将棋` },
 ];
 
 const X_POSTS_CORE = [
   { id: 'core-history-slg-ja', text: `歴史シミュレーションを4本、ブラウザで無料公開しています。\n\n・三国志・天下三分（8シナリオ／10勢力）\n・戦国風雲記（街道・攻城ヘックス戦）\n・源平争乱記（兵力でなく"名分"を獲る）\n・太平風雲記（南北朝の正統性争い）\n\n全部インストール不要。フレームワークも不使用です。\n▶ hideの部屋 ${SITE_URL}\n\n#個人開発 #ブラウザゲーム #シミュレーションゲーム` },
   { id: 'core-ai-team-ja',     text: `ゲーム開発をAIエージェント22体のチームでやっています。\n\n企画→アセット制作→実装→品質ゲート（法務／脆弱性／日英表記／アセット）→動的テスト→採点→リリース。\nこのパイプラインごとサイトで公開しました。\n▶ hideの部屋 ${AGENTS_URL}\n\n#AI駆動開発 #ClaudeCode #個人開発` },
-  { id: 'core-tech-en',        text: `I built 48 browser games with zero frameworks — just vanilla JS and the Canvas API.\n\nHex-grid battles, AI opponents, Web Audio synths: all hand-rolled.\nNo bundler, no npm install — just open the HTML.\n▶ hideの部屋 ${SITE_URL}\n\n#JavaScript #CanvasAPI #gamedev #indiedev` },
+  { id: 'core-tech-en',        text: `I built 53 browser games with zero frameworks — just vanilla JS and the Canvas API.\n\nHex-grid battles, AI opponents, Web Audio synths: all hand-rolled.\nNo bundler, no npm install — just open the HTML.\n▶ hideの部屋 ${SITE_URL}\n\n#JavaScript #CanvasAPI #gamedev #indiedev` },
   { id: 'core-casual-ja',      text: `将棋・囲碁・麻雀・チェス・花札・百人一首・バックギャモン…\nボードゲームだけで20本、ブラウザで無料で遊べます。\n\nアプリ入れなくていいので、通勤中の暇つぶしにどうぞ。\n▶ hideの部屋 ${SITE_URL}\n\n#無料ゲーム #暇つぶし #将棋 #麻雀` },
 ];
 
@@ -33,7 +33,7 @@ const INSTAGRAM_POSTS = [
   {
     id: 'ig-hero',
     images: ['ig-01-hero.jpg', 'ig-02-strategy.jpg', 'ig-03-board.jpg', 'ig-04-team.jpg'],
-    caption: `ブラウザだけで遊べるゲームを48本、無料公開しています🎮\n\n▫️歴史シミュレーション5本（三国志・戦国・源平・南北朝・幕末）\n▫️ボードゲーム22本（将棋・囲碁・麻雀・チェス・花札…）\n▫️アクション・シューティング・パズル\n\nすべてインストール不要。ライブラリもフレームワークも使わず、素のJavaScriptとCanvas APIだけで作りました。\n\n開発はAIエージェント22体のチーム制。企画から品質チェック、リリースまでの流れもサイトで公開しています。\n\nプロフィールのリンク（hideの部屋）から遊べます👆\n\n—\n48 free browser games, no install required.\nBuilt with vanilla JavaScript and the Canvas API — zero frameworks.\nDeveloped by a team of 22 AI agents.\n\n#個人開発 #ブラウザゲーム #無料ゲーム #ゲーム制作 #JavaScript #CanvasAPI #AI駆動開発 #indiedev #gamedev #browsergames #retrogaming #将棋 #麻雀 #シミュレーションゲーム #プログラミング`,
+    caption: `ブラウザだけで遊べるゲームを53本、無料公開しています🎮\n\n▫️歴史シミュレーション5本（三国志・戦国・源平・南北朝・幕末）\n▫️ボードゲーム23本（将棋・囲碁・麻雀・チェス・花札…）\n▫️アクション・シューティング・パズル\n\nすべてインストール不要。ライブラリもフレームワークも使わず、素のJavaScriptとCanvas APIだけで作りました。\n\n開発はAIエージェント22体のチーム制。企画から品質チェック、リリースまでの流れもサイトで公開しています。\n\nプロフィールのリンク（hideの部屋）から遊べます👆\n\n—\n53 free browser games, no install required.\nBuilt with vanilla JavaScript and the Canvas API — zero frameworks.\nDeveloped by a team of 22 AI agents.\n\n#個人開発 #ブラウザゲーム #無料ゲーム #ゲーム制作 #JavaScript #CanvasAPI #AI駆動開発 #indiedev #gamedev #browsergames #retrogaming #将棋 #麻雀 #シミュレーションゲーム #プログラミング`,
   },
   {
     id: 'ig-genpei',
@@ -48,10 +48,10 @@ const INSTAGRAM_POSTS = [
 ];
 
 const REDDIT_POSTS = [
-  { id: 'reddit-webgames',   subreddit: 'webgames',   title: '48 free browser games (shogi, mahjong, backgammon, beat-em-up, shooting) – built with Claude AI + vanilla JS, no install needed' },
-  { id: 'reddit-javascript', subreddit: 'javascript', title: 'I built 48 browser games using only vanilla JS and Canvas API with Claude AI pair programming – no frameworks, no bundlers' },
-  { id: 'reddit-gamedev',    subreddit: 'gamedev',    title: 'Made 48 browser games with Claude AI as my pair programmer – zero frameworks, pure Canvas API' },
-  { id: 'reddit-claudeai',   subreddit: 'ClaudeAI',   title: 'Built 48 browser games through Claude AI pair programming – a year of vanilla JS + Canvas API projects' },
+  { id: 'reddit-webgames',   subreddit: 'webgames',   title: '53 free browser games (shogi, mahjong, backgammon, beat-em-up, shooting) – built with Claude AI + vanilla JS, no install needed' },
+  { id: 'reddit-javascript', subreddit: 'javascript', title: 'I built 53 browser games using only vanilla JS and Canvas API with Claude AI pair programming – no frameworks, no bundlers' },
+  { id: 'reddit-gamedev',    subreddit: 'gamedev',    title: 'Made 53 browser games with Claude AI as my pair programmer – zero frameworks, pure Canvas API' },
+  { id: 'reddit-claudeai',   subreddit: 'ClaudeAI',   title: 'Built 53 browser games through Claude AI pair programming – a year of vanilla JS + Canvas API projects' },
 ];
 
 // ゲーム別スポットライト投稿（scripts/gen-game-spotlight-posts.mjs の生成物）。
