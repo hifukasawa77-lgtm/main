@@ -88,12 +88,14 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `oshikatsu.html` | `node scripts/verify-oshikatsu.mjs`（見た目を変えたら `--shots DIR` で撮って目視。`--inject` で故障注入） |
 | `assets/js/oshi-research.js` / `cloudflare-worker/oshi-research.js`（推し活ログのイベントリサーチ） | `node scripts/verify-oshi-research.mjs`（`--inject` で故障注入）＋ `node --test tests/security.test.mjs` ＋ `node scripts/verify-oshikatsu.mjs`（画面側の連携） |
 | `assets/` 配下の画像（追加・差し替え・再エンコード） | `node scripts/verify-game-assets.mjs` / `node scripts/verify-asset-format.mjs` / `node scripts/verify-known-bug-patterns.mjs` |
+| `legal/knowledge/` / `legal/corpus/` / `obsidian-vault/04-Knowledge/rokuho-*.md` / `.claude/agents/legal-checker.md` / `scripts/legal-*.mjs`（リーガルチェッカーの知識・法令コーパス・走査器） | `node scripts/verify-legal-knowledge.mjs`（`--inject` で故障注入。引用が実条文に当たるか・コーパスが古くないか・走査器の自己検査・定義の整合）。法改正が施行されたら `node scripts/legal-corpus.mjs --check-online` → `--fetch` |
 | `assets/js/agent-data.js` | `node scripts/agent-evolve-check.mjs` / `node scripts/agent-dynamic-test.cjs` |
 | `marketing/` / `scripts/post-social.js` | `node scripts/verify-social-posts.mjs` |
 | `note/` | `node scripts/verify-note-articles.mjs` |
 | CLAUDE.md の「定期実行（Routine）一覧」（Routineの新設・変更・停止） | `node scripts/verify-routine-delivery.mjs` |
 | 上記以外のHTML（新規ゲーム含む） | `bash .claude/skills/dynamic-test/run.sh --changed` |
 | HTMLの `<head>` を足した・新規ページ（全ページ共通のCSP／frame-guard／referrer） | `node scripts/security-baseline.mjs`（不足は `--write` で補う） |
+| 新規ページ・新作ゲーム・トップのカード追加（検索・共有用タグ／サイトマップ／構造化データ） | `node scripts/seo-tags.mjs`（不足は `--write` で補う。`--inject` で故障注入） |
 | コミット直前（全変更共通） | `bash .claude/skills/release-check/release-check.sh` |
 
 - **表に無いファイルでも、CLAUDE.md に検査の記載があればそちらが優先**（CLAUDE.md が正、この表は索引）。

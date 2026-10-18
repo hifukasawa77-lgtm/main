@@ -10,7 +10,7 @@
 
 ## 現状サマリー（訴求の根拠）
 
-- 公開ゲーム **37本**（ボード20／シミュレーション6／アクション4／パズル3／RPG2／カード1／その他1）
+- 公開ゲーム **53本**（ボード23／シミュレーション8／アクション13／パズル3／RPG3／カード2／その他1）
 - 全てブラウザ完結・インストール不要・無料
 - 素のHTML/CSS/JavaScript（Canvas API）のみ。フレームワーク・ビルドツール不使用
 - Claude AI とのペアプログラミングで制作。22体のAIエージェントによる開発パイプラインを公開中
@@ -44,7 +44,7 @@
 
 ### JA-2 — 技術訴求
 ```
-ライブラリを1つも使わず、素のCanvas APIだけでゲームを37本作りました。
+ライブラリを1つも使わず、素のCanvas APIだけでゲームを53本作りました。
 
 ヘックス戦の経路探索も、AIの思考ルーチンも、Web Audioのシンセも全部自前。
 ビルドツールもなし。HTMLファイルを開けば動きます。
@@ -81,7 +81,7 @@
 
 ### EN-1 — Tech angle
 ```
-I built 37 browser games with zero frameworks — just vanilla JS and the Canvas API.
+I built 53 browser games with zero frameworks — just vanilla JS and the Canvas API.
 
 Hex-grid battles, AI opponents, Web Audio synths: all hand-rolled.
 No bundler, no npm install — just open the HTML.
@@ -121,18 +121,18 @@ Hex battles, diplomacy, siege warfare. No install, no account.
 
 画像は `assets/marketing/` に 1080×1080（正方形）で用意。カルーセル4枚を想定。
 
-- `ig-01-hero.jpg` — 37本・インストール不要
-- `ig-02-strategy.jpg` — 歴史SLG 4本
-- `ig-03-board.jpg` — ボードゲーム20本
+- `ig-01-hero.jpg` — 53本・インストール不要
+- `ig-02-strategy.jpg` — 歴史SLG 5本
+- `ig-03-board.jpg` — ボードゲーム23本
 - `ig-04-team.jpg` — AIエージェント22体
 
 ## IG-1 — カルーセル本命（日英併記）
 
 ```
-ブラウザだけで遊べるゲームを37本、無料公開しています🎮
+ブラウザだけで遊べるゲームを53本、無料公開しています🎮
 
-▫️歴史シミュレーション4本（三国志・戦国・源平・南北朝）
-▫️ボードゲーム20本（将棋・囲碁・麻雀・チェス・花札…）
+▫️歴史シミュレーション5本（三国志・戦国・源平・南北朝・幕末）
+▫️ボードゲーム23本（将棋・囲碁・麻雀・チェス・花札…）
 ▫️アクション・シューティング・パズル
 
 すべてインストール不要。ライブラリもフレームワークも使わず、素のJavaScriptとCanvas APIだけで作りました。
@@ -142,7 +142,7 @@ Hex battles, diplomacy, siege warfare. No install, no account.
 プロフィールのリンク（hideの部屋）から遊べます👆
 
 —
-37 free browser games, no install required.
+53 free browser games, no install required.
 Built with vanilla JavaScript and the Canvas API — zero frameworks.
 Developed by a team of 22 AI agents.
 

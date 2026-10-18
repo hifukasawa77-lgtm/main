@@ -252,6 +252,32 @@ node scripts/verify-service-worker.mjs   # 別オリジンの素通し／拒否�
   （バージョン番号）を上げてキャッシュキーを変えること。忘れやすいのは「HTMLは変えたがCSSだけ
   触った」回（2026-09-26、トップページ改修で実際に踏んだ）
 
+## リーガルチェッカー（法令コーパス）の必須チェック（legal/ ・ legal-checker・scripts/legal-*.mjs を触ったら必ず実行）
+
+```bash
+node scripts/verify-legal-knowledge.mjs          # 知識内の引用【法令名 条｜語】を実条文へ照合／コーパス鮮度／走査器の自己検査／エージェント定義の整合
+node scripts/verify-legal-knowledge.mjs --inject # 故障を仕込んで ✗ が出ることを確認（偽の緑の防止）
+node scripts/legal-lookup.mjs 著作権法 32        # 条文を引く（--search 語 / --toc / --list）
+node scripts/legal-scan.mjs [--only mark,external-send] [--changed]  # リポジトリを法務の目で走査（候補の列挙）
+node scripts/legal-corpus.mjs --status | --check-online | --fetch | --amendments | --diff <slug>
+```
+
+- **法律知識は記憶で書くと黙って古くなる**（例外もエラーも出ない）。2026-10-13 に取得した現行条文は、六法のうち5法が直近数か月に改正済みで、
+  個情法の課徴金（2028-07-16施行予定）・刑訴の電磁的記録提供命令・刑法の拘禁刑など、学習時点より新しい内容を含んでいた。
+  **条文は `legal-lookup` で引いてから書く**。知識ファイルの引用は `【法令名 条番号｜キーワード】` の記法で書き、検査が実条文と照合する（初回で私のノートの誤り5件を検出）
+- **コーパスは取得物＝手で直さない**（sha256 を MANIFEST と照合）。**sha256 は改行を LF に正規化して比べる**（このPCは `autocrlf=true` で、ブランチ切替の瞬間に JSON が CRLF になり、生バイト比較だと**全30法令が偽の赤**になった。検査の故障注入に「CRLF でも通る」陽性対照を持つ）。`legal/corpus/` は `.claudeignore` 対象なので **Read しない**（4MB超）。引く道具は lookup
+- **施行日を過ぎた改正が未取込なら検査が落ちる**（30日超は✗、以内は△）。`--fetch` で更新→`--amendments` でダイジェスト再生成→検査。**引用した条が改正対象なら△で日付が出る**
+- **取得の失敗は黙って成功にしない**: `--check-online` は確認できなかった法令が1つでもあれば非0で終わり成功メッセージを出さない。`--amendments` は1法令でも失敗したら既存の AMENDMENTS を上書きしない（欠けた法令の改正警告が黙って消えるため）。鮮度は**法令ごとの `fetched_at`** で見る（`--fetch --only` の部分取得で全体の日付が新しくなり、古い法令を隠すのを防ぐ）。いずれも偽の取得関数での自己検査と、実装を壊して検出されることの確認済み（2026-10-13 Codexレビュー指摘）
+- **判例は一次データを取得できないので記憶ベース**。報告に使う前に裁判所HP等で原典確認し、未確認は「要原典確認」を付す。ToS・ガイドライン・告示は検査時点の原文を WebFetch で確認し URL と取得日を残す
+- **標章の登録有無・区分は J-PlatPat（人手）**。台帳（`legal/knowledge/data/third-party-marks.json`）は confidence を high（著名）/ verify（要確認）の2値に限り、**登録番号・登録の有無を断定する欄を持たない**（検査が見張る）
+- **改称は title だけで終わらせない**: `zelda_like.html`・`gradius-1.html` は title/og を改称済みなのにファイル名/URL に旧名が残った。`legal-scan.mjs --only mark` で URL・description・カタログまで見る
+- **実装と公開文面の整合**（プライバシーポリシーの AI事業者・外部送信先・解析の有無）は `privacy-consistency`／`external-send` で見る。ズレは規約違反でなく「虚偽の表示」になる
+- **台帳（`legal/knowledge/08-this-repo-ledger.md`）は監査のたびに日付つきで追記**（上書きしない）。同じ論点を洗い直さない
+- **AIモデルは一覧に載せる前にライセンス確認**（`data/ai-model-licenses.json`・confirmed は一次情報＋日付＋URLが要る）。2026-10-13 時点で Qwen2.5-3B は**非商用限定**（収益化したら外す）
+- 走査器は**候補の列挙で判定ではない**。誤検知を減らす設計（コメント・CSPの空白化、ASCII語の語境界、風/ライク併記の検出）で、自己検査が誤検知の再発も見張る
+- **検査の自己検査も故障注入で確かめる**: 走査器の自己検査が「分類（Google Fonts・MIT・Qwen非商用）まで」見ていなかったため、台帳を空にしても素通りした（修正済み）。「検出した」でなく「正しく分類した」まで確認する
+- 範囲外（税務・社保・登記・権利化）は「範囲外」と書いて回す。**AIは弁護士ではない**（弁護士法72条）
+
 ## ZERO-1 Mobile とエアタッチの必須チェック（zero-1-mobile.html / assets/js/gesture-pointer.js を触ったら必ず実行）
 
 ```bash
@@ -463,6 +489,17 @@ HandLandmarker）／判定層（`GestureEngine`・純粋ロジック）／作用
   （PCのWebカメラは前面/背面の区別を持たず `OverconstrainedError` で掴めない）。
   検査#49〜54 がデスクトップ幅（1440×900）で通し確認する。
   なお **PC版 ZERO-1 は別リポジトリ `zero-1-local-ai`（Ollama）** で、こことは別実装
+  **PC版を触る依頼（「デスクトップ版ZERO-1」等）はこのリポジトリでは何も変わらない。**
+  `mcp__claude-code-remote__add_repo` で取り込み → クローン → `register_repo_root`。先に向こうの
+  `CLAUDE.md` と `docs/開発の注意.md` を読む（検査の書き方・大きさの上限が違う）。`npm ci --ignore-scripts` のあと
+  `node scripts/setup-airtouch.mjs` / `setup-wakeword.mjs` で `public/wasm` と `models` を用意しないと、
+  ビルドに入らず `/wasm` が404になる。実ブラウザは `/opt/node-tools/node_modules/playwright-core`
+  ＋ `/opt/pw-browsers/chromium`（`--no-sandbox`）。コミットは向こうの `npm run check` を通してから
+  向こうは `main` だけの浅いクローンになるので、**push したブランチは追跡参照が無く、Stop フックが「リモートブランチなし・Nコミット未push」と誤報する**。
+  `git fetch origin +refs/heads/<ブランチ>:refs/remotes/origin/<ブランチ>` で直る（push 自体は済んでいる。`git ls-remote origin <ブランチ>` で確かめる）
+  向こうの**開発サーバ（`npm run dev`）はファイル・SQLite・statfs に触れず**「operation not permitted」・ディスク0GBになる（既存機能も同じ）。
+  画面の確認は `npm run build && npm start` で行う。カメラを使う機能は Chromium の `--use-fake-device-for-media-stream
+  --use-file-for-fake-video-capture=<写真から ffmpeg で作った .y4m>` で本物のモデルに映像を見せて確かめられる
 
 ## Web Audio ページの必須チェック（synth-eq.html を触ったら必ず実行）
 
@@ -642,8 +679,8 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 
 | スキル | スケジュール（JST） | 成果物 | mainへの直接push |
 |---|---|---|---|
-| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve-2026-09-30`（旧`claude/agent-evolve`はPR #272と共にclose。理由は下記） | 禁止（深澤承認制） |
-| `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ | 禁止（コード変更なし） |
+| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-09-30`・PR #363。旧`claude/agent-evolve`はPR #272と共にclose。理由は下記） | 禁止（深澤承認制） |
+| `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ。Vaultの写しと痕跡は `claude/site-proposal-vault` | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
 | `/note-post` | 毎週水曜 06:00 | ローリングPR `claude/note-post`（note記事1本） | 禁止（深澤承認制） |
@@ -664,6 +701,9 @@ node scripts/verify-routine-delivery.mjs   # 表の各Routineが成果物を出�
   パラメータが無い。MCP経由で作ったRoutineは**リポジトリ無しのコンテナで起動する**
 - **表に載っているなら、動いている証跡があること。動かないなら表から外して停止する。**
   検査はこの原則で判定する（「起動はしている」を成功と呼ばせないため）
+- **成果物の置き場所は全部この表に書く**（検査は書かれたブランチを全部見て、最も新しいものを採る）。
+  2026-10-12、実際の置き場所（`claude/site-proposal-vault`・`claude/agent-evolve-2026-09-30`）が表に無かったため、
+  毎週動いていた2本を「15日・82日止まっている」と**偽の赤**で報告していた
 - harness-lint 検査#15 は同じ内容を**△警告**で出す（✗にしない理由は検査#15のコメント参照。
   Routineが動くかはAPI側の設定に依存し、リポジトリのコードでは直せないため）。
   **△が出たら必ず中身を見ること**
@@ -769,8 +809,10 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - **エージェント停止時の引き継ぎ**: サブエージェントがセッション上限等で停止しても成果物ファイルはディスクに残っていることが多い。「停止＝作業消失」と即断せず、まずファイル実体を確認してメイン側が残作業（テスト・修正）を引き継ぐ。上限リスクが高い局面では後続の品質ゲートをエージェント追加起動せずインライン実行に切り替えてよい
 
 ### Legal-Checkerエージェント (`legal-checker`)
-- 著作権・ライセンス・利用規約等の法務リスクを確認する特化型エージェント
-- コード・グラフィック・音楽・ライブラリ等の成果物を対象に法務チェックを実施する
+- **顧問弁護士の視点での一次スクリーニング**（弁護士ではない。弁護士法72条の線を明文化し、RED・金銭的影響大・第三者請求・捜査機関の連絡は弁護士へ回す）
+- 六法＋関連30法令の**現行条文**（`legal/corpus/`・e-Gov法令API・5,000条超）を**引いてから**書く。論点別プレイブックは `legal/knowledge/INDEX.md`、六法の条文地図は `obsidian-vault/04-Knowledge/rokuho-overview.md`
+- 著作権・商標/不競法・個人情報/外部送信・景表法/特商法/資金決済・サイバー/コンテンツ・契約/OSS/AIモデル/ToS・紛争対応（時効・親告罪・管轄）まで、規範→あてはめ→帰結（民事/刑事/行政/プラットフォーム）→対処案で報告する
+- 詳細は下の「リーガルチェッカー（法令コーパス）の必須チェック」節
 - リスクを RED（即時修正必須）/ YELLOW（要対応）/ GREEN（問題なし）の3段階で分類して報告
 - RED/YELLOWが存在する場合は問題の種別に応じて以下へ修正を依頼する:
   - グラフィック起因の問題 → [Graphic-Designer] へ結果を返す → 修正後に [Code-Generator] へ再連携
@@ -992,6 +1034,25 @@ openssl dgst -sha384 -binary package/<CDNパスと同じファイル> | openssl 
 - そのため FAQ の文言を1文字変えただけで CSP が古くなる。ブラウザは JSON-LD を実行しないので
   **画面は壊れず dynamic-test も素通りし、GitHub Actions の security が赤くなって初めて気づく**（2026-09-26）
 - インラインscript（JSON-LD含む）を触ったら `node scripts/security-csp.mjs --write` で再生成する
+
+### 検索・共有用タグとサイトマップ（`release-check` 検査#12・CI `seo.yml` が機械検査する）
+
+```bash
+node scripts/seo-tags.mjs            # 検査: 公開ページ全部（トップからのリンク＋サイトマップ）と構造化データ
+node scripts/seo-tags.mjs --write    # 不足を補う（既存タグは上書きしない。サイトマップへの追加・ItemList の同期も行う）
+node scripts/seo-tags.mjs --inject   # 故障注入（8種の壊し方を全部検出するか）
+```
+
+- **新しいページ・新作ゲームを公開したら `--write` を1回かける**。2026-10-15 に92ページのタグを全部そろえたのに、
+  前後に公開された新作8本が**タグ無し・サイトマップ外**のまま出ていた（例外もエラーも出ない）
+- 見るもの: title のサイト名「hideの部屋」／description／canonical（＝サイトマップのURL）／OGP 5種／Twitterカード／
+  サイトマップ掲載／トップの構造化データ（ItemList）に全作品が載り件数の申告が実数と一致
+- 説明文は `assets/js/agent-data.js` の GAMES → トップのカード説明から作る。**どちらにも無いページは止まる**ので手で書く
+  （新作は GAMES にも足すこと。案内チャットボットにも載らないままになる。2026-10-16 時点でピンボールが未登録）
+- `--write` で ItemList を同期したら **CSPハッシュが変わる**（JSON-LD もハッシュの対象）→ `node scripts/security-csp.mjs --write`
+- 共通のOG画像は `assets/og/og-default.jpg`（`node scripts/gen-site-og.mjs`）。**OG画像は書き出したら必ず目で見る**
+  （旧 `og-image.webp` は日本語が全部「□」のまま公開されていた）
+- 日本語ディレクトリ（`浮き沈みゲーム/`）のパスは、サイトマップでは `%E6…`、git では `\346…` で出る。照合は必ず元に戻してから
 
 ### 全ページのセキュリティ基礎線（2026-10-08 新設）
 

@@ -310,33 +310,51 @@
         return false;
       }
 
+      // 題材の語（GAMES[].themes）。「サッカーのゲームある？」でクラブロードを見つけるのには使うが、
+      // 「サッカーのルール教えて」はサッカーそのものの質問で、サイトのゲームはサッカーのルールを教えない。
+      // ★別名から外すと探せなくなるので、ルール・遊び方を聞かれたときだけサイトの語彙として数えない
+      //   （2026-10-12: クラブロードの別名「サッカー」が入って、この質問がゲーム紹介になっていた）
+      const THEME_WORDS = new Set(GAMES.flatMap(g => [...((g.themes && g.themes.ja) || []), ...((g.themes && g.themes.en) || [])])
+        .map(w => normalize(w)).filter(Boolean));
+      const ASKS_RULES = /ルール|遊び方|やり方|規則|how to play|\brules?\b/i;
+
       // 話題を持たないintentが当たったとき、サイト語彙に無い内容語が1つでもあれば off-topic。
       function isOffTopic(intentName, text) {
         if (!intentName || TOPIC_GENERIC_INTENTS.indexOf(intentName) === -1) return false;
         const tokens = contentTokens(text);
         if (!tokens.length) return false;         // 「おすすめは？」等は内容語ゼロ＝サイト内の話題
-        return tokens.some(tk => !isKnownTopicWord(tk));
+        const asksRules = ASKS_RULES.test(String(text || ''));
+        return tokens.some(tk => !isKnownTopicWord(tk) || (asksRules && THEME_WORDS.has(tk)));
       }
 
       // ゲームエイリアスは起動時に正規化しておく（カナ折り畳み・長音展開を辞書側にも適用）
-      const GAME_ALIAS_NORM = GAMES.map(g => ({
-        g,
-        aliases: [...(g.aliases.ja || []), ...(g.aliases.en || []), g.title.ja, g.title.en]
-          .filter(Boolean).map(a => normalize(a)).filter(a => a.length >= 2)
-      }));
+      // themeFree: 題材の語（themes）を除いた別名。ルール・遊び方の質問ではこちらで照合する
+      const GAME_ALIAS_NORM = GAMES.map(g => {
+        const aliases = [...(g.aliases.ja || []), ...(g.aliases.en || []), g.title.ja, g.title.en]
+          .filter(Boolean).map(a => normalize(a)).filter(a => a.length >= 2);
+        return { g, aliases, themeFree: aliases.filter(a => !THEME_WORDS.has(a)) };
+      });
 
-      function detectGame(text) {
+      // ★opts.excludeThemes: 「サッカーのルール教えて」で別名「サッカー」からクラブロードを出さない。
+      //   話題の判定（isOffTopic）だけ直しても、ここが先にカードを返すので画面では直らない（2026-10-12）
+      function detectGame(text, opts) {
         const t = normalize(text);
         if (!t) return [];
-        const hits = [];
+        const pick = (e) => (opts && opts.excludeThemes ? e.themeFree : e.aliases);
+        const found = [];
         for (const e of GAME_ALIAS_NORM) {
-          if (e.aliases.some(a => t.indexOf(a) !== -1)) hits.push(e.g);
+          const matched = pick(e).filter(a => t.indexOf(a) !== -1);
+          if (matched.length) found.push({ g: e.g, longest: matched.reduce((x, y) => (y.length > x.length ? y : x)) });
         }
+        // ★当たった語が、別のゲームの当たった語の一部にすぎないなら外す。
+        //   「いろはかるた」が百人一首の別名「かるた」にも当たり、題名どおりに聞いても聞き返しになっていた（2026-10-17）。
+        //   「かるた」だけなら両方とも同じ語で当たるので、従来どおり聞き返す
+        const hits = found.filter(h => !found.some(o => o !== h && o.longest.length > h.longest.length && o.longest.indexOf(h.longest) !== -1)).map(h => h.g);
         if (hits.length) return hits;
         // ファジー第2パス（タイポ耐性）: 最も近い1件のみ、閾値0.78
         let best = null, bestSim = 0;
         for (const e of GAME_ALIAS_NORM) {
-          for (const a of e.aliases) {
+          for (const a of pick(e)) {
             if (a.length < 3) continue;
             const s = fuzzyScore(t, a);
             if (s > bestSim) { bestSim = s; best = e.g; }
@@ -1054,7 +1072,7 @@
         if (intent0.name === 'clear' && intent0.score >= 2)   { doClear(); return; }
 
         // game match has priority
-        const gameHits = detectGame(text);
+        const gameHits = detectGame(text, { excludeThemes: ASKS_RULES.test(text) });
         if (gameHits.length === 1) {
           State.lastIntent = 'open_game';
           State.slots.game = gameHits[0].slug;

@@ -28,6 +28,7 @@ bash .claude/skills/release-check/release-check.sh
 | 9 | アセットの形式方針（原則WebP） | 追跡変更＋**未追跡**の新規画像 |
 | 10 | 変更ファイルに対応する必須チェックの提示（△警告） | `git diff HEAD` |
 | 11 | CSPハッシュの整合（インライン `<script>`・**JSON-LD含む**。古ければ `node scripts/security-csp.mjs --write`） | `scripts/security-csp.mjs` の対象5ページ（毎回） |
+| 12 | 検索・共有用タグ（title のサイト名・description・canonical・OGP・Twitterカード）とサイトマップ掲載、トップの構造化データと全作品の一致。不足は `node scripts/seo-tags.mjs --write` | トップからリンクされたページ＋サイトマップの全ページ（毎回） |
 
 ## 運用
 - コミット直前に必ず実行する。✗が出たら是正してから再実行 → コミット

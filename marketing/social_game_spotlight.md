@@ -1300,3 +1300,563 @@ Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/corridor.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
+
+## ピッパの月灯りランタン / Pippa's Moonlit Lantern (`pippa-run`)
+
+### game-pippa-run-x-ja
+```
+🦊 ピッパの月灯りランタン
+
+星のかけらを集めてランタンを目指す、オリジナルの横スクロールアクション。自動デモつき
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pippa_run.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-pippa-run-x-en
+```
+🦊 Pippa's Moonlit Lantern
+
+Original side-scrolling platformer — collect star shards and reach the lantern
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pippa_run.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-pippa-run-bsky-ja
+```
+🦊 ピッパの月灯りランタン
+星のかけらを集めてランタンを目指す、オリジナルの横スクロールアクション。自動デモつき
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pippa_run.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## ルミナ・テイマー / Lumina Tamer (`lumina-tamer`)
+
+### game-lumina-tamer-x-ja
+```
+🔥 ルミナ・テイマー
+
+モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・バトルタワー・セーブ対応
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
+
+#個人開発 #ブラウザゲーム #RPG
+```
+
+### game-lumina-tamer-x-en
+```
+🔥 Lumina Tamer
+
+Monster-taming RPG with 38 monsters, 4 gyms, a battle tower and saves
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
+
+#indiedev #browsergames #rpg
+```
+
+### game-lumina-tamer-bsky-ja
+```
+🔥 ルミナ・テイマー
+モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・バトルタワー・セーブ対応
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
+#ブラウザゲーム #個人開発 #RPG
+```
+
+## ぬりぬりアリーナ / Nurinuri Arena (`nurinuri-arena`)
+
+### game-nurinuri-arena-x-ja
+```
+🎨 ぬりぬりアリーナ
+
+インクを撃って陣地を塗り広げる4vs4チームバトル。自分のインクに潜って泳ぎ、ボムやとくせいで逆転
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/nurinuri_arena.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-nurinuri-arena-x-en
+```
+🎨 Nurinuri Arena
+
+4v4 ink-turf team battle — swim in your own ink, bomb and special your way to victory
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/nurinuri_arena.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-nurinuri-arena-bsky-ja
+```
+🎨 ぬりぬりアリーナ
+インクを撃って陣地を塗り広げる4vs4チームバトル。自分のインクに潜って泳ぎ、ボムやとくせいで逆転
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/nurinuri_arena.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## ねじれ地下道 / Underpass Anomaly (`underpass-anomaly`)
+
+### game-underpass-anomaly-x-ja
+```
+🚪 ねじれ地下道
+
+異変を見つけたら引き返す一人称の脱出ホラー。異変は26種類、正しい判断を8回続ければ脱出(ホラー注意)
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/underpass_anomaly.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-underpass-anomaly-x-en
+```
+🚪 Underpass Anomaly
+
+First-person escape horror — spot the anomaly and turn back; 26 anomalies, 8 correct calls to escape
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/underpass_anomaly.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-underpass-anomaly-bsky-ja
+```
+🚪 ねじれ地下道
+異変を見つけたら引き返す一人称の脱出ホラー。異変は26種類、正しい判断を8回続ければ脱出(ホラー注意)
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/underpass_anomaly.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## 鉛ヶ沢 ― 屍人の夜 / Namarigasawa — Night of the Hollow (`namarigasawa`)
+
+### game-namarigasawa-x-ja
+```
+🌫️ 鉛ヶ沢 ― 屍人の夜
+
+毒ガスで住人が屍人と化した山奥の鉱山町を舞台にした、和風サバイバルホラー。鍵と手記を集めて脱出(ホラー注意)
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/namarigasawa.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-namarigasawa-x-en
+```
+🌫️ Namarigasawa — Night of the Hollow
+
+Japanese survival horror in a gas-stricken mining town — find keys and notes to escape
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/namarigasawa.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-namarigasawa-bsky-ja
+```
+🌫️ 鉛ヶ沢 ― 屍人の夜
+毒ガスで住人が屍人と化した山奥の鉱山町を舞台にした、和風サバイバルホラー。鍵と手記を集めて脱出(ホラー注意)
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/namarigasawa.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## ぶっ飛びブロウラーズ / Blast Brawlers (`burst-brawlers`)
+
+### game-burst-brawlers-x-ja
+```
+💥 ぶっ飛びブロウラーズ
+
+ダメージ%が溜まるほど吹っ飛ぶ最大4人の乱闘アクション。4キャラ・2ステージ・2P対戦・パッド対応
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/burst_brawlers.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-burst-brawlers-x-en
+```
+💥 Blast Brawlers
+
+Up to 4-player platform fighter — the more damage, the farther you fly. 2P and gamepad supported
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/burst_brawlers.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-burst-brawlers-bsky-ja
+```
+💥 ぶっ飛びブロウラーズ
+ダメージ%が溜まるほど吹っ飛ぶ最大4人の乱闘アクション。4キャラ・2ステージ・2P対戦・パッド対応
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/burst_brawlers.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## 月蝕城 / Eclipse Castle (`eclipse-castle`)
+
+### game-eclipse-castle-x-ja
+```
+🌑 月蝕城
+
+退魔の剣士・紅葉が妖の城を登る和風ゴシック横スクロールアクション。鎖鎌・階段・サブ武器・全3ステージとボス戦
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/eclipse_castle.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-eclipse-castle-x-en
+```
+🌑 Eclipse Castle
+
+Japanese gothic side-scrolling action — chain-sickle, stairs, sub-weapons, 3 stages and bosses
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/eclipse_castle.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-eclipse-castle-bsky-ja
+```
+🌑 月蝕城
+退魔の剣士・紅葉が妖の城を登る和風ゴシック横スクロールアクション。鎖鎌・階段・サブ武器・全3ステージとボス戦
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/eclipse_castle.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## クラブロード / Club Road (`club-road`)
+
+### game-club-road-x-ja
+```
+⚽ クラブロード
+
+3部の小さなサッカークラブのGMになり、育成・補強・施設・戦術で1部優勝を目指す経営シミュレーション
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/club_road.html
+
+#個人開発 #ブラウザゲーム #シミュレーションゲーム
+```
+
+### game-club-road-x-en
+```
+⚽ Club Road
+
+Football club management sim — rise from the third division to the top with scouting, training, facilities and tactics
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/club_road.html
+
+#indiedev #browsergames #strategygame
+```
+
+### game-club-road-bsky-ja
+```
+⚽ クラブロード
+3部の小さなサッカークラブのGMになり、育成・補強・施設・戦術で1部優勝を目指す経営シミュレーション
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/club_road.html
+#ブラウザゲーム #個人開発 #シミュレーションゲーム
+```
+
+## 幕末風雲記 / Bakumatsu Fuunki (`bakumatsu`)
+
+### game-bakumatsu-x-ja
+```
+⚓ 幕末風雲記
+
+嘉永6年の黒船来航〜明治元年の戊辰戦争まで6シナリオ。幕府・雄藩を率いて内政・外交・軍事と近代化を進める幕末戦略シミュレーション
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bakumatsu.html
+
+#個人開発 #ブラウザゲーム #シミュレーションゲーム
+```
+
+### game-bakumatsu-x-en
+```
+⚓ Bakumatsu Fuunki
+
+Bakumatsu-era strategy sim: 6 scenarios from Perry's arrival to the Boshin War, modernize a han through politics, diplomacy and military
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bakumatsu.html
+
+#indiedev #browsergames #strategygame
+```
+
+### game-bakumatsu-bsky-ja
+```
+⚓ 幕末風雲記
+嘉永6年の黒船来航〜明治元年の戊辰戦争まで6シナリオ。幕府・雄藩を率いて内政・外交・軍事と近代化を進める幕末戦略シミュレーション
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/bakumatsu.html
+#ブラウザゲーム #個人開発 #シミュレーションゲーム
+```
+
+## HEXLAN AI / HEXLAN AI (`catan`)
+
+### game-catan-x-ja
+```
+🏝️ HEXLAN AI
+
+カタン風ボードゲーム。1人vsAI3体で資源収集・開拓地建設・開発カードを駆使しVP10点を目指す
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+
+#個人開発 #ブラウザゲーム #ボードゲーム
+```
+
+### game-catan-x-en
+```
+🏝️ HEXLAN AI
+
+Catan-style board game vs 3 AI opponents — gather resources, build settlements and race to 10 victory points
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+
+#indiedev #browsergames #boardgame
+```
+
+### game-catan-bsky-ja
+```
+🏝️ HEXLAN AI
+カタン風ボードゲーム。1人vsAI3体で資源収集・開拓地建設・開発カードを駆使しVP10点を目指す
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+#ブラウザゲーム #個人開発 #ボードゲーム
+```
+
+## テトラ陣地 / Tetra Territory (`blokus`)
+
+### game-blokus-x-ja
+```
+🧩 テトラ陣地
+
+ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+
+#個人開発 #ブラウザゲーム #ボードゲーム
+```
+
+### game-blokus-x-en
+```
+🧩 Tetra Territory
+
+Blokus-style board game — place polyomino pieces on a 20x20 grid, corner-touch rule, vs AI
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+
+#indiedev #browsergames #boardgame
+```
+
+### game-blokus-bsky-ja
+```
+🧩 テトラ陣地
+ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+#ブラウザゲーム #個人開発 #ボードゲーム
+```
+
+## GLASS PINBALL / Glass Pinball (`pinball`)
+
+### game-pinball-x-ja
+```
+🎯 GLASS PINBALL
+
+物理エンジンの縦型ピンボール。フリッパーでバンパー・ドロップターゲットを狙う
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pinball.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-pinball-x-en
+```
+🎯 Glass Pinball
+
+Physics pinball — flippers, bumpers and drop targets
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pinball.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-pinball-bsky-ja
+```
+🎯 GLASS PINBALL
+物理エンジンの縦型ピンボール。フリッパーでバンパー・ドロップターゲットを狙う
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pinball.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## 影修羅伝 / Kage Shura Den (`kage-shura`)
+
+### game-kage-shura-x-ja
+```
+🥷 影修羅伝
+
+忍者が戦国の街道を駆ける和風2Dアクション。必殺技3種と大鬼ボス戦
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kage_shura_den.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-kage-shura-x-en
+```
+🥷 Kage Shura Den
+
+Japanese 2D ninja action — 3 special arts and an ogre boss
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kage_shura_den.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-kage-shura-bsky-ja
+```
+🥷 影修羅伝
+忍者が戦国の街道を駆ける和風2Dアクション。必殺技3種と大鬼ボス戦
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kage_shura_den.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## いろはかるた / Iroha Karuta (`iroha-karuta`)
+
+### game-iroha-karuta-x-ja
+```
+🎴 いろはかるた
+
+江戸いろは48枚。読み札を聞いて絵札を取る伝統のかるた
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/iroha_karuta.html
+
+#個人開発 #ブラウザゲーム #カードゲーム
+```
+
+### game-iroha-karuta-x-en
+```
+🎴 Iroha Karuta
+
+Traditional Edo iroha karuta — 48 cards, grab the matching picture card
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/iroha_karuta.html
+
+#indiedev #browsergames #cardgame
+```
+
+### game-iroha-karuta-bsky-ja
+```
+🎴 いろはかるた
+江戸いろは48枚。読み札を聞いて絵札を取る伝統のかるた
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/iroha_karuta.html
+#ブラウザゲーム #個人開発 #カードゲーム
+```
+
+## トライ陣地 / Tri Territory (`blokus-trigon`)
+
+### game-blokus-trigon-x-ja
+```
+🔺 トライ陣地
+
+三角形ピースをひし形の盤に敷き詰める陣取りAI対戦。角タッチルール
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus_trigon.html
+
+#個人開発 #ブラウザゲーム #ボードゲーム
+```
+
+### game-blokus-trigon-x-en
+```
+🔺 Tri Territory
+
+Triangle-piece territory game on a hex-diamond board vs AI, corner-touch rule
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus_trigon.html
+
+#indiedev #browsergames #boardgame
+```
+
+### game-blokus-trigon-bsky-ja
+```
+🔺 トライ陣地
+三角形ピースをひし形の盤に敷き詰める陣取りAI対戦。角タッチルール
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus_trigon.html
+#ブラウザゲーム #個人開発 #ボードゲーム
+```
+
+## ターボカート・グランプリ / Turbo Kart Grand Prix (`kart`)
+
+### game-kart-x-ja
+```
+🏎️ ターボカート・グランプリ
+
+世界9コースを巡るカートレース。ドリフトのミニターボとアイテムで5台を抜く
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-kart-x-en
+```
+🏎️ Turbo Kart Grand Prix
+
+Kart racing world tour across 9 courses — drift boosts and items vs 5 rivals
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-kart-bsky-ja
+```
+🏎️ ターボカート・グランプリ
+世界9コースを巡るカートレース。ドリフトのミニターボとアイテムで5台を抜く
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
