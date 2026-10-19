@@ -2,14 +2,31 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import worker from '../cloudflare-worker/gemini-proxy.js';
+import worker, { VocalisBudget } from '../cloudflare-worker/gemini-proxy.js';
 import notebook from '../cloudflare-worker/notebook-worker.js';
 import { allowedOrigin, readJson, SITE_ORIGIN } from '../cloudflare-worker/request-security.js';
 import { securePage, pages } from '../scripts/security-csp.mjs';
 
 const ctx = { waitUntil: () => assert.fail('Public conversations must not be persisted') };
+/** The real VocalisBudget Durable Object on in-memory storage, one instance per name (like idFromName). */
+function budgetNamespace() {
+  const objects = new Map();
+  const storage = () => {
+    const data = new Map();
+    const api = { get: async k => data.get(k), put: async (k, v) => { data.set(k, structuredClone(v)); }, delete: async k => data.delete(k) };
+    return { ...api, transaction: async fn => fn(api) };
+  };
+  return {
+    idFromName: name => name,
+    get: name => {
+      if (!objects.has(name)) objects.set(name, new VocalisBudget({ storage: storage() }, {}));
+      const object = objects.get(name);
+      return { fetch: (url, init) => object.fetch(new Request(url, init)) };
+    },
+  };
+}
 function env(extra = {}) {
-  return { RATE_LIMITER: { limit: async () => ({ success: true }) }, AI: { run: async () => ({ response: 'テスト回答' }) }, ...extra };
+  return { RATE_LIMITER: { limit: async () => ({ success: true }) }, AI: { run: async () => ({ response: 'テスト回答' }) }, VOCALIS_BUDGET: budgetNamespace(), ...extra };
 }
 function req(body = { message: 'こんにちは' }, path = '/', headers = {}, method = 'POST') {
   return new Request('https://worker.test' + path, { method,
@@ -301,4 +318,114 @@ test('Page reports are labelled unverified and a forged flood gets the sender ba
     assert.ok(h.logs.some(l => l.includes('kind="ip-banned"')), 'forged flood is banned');
     assert.equal((await report()).status, 403);
   } finally { h.restore(); }
+});
+
+// ── 2026-10-19 点検の穴 ──────────────────────────────────────────────────────────────────────
+test('Daily AI quota is shared by all visitors: chat, video and notebook stop at the limit and the model is not called', async () => {
+  let calls = 0;
+  const e = env({ AI_DAILY_UNITS: '3', AI: { run: async () => { calls += 1; return { response: 'x', image: 'aW1n' }; } } });
+  for (let i = 0; i < 3; i++) assert.equal((await worker.fetch(req({ message: 'hi' }), e, ctx)).status, 200);
+  const over = await worker.fetch(req({ message: 'hi' }), e, ctx);
+  assert.equal(over.status, 429, 'the 4th chat ran past the daily limit');
+  assert.match((await over.json()).error, /上限/);
+  assert.equal(calls, 3, 'the model was called past the limit');
+  // An image costs more than one unit, so it cannot slip through a nearly-full budget
+  const fresh = env({ AI_DAILY_UNITS: '9', AI: { run: async () => { calls += 1; return { image: 'aW1n' }; } } });
+  calls = 0;
+  assert.equal((await worker.fetch(req({ prompt: 'cat', steps: 8 }, '/video/image'), fresh, ctx)).status, 429, '8-step image fit in 9 units');
+  assert.equal((await worker.fetch(req({ prompt: 'cat', steps: 4 }, '/video/image'), fresh, ctx)).status, 200);
+  assert.equal(calls, 1);
+  // Notebook (72B) counts 5, or 10 for both modes, against the same budget
+  const shared = env({ AI_DAILY_UNITS: '9' });
+  const nb = body => notebook.fetch(new Request('https://nb.test/', { method: 'POST', headers: { Origin: SITE_ORIGIN, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), shared, ctx);
+  assert.equal((await nb({ sources: ['資料'], mode: 'both' })).status, 429);
+  assert.equal((await nb({ sources: ['資料'], mode: 'summary' })).status, 200);
+  assert.equal((await worker.fetch(req({ message: 'hi' }), shared, ctx)).status, 200);
+  assert.equal((await worker.fetch(req({ message: 'hi' }), shared, ctx)).status, 200);
+  assert.equal((await worker.fetch(req({ message: 'hi' }), shared, ctx)).status, 200);
+  assert.equal((await worker.fetch(req({ message: 'hi' }), shared, ctx)).status, 200);
+  assert.equal((await worker.fetch(req({ message: 'hi' }), shared, ctx)).status, 429, 'chat did not count what the notebook already used (they must share one budget)');
+});
+
+test('Daily AI quota fails closed: no budget binding, or a broken one, refuses instead of running uncounted', async () => {
+  let calls = 0;
+  const ai = { run: async () => { calls += 1; return { response: 'x' }; } };
+  const missing = env({ VOCALIS_BUDGET: undefined, AI: ai });
+  assert.equal((await worker.fetch(req({ message: 'hi' }), missing, ctx)).status, 503);
+  const broken = env({ AI: ai, VOCALIS_BUDGET: { idFromName: n => n, get: () => ({ fetch: async () => { throw new Error('down'); } }) } });
+  assert.equal((await worker.fetch(req({ message: 'hi' }), broken, ctx)).status, 503);
+  assert.equal(calls, 0);
+});
+
+test('Rate limits and bans count an IPv6 /64 as one client (rotating addresses inside it does not reset the count)', async () => {
+  const keys = [];
+  const e = env({ RATE_LIMITER: { limit: async ({ key }) => { keys.push(key); return { success: true }; } } });
+  for (const ip of ['2001:db8:1:2::1', '2001:db8:1:2:aaaa:bbbb:cccc:dddd', '2001:0db8:0001:0002::ffff']) {
+    await worker.fetch(req({ message: 'hi' }, '/', { 'CF-Connecting-IP': ip }), e, ctx);
+  }
+  assert.equal(new Set(keys).size, 1, `each address got its own count: ${keys.join(', ')}`);
+  keys.length = 0;
+  await worker.fetch(req({ message: 'hi' }, '/', { 'CF-Connecting-IP': '2001:db8:1:3::1' }), e, ctx);
+  await worker.fetch(req({ message: 'hi' }, '/', { 'CF-Connecting-IP': '203.0.113.7' }), e, ctx);
+  assert.deepEqual(keys, ['2001:db8:1:3::/64', '203.0.113.7']);
+});
+
+test('Forged page reports cannot ping @channel/@everyone or plant disguised links in the owner\'s Slack/Discord', async () => {
+  for (const webhook of [FAKE_SLACK_WEBHOOK, 'https://discord.com/api/webhooks/1/abc']) {
+    const h = harness({ webhook });
+    try {
+      const evil = '<!channel> <https://evil.example/verify|Cloudflare: ログイン確認> @everyone [確認](https://evil.example/x)';
+      const r = await worker.fetch(new Request('https://w.test/security/report', { method: 'POST',
+        headers: { Origin: SITE_ORIGIN, 'Content-Type': 'text/plain' }, body: JSON.stringify({ kind: 'framed', framer: evil }) }), h.e, h.c);
+      assert.equal(r.status, 204);
+      await h.settle();
+      assert.equal(h.posts.length, 1);
+      const body = h.posts[0].body;
+      const text = body.text ?? body.content;
+      for (const bad of ['<!channel>', '<https://', '@everyone', '](https://', 'https://evil']) {
+        assert.ok(!text.includes(bad), `${bad} reached the alert: ${text}`);
+      }
+      assert.match(text, /evil\.example/, 'the report content is still visible (defanged), not dropped');
+      if (body.content !== undefined) assert.deepEqual(body.allowed_mentions, { parse: [] });
+    } finally { h.restore(); }
+  }
+});
+
+test('One sender cannot mute alerts for everyone: the throttle is per kind and per (masked) source', async () => {
+  const h = harness();
+  try {
+    const report = ip => worker.fetch(new Request('https://w.test/security/report', { method: 'POST',
+      headers: { Origin: SITE_ORIGIN, 'Content-Type': 'text/plain', 'CF-Connecting-IP': ip }, body: JSON.stringify({ kind: 'framed', framer: 'x' }) }), h.e, h.c);
+    await report('198.51.100.20'); await report('198.51.100.20');
+    await h.settle();
+    assert.equal(h.posts.length, 1, 'the same source is still summarised');
+    await report('192.0.2.30');
+    await h.settle();
+    assert.equal(h.posts.length, 2, 'an attacker\'s cheap event silenced the real alert from another source');
+  } finally { h.restore(); }
+});
+
+test('The URL attack filter stays fast on hostile input and still catches template injection', () => {
+  const started = performance.now();
+  detectAttack(new URL('https://w.test/?' + '%3C%25'.repeat(8000)));
+  assert.ok(performance.now() - started < 50, 'quadratic regex: a 48KB URL took too long (CPU per request)');
+  assert.equal(detectAttack(new URL('https://w.test/?t=%3C%25%3D%207*7%20%25%3E')), 'template-injection');
+});
+
+test('Syslog values are cut before escaping, so a long run of quotes cannot break the structured-data block', () => {
+  const line = syslogLine({ severity: 'notice', kind: 'k', ua: 'a' + '"'.repeat(400), country: 'JP' });
+  const sd = line.slice(line.indexOf('[sec@32473 '), line.lastIndexOf(']') + 1);
+  // Every parameter value must close: ua="…" followed by the next parameter
+  assert.match(sd, /ua="(?:[^"\\]|\\.)*" country="JP"\]/, `broken structured data: ${sd.slice(-80)}`);
+});
+
+test('Vocalis returns fixed error text, never the upstream exception message', async () => {
+  const e = env({ VOCALIS_ACCESS_PIN: 'pin-123456', AI: { run: async () => { throw new Error('internal account 1234 quota detail'); } } });
+  for (const [path, body] of [['/vocal/portrait', { profile: { name: 'A', voice: 'female', appearance: 'short hair', style: 'アニメ' } }],
+    ['/vocal/song', { theme: 'sky', minutes: 1, voice: 'female', genre: 'J-POP' }]]) {
+    const r = await worker.fetch(req(body, path, { 'X-Vocalis-Code': 'pin-123456' }), e, { waitUntil() {} });
+    const text = await r.text();
+    assert.ok(r.status >= 400);
+    assert.ok(!text.includes('internal account'), `${path} leaked the upstream message: ${text}`);
+  }
 });

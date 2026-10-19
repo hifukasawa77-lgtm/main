@@ -14,7 +14,7 @@
 //
 // Pages also report what only the browser can see (a CSP-blocked script, being framed by
 // another site) to POST /security/report — see assets/js/frame-guard.js.
-import { SITE_ORIGIN, hardenResponse } from './request-security.js';
+import { SITE_ORIGIN, clientKey, hardenResponse } from './request-security.js';
 
 export const BAN_SECONDS = 900;
 export const ALERT_THROTTLE_SECONDS = 600;
@@ -30,7 +30,8 @@ const ATTACK_PATTERNS = [
   ['scanner-probe', /\/(?:wp-(?:admin|login|content|includes)|xmlrpc\.php|phpmyadmin|\.env|\.git\/|\.aws\/|cgi-bin\/|actuator\/|server-status|vendor\/phpunit|boaform|HNAP1)/i],
   ['markup-injection', /<\s*(?:script|iframe|svg|img)\b|javascript:|on(?:error|load)\s*=/i],
   ['sql-injection', /(?:\bunion\b[\s\S]{0,20}\bselect\b|\bor\b\s+['"]?1['"]?\s*=\s*['"]?1|;\s*drop\s+table|sleep\s*\(\s*\d+\s*\))/i],
-  ['template-injection', /\$\{jndi:|\{\{[\s\S]{0,40}\}\}|<%[\s\S]*%>/i],
+  // ★量指定子に上限を付ける（<%[\s\S]*%> は "<%<%<%…" で長さの2乗の時間がかかり、全要求の手前で CPU を使い切れた）
+  ['template-injection', /\$\{jndi:|\{\{[\s\S]{0,40}\}\}|<%[\s\S]{0,200}?%>/i],
 ];
 
 // Which rejections count as hostile and how loud they are.
@@ -60,15 +61,19 @@ export function clientIp(request) {
   return request.headers.get('CF-Connecting-IP') || 'unknown';
 }
 
+/** 調べる長さの上限。正当な要求の URL はこれより十分短い（長い URL ほど正規表現の時間が延びる） */
+const MAX_INSPECT_CHARS = 4096;
+
 export function detectAttack(url) {
-  let target = url.pathname + url.search;
+  let target = (url.pathname + url.search).slice(0, MAX_INSPECT_CHARS);
   try { target += ' ' + decodeURIComponent(target); } catch { target += ' (undecodable)'; }
   for (const [kind, re] of ATTACK_PATTERNS) if (re.test(target)) return kind;
   return null;
 }
 
 function sdEscape(value) {
-  return String(value ?? '').replace(/[\\"\]]/g, c => '\\' + c).replace(/[\r\n]/g, ' ').slice(0, 300);
+  // ★切ってから逃がす。逃がしてから切ると、末尾の \ だけが残って閉じの " を逃がし、行の構造が壊れる
+  return String(value ?? '').slice(0, 300).replace(/[\\"\]]/g, c => '\\' + c).replace(/[\r\n]/g, ' ');
 }
 
 /** One RFC 5424 line: <PRI>1 TIMESTAMP HOST APP PROCID MSGID [SD] MSG */
@@ -99,8 +104,11 @@ function baseEvent(request, service, url) {
 }
 
 // ── Ban list (per location, Cache API: free, no write quota to exhaust) ───────────────────
-const banKey = ip => `https://security-gate.invalid/ban/${encodeURIComponent(ip)}`;
-const throttleKey = kind => `https://security-gate.invalid/alert/${encodeURIComponent(kind)}`;
+// IPv6 は /64 ごとに数える・遮断する（1台の手元で /64 の中を渡り歩けば、毎回別人になれた）
+const banKey = ip => `https://security-gate.invalid/ban/${encodeURIComponent(clientKey(ip))}`;
+// ★通知のまとめは「種別＋送信元のおおよそ」ごと。種別だけだと、攻撃者が安い事件を10分ごとに1つ起こすだけで
+//   同じ種別の本物の通知を黙らせられた
+const throttleKey = (kind, ip) => `https://security-gate.invalid/alert/${encodeURIComponent(kind)}/${encodeURIComponent(maskIp(ip || ''))}`;
 function edgeCache() {
   try { return globalThis.caches?.default || null; } catch { return null; }
 }
@@ -120,7 +128,7 @@ async function ban(ip) {
 /** Counts one rejection for this IP; true when the IP crossed the abuse limit. */
 async function countStrike(env, ip) {
   if (!env.ABUSE_LIMITER || ip === 'unknown') return false;
-  try { return !(await env.ABUSE_LIMITER.limit({ key: ip })).success; } catch { return false; }
+  try { return !(await env.ABUSE_LIMITER.limit({ key: clientKey(ip) })).success; } catch { return false; }
 }
 
 // ── Notification ─────────────────────────────────────────────────────────────────────────
@@ -130,13 +138,29 @@ export function maskIp(ip) {
   return ip;
 }
 
+/**
+ * 通知へ載せる、相手が決められる文字（URL・通報の中身・UA 等）を無害にする。
+ * ★Slack は <!channel> で全員を呼び出し、<https://偽|もっともらしい文> で行き先を隠したリンクを作れる。
+ *   Discord は @everyone と [文](URL)。通報の中身は誰でも偽れるので、そのまま載せると
+ *   持ち主の Slack に全員宛ての偽の「ログイン確認」リンクを流し込めた（2026-10-19 の点検）。
+ *   記号を全角へ置き換え、URL は https → hxxps（押せない形）にする
+ */
+export function defang(value) {
+  return String(value ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/&/g, '＆').replace(/</g, '＜').replace(/>/g, '＞')
+    .replace(/@/g, '＠').replace(/\[/g, '［').replace(/\]/g, '］').replace(/`/g, '｀').replace(/\|/g, '｜')
+    .replace(/\b(h)(ttps?):\/\//gi, (_, h, rest) => `${h}x${rest.slice(1).replace(/^t/, 'x')}://`)
+    .replace(/:\/\//g, '[:]//');
+}
+
 export function alertText(event) {
   return [
     `🚨 hideの部屋: 攻撃を検知して遮断しました / Attack blocked (${event.severity})`,
-    `種別 kind: ${event.kind}`,
-    `対象 target: ${event.method} ${event.host}${event.path}${event.status ? ' → ' + event.status : ''}`,
-    `送信元 source: ${maskIp(event.ip)}${event.country ? ' (' + event.country + ')' : ''}`,
-    event.detail ? `詳細 detail: ${String(event.detail).slice(0, 200)}` : '',
+    `種別 kind: ${defang(event.kind)}`,
+    `対象 target: ${defang(event.method)} ${defang(event.host)}${defang(event.path)}${event.status ? ' → ' + Number(event.status) : ''}`,
+    `送信元 source: ${defang(maskIp(event.ip))}${event.country ? ' (' + defang(event.country) + ')' : ''}`,
+    event.detail ? `詳細 detail: ${defang(String(event.detail).slice(0, 200))}` : '',
     event.unverified ? '※ページからの通報です。送信元は検証できないため、偽装の可能性があります / Unverified client report' : '',
     `同じ種別の通知は${ALERT_THROTTLE_SECONDS / 60}分間まとめます（ログには全件）`,
   ].filter(Boolean).join('\n');
@@ -157,13 +181,14 @@ async function notify(env, event) {
   const url = webhookUrl(env);
   if (!url) return false;
   const cache = edgeCache();
-  const key = throttleKey(event.kind);
+  const key = throttleKey(event.kind, event.ip);
   try { if (cache && await cache.match(key)) return false; } catch { /* fall through and notify */ }
   try {
     if (cache) await cache.put(key, new Response('1', { headers: { 'Cache-Control': `max-age=${ALERT_THROTTLE_SECONDS}` } }));
   } catch { /* ignore */ }
   const text = alertText(event);
-  const body = url.includes('discord.com') ? { content: text } : { text };
+  // Discord は allowed_mentions で誰も呼ばない（文字を逃がすのに加えた2枚目の壁）。Slack は link_names を付けない
+  const body = url.includes('discord.com') ? { content: text, allowed_mentions: { parse: [] } } : { text, unfurl_links: false, unfurl_media: false };
   try {
     const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });

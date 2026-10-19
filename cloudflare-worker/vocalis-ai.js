@@ -44,7 +44,10 @@ JSONのみで日本語歌詞と作曲設計を返す。形式:
     return { status: 200, body: { ...result, usage: { kind: 'song', model: generated.model, estimated: true, estimatedUsd: generated.estimatedUsd } } };
   } catch (error) {
     if (error instanceof SyntaxError) return { status: 502, body: { error: 'AIの曲データを解析できませんでした。再試行してください。' } };
-    return { status: Number(error.status) || 502, body: { error: error.message || 'AI曲生成に失敗しました。' } };
+    // 上流の例外文は返さない（README の約束どおり）。詳しくはログへ
+    console.error('vocalis song failed', error && error.message);
+    const status = Number(error.status) || 502;
+    return { status, body: { error: status === 429 ? '混み合っています。少し待ってから再試行してください。' : 'AI曲生成に失敗しました。再試行してください。' } };
   }
 }
 
@@ -57,6 +60,7 @@ export async function handleVocalPortrait(env, body) {
     const image = 'data:image/jpeg;base64,' + result.image;
     return { status: 200, body: { profile, image, usage: { kind: 'portrait', model: '@cf/black-forest-labs/flux-1-schnell', estimated: true, estimatedUsd: 0.0004224 } } };
   } catch (error) {
-    return { status: 502, body: { error: error.message || 'AI顔生成に失敗しました。' } };
+    console.error('vocalis portrait failed', error && error.message);
+    return { status: 502, body: { error: 'AI顔生成に失敗しました。再試行してください。' } };
   }
 }
