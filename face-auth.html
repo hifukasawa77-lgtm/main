@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!--
+    CSP: 顔の検出・照合を完全に端末内で動かすための許可。
+      - cdn.jsdelivr.net … face-api 本体（importmap の integrity で改ざん検知）と学習済みモデル（初回のみ・約7MB）
+      - media-src blob: … カメラ映像を <video> に流すのに要る（無いと映像が止まる）
+      - 'wasm-unsafe-eval' … TensorFlow.js が WebGL 非対応の端末で WebAssembly へ落ちるときに要る
+    カメラ映像・顔の特徴量はどこへも送らない。外への通信はモデル取得の要求だけ。
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://ai-proxy.hi-fukasawa77.workers.dev; worker-src 'self' blob:; font-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none';">
+  <script src="assets/js/frame-guard.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#05070d">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="description" content="スマホのカメラで顔を登録し、まばたき・首振りの生体確認つきで照合する顔認証の体験ページ。顔の検出・特徴量の照合はすべて端末内で行い、映像も顔データも外部へ送信しない。Face unlock demo with liveness check, fully on-device.">
+  <title>顔認証 | Face Unlock｜hideの部屋</title>
+  <meta property="og:site_name" content="hideの部屋">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="顔認証 | Face Unlock｜hideの部屋">
+  <meta property="og:description" content="スマホのカメラで顔を登録し、まばたき・首振りの生体確認つきで照合する顔認証の体験ページ。顔の検出・特徴量の照合はすべて端末内で行い、映像も顔データも外部へ送信しない。Face unlock demo with liveness check, fully on-device.">
+  <meta property="og:url" content="https://hifukasawa77-lgtm.github.io/main/face-auth.html">
+  <meta property="og:image" content="https://hifukasawa77-lgtm.github.io/main/assets/og/og-default.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="顔認証 | Face Unlock｜hideの部屋">
+  <meta name="twitter:description" content="スマホのカメラで顔を登録し、まばたき・首振りの生体確認つきで照合する顔認証の体験ページ。顔の検出・特徴量の照合はすべて端末内で行い、映像も顔データも外部へ送信しない。Face unlock demo with liveness check, fully on-device.">
+  <meta name="twitter:image" content="https://hifukasawa77-lgtm.github.io/main/assets/og/og-default.jpg">
+  <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/face-auth.html">
+  <link rel="icon" href="assets/logo/favicon.svg" type="image/svg+xml">
+  <!--
+    動的 import には SRI 属性を付けられないので、importmap の integrity で改ざん検知する。
+    版を上げるときは integrity も必ず取り直す（scripts/verify-face-auth.mjs が長さと版の一致を見る）:
+      curl -sO https://registry.npmjs.org/@vladmandic/face-api/-/face-api-<版>.tgz && tar xzf face-api-<版>.tgz &&
+      openssl dgst -sha384 -binary package/dist/face-api.esm.js | openssl base64 -A
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "face-api": "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js"
+    },
+    "integrity": {
+      "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js": "sha384-QjykkBQk/5VrjbHGPxRjq2IdRXqazxuCl+A1wXwE7XNZ2i08gTyIoLQtp/bUZD7Q"
+    }
+  }
+  </script>
+  <style>
+    :root{
+      --bg:#05070d; --text:#e6edf6; --muted:#8b97a8;
+      --cyan:#22d3ee; --purple:#a78bfa;
+      --card:rgba(255,255,255,0.04); --border:rgba(255,255,255,0.09); --radius:18px;
+      --ok:#34d399; --warn:#fbbf24; --ng:#f87171;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0}
+    body{
+      background:var(--bg); color:var(--text); min-height:100vh;
+      font-family:"Segoe UI Variable","Yu Gothic UI","Hiragino Sans","Meiryo",system-ui,sans-serif;
+      line-height:1.6; -webkit-font-smoothing:antialiased;
+    }
+    #bg-canvas{position:fixed; inset:0; z-index:-1; pointer-events:none}
+    .wrap{max-width:720px; margin:0 auto; padding:28px 16px 72px}
+    a{color:var(--cyan)}
+    .back{display:inline-block; color:var(--muted); text-decoration:none; font-size:.86rem; margin-bottom:10px}
+    .hero{text-align:center; margin-bottom:18px}
+    .hero h1{font-size:clamp(1.7rem,6vw,2.4rem); margin:.1em 0 0; letter-spacing:.02em}
+    .hero .sub{color:var(--muted); margin:.2em 0 0; font-size:.95rem}
+    .grad{background:linear-gradient(135deg,var(--cyan),var(--purple)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+    .card{
+      background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+      backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); padding:18px; margin:16px 0;
+    }
+    .card h2{font-size:1rem; margin:0 0 10px}
+    .card h2 .en,.en{color:var(--muted); font-weight:500; font-size:.8em}
+
+    /* カメラ */
+    .stage{position:relative; width:100%; max-width:420px; margin:0 auto; aspect-ratio:3/4; border-radius:22px; overflow:hidden; background:#0b0f19; border:1px solid var(--border)}
+    .stage video,.stage canvas{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1)}
+    .stage .guide{position:absolute; left:50%; top:46%; width:62%; aspect-ratio:3/4; transform:translate(-50%,-50%); border-radius:50%;
+      border:2px dashed rgba(255,255,255,.28); pointer-events:none; transition:border-color .2s}
+    .stage[data-state="ok"] .guide{border-color:var(--cyan); border-style:solid}
+    .stage[data-state="pass"] .guide{border-color:var(--ok); border-style:solid}
+    .stage[data-state="fail"] .guide{border-color:var(--ng); border-style:solid}
+    .stage .idle{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; color:var(--muted); text-align:center; padding:20px}
+    .stage .idle .big{font-size:3rem}
+    .ring{position:absolute; left:50%; top:46%; width:70%; aspect-ratio:1; transform:translate(-50%,-50%) rotate(-90deg); pointer-events:none}
+    .ring circle{fill:none; stroke-width:3}
+    .ring .bgc{stroke:rgba(255,255,255,.06)}
+    .ring .fg{stroke:url(#ringGrad); stroke-linecap:round; transition:stroke-dashoffset .25s}
+
+    .prompt{min-height:3.4em; text-align:center; margin:12px 0 4px}
+    .prompt .main{font-size:1.15rem; font-weight:600}
+    .prompt .en{display:block}
+    .steps{display:flex; justify-content:center; gap:8px; margin:6px 0 0; padding:0; list-style:none}
+    .steps li{font-size:.78rem; padding:3px 10px; border-radius:999px; border:1px solid var(--border); color:var(--muted)}
+    .steps li.now{border-color:var(--cyan); color:var(--text)}
+    .steps li.done{border-color:var(--ok); color:var(--ok)}
+
+    .btns{display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-top:14px}
+    button{font:inherit; cursor:pointer; border-radius:12px; padding:11px 18px; min-height:44px; border:1px solid var(--border); background:rgba(255,255,255,.05); color:var(--text)}
+    button.primary{background:linear-gradient(135deg,rgba(34,211,238,.22),rgba(167,139,250,.22)); border-color:rgba(34,211,238,.45)}
+    button.danger{border-color:rgba(248,113,113,.4); color:#fecaca}
+    button:disabled{opacity:.45; cursor:not-allowed}
+    button:focus-visible,select:focus-visible{outline:2px solid var(--cyan); outline-offset:2px}
+
+    .result{display:none; text-align:center; padding:14px; border-radius:14px; margin-top:12px}
+    .result.show{display:block}
+    .result.ok{background:rgba(52,211,153,.08); border:1px solid rgba(52,211,153,.35)}
+    .result.ng{background:rgba(248,113,113,.08); border:1px solid rgba(248,113,113,.35)}
+    .result .icon{font-size:2.4rem}
+    .result .title{font-weight:700; font-size:1.1rem}
+    .meter{position:relative; height:10px; border-radius:6px; background:rgba(255,255,255,.07); margin:12px auto 4px; max-width:320px; overflow:hidden}
+    .meter .bar{position:absolute; left:0; top:0; bottom:0; border-radius:6px}
+    .meter .th{position:absolute; top:-3px; bottom:-3px; width:2px; background:#fff}
+    .small{font-size:.8rem; color:var(--muted)}
+    .row{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:8px 0}
+    select{font:inherit; background:#0b0f19; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:8px 10px; min-height:40px}
+    .status{display:inline-block; padding:2px 10px; border-radius:999px; font-size:.8rem; border:1px solid var(--border)}
+    .status.on{border-color:rgba(52,211,153,.45); color:var(--ok)}
+    .err{display:none; margin-top:12px; padding:12px 14px; border-radius:12px; background:rgba(251,191,36,.07); border:1px solid rgba(251,191,36,.35); font-size:.9rem}
+    .err.show{display:block}
+    ul.notes{margin:6px 0 0; padding-left:1.2em; font-size:.88rem; color:#c5cfdc}
+    ul.notes li{margin:4px 0}
+    .unlocked{display:none; text-align:center; padding:24px 10px}
+    .unlocked.show{display:block; animation:pop .45s ease-out}
+    .unlocked .big{font-size:3.4rem}
+    @keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+    @media (prefers-reduced-motion: reduce){ .unlocked.show{animation:none} .ring .fg{transition:none} }
+  </style>
+</head>
+<body>
+  <canvas id="bg-canvas" aria-hidden="true"></canvas>
+  <main class="wrap">
+    <a class="back" href="index.html">← hideの部屋へ戻る / Back</a>
+    <header class="hero">
+      <h1><span class="grad">顔認証</span> <span class="en">Face Unlock</span></h1>
+      <p class="sub">登録した顔と、まばたき・首振りで「いま本人がそこにいる」ことを確かめます<br><span class="en">Register your face, then unlock with a quick liveness check.</span></p>
+    </header>
+
+    <section class="card" aria-labelledby="h-cam">
+      <h2 id="h-cam">カメラ <span class="en">Camera</span>
+        <span id="regStatus" class="status" style="float:right">未登録 / Not registered</span></h2>
+      <div class="stage" id="stage" data-state="idle">
+        <video id="video" playsinline muted autoplay></video>
+        <canvas id="overlay"></canvas>
+        <div class="guide"></div>
+        <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
+          <defs><linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs>
+          <circle class="bgc" cx="50" cy="50" r="47"/>
+          <circle class="fg" id="ringFg" cx="50" cy="50" r="47" stroke-dasharray="295.3" stroke-dashoffset="295.3"/>
+        </svg>
+        <div class="idle" id="idle"><div class="big">🙂</div><div>カメラは止まっています</div><div class="en">Camera is off</div></div>
+      </div>
+      <div class="prompt" aria-live="polite" id="prompt"><span class="main" id="promptMain">「顔を登録」から始めてください</span><span class="en" id="promptEn">Start with “Register face”.</span></div>
+      <ol class="steps" id="steps" aria-hidden="true"></ol>
+      <div class="btns">
+        <button class="primary" id="btnUnlock" disabled>🔓 顔で解除 <span class="en">Unlock</span></button>
+        <button id="btnEnroll">📸 顔を登録 <span class="en">Register face</span></button>
+        <button id="btnCancel" hidden>■ 止める <span class="en">Stop</span></button>
+      </div>
+      <div class="result" id="result" role="status"></div>
+      <div class="err" id="err" role="alert"></div>
+      <div class="unlocked" id="unlocked">
+        <div class="big">🔓</div>
+        <div style="font-weight:700;font-size:1.2rem">ロックを解除しました</div>
+        <div class="en">Unlocked — welcome back.</div>
+        <div class="btns"><button id="btnRelock">🔒 もう一度ロック <span class="en">Lock again</span></button></div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-set">
+      <h2 id="h-set">設定 <span class="en">Settings</span></h2>
+      <div class="row">
+        <label for="strict">照合の厳しさ <span class="en">Strictness</span></label>
+        <select id="strict">
+          <option value="standard">標準 / Standard</option>
+          <option value="strict">厳しめ / Strict</option>
+        </select>
+      </div>
+      <p class="small" style="margin:0">厳しめにすると他人で通りにくくなる代わりに、暗い場所・眼鏡の付け外しで本人も落ちやすくなります。<br>Strict rejects look-alikes more often, but may also reject you in poor light.</p>
+      <div class="row" style="margin-top:12px">
+        <span>登録データを消す <span class="en">Delete my face data</span></span>
+        <button class="danger" id="btnDelete" disabled>🗑 消去 <span class="en">Delete</span></button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-priv">
+      <h2 id="h-priv">プライバシーと限界 <span class="en">Privacy &amp; limits</span></h2>
+      <ul class="notes">
+        <li><b>顔の映像も特徴量も、この端末から出ません。</b>検出・照合はブラウザの中で行います。保存するのは顔の特徴を表す数字128個だけで、写真は保存しません。外への通信は初回のモデル取得（約7MB・cdn.jsdelivr.net）だけです。<br><span class="en">Nothing leaves your device. Only 128 numbers describing your face are kept locally; no photos.</span></li>
+        <li><b>これは体験用です。本物の鍵には使わないでください。</b>写真はまばたき・首振りの確認で落ちますが、録画の再生・精巧なマスク・よく似た家族（双子など）は通る可能性があります。深度センサーや赤外線カメラは使えないためです。<br><span class="en">This is a demo, not a security lock. Replayed video or look-alikes may pass.</span></li>
+        <li>銀行・ログインに使える強さが必要なら、スマホ本体の顔認証（Face ID 等）を<b>パスキー</b>で呼ぶ方式が正解です（照合はOSが専用チップで行い、顔データはどのサイトにも渡りません）。<br><span class="en">For real sign-in, use passkeys — your phone’s own face unlock, never shared with sites.</span></li>
+        <li>5回続けて照合に失敗すると、しばらく試せなくなります（30秒から、回を重ねるごとに倍）。<br><span class="en">After 5 failures in a row, unlocking pauses for a while.</span></li>
+      </ul>
+    </section>
+  </main>
+
+  <script src="assets/js/face-auth-core.js"></script>
+  <script type="module">
+  const C = window.FaceAuthCore;
+  const TEST = window.__FACEAUTH_TEST === true;
+  const KEY_TEMPLATE = 'face_auth_template_v1';
+  const KEY_LOCK = 'face_auth_lock_v1';
+  const KEY_SETTINGS = 'face_auth_settings_v1';
+  const MODEL_BASE = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/';
+  const LOST_RESET_MS = 1500;
+  const ENROLL_INTERVAL_MS = 350;
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    stage: $('stage'), video: $('video'), overlay: $('overlay'), idle: $('idle'), ring: $('ringFg'),
+    pMain: $('promptMain'), pEn: $('promptEn'), steps: $('steps'),
+    unlock: $('btnUnlock'), enroll: $('btnEnroll'), cancel: $('btnCancel'), del: $('btnDelete'),
+    result: $('result'), err: $('err'), unlocked: $('unlocked'), relock: $('btnRelock'),
+    strict: $('strict'), reg: $('regStatus'),
+  };
+
+  /* ---------- 保存（localStorage はシークレットタブ等で参照ごと落ちるので必ず try/catch） ---------- */
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); return true; } catch (_) { return false; } },
+    del(k) { try { localStorage.removeItem(k); } catch (_) {} },
+  };
+  let template = C.sanitizeTemplate(store.get(KEY_TEMPLATE));
+  let settings = { strict: 'standard' };
+  try { const s = JSON.parse(store.get(KEY_SETTINGS) || '{}'); if (s && (s.strict === 'strict' || s.strict === 'standard')) settings.strict = s.strict; } catch (_) {}
+  els.strict.value = settings.strict;
+  const threshold = () => C.DEFAULTS.threshold[settings.strict];
+
+  /* ---------- 推定層（差し替え可能） ---------- */
+  let faceapiMod = null;
+  async function loadFaceApi() {
+    if (faceapiMod) return faceapiMod;
+    let mod;
+    try { mod = await import('face-api'); }
+    catch (e) { throw Object.assign(new Error('lib'), { stage: 'lib', cause: e }); }
+    const fa = mod.default && mod.default.nets ? mod.default : mod;
+    try {
+      if (fa.tf && fa.tf.setBackend) { try { await fa.tf.setBackend('webgl'); } catch (_) {} await fa.tf.ready(); }
+      await Promise.all([
+        fa.nets.tinyFaceDetector.loadFromUri(MODEL_BASE),
+        fa.nets.faceLandmark68Net.loadFromUri(MODEL_BASE),
+        fa.nets.faceRecognitionNet.loadFromUri(MODEL_BASE),
+      ]);
+    } catch (e) { throw Object.assign(new Error('model'), { stage: 'model', cause: e }); }
+    faceapiMod = fa;
+    return fa;
+  }
+  function realSourceFactory({ video }) {
+    let stream = null, fa = null, opts = null, stopped = false;
+    return {
+      async start(onStage) {
+        if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw Object.assign(new Error('insecure'), { stage: 'insecure' });
+        }
+        onStage('カメラを起動しています…', 'Starting camera…');
+        try {
+          // facingMode を exact で要求しない（PCのWebカメラは前面/背面の区別が無く掴めなくなる）
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+        } catch (e) { throw Object.assign(new Error('camera'), { stage: 'camera', cause: e }); }
+        // 許可待ちの間に「止める」を押されていたら、取れたカメラをすぐ返す（点けっぱなしにしない）
+        if (stopped) { stream.getTracks().forEach((t) => t.stop()); stream = null; return; }
+        video.srcObject = stream;
+        try { await video.play(); } catch (_) {}
+        onStage('顔の認識モデルを準備しています…（初回のみ約7MB）', 'Loading face model… (first time ~7MB)');
+        fa = await loadFaceApi();
+        opts = new fa.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+      },
+      async detect({ descriptor }) {
+        const width = video.videoWidth, height = video.videoHeight;
+        if (!width || !height) return { width: 1, height: 1, faces: [] };
+        let task = fa.detectAllFaces(video, opts).withFaceLandmarks();
+        if (descriptor) task = task.withFaceDescriptors();
+        const res = await task;
+        return {
+          width, height,
+          faces: res.map((r) => ({
+            box: { x: r.detection.box.x, y: r.detection.box.y, width: r.detection.box.width, height: r.detection.box.height },
+            landmarks: r.landmarks.positions.map((p) => ({ x: p.x, y: p.y })),
+            descriptor: r.descriptor ? Array.from(r.descriptor) : null,
+          })),
+        };
+      },
+      stop() {
+        stopped = true;
+        if (stream) stream.getTracks().forEach((t) => t.stop());
+        stream = null; video.srcObject = null;
+      },
+    };
+  }
+  const sourceFactory = (TEST && typeof window.__FACEAUTH_SOURCE_FACTORY === 'function') ? window.__FACEAUTH_SOURCE_FACTORY : realSourceFactory;
+
+  /* ---------- 画面 ---------- */
+  function say(main, en) { els.pMain.textContent = main; els.pEn.textContent = en || ''; }
+  function setRing(p) { els.ring.setAttribute('stroke-dashoffset', String(295.3 * (1 - Math.max(0, Math.min(1, p))))); }
+  function setSteps(list, now) {
+    els.steps.textContent = '';
+    list.forEach((name, i) => {
+      const li = document.createElement('li');
+      li.textContent = name;
+      if (i < now) li.className = 'done'; else if (i === now) li.className = 'now';
+      els.steps.appendChild(li);
+    });
+  }
+  function showError(title, detail, next) {
+    els.err.textContent = '';
+    const b = document.createElement('b'); b.textContent = title; els.err.appendChild(b);
+    for (const line of [detail, next]) {
+      if (!line) continue;
+      const d = document.createElement('div'); d.textContent = line; els.err.appendChild(d);
+    }
+    els.err.classList.add('show');
+  }
+  function clearError() { els.err.classList.remove('show'); els.err.textContent = ''; }
+  function showResult(ok, title, sub, dist) {
+    const r = els.result;
+    r.textContent = '';
+    r.className = 'result show ' + (ok ? 'ok' : 'ng');
+    const i = document.createElement('div'); i.className = 'icon'; i.textContent = ok ? '✅' : '⛔'; r.appendChild(i);
+    const t = document.createElement('div'); t.className = 'title'; t.textContent = title; r.appendChild(t);
+    if (sub) { const s = document.createElement('div'); s.className = 'small'; s.textContent = sub; r.appendChild(s); }
+    if (Number.isFinite(dist)) {
+      const max = 1.0, th = threshold();
+      const m = document.createElement('div'); m.className = 'meter';
+      const bar = document.createElement('div'); bar.className = 'bar';
+      bar.style.width = (Math.min(dist, max) / max * 100) + '%';
+      bar.style.background = dist <= th ? 'var(--ok)' : 'var(--ng)';
+      const tk = document.createElement('div'); tk.className = 'th'; tk.style.left = (th / max * 100) + '%';
+      m.append(bar, tk); r.appendChild(m);
+      const n = document.createElement('div'); n.className = 'small';
+      n.textContent = `顔の違い ${dist.toFixed(3)}（${th.toFixed(2)} 以下で本人） / distance ${dist.toFixed(3)}, pass ≤ ${th.toFixed(2)}`;
+      r.appendChild(n);
+    }
+  }
+  function hideResult() { els.result.className = 'result'; els.result.textContent = ''; }
+  function refreshButtons() {
+    const busy = !!session;
+    const has = !!template;
+    els.reg.textContent = has ? '登録済み / Registered' : '未登録 / Not registered';
+    els.reg.className = 'status' + (has ? ' on' : '');
+    els.unlock.disabled = busy || !has;
+    els.enroll.disabled = busy;
+    els.del.disabled = busy || !has;
+    els.cancel.hidden = !busy;
+    els.enroll.firstChild.textContent = has ? '📸 登録し直す ' : '📸 顔を登録 ';
+  }
+
+  function drawOverlay(frame) {
+    const cv = els.overlay, ctx = cv.getContext('2d');
+    if (cv.width !== frame.width || cv.height !== frame.height) { cv.width = frame.width; cv.height = frame.height; }
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    for (const f of frame.faces || []) {
+      ctx.strokeStyle = 'rgba(34,211,238,.55)'; ctx.lineWidth = 2;
+      ctx.strokeRect(f.box.x, f.box.y, f.box.width, f.box.height);
+      if (f.landmarks) {
+        ctx.fillStyle = 'rgba(167,139,250,.75)';
+        for (const p of f.landmarks) { ctx.beginPath(); ctx.arc(p.x, p.y, 1.6, 0, Math.PI * 2); ctx.fill(); }
+      }
+    }
+  }
+
+  /* ---------- 進行 ---------- */
+  let session = null;      // { mode:'enroll'|'auth', phase, ... }
+  let source = null;
+  let loopToken = 0;
+
+  function lockNow(now) { return C.lockState(store.get(KEY_LOCK), now); }
+
+  async function begin(mode) {
+    if (session) return;
+    clearError(); hideResult(); els.unlocked.classList.remove('show');
+    const now = Date.now();
+    if (mode === 'auth') {
+      const ls = lockNow(now);
+      if (ls.locked) {
+        const sec = Math.ceil(ls.remainMs / 1000);
+        showResult(false, `しばらくお待ちください（あと${sec}秒）`, `Too many failures. Try again in ${sec}s.`);
+        return;
+      }
+    }
+    session = mode === 'enroll'
+      ? { mode, phase: 'enroll', samples: [], lastCapture: 0, lastOk: 0 }
+      : { mode, phase: 'pre', pre: [], post: [], live: null, lastOk: 0 };
+    refreshButtons();
+    els.idle.hidden = true;
+    source = sourceFactory({ video: els.video });
+    try {
+      await source.start((m, en) => say(m, en));
+    } catch (e) {
+      failStart(e);
+      return;
+    }
+    if (!session) return; // 起動中に止められた
+    session.startedAt = Date.now();
+    session.lastOk = session.startedAt;
+    if (mode === 'enroll') { say('顔を枠に合わせ、少しずつ向きを変えてください', 'Fit your face in the frame and move slightly.'); setSteps(['撮影 0/' + C.DEFAULTS.enrollSamples], 0); }
+    else { say('顔を枠に合わせてください', 'Fit your face in the frame.'); setSteps(['照合', '動き1', '動き2', '照合'], 0); }
+    if (!(TEST && window.__FACEAUTH_MANUAL)) runLoop();
+  }
+
+  function failStart(e) {
+    const stage = e && e.stage;
+    const name = e && e.cause && e.cause.name;
+    end();
+    if (stage === 'insecure') showError('このページではカメラを使えません', 'カメラは https のページでしか使えません。', '公開URL（https://hifukasawa77-lgtm.github.io/main/face-auth.html）から開いてください。');
+    else if (stage === 'camera' && (name === 'NotAllowedError' || name === 'SecurityError')) showError('カメラの使用が許可されていません', 'ブラウザがカメラへのアクセスを止めています。', 'アドレスバーの鍵マーク（またはサイト設定）からカメラを「許可」にして、もう一度押してください。');
+    else if (stage === 'camera' && (name === 'NotFoundError' || name === 'OverconstrainedError')) showError('カメラが見つかりません', 'この端末で使えるカメラがありません。', '別のアプリがカメラを使っていないか確かめてください。');
+    else if (stage === 'camera' && name === 'NotReadableError') showError('カメラを開けませんでした', '別のアプリ（ビデオ通話など）がカメラを使用中の可能性があります。', 'そのアプリを閉じてから、もう一度押してください。');
+    else if (stage === 'lib') showError('顔認識ライブラリを読み込めませんでした', 'cdn.jsdelivr.net へ届かないか、配信された内容が改ざん検知（integrity）に一致しませんでした。', '通信を確かめて再読み込みしてください。社内ネットワーク・広告ブロッカーで止まることがあります。');
+    else if (stage === 'model') showError('顔の認識モデルを取得できませんでした', 'cdn.jsdelivr.net からのモデル取得（約7MB）が途中で失敗しました。', '電波の良い場所で、もう一度押してください。');
+    else showError('起動できませんでした', String((e && (e.cause && e.cause.message || e.message)) || e), 'ページを再読み込みしてもう一度お試しください。');
+  }
+
+  function end() {
+    loopToken++;
+    if (source) { try { source.stop(); } catch (_) {} }
+    source = null; session = null;
+    els.stage.dataset.state = 'idle';
+    els.idle.hidden = false;
+    setRing(0);
+    const ctx = els.overlay.getContext('2d'); ctx.clearRect(0, 0, els.overlay.width, els.overlay.height);
+    els.steps.textContent = '';
+    refreshButtons();
+  }
+
+  async function runLoop() {
+    const token = ++loopToken;
+    while (token === loopToken && session) {
+      try { await step(Date.now()); }
+      catch (e) { if (token === loopToken) { end(); showError('処理中に失敗しました', String(e && e.message || e), 'もう一度押してください。'); } return; }
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  }
+
+  /** 1フレーム分の処理。検査からは時刻を明示して呼ぶ */
+  async function step(now) {
+    const s = session;
+    if (!s || !source) return;
+    const wantDesc = s.mode === 'enroll' ? (now - s.lastCapture >= ENROLL_INTERVAL_MS) : (s.phase === 'pre' || s.phase === 'post');
+    const frame = await source.detect({ descriptor: wantDesc });
+    if (s !== session) return;
+    drawOverlay(frame);
+    const a = C.assessFrame(frame);
+    if (!a.ok) {
+      els.stage.dataset.state = 'idle';
+      // 認証の途中で顔を見失ったら最初から（まばたきの後に写真へ差し替えさせない）
+      if (s.mode === 'auth' && s.phase !== 'pre' && (a.code === 'multi' || now - s.lastOk > LOST_RESET_MS)) {
+        s.phase = 'pre'; s.pre = []; s.post = []; s.live = null;
+        say(a.code === 'multi' ? a.msg : '顔を見失ったので最初からやり直します', a.code === 'multi' ? a.en : 'Lost your face — starting over.');
+        setSteps(['照合', '動き1', '動き2', '照合'], 0); setRing(0);
+        return;
+      }
+      if (s.mode === 'enroll' && a.code === 'multi') { s.samples = []; setRing(0); }
+      say(a.msg, a.en);
+      return;
+    }
+    s.lastOk = now;
+    els.stage.dataset.state = 'ok';
+    const face = a.face;
+
+    if (s.mode === 'enroll') {
+      if (face.descriptor && C.isDescriptor(face.descriptor)) {
+        s.samples.push(face.descriptor); s.lastCapture = now;
+        const n = s.samples.length, N = C.DEFAULTS.enrollSamples;
+        setRing(n / N); setSteps(['撮影 ' + n + '/' + N], n >= N ? 1 : 0);
+        say(n < N ? 'そのまま、少しずつ向きを変えてください' : '登録しています…', n < N ? 'Hold on, move slightly.' : 'Saving…');
+        if (n >= N) {
+          const r = C.buildTemplate(s.samples, now);
+          end();
+          if (!r.ok) { showResult(false, '登録できませんでした', r.reason + ' / ' + r.reasonEn); return; }
+          template = r.template;
+          if (!store.set(KEY_TEMPLATE, JSON.stringify(template))) {
+            showResult(true, '登録しました（この画面を閉じるまで有効）', 'この端末では保存領域が使えないため、再読み込みで消えます。 / Saved for this session only.');
+          } else {
+            showResult(true, '顔を登録しました', '「顔で解除」を押して試してください。 / Registered. Try “Unlock”.');
+          }
+          store.set(KEY_LOCK, JSON.stringify(C.recordSuccess()));
+          say('登録しました', 'Registered.');
+          refreshButtons();
+        }
+      }
+      return;
+    }
+
+    // 認証: 照合 → 生体確認2つ → もう一度照合
+    const pose = C.poseFromLandmarks(face.landmarks);
+    if (s.phase === 'pre' || s.phase === 'post') {
+      const bucket = s.phase === 'pre' ? s.pre : s.post;
+      if (face.descriptor && C.isDescriptor(face.descriptor)) bucket.push(face.descriptor);
+      if (bucket.length < C.DEFAULTS.matchFrames) { say('照合しています…そのまま', 'Matching… hold still.'); return; }
+      if (s.phase === 'pre') {
+        s.phase = 'live';
+        s.live = C.createLiveness(C.pickChallenges(TEST && window.__FACEAUTH_RAND), now);
+        const c = s.live.challenges;
+        setSteps(['照合', C.CHALLENGES[c[0]].msg.replace(/てください$/, ''), C.CHALLENGES[c[1]].msg.replace(/てください$/, ''), '照合'], 1);
+        const st = s.live.update(null, now); say(st.msg, st.en);
+        return;
+      }
+      return finishAuth(now);
+    }
+    if (s.phase === 'live') {
+      const st = s.live.update(pose, now);
+      if (st.failed) { return failAuth(now, st.reason, st.reasonEn); }
+      if (st.done) {
+        s.phase = 'post'; setSteps(['照合', '動き1', '動き2', '照合'], 3);
+        say('正面を向いてください', 'Look straight at the camera.');
+        return;
+      }
+      setSteps(['照合', '動き1', '動き2', '照合'], 1 + st.step);
+      setRing((st.step + (st.progress || 0)) / st.total);
+      say(st.msg, st.en);
+    }
+  }
+
+  function finishAuth(now) {
+    const s = session;
+    const th = threshold();
+    const a = C.decide(template.d, s.pre, th);
+    const b = C.decide(template.d, s.post, th);
+    const dist = Math.max(a.distance, b.distance);
+    if (a.ok && b.ok) {
+      store.set(KEY_LOCK, JSON.stringify(C.recordSuccess()));
+      end();
+      els.stage.dataset.state = 'pass';
+      showResult(true, '本人と確認しました', 'Verified.', dist);
+      els.unlocked.classList.add('show');
+      say('ロックを解除しました', 'Unlocked.');
+      return;
+    }
+    failAuth(now, '登録した顔と一致しませんでした', 'Face did not match.', dist);
+  }
+
+  function failAuth(now, reason, reasonEn, dist) {
+    // ロックは再読み込みをまたいで効かせるので、フレームの時刻ではなく壁時計で持つ
+    // （検査はフレームの時刻を差し替える。混ぜるとロックが即座に明けて無言で効かなくなる）
+    const wall = Date.now();
+    const lock = C.recordFailure(store.get(KEY_LOCK), wall);
+    store.set(KEY_LOCK, JSON.stringify(lock));
+    end();
+    els.stage.dataset.state = 'fail';
+    const ls = C.lockState(lock, wall);
+    const left = C.DEFAULTS.maxFailures - lock.fails;
+    const sub = ls.locked
+      ? `失敗が続いたため ${Math.ceil(ls.remainMs / 1000)} 秒間ロックします / Locked for ${Math.ceil(ls.remainMs / 1000)}s`
+      : `${reasonEn} — あと${left}回でしばらくロックします / ${left} tries left`;
+    showResult(false, reason, sub, dist);
+    say('解除できませんでした', 'Could not unlock.');
+  }
+
+  /* ---------- 配線 ---------- */
+  els.enroll.addEventListener('click', () => begin('enroll'));
+  els.unlock.addEventListener('click', () => begin('auth'));
+  els.cancel.addEventListener('click', () => { end(); say('止めました', 'Stopped.'); });
+  els.relock.addEventListener('click', () => { els.unlocked.classList.remove('show'); hideResult(); say('ロックしました。「顔で解除」で開けます', 'Locked. Press “Unlock”.'); });
+  els.del.addEventListener('click', () => {
+    if (!confirm('登録した顔のデータを消します。よろしいですか？\nDelete your face data?')) return;
+    store.del(KEY_TEMPLATE); store.del(KEY_LOCK); template = null;
+    hideResult(); els.unlocked.classList.remove('show');
+    say('登録データを消しました', 'Face data deleted.'); refreshButtons();
+  });
+  els.strict.addEventListener('change', () => {
+    settings.strict = els.strict.value === 'strict' ? 'strict' : 'standard';
+    store.set(KEY_SETTINGS, JSON.stringify(settings));
+  });
+  // 画面を離れたらカメラを必ず止める（点けっぱなしにしない）
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && session) { end(); say('画面を離れたので止めました', 'Stopped because the page was hidden.'); }
+  });
+  window.addEventListener('pagehide', () => { if (session) end(); });
+
+  refreshButtons();
+  if (template) say('「顔で解除」を押してください', 'Press “Unlock”.');
+
+  if (TEST) {
+    window.FACE_AUTH = {
+      step, begin, end, threshold,
+      get session() { return session; },
+      get template() { return template; },
+    };
+  }
+
+  /* ---------- 背景パーティクル ---------- */
+  (function particles() {
+    const cv = $('bg-canvas'), ctx = cv.getContext('2d');
+    const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let w = 0, h = 0, pts = [];
+    function size() {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      w = innerWidth; h = innerHeight; cv.width = w * dpr; cv.height = h * dpr;
+      cv.style.width = w + 'px'; cv.style.height = h + 'px'; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const n = Math.round(Math.min(60, w * h / 16000));
+      pts = Array.from({ length: n }, () => ({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - .5) * .25, vy: (Math.random() - .5) * .25, c: Math.random() < .5 ? '34,211,238' : '167,139,250' }));
+    }
+    function draw() {
+      ctx.clearRect(0, 0, w, h);
+      for (const p of pts) {
+        if (!reduce) { p.x = (p.x + p.vx + w) % w; p.y = (p.y + p.vy + h) % h; }
+        ctx.fillStyle = `rgba(${p.c},.35)`; ctx.beginPath(); ctx.arc(p.x, p.y, 1.4, 0, Math.PI * 2); ctx.fill();
+      }
+      if (!reduce) requestAnimationFrame(draw);
+    }
+    size(); draw(); addEventListener('resize', () => { size(); if (reduce) draw(); });
+  })();
+  </script>
+</body>
+</html>

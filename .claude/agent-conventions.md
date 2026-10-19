@@ -85,6 +85,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `assets/js/gesture-pointer.js` | `node scripts/verify-gesture-pointer.mjs` |
 | `synth-eq.html` | `node scripts/verify-synth-eq.mjs` |
 | `receipt-ocr.html` | `node scripts/verify-receipt-ocr.mjs`（OCRの精度に手を入れたら `--ocr` も） |
+| `face-auth.html` / `assets/js/face-auth-core.js` | `node scripts/verify-face-auth.mjs`（`--inject` で故障注入。生体確認・確認後の照合・2人映り・登録の一貫性・ロック・カメラ停止を壊して ❌ が出るか） |
 | `oshikatsu.html` | `node scripts/verify-oshikatsu.mjs`（見た目を変えたら `--shots DIR` で撮って目視。`--inject` で故障注入） |
 | `assets/js/oshi-research.js` / `cloudflare-worker/oshi-research.js`（推し活ログのイベントリサーチ） | `node scripts/verify-oshi-research.mjs`（`--inject` で故障注入）＋ `node --test tests/security.test.mjs` ＋ `node scripts/verify-oshikatsu.mjs`（画面側の連携） |
 | `assets/` 配下の画像（追加・差し替え・再エンコード） | `node scripts/verify-game-assets.mjs` / `node scripts/verify-asset-format.mjs` / `node scripts/verify-known-bug-patterns.mjs` |
