@@ -113,6 +113,32 @@ async function run({ port, noRoundRect }) {
   await page.waitForTimeout(2500);
   step('4. ターン終了を1回', n, await total());
 
+  // 5. 共有リンク（#scn=）から入る XSS を塞いでいるか（2026-10-19 の点検）。
+  //    ①タグの形を含む共有コードは受け取らない ②それでも入った（旧版の保存等）状態でも、武将一覧で動かない
+  //    ③普通の共有コードは今までどおり読める（塞ぎすぎの反証）
+  n = await total();
+  const share = await page.evaluate(async () => {
+    const enc = (st) => btoa(unescape(encodeURIComponent(JSON.stringify(st))));
+    const scn = DATA.scenarios[0];
+    const d = (scn.daimyo || []).find(x => x.id === 'oda') || scn.daimyo[0];
+    const clean = buildGameState(scn.id, d.id, 'normal');
+    const innocent = decodeShareState('scn=' + enc(clean)) !== null;
+    const poisoned = JSON.parse(JSON.stringify(clean));
+    const gid = Object.keys(poisoned.generals).find(id => poisoned.generals[id] && poisoned.generals[id].alive !== false);
+    poisoned.generals[gid].loyalty = '<img src=x onerror="window.__sengokuXss=(window.__sengokuXss||0)+1">';
+    const rejected = decodeShareState('scn=' + enc(poisoned)) === null;
+    window.__sengokuXss = 0;
+    game.changeScene(new MapScene(poisoned));
+    await new Promise(r => setTimeout(r, 300));
+    try { game.scene._openGeneralListPanel(); } catch (_) {}
+    await new Promise(r => setTimeout(r, 800));
+    const cell = [...document.querySelectorAll('td.gl-num')].some(td => td.querySelector('img'));
+    return { innocent, rejected, ran: window.__sengokuXss, imgInCell: cell, loyaltyType: typeof game.scene.state.generals[gid].loyalty };
+  });
+  const shareProblems = (share.innocent ? 0 : 1) + (share.rejected ? 0 : 1) + (share.ran ? 1 : 0) + (share.imgInCell ? 1 : 0);
+  if (shareProblems) errors.push(`共有リンクの守り: ${JSON.stringify(share)}`);
+  step(`5. 共有リンクのXSSを塞ぐ（普通のコード=${share.innocent ? '読める' : '読めない'}・タグ入り=${share.rejected ? '拒否' : '受理'}・一覧で実行=${share.ran ? 'された' : 'されない'}）`, n, await total());
+
   const scene = await page.evaluate(() => game.scene.constructor.name);
   const framed = await frameErrors();
   await browser.close();
