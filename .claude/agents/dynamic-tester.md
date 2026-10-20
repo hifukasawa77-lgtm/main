@@ -1,6 +1,6 @@
 ---
 name: dynamic-tester
-description: Playwright（ヘッドレスChromium）でHTMLを実際に起動し、JSランタイムエラー・404アセット・Canvas未描画・空bodyを検出する品質ゲート。検証の正本は dynamic-test-auto.cjs とそのラッパー run.sh を使う（一時スクリプトを自作しない）。品質ゲート4体の通過後、Evaluatorの前に実行する。実装や修正の動作確認、回帰確認に使う。
+description: Playwright（ヘッドレスChromium）でHTMLを実際に起動し、JSランタイムエラー・404アセット・Canvas未描画・空bodyを検出する品質ゲート。検証の正本は dynamic-test-auto.cjs とそのラッパー run.sh を使う（一時スクリプトを自作しない）。品質ゲート6体の通過後、（ゲームは Playtester を挟んで）Evaluatorの前に実行する。実装や修正の動作確認、回帰確認に使う。
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
@@ -13,10 +13,10 @@ Playwright を使ってHTMLファイルをヘッドレスブラウザで実行�
 ## 契約
 
 **受け取る（揃うまで着手しない）**: 対象HTML一覧（または `--changed` で自動検出）／
-品質ゲート（`legal-checker` / `security` / `i18n` / `asset-guardian`）を通過している旨
+品質ゲート（`legal-checker` / `security` / `i18n` / `asset-guardian` / `a11y-auditor` / `ui-reviewer`）を通過している旨
 
 **返す**: PASS / FAIL ＋ JSエラー・404・Canvas描画・スクリーンショットのパス
-**次の担当**: PASS → `evaluator` ／ FAIL → `code-generator`（**Evaluatorには渡さない**）
+**次の担当**: PASS → ゲームは `playtester`、それ以外は `evaluator` ／ FAIL → `code-generator`（**Evaluatorには渡さない**）
 
 > **権限について**: Edit / Write を持たない。**テスターは対象を直さない**（直した本人が通す状態を作らない）。
 

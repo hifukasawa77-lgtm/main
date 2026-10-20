@@ -377,7 +377,7 @@ for n in names:
     if 'agent-conventions.md' not in body:
         out.append('FAIL:%s: 共通運用規約（.claude/agent-conventions.md）を参照していない' % n)
     # (c) 参照している検査スクリプトが実在するか
-    for sc in set(re.findall(r'(scripts/[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|py))', body)):
+    for sc in set(re.findall(r'(scripts/[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|py)(?![A-Za-z0-9]))', body)):
         if not os.path.exists(sc):
             out.append('FAIL:%s: 存在しない検査スクリプトを参照 → %s' % (n, sc))
     for sk in set(re.findall(r'(\.claude/skills/[A-Za-z0-9_./-]+\.(?:sh|cjs|mjs))', body)):
@@ -389,7 +389,7 @@ for n in names:
             out.append('FAIL:%s: 実在しないページを参照 → %s（改称の取りこぼし）' % (n, pg))
 
 # (e) 規約§4の対応表が参照する検査コマンドの実体
-for sc in set(re.findall(r'(scripts/[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|py))', conv)):
+for sc in set(re.findall(r'(scripts/[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|py)(?![A-Za-z0-9]))', conv)):
     if not os.path.exists(sc):
         out.append('FAIL:agent-conventions: 対応表が存在しないスクリプトを参照 → %s' % sc)
 for sk in set(re.findall(r'(\.claude/skills/[A-Za-z0-9_./-]+\.(?:sh|cjs|mjs))', conv)):
@@ -400,7 +400,7 @@ for ref in set(re.findall(r'`([a-z][a-z0-9-]+)`', conv)):
     if ref.endswith('-agent') or ref in ('planner','researcher','evaluator','release','marketer','optimizer',
                                           'refactoring','security','triage','verifier','pmo','i18n','asset-guardian',
                                           'code-generator','graphic-designer','music-generator','legal-checker',
-                                          'dynamic-tester','game-balance','english-teacher'):
+                                          'dynamic-tester','game-balance','english-teacher','a11y-auditor','ui-reviewer','playtester','ops-monitor'):
         if ref not in names:
             out.append('FAIL:agent-conventions: 実在しないエージェントを参照 → %s' % ref)
 print('\n'.join(out))
