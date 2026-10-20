@@ -77,7 +77,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `sanguo.html` | `node scripts/verify-sanguo-boot.mjs` / `node scripts/verify-known-bug-patterns.mjs` |
 | `taihei.html` | `node scripts/verify-taihei-boot.mjs` / `node scripts/verify-taihei-balance.mjs` |
 | `genpei.html` | `node scripts/verify-genpei-boot.mjs` / `node scripts/verify-genpei-balance.mjs` / `node scripts/verify-genpei-kyoten.mjs` |
-| `bakumatsu.html` / `game.js` / `bakumatsu.css` | `node scripts/verify-bakumatsu-map.mjs` |
+| `bakumatsu.html` / `game.js` / `bakumatsu.css` / `bakumatsu-guide.js` | `node scripts/verify-bakumatsu-map.mjs` ＋ `node scripts/playtest-fuzz.mjs bakumatsu.html --seconds 8`（複数の `--seed` で。無限ループ型の固まりは操作しないと出ない） |
 | `sw.js` | `node scripts/verify-service-worker.mjs` |
 | `assets/js/frame-guard.js` / `scripts/security-baseline.mjs`（全ページのセキュリティ基礎線） | `node scripts/security-baseline.mjs`（`--inject` で故障注入）/ `node scripts/verify-frame-guard.mjs`（実ブラウザ。`--inject` で故障注入） |
 | `cloudflare-worker/request-security.js` / `cloudflare-worker/security-monitor.js` / `cloudflare-worker/gemini-proxy.js` / `cloudflare-worker/notebook-worker.js` | `node --test tests/security.test.mjs`（遮断・シスログ・通知・IP遮断・ページ通報） |

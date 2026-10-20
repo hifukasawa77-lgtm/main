@@ -97,6 +97,13 @@ async function measure(url, viewport) {
           if (rect.width > 0 && rect.right > width + tolerance) {
             const style = getComputedStyle(el);
             if (style.position === 'fixed' || style.visibility === 'hidden' || style.display === 'none') continue;
+            // 祖先が自分でスクロール/切り取りしていて、その祖先が画面内に収まっているなら、はみ出しの原因ではない（pre のコード等）
+            let clipped = false;
+            for (let up = el.parentElement; up && up !== document.body; up = up.parentElement) {
+              const overflowX = getComputedStyle(up).overflowX;
+              if (overflowX !== 'visible' && up.getBoundingClientRect().right <= width + tolerance) { clipped = true; break; }
+            }
+            if (clipped) continue;
             culprits.push(`${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/)[0] : ''}(右端${Math.round(rect.right)}px)`);
             if (culprits.length >= 3) break;
           }
@@ -124,7 +131,7 @@ async function inspect(label, urlPath) {
     const known = baseline[label]?.[viewport.label];
     if (over > TOLERANCE && known !== undefined && over <= known + BASELINE_SLACK) {
       pass++; // 既知（悪化していない）。直したら baseline から外す
-      console.log(`  △ ${label} @${viewport.label}: 既知のはみ出し +${over}px（記録 +${known}px・悪化なし）`);
+      console.log(`  △ ${label} @${viewport.label}: 既知のはみ出し +${over}px（記録 +${known}px・悪化なし） 原因: ${result.culprits.join(', ') || '(特定できず)'}`);
     } else {
       check(`${label} @${viewport.label}: 横にはみ出さない`, over <= TOLERANCE,
         over > TOLERANCE ? `+${over}px はみ出し${known !== undefined ? `（記録は +${known}px＝悪化）` : ''} 原因: ${result.culprits.join(', ') || '(特定できず)'}` : '');
