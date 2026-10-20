@@ -14,6 +14,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `assets/js/zero1-worker.js` — ZERO-1 Mobile のモデルを画面とは別の糸で動かす worker（同じ糸でやると読み込み中に画面が固まる）
 - `assets/js/zero1-tools.js` — ZERO-1 Mobile の端末内ツール層（時計・タイマー・メモ・単位換算・計算・サイト内検索）と、サイト知識の取り出し（ローカルRAG）。純粋ロジックのみで作用を持たない
 - `sw.js` — サイト全体の Service Worker。**別オリジンの通信には触らない**（触ると失敗の理由が消える）
+- `frontline-zero/` — Unity 6 製チームFPS「フロントライン・ゼロ」のWebGLビルド出力（ソース・再ビルド手順・落とし穴は `unity-frontline/README.md`。**ビルド出力は手編集しない**。「ビルドツール不使用」の例外はここだけ）
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。`obsidian-vault/`（第二の脳）とは別物。使い分けは「Obsidian メモリ層（Claudechord Vault）」節の早見表を参照。詳細: `claudechord-vault/README.md`）
 
 ## デザイン・スタイルのルール
