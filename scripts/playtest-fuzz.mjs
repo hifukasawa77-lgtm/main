@@ -148,14 +148,16 @@ async function playtest(label, urlPath) {
   const random = rng(SEED);
   const seen = new Set([first.hash]);
   let hung = false, sent = 0;
+  const recent = []; // 固まる直前の入力（再現・原因の手掛かりに出す）
   const end = Date.now() + SECONDS * 1000;
   while (Date.now() < end && !hung) {
     try {
       const burst = 4 + Math.floor(random() * 4);
       for (let i = 0; i < burst; i += 1) {
-        const input = random() < 0.8
-          ? page.keyboard.press(KEYS[Math.floor(random() * KEYS.length)], { delay: 15 })
-          : page.mouse.click(40 + random() * 1200, 40 + random() * 720);
+        let input, what;
+        if (random() < 0.8) { const key = KEYS[Math.floor(random() * KEYS.length)]; what = `キー ${key === ' ' ? 'Space' : key}`; input = page.keyboard.press(key, { delay: 15 }); }
+        else { const x = Math.round(40 + random() * 1200), y = Math.round(40 + random() * 720); what = `クリック (${x},${y})`; input = page.mouse.click(x, y); }
+        recent.push(what); if (recent.length > 6) recent.shift();
         if ((await within(input.then(() => true), HANG_MS)) === null) { hung = true; break; }
         sent += 1;
       }
@@ -171,7 +173,7 @@ async function playtest(label, urlPath) {
   }
   const engineErrors = hung ? [] : await page.evaluate(() => (window.engine && Array.isArray(window.engine.errors) ? window.engine.errors.map(String) : [])).catch(() => []);
 
-  check(`${label}: 応答し続ける（${sent}回の入力）`, !hung, hung ? `${HANG_MS / 1000}秒以上応答なし` : '');
+  check(`${label}: 応答し続ける（${sent}回の入力）`, !hung, hung ? `${HANG_MS / 1000}秒以上応答なし。直前の入力: ${recent.join(' → ')}` : '');
   check(`${label}: 入力に画面が反応する`, hung || seen.size > 1, !hung && seen.size <= 1 ? '最初から最後まで画面が同じ（入力が死んでいる／ソフトロック）' : `画面の状態 ${seen.size} 通り`);
   check(`${label}: 例外0件（pageerror + console.error + engine.errors）`, errors.length + engineErrors.length === 0, [...errors, ...engineErrors].slice(0, 2).join(' | '));
   check(`${label}: 404アセット0件`, missing.length === 0, missing.slice(0, 2).join(' | '));

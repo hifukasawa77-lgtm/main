@@ -211,6 +211,12 @@ node scripts/verify-known-bug-patterns.mjs # generals.jsonの末尾追加チェ�
 node scripts/verify-bakumatsu-map.mjs   # 拠点14件が地図の陸に載っているか（切り取り位置の整合・見切れ・ラベル重なりも検査）
 ```
 
+- **`MutationObserver` の中で、観測している DOM を書き換えるときは「変わるときだけ」書く**。
+  `bakumatsu-guide.js` は `body` の子孫を観測する `MutationObserver(u)` の中で `textContent = …` / `innerHTML = …` を
+  毎回代入していた。**同じ値の代入でも子ノードは置き換わり、変更として通知される**ので、`u` が自分を呼び直し続け、
+  「戦の準備」ボタンや開戦ダイアログが出た瞬間にページが**例外もエラーも出さず永久に固まる**
+  （`playtest-fuzz` の無作為入力で発見。Space 連打で再現。2026-10-20）。タイトルも地図も無事に出るので起動検査は素通りする。
+  代入前に現在値と比べる（`if (el.textContent !== next) el.textContent = next`）。
 - **拠点のずれは例外もエラーも出さない**。「起動して例外0件」の検査では素通りするので、
   実際に描かれた拠点の画面座標を地図画像へ逆写像して陸/海を確かめるところまでやる
   （2026-08-25: 全14拠点のうち鶴岡・新潟・長岡・佐賀・鹿児島・高知が海の上に置かれていた）
