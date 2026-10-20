@@ -646,7 +646,7 @@ node scripts/playtest-fuzz.mjs <ページ> --seconds 10 [--seed N]      # 無作
 
 - **どちらも「例外もエラーも出ない」壊れ方を見る**。横はみ出しは例外を出さずに横スクロールが生えるだけ、入力が死んだゲームはタイトルが無事に出る
   （`dynamic-test` は「起動して例外が無いか」しか見ない）。
-- **既知のはみ出しは `scripts/responsive-baseline.json` に記録済み**（2026-10-20 時点で 6 ページ・8 件。同日に typing_dojo・learn-python・cyber-city・shogi を直した）。目的は**悪化させない**こと:
+- **既知のはみ出しは `scripts/responsive-baseline.json` に記録済み**（2026-10-20 時点で 4 ページ・7 件。同日に typing_dojo・learn-python・cyber-city・shogi・go・beat_em_up を直した。残りは bakumatsu・battle＝レイアウトの作り直しが要る、no-luck-poker＝固定幅の盤、calculator＝画面外へ伸びる装飾の円で実害は小さい）。目的は**悪化させない**こと:
   記録以下なら `△ 既知` で通し、増えたら ❌。直ったページは「改善済み」と出るので baseline から外す（外さないと再発が通る）。
   棚卸しは `node scripts/verify-responsive.mjs --all --write-baseline`（`--all` と一緒でないと書かない＝一部のページだけで記録して他の記録を消さない）。
 - **playtest-fuzz の画面変化は「キャンバスの標本画素＋DOM構造」で見る**。本文の文字だけを見る実装は、盤面を DOM で描く将棋を
@@ -654,7 +654,7 @@ node scripts/playtest-fuzz.mjs <ページ> --seconds 10 [--seed N]      # 無作
   固まったページは入力の送信も `context.close()` も返ってこないので、時間で見切る（`within`）。
 - **`--all` の棚卸しはノイズが多い**（2026-10-20: 107ページ中28項目が❌。盤面のマスを狙ってクリックしないと変わらない将棋・チェス系、
   文章中心の `learn-*` ページは「反応しない」と出る）。**新作ゲームを1本ずつ**見る道具で、全ページの合否には使わない。
-  本物の兆候は「応答なし（3秒超）」と「操作中の例外」。`bakumatsu.html` は無作為入力で3秒以上応答しない（再現する・要調査）。
+  本物の兆候は「応答なし（3秒超）」と「操作中の例外」。`bakumatsu.html` はこれで無限ループを見つけて直した（上の MutationObserver の項）。
 - **検査自身のクリックで起きた遷移の中断（`ERR_ABORTED`）は、実体が在るときだけ数えない**（`index.html` のリンクを踏んで偽の404が出た）。
 - **無作為入力はゲームを進めない**ことがある（タイトルで止まる等）。「反応する」が緑でも「最後まで遊べる」ことは意味しない。
   ゲーム内の後半は各 `verify-*-boot.mjs` / `*-balance.mjs` の担当。
