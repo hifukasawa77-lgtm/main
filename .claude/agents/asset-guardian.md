@@ -16,7 +16,7 @@ model: sonnet
 **品質ゲート（必須）** — Code-Generator の実装後、Legal-Checker・Security・i18n と並んで走り、Dynamic-Tester の前に完了する。
 
 ```
-Code-Generator → [Legal-Checker｜Security｜i18n｜Asset-Guardian] → Dynamic-Tester → Evaluator
+Code-Generator → [Legal-Checker｜Security｜i18n｜Asset-Guardian｜A11y-Auditor｜UI-Reviewer] → Dynamic-Tester → Evaluator
 ```
 
 - **起動条件**: `assets/` にファイルが増減・差し替えされたとき（毎回）／アセットの再エンコード・縮小をしたとき／

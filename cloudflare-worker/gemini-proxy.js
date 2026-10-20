@@ -16,6 +16,7 @@
  */
 import { buildSystemPrompt } from './site-knowledge.js';
 import { allowedOrigin, publicHeaders, securityHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
+import { aiUnitsFor, takeAiQuota } from './ai-quota.js';
 import { withSecurityGate } from './security-monitor.js';
 import { researchOshi } from './oshi-research.js';
 import { handleVocalSong, handleVocalPortrait } from './vocalis-ai.js';
@@ -290,6 +291,15 @@ export default withSecurityGate('ai-proxy', {
       return jsonResponse(r.body, origin, r.status);
     }
 
+    // ── 1日の AI 利用の上限（全員で共有）──
+    // Origin は curl で名乗れるので、それだけでは誰でも Workers AI の無料枠を使い切れた（1日分を数分で）。
+    // 使い切られるとサイトの案内チャットも止まる。IP ごとの制限に加えて、全体の1日の上限を置く。
+    const units = aiUnitsFor(url.pathname, body);
+    if (units) {
+      const quota = await takeAiQuota(env, units);
+      if (!quota.ok) return jsonResponse({ error: quota.error }, origin, quota.status);
+    }
+
     // ── AI Video Studio エンドポイント ──
     if (url.pathname === '/video/script') return handleVideoScript(env, body, origin);
     if (url.pathname === '/video/image')  return handleVideoImage(env, body, origin);
@@ -465,7 +475,26 @@ export class VocalisBudget {
     if (url.pathname === '/reserve' && request.method === 'POST') return this.reserve(await request.json());
     if (url.pathname === '/configure' && request.method === 'POST') return this.configure(await request.json());
     if (url.pathname === '/settle' && request.method === 'POST') return this.settle(await request.json());
+    if (url.pathname === '/quota' && request.method === 'POST') return this.quota(await request.json());
     return new Response('Not Found', { status: 404 });
+  }
+  /**
+   * Daily units shared by every AI path (chat, video, notebook). Only the 'ai-daily' instance is used for this,
+   * so it never mixes with the Vocalis monthly budget stored in 'vocalis-global'.
+   */
+  async quota(body) {
+    const units = Math.min(Math.max(Math.floor(Number(body.units)) || 1, 1), 50);
+    const limit = Math.min(Math.max(Math.floor(Number(body.limit)) || 0, 1), 1_000_000);
+    const day = new Date().toISOString().slice(0, 10);
+    const result = await this.state.storage.transaction(async tx => {
+      let value = await tx.get('quota') || { day, used: 0 };
+      if (value.day !== day) value = { day, used: 0 };
+      if (value.used + units > limit) return { ok: false, day, used: value.used, limit };
+      value.used += units;
+      await tx.put('quota', value);
+      return { ok: true, day, used: value.used, limit };
+    });
+    return Response.json(result);
   }
   month() { return new Date().toISOString().slice(0, 7); }
   async configuredCeiling() { return Number(await this.state.storage.get('ceilingUsd')) || Number(this.env.VOCALIS_MONTHLY_BUDGET_USD) || 0.50; }

@@ -267,6 +267,21 @@ else
   note_warn "scripts/security-csp.mjs が無い（CSPハッシュの検査を実行できない）"
 fi
 
+echo "== 12. 検索・共有用タグとサイトマップ（公開ページ全部＋トップの構造化データ） =="
+# 2026-10-15 に公開92ページのタグを全部そろえたのに、前後に公開された新作8本がタグ無し・
+# サイトマップ外のまま出ていた（例外もエラーも出ない）。新しいページを足したら --write を1回かける。
+if [ -f scripts/seo-tags.mjs ]; then
+  if SEO_OUT=$(node scripts/seo-tags.mjs 2>&1); then
+    ok "$(printf '%s\n' "$SEO_OUT" | tail -1 | sed 's/^==> seo-tags: //')"
+  else
+    printf '%s\n' "$SEO_OUT" | grep '^✗' | head -10 | while IFS= read -r l; do note_fail "${l#✗ }"; done
+    FAIL=1
+    echo "    → 直し方: node scripts/seo-tags.mjs --write（説明文の材料が無いページは手で書く）"
+  fi
+else
+  note_warn "scripts/seo-tags.mjs が無い（検索用タグの検査を実行できない）"
+fi
+
 echo ""
 echo "-- git diff --stat（参考） --"
 git diff HEAD --stat 2>/dev/null | tail -3
