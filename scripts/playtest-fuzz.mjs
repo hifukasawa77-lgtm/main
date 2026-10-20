@@ -127,7 +127,13 @@ async function playtest(label, urlPath) {
   const errors = [], missing = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
-  page.on('requestfailed', (r) => { if (r.url().startsWith(BASE)) missing.push(`failed ${r.url()}`); });
+  // 無作為クリックでリンクを踏むと、遷移で前の読み込みが中断される（ERR_ABORTED）。実体が在るなら検査自身が起こした中断なので数えない
+  page.on('requestfailed', (r) => {
+    if (!r.url().startsWith(BASE)) return;
+    const local = path.join(ROOT, decodeURIComponent(new URL(r.url()).pathname.replace(/^\//, '')));
+    if (/ERR_ABORTED/.test(r.failure()?.errorText ?? '') && fs.existsSync(local)) return;
+    missing.push(`failed ${r.url()}`);
+  });
   page.on('response', (r) => { if (r.status() >= 400 && r.url().startsWith(BASE)) missing.push(`${r.status()} ${r.url()}`); });
   await page.addInitScript(() => { window.__TEST = true; window.__SANGUO_TEST = true; try { localStorage.clear(); } catch { /* 無くても進む */ } });
   try {
