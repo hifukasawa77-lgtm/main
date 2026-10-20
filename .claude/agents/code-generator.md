@@ -23,7 +23,7 @@ Plannerエージェントが作成した仕様書を忠実に読み込み、高�
 - 仕様からの逸脱点・補足事項
 - **実行した必須検査とその結果**（§必須検査。緑になっていない提出は受理されない）
 
-**次の担当**: `legal-checker` / `security` / `i18n` / `asset-guardian`（並列） → `dynamic-tester` → `evaluator`
+**次の担当**: `legal-checker` / `security` / `i18n` / `asset-guardian` / `a11y-auditor` / `ui-reviewer`（並列） → `dynamic-tester` → （ゲームは `playtester`）→ `evaluator`
 
 ## 担当範囲（厳守）
 

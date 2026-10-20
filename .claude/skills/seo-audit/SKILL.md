@@ -14,6 +14,14 @@ bash .claude/skills/seo-audit/seo-audit.sh zelda_like.html # 指定ファイル�
 
 終了コード: 欠落なし=0 / 欠落あり=1。admin系・テスト用HTMLは除外済み。
 
+## まず道具で補う（手で書く前に）
+
+```bash
+node scripts/seo-tags.mjs --write   # 公開ページ全部の不足タグ・サイトマップ・トップの構造化データを補う
+node scripts/seo-tags.mjs           # 検査（release-check 検査#12・CI seo.yml と同じ）
+```
+下のテンプレは、道具が材料不足で止まったページ（GAMES にもトップのカードにも説明が無い）を手で書くときの書式。
+
 ## 本サイト標準のOGPテンプレ
 
 `<head>` 内に以下を追記する（値はページごとに差し替え）:
@@ -22,13 +30,16 @@ bash .claude/skills/seo-audit/seo-audit.sh zelda_like.html # 指定ファイル�
 <meta name="description" content="ページの説明（日本語70字目安。ゲームならジャンル＋遊び方の一言）">
 <link rel="canonical" href="https://hifukasawa77-lgtm.github.io/main/PAGE.html">
 <meta property="og:type" content="website">
-<meta property="og:title" content="ページ名 | hide_0001 Portfolio">
+<meta property="og:title" content="ページ名｜hideの部屋">
 <meta property="og:description" content="descriptionと同文でよい">
 <meta property="og:url" content="https://hifukasawa77-lgtm.github.io/main/PAGE.html">
 <meta property="og:image" content="https://hifukasawa77-lgtm.github.io/main/assets/og/PAGE.png">
-<meta property="og:site_name" content="hide_0001 Portfolio">
+<meta property="og:site_name" content="hideの部屋">
 <meta name="twitter:card" content="summary_large_image">
 ```
+
+- **サイト名は「hideの部屋」で統一する**（title 末尾も `｜hideの部屋`）。旧表記「hide_0001」「hide portfolio」「hide の部屋」は指名検索「hideの部屋」の手がかりを割るので使わない
+- **専用のOG画像が無いページは `assets/og/og-default.jpg` を使う**（`node scripts/gen-site-og.mjs` で再生成）。旧 `assets/og-image.webp` は日本語が「□」に化けたまま公開されていた——**OG画像は書き出したら必ず目で見る**（例外もエラーも出ない）
 
 - **og:image の方針**: 1200x630。ダーク背景（#0a0a12系）＋シアン/パープルのアクセントで既存ビジュアルと統一（サイバーパンク演出禁止）。ゲームは `test-screenshots/` のスクショを加工して使ってよい。専用画像が無い間は index.html が使っているサイト共通OG画像へフォールバックする
 - **形式**: 写真的・スクショ的な内容は **JPEG** で書き出す（PNGだと桁違いに重くなりクローラ取得が遅い。実例: sengoku 969KB PNG→79KB JPEG）。フラットな図形/文字主体ならPNGでよい。テンプレの `og:image` 拡張子は実ファイルに合わせる

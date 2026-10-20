@@ -7358,6 +7358,18 @@ document.addEventListener('click', event => {
     // ── ゲームシェアボタン（動的生成） ──
     (function() {
       const BASE = 'https://hifukasawa77-lgtm.github.io/main/';
+      const isEn = () => document.documentElement.lang === 'en';
+      // 見出し（h3）は言語切替で書き換わるので、生成時に控えず、使う時点で読む
+      const titleOf = card => card.querySelector('h3')?.textContent?.trim() || (isEn() ? 'Game' : 'ゲーム');
+      const threadsLabel = card => isEn()
+        ? `Share ${titleOf(card)} on Threads`
+        : `${titleOf(card)}をThreadsでシェア`;
+      const threadsButtons = [];
+
+      const X_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.734-8.857L1.254 2.25H8.08l4.257 5.629L18.244 2.25zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>';
+      // Threads のロゴ（Simple Icons・CC0 のパスデータ）
+      const THREADS_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.186 24h-.007c-3.581-.024-6.334-1.205-8.184-3.509C2.35 18.44 1.5 15.586 1.472 12.01v-.017c.03-3.579.879-6.43 2.525-8.482C5.845 1.205 8.6.024 12.18 0h.014c2.746.02 5.043.725 6.826 2.098 1.677 1.29 2.858 3.13 3.509 5.467l-2.04.569c-1.104-3.96-3.898-5.984-8.304-6.015-2.91.022-5.11.936-6.54 2.717C4.307 6.504 3.616 8.914 3.589 12c.027 3.086.718 5.496 2.057 7.164 1.43 1.783 3.631 2.698 6.54 2.717 2.623-.02 4.358-.631 5.8-2.045 1.647-1.613 1.618-3.593 1.09-4.798-.31-.71-.873-1.3-1.634-1.75-.192 1.352-.622 2.446-1.284 3.272-.886 1.102-2.14 1.704-3.73 1.79-1.202.065-2.361-.218-3.259-.801-1.063-.689-1.685-1.74-1.752-2.964-.065-1.19.408-2.285 1.33-3.082.88-.76 2.119-1.207 3.583-1.291a13.853 13.853 0 0 1 3.02.142c-.126-.742-.375-1.332-.75-1.757-.513-.586-1.308-.883-2.359-.89h-.029c-.844 0-1.992.232-2.721 1.32L7.734 7.847c.98-1.454 2.568-2.256 4.478-2.256h.044c3.194.02 5.097 1.975 5.287 5.388.108.046.216.094.321.142 1.49.7 2.58 1.761 3.154 3.07.797 1.82.871 4.79-1.548 7.158-1.85 1.81-4.094 2.628-7.277 2.65Zm1.003-11.69c-.242 0-.487.007-.739.021-1.836.103-2.98.946-2.916 2.143.067 1.256 1.452 1.839 2.784 1.767 1.224-.065 2.818-.543 3.086-3.71a10.5 10.5 0 0 0-2.215-.221z"/></svg>';
+
       document.querySelectorAll('.work-card[data-category]').forEach(card => {
         const title = card.querySelector('h3')?.textContent?.trim() || 'ゲーム';
         const href = card.getAttribute('href') || '';
@@ -7367,14 +7379,39 @@ document.addEventListener('click', event => {
         const btn = document.createElement('button');
         btn.className = 'work-share-btn';
         btn.setAttribute('aria-label', `${title}をXでシェア`);
-        btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.734-8.857L1.254 2.25H8.08l4.257 5.629L18.244 2.25zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>シェア';
+        btn.innerHTML = X_ICON + 'シェア';
         btn.addEventListener('click', e => {
           e.preventDefault();
           e.stopPropagation();
           window.open(tweetUrl, '_blank', 'noopener,noreferrer,width=560,height=360');
         });
+
+        // Threads は公式の Web intent で、投稿文・リンク・トピックタグを埋めて作成画面を開ける
+        // （https://developers.facebook.com/docs/threads/threads-web-intents）。値は percent-encode が必須
+        const threadsBtn = document.createElement('button');
+        threadsBtn.type = 'button';
+        threadsBtn.className = 'work-share-btn work-share-threads';
+        threadsBtn.setAttribute('aria-label', threadsLabel(card));
+        threadsBtn.innerHTML = THREADS_ICON + 'Threads';
+        threadsBtn.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const text = encodeURIComponent(`「${titleOf(card)}」ブラウザで無料プレイ！`);
+          const intentUrl = `https://www.threads.com/intent/post?text=${text}&url=${encodeURIComponent(pageUrl)}&tag=${encodeURIComponent('hideの部屋')}`;
+          window.open(intentUrl, '_blank', 'noopener,noreferrer,width=560,height=640');
+        });
+        threadsButtons.push([card, threadsBtn]);
+
         const body = card.querySelector('.work-body');
-        if (body) body.appendChild(btn);
+        if (body) {
+          body.appendChild(btn);
+          body.appendChild(threadsBtn);
+        }
+      });
+
+      // 言語切替（applyLang が発火する site-lang-change）でも読み上げ用ラベルを追従させる
+      window.addEventListener('site-lang-change', () => {
+        threadsButtons.forEach(([card, b]) => b.setAttribute('aria-label', threadsLabel(card)));
       });
     })();
 

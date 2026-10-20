@@ -1,4 +1,5 @@
 import { allowedOrigin, publicHeaders, errorResponse, readJson, limitRequest } from './request-security.js';
+import { takeAiQuota } from './ai-quota.js';
 import { withSecurityGate } from './security-monitor.js';
 const MAX_SOURCE_CHARS = 8000;
 const MAX_SOURCES = 5;
@@ -71,6 +72,10 @@ export default withSecurityGate('notebook-proxy', {
         sources.reduce((sum, source) => sum + source.length, 0) > MAX_TOTAL_CHARS) {
       return errorResponse(400, 'Invalid or oversized sources', headers);
     }
+
+    // 1日の AI 利用の上限（全体で共有。72B のモデルなので1回を重く数える。両方なら2回分）
+    const quota = await takeAiQuota(env, mode === 'both' ? 10 : 5);
+    if (!quota.ok) return new Response(JSON.stringify({ error: quota.error }), { status: quota.status, headers });
 
     const truncated = sources.map(s => (typeof s === 'string' ? s : '').slice(0, MAX_SOURCE_CHARS));
     const combined = truncated.join('\n\n---\n\n').slice(0, MAX_TOTAL_CHARS);
