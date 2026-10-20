@@ -631,6 +631,24 @@ node scripts/verify-oshi-research.mjs --inject   # 防御を壊して ❌ が出
 - 検査用ブリッジ `window.OSHI_DEBUG` は `window.__OSHI_TEST` のときだけ開く。関数を足したらここにも足す
 - 検査の**スクロール位置に注意**: 画面外のCanvasは `page.mouse.click` の座標が合わない（`scrollIntoViewIfNeeded` してから）
 
+## スマホ幅の崩れと、操作したときの壊れ方の機械検査（ui-reviewer / playtester）
+
+```bash
+node scripts/verify-responsive.mjs <ページ>... | --changed | --all   # 390px・768px で横はみ出し・viewport メタ（--inject で故障注入）
+node scripts/playtest-fuzz.mjs <ページ> --seconds 10 [--seed N]      # 無作為なキー・クリックで固まり・無反応・操作中の例外（--inject で故障注入）
+```
+
+- **どちらも「例外もエラーも出ない」壊れ方を見る**。横はみ出しは例外を出さずに横スクロールが生えるだけ、入力が死んだゲームはタイトルが無事に出る
+  （`dynamic-test` は「起動して例外が無いか」しか見ない）。
+- **既知のはみ出しは `scripts/responsive-baseline.json` に記録済み**（2026-10-20 時点で 10 ページ・13 件）。目的は**悪化させない**こと:
+  記録以下なら `△ 既知` で通し、増えたら ❌。直ったページは「改善済み」と出るので baseline から外す（外さないと再発が通る）。
+  棚卸しは `node scripts/verify-responsive.mjs --all --write-baseline`（`--all` と一緒でないと書かない＝一部のページだけで記録して他の記録を消さない）。
+- **playtest-fuzz の画面変化は「キャンバスの標本画素＋DOM構造」で見る**。本文の文字だけを見る実装は、盤面を DOM で描く将棋を
+  「入力が死んでいる」と誤報した。乱数は種付き（`--seed`）で、同じ種なら同じ入力列＝落ちたら再現できる。
+  固まったページは入力の送信も `context.close()` も返ってこないので、時間で見切る（`within`）。
+- **無作為入力はゲームを進めない**ことがある（タイトルで止まる等）。「反応する」が緑でも「最後まで遊べる」ことは意味しない。
+  ゲーム内の後半は各 `verify-*-boot.mjs` / `*-balance.mjs` の担当。
+
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
 - スターター: `gamekit/template.html` をリポジトリ直下にコピーして開始する
@@ -814,25 +832,36 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 
 ### Securityエージェント (`security`)
 - ソースコードの脆弱性（XSS・eval系・安全でないDOM操作・SRI未設定・外部ライブラリリスク）を静的解析する品質ゲート
-- **Legal-Checker・i18n・Asset-Guardianと並列で実行**し、Dynamic-Testerの前に完了させる
+- **Legal-Checker・i18n・Asset-Guardian・A11y-Auditor・UI-Reviewerと並列で実行**し、Dynamic-Testerの前に完了させる
 - リスクを CRITICAL / WARN / OK の3段階で分類し、該当行と修正案を添えて報告する
 - **CRITICALが1件でも残る場合はDynamic-Testerへ進ませない**（Code-Generatorへ差し戻す）。Evaluatorの「セキュリティ即不合格」まで持ち越すと手戻りが大きい
 - 単独起動（「セキュリティチェックして」）も可能
 
 ### i18nエージェント (`i18n`)
 - 「UIは日英バイリンガル表記」方針を担保する品質ゲート。翻訳漏れの検出・用語統一・対訳適用を担当
-- **Legal-Checker・Security・Asset-Guardianと並列で実行**し、Dynamic-Testerの前に完了させる
+- **Legal-Checker・Security・Asset-Guardian・A11y-Auditor・UI-Reviewerと並列で実行**し、Dynamic-Testerの前に完了させる
 - 機械検査（`.claude/skills/i18n-check/i18n-check.sh`）を先に回し、その検出結果に訳語を当てて用語を統一する役割
 - デザイン・ロジック・スタイルの変更は行わない。漏れが残る場合は対訳付きでCode-Generatorへ差し戻す
 
 ### Asset-Guardianエージェント (`asset-guardian`)
 - 画像・音声アセットが方針どおりか（WebP・解像度不変・アルファ保持・参照整合・容量）を検査する品質ゲート
-- **Legal-Checker・Security・i18nと並列で実行**し、Dynamic-Testerの前に完了させる
+- **Legal-Checker・Security・i18n・A11y-Auditor・UI-Reviewerと並列で実行**し、Dynamic-Testerの前に完了させる
 - 判定は BLOCK / WARN / OK。**BLOCKが1件でも残る場合はDynamic-Testerへ進ませない**
 - 検査は `verify-asset-format.mjs` / `verify-game-assets.mjs` / `verify-known-bug-patterns.mjs` の3本＋容量確認。
   **新規アセットは git add 前＝未追跡**なので未追跡ファイルも対象にする
 - 絵の良し悪しは見ない（それは Graphic-Designer）。見るのは「方針から外れていないか」「無言で壊れていないか」だけ
 - 画像そのものの作り直しは Graphic-Designer、参照コードの修正は Code-Generator へ回す
+
+### A11y-Auditorエージェント (`a11y-auditor`)
+- アクセシビリティ（キーボード操作・読み上げ・コントラスト・動きの抑制）を検査する品質ゲート。`/a11y-audit` スキルの機械検査（`a11y-audit.sh`）を土台に、Canvasゲーム固有の指針（キーボードだけで遊べる・一時停止・光感受性）まで確かめる
+- **Legal-Checker・Security・i18n・Asset-Guardian・UI-Reviewerと並列で実行**し、Dynamic-Testerの前に完了させる
+- 判定は ERROR / WARN / OK。**ERRORが1件でも残る場合はDynamic-Testerへ進ませない**
+- 直してよいのは**属性・ラベル・フォールバック文・`prefers-reduced-motion` の分岐だけ**（Edit のみ）。配色・ロジック・レイアウトは担当外。操作系の欠落は Code-Generator へ
+
+### UI-Reviewerエージェント (`ui-reviewer`)
+- 画面をスマホ幅（390px・768px）で実ブラウザに映して確かめる品質ゲート。横はみ出し・viewport メタ・デザイン方針（黒背景＋シアン/パープル、サイバーパンク調の禁止）からの逸脱を、`node scripts/verify-responsive.mjs` とスクリーンショットで見る
+- **Legal-Checker・Security・i18n・Asset-Guardian・A11y-Auditorと並列で実行**し、Dynamic-Testerの前に完了させる
+- 判定は BLOCK / WARN / OK。**直さず報告する**（Edit/Write なし）。既知のはみ出しは `scripts/responsive-baseline.json` に記録し、**悪化させない**運用（増えたら BLOCK、直ったら baseline から外す）
 
 ### Dynamic-Testerエージェント (`dynamic-tester`)
 - Playwright（ヘッドレスChromium）でHTMLファイルを実際に起動し動作確認する品質ゲート
@@ -840,6 +869,12 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - 対象: 変更されたHTMLファイル（`git diff HEAD` から自動検出）
 - PASS時: Evaluatorへ結果サマリーを渡す
 - FAIL時: Code-Generatorへブロッキングフィードバックを返す（Evaluatorには渡さない）
+
+### Playtesterエージェント (`playtester`)
+- ゲームに無作為なキー・クリックを浴びせ、**入力が死んでいないか・固まらないか・操作中に例外が出ないか**を確かめる。Dynamic-Tester が「起動して例外が無いか」しか見ないのを補う
+- 検査は `node scripts/playtest-fuzz.mjs <ページ> --seconds 10`（種付きの乱数。`--seed` が同じなら同じ入力列＝落ちたら再現できる）。**Dynamic-Tester の PASS 後、Evaluator の前**に走る
+- 画面の変化は**キャンバスの標本画素＋DOM構造**で見る（盤面を DOM で描く将棋・囲碁は本文が変わらない）。判定は PASS / FAIL。FAIL は Evaluator に渡さず Code-Generator へ
+- **直さず報告する**（Edit/Write なし）。難易度の偏りは Game-Balance、原因不明は Triage へ
 
 ### Evaluatorエージェント (`evaluator`)
 - Code-Generatorの成果物を仕様書と照らし合わせ100点満点で採点する
@@ -854,6 +889,12 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - **前提**: Evaluatorが合格（80点以上 かつ 仕様適合性16点以上）を出し、`kai_001` へのプッシュが完了していること
 - `/game-release` スキルから起動された場合は、そのスキルの手順（動的テスト→SEO/a11y監査→index.htmlへのカード追加→スクリーンショット→デプロイ検証）完了後に本作業へ入る
 - リリース完了後はPMOへ結果（バージョン・公開URL・CHANGELOG差分）を渡しKPIへ反映する
+
+### Ops-Monitorエージェント (`ops-monitor`)
+- 公開後の**本番が壊れていないか**を点検する運用監視。Release の後（リリース直後・週1回の定点・「本番がおかしい」の報告）に走る
+- 点検は既存の検査を束ねる: `deploy-verify.sh`（疎通・実ブラウザのスモーク）／`seo-tags.mjs`／`verify-routine-delivery.mjs`／`security-baseline.mjs`／`release-check.sh`（CSP・SRI）／`verify-service-worker.mjs`
+- 判定は 正常 / 要対応 / 障害。**直さず報告する**（Edit/Write なし）。Secret の登録・Worker の再デプロイ・Pages 設定の変更は深澤の判断
+- 本番（github.io）へ届かない環境では「実ブラウザ確認は未実施」と書く（緑扱いにしない）
 
 ### Marketerエージェント (`marketer`)
 - 完成した成果物のマーケティング戦略立案とコンテンツ生成を一貫して担当
@@ -948,9 +989,10 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
           ├→ [Music-Generator]  音楽・SE制作（並行）
           └→ [Code-Generator]   実装（グラフィック・音楽納品後）
                ↓
-     ┌──────────────── 品質ゲート（4体を並列実行）────────────────┐
+     ┌──────────────── 品質ゲート（6体を並列実行）────────────────┐
      │ [Legal-Checker] 法務   [Security] 脆弱性                     │
      │ [i18n] 日英            [Asset-Guardian] アセット方針・参照整合 │
+     │ [A11y-Auditor] アクセシビリティ  [UI-Reviewer] スマホ幅・デザイン方針 │
      └────────────────────────────────────────────────────────────┘
                ↓ RED/YELLOW（グラフィック起因）
             [Graphic-Designer] 修正 → [Code-Generator] へ再連携 → [Legal-Checker] 再チェック
@@ -960,10 +1002,16 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
             [Code-Generator] 修正 → 該当ゲートへ再チェック
                ↓ BLOCK（アセット方針違反・参照切れ）
             [Asset-Guardian] 指摘 → [Graphic-Designer]（画像） / [Code-Generator]（参照） → 再チェック
-               ↓ GREEN / OK / 非BLOCK（4体すべて通過）
+               ↓ ERROR（アクセシビリティ）／ BLOCK（スマホ幅のはみ出し・デザイン方針違反）
+            [A11y-Auditor] / [UI-Reviewer] 指摘 → [Code-Generator]（実装） / [Graphic-Designer]（配色・画像） → 再チェック
+               ↓ GREEN / OK / 非BLOCK（6体すべて通過）
           → [Dynamic-Tester] 動的実行チェック（Playwright）※必須
                ↓ FAIL
             [Code-Generator] 修正・再提出 → [Dynamic-Tester] 再検証
+               ↓ PASS（ゲームのみ）
+          → [Playtester] 無作為入力で固まり・無反応・操作中の例外を検出
+               ↓ FAIL（再現コマンド付き）
+            [Code-Generator] 修正・再提出 → [Playtester] 再検証
                ↓ PASS
           → [Evaluator] 検証・採点
                ↓ 不合格
@@ -972,6 +1020,8 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
             深澤(PM)へ報告 → [PMO] 記録・KPI更新 → GitHub push (kai_001)
                ↓
           → [Release] kai_001→main マージ・バージョンタグ・CHANGELOG・Pages疎通確認
+               ↓
+          → [Ops-Monitor] 本番の点検（疎通・Routine・CSP/SRI。報告のみ）
                ↓ ※任意
             [Marketer] 戦略立案・コンテンツ生成 → 深澤(PM)へ納品
                ↓

@@ -46,8 +46,8 @@
 
 | 役割 | 与える | 与えない |
 |---|---|---|
-| 診断・監査（security / legal-checker / triage / evaluator / dynamic-tester） | Read, Grep, Glob, Bash | **Edit / Write**（直す係ではない。直すと「検査した人が検査対象を作る」状態になる） |
-| 限定改変（i18n / game-balance / optimizer / refactoring / asset-guardian） | Read, Grep, Glob, Bash, Edit | **Write**（新規ファイル作成は担当外） |
+| 診断・監査（security / legal-checker / triage / evaluator / dynamic-tester / ui-reviewer / playtester / ops-monitor） | Read, Grep, Glob, Bash | **Edit / Write**（直す係ではない。直すと「検査した人が検査対象を作る」状態になる） |
+| 限定改変（i18n / game-balance / optimizer / refactoring / asset-guardian / a11y-auditor） | Read, Grep, Glob, Bash, Edit | **Write**（新規ファイル作成は担当外） |
 | 制作（code-generator / planner / graphic-designer / music-generator / verifier） | Read, Write, Edit, Grep, Glob, Bash ほか | — |
 | 外部連携が要る（pmo / graphic-designer） | MCPコネクタが要るため `tools:` を絞らない | — |
 
@@ -87,6 +87,8 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `receipt-ocr.html` | `node scripts/verify-receipt-ocr.mjs`（OCRの精度に手を入れたら `--ocr` も） |
 | `oshikatsu.html` | `node scripts/verify-oshikatsu.mjs`（見た目を変えたら `--shots DIR` で撮って目視。`--inject` で故障注入） |
 | `assets/js/oshi-research.js` / `cloudflare-worker/oshi-research.js`（推し活ログのイベントリサーチ） | `node scripts/verify-oshi-research.mjs`（`--inject` で故障注入）＋ `node --test tests/security.test.mjs` ＋ `node scripts/verify-oshikatsu.mjs`（画面側の連携） |
+| 新規ページ・新作ゲーム・CSS/レイアウトを触ったHTML（スマホ幅の崩れ） | `node scripts/verify-responsive.mjs <ページ>`（`--inject` で故障注入。既知のはみ出しは `scripts/responsive-baseline.json`＝悪化させない） |
+| 新作ゲーム・入力処理／シーン遷移を触ったゲーム（操作したときの壊れ方） | `node scripts/playtest-fuzz.mjs <ページ> --seconds 10`（`--inject` で故障注入。落ちたら同じ `--seed` で再現） |
 | `assets/` 配下の画像（追加・差し替え・再エンコード） | `node scripts/verify-game-assets.mjs` / `node scripts/verify-asset-format.mjs` / `node scripts/verify-known-bug-patterns.mjs` |
 | `legal/knowledge/` / `legal/corpus/` / `obsidian-vault/04-Knowledge/rokuho-*.md` / `.claude/agents/legal-checker.md` / `scripts/legal-*.mjs`（リーガルチェッカーの知識・法令コーパス・走査器） | `node scripts/verify-legal-knowledge.mjs`（`--inject` で故障注入。引用が実条文に当たるか・コーパスが古くないか・走査器の自己検査・定義の整合）。法改正が施行されたら `node scripts/legal-corpus.mjs --check-online` → `--fetch` |
 | `assets/js/agent-data.js` | `node scripts/agent-evolve-check.mjs` / `node scripts/agent-dynamic-test.cjs` |
@@ -138,6 +140,10 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | 日本語のみのUI文言 | `i18n` |
 | WebP方針違反・容量超過・参照切れ・肖像indexずれ | `asset-guardian` |
 | 難易度・テンポ・数値の偏り | `game-balance` |
+| キーボードだけで操作できない・読み上げ・コントラスト・動きの抑制 | `a11y-auditor` |
+| スマホ幅で横にはみ出す・デザイン方針（配色）からの逸脱 | `ui-reviewer` |
+| 入力しても反応しない・操作中に固まる／例外が出る（ゲーム） | `playtester` |
+| 本番の疎通・Routine が成果物を出していない・公開後のずれ | `ops-monitor` |
 | 原因不明の「動かない」報告（再現から） | `triage` |
 | 同じ無言バグを二度踏んだ | `verifier`（機械検査へ昇格させる） |
 | 学び・意思決定として残すべきもの | `/second-brain` → `/self-improve` |
@@ -151,8 +157,9 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | 横断 | `pmo`（進捗・リスク・KPI） / `accounting-agent`（課金監視） |
 | 起点 | `researcher`（市場調査） → `planner`（要件・設計・仕様書） |
 | 制作 | `graphic-designer` / `music-generator` / `code-generator` |
-| 品質ゲート（並列） | `legal-checker` / `security` / `i18n` / `asset-guardian` |
-| 動的検証 | `dynamic-tester` |
+| 品質ゲート（並列） | `legal-checker` / `security` / `i18n` / `asset-guardian` / `a11y-auditor` / `ui-reviewer` |
+| 動的検証 | `dynamic-tester` → `playtester`（ゲームのみ） |
 | 採点・公開 | `evaluator` → `release` → `marketer`（任意） |
 | 公開後の改善 | `optimizer` / `refactoring` / `game-balance` / `achievement-agent` |
+| 公開後の運用 | `ops-monitor`（本番の点検） |
 | 常設ユーティリティ | `triage`（不具合の再現・切り分け） / `verifier`（検査の作成） / `english-teacher` |
