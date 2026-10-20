@@ -21,7 +21,7 @@ public class FrontlineGame : MonoBehaviour
 {
     // ---- 調整値 ----
     const int BotsPerSide = 9;
-    const float StartTickets = 120f;
+    const float StartTickets = 80f;
     const float PlayerSpeed = 7f, SprintMul = 1.55f, JumpV = 7.5f, Gravity = -22f;
     const float BotSpeed = 5.6f;
     const float MapHalf = 80f;
