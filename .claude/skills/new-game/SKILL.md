@@ -36,13 +36,16 @@ GameKit（`gamekit/gamekit.js`）を土台に、CLAUDE.md のエージェント�
 - 大規模な場合は複数の code-generator に分割（シーン単位 / ファイル単位、担当範囲を明示）
 - 完了後 Dynamic-Tester へ
 
-### 4. 品質ゲート — [legal-checker ｜ security ｜ i18n]（並列）→ dynamic-tester → evaluator
-まず3体を**並列で**走らせ、すべて通過してから dynamic-tester へ進む。
+### 4. 品質ゲート — [legal-checker ｜ security ｜ i18n ｜ asset-guardian ｜ a11y-auditor ｜ ui-reviewer]（並列）→ dynamic-tester → playtester → evaluator
+まず6体を**並列で**走らせ、すべて通過してから dynamic-tester へ進む（アセットを足さないゲームでは asset-guardian は空振りでよい）。
 
 - **legal-checker**: 外部素材・ライブラリ使用時のみ。RED/YELLOW は起因エージェントへ差し戻し
 - **security**: 毎回実行。XSS・eval系・安全でないDOM操作・SRI未設定を検査。**CRITICALが残る間は先へ進めない**（Evaluatorの即不合格まで持ち越すと手戻りが大きい）
 - **i18n**: 毎回実行。`bash .claude/skills/i18n-check/i18n-check.sh` を回してから訳語を当て、日英バイリンガルUIを担保する
+- **a11y-auditor**: 毎回実行。`bash .claude/skills/a11y-audit/a11y-audit.sh <ゲーム>.html`＋キーボードだけで遊べるか・一時停止の有無。ERROR が残る間は先へ進めない
+- **ui-reviewer**: 毎回実行。`node scripts/verify-responsive.mjs <ゲーム>.html`（390px・768px で横はみ出し）とデザイン方針。BLOCK が残る間は先へ進めない
 - **dynamic-tester**: Playwright でJSエラー・Canvas描画・404を検証。FAILは code-generator へ差し戻し（Evaluatorに渡さない）
+- **playtester**: `node scripts/playtest-fuzz.mjs <ゲーム>.html --seconds 10`。無作為入力で固まり・無反応・操作中の例外が出ないか。FAILは code-generator へ（再現コマンド付き）
 - **evaluator**: 仕様適合性を100点満点で採点。80点以上かつ仕様適合16点以上で合格。不合格は code-generator へ差し戻し（同一理由2回で深澤へエスカレーション）
 
 ### 5. 納品

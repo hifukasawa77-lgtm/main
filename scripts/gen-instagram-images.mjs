@@ -22,15 +22,15 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = path.join(ROOT, 'assets', 'marketing');
 
 const CARDS = [
-  { file: 'ig-01-hero.jpg', kicker: 'BROWSER GAMES', title: '48本、<br>ブラウザで無料。',
+  { file: 'ig-01-hero.jpg', kicker: 'BROWSER GAMES', title: '53本、<br>ブラウザで無料。',
     sub: 'インストール不要 / No install required',
-    items: ['ボードゲーム 22本', 'アクション 10本', 'シミュレーション 8本', 'パズル・RPG ほか 8本'],
+    items: ['ボードゲーム 23本', 'アクション 13本', 'シミュレーション 8本', 'パズル・RPG ほか 9本'],
     accent: '#22d3ee' },
   { file: 'ig-02-strategy.jpg', kicker: 'HISTORICAL STRATEGY', title: '歴史SLG、<br>5タイトル。',
     sub: 'ヘックス戦・外交・攻城戦 / Hex battles &amp; diplomacy',
     items: ['三国志・天下三分', '戦国風雲記', '源平争乱記', '太平風雲記', '幕末風雲記'],
     accent: '#a78bfa' },
-  { file: 'ig-03-board.jpg', kicker: 'BOARD GAMES', title: '盤上遊戯、<br>22本。',
+  { file: 'ig-03-board.jpg', kicker: 'BOARD GAMES', title: '盤上遊戯、<br>23本。',
     sub: 'AI対戦つき / Play against AI',
     items: ['将棋・囲碁・チェス', '麻雀・花札・百人一首', 'バックギャモン・オセロ', 'トランプゲーム集'],
     accent: '#22d3ee' },

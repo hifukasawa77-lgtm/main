@@ -40,3 +40,9 @@ related: ["[[recursive-self-improvement]]", "[[0004-code-generator-color-scheme-
 
 ---
 > ♻️ **昇格済み（2026-07-01, /self-improve）**: 「ドリフト」「スキル定義」「hook 2段ゲート」は `harness-lint.sh` 検査#1〜#5で機械強制済み（[[0007-harness-lint-automation]] / [[0008-value-drift-lint]]）。「bash罠」は `/self-improve` 手順0の追記注意へ、「セカンドブレイン運用（Daily圧縮）」は `second-brain/SKILL.md` 書式ルールへ反映済み（[[0009-daily-hygiene-rule]]）。
+
+## Windows（autocrlf=true）で node によるファイル置換をするときの改行
+- 作業コピーは CRLF（index は LF）。`readFileSync` した文字列を `\n` で検索・置換して書き戻すと、**既存行は CRLF のまま新しい行だけ LF**（混在）になる。
+  さらに `\r` の直後へ挿入すると孤立した CR ができ、git が **非テキスト扱い**（`git ls-files --eol` が `w/-text`）にして差分が全行になる（2026-10-13 に第二の脳のプロジェクトノートで実際に発生）。
+- 対策: ①書き戻す前に `includes("\r\n")` で改行を検出し、`\n` に正規化して置換→元の改行へ戻す ②書いた後に `git ls-files --eol` と `git diff --stat` で行数を確認（1行追記のはずが全行差分なら壊れている）。
+- ※ Git Bash の `grep -c $'\r'` は CR を数えられず 0 を返すことがある。`od -c` か `git ls-files --eol` を使う。

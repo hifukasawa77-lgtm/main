@@ -167,6 +167,8 @@ Workers AI のモデルカタログ: https://developers.cloudflare.com/workers-a
 - 管理画面はトークンをlocalStorageへ保存しません。旧保存値は管理画面を次に開いた際に削除します。以前使った別のブラウザ・端末にも保存値が残り得るため、管理用トークンのローテーションを推奨します。
 - 管理画面のCORSはローカルファイル利用との互換性のため全Originを許可しますが、毎回トークンで認可します。任意Origin許可を認証とは扱いません。
 - AI・管理レスポンスはno-store。上流AIサービスの例外詳細はクライアントへ返しません。
+- **1日の AI 利用の上限（全訪問者で共有・2026-10-19）**: `ai-quota.js`。Origin は curl で名乗れるので、Origin の照合と IP ごとの制限だけでは、1人が無料枠（1日分）を数分で使い切り、サイトの案内チャットまで止められた。チャット1・台本3・読み上げ1・画像（2＋ステップ数）・ノートブック5（両方なら10）を数え、`AI_DAILY_UNITS`（既定1500・`wrangler.toml` の `[vars]`）に達したら 429。日付は UTC（日本時間 9:00 に戻る）。数えるのは `VocalisBudget` クラスの `ai-daily` という別の実体（Vocalis の月の予算とは別）。**数えられないとき（バインディング無し・障害）は AI を呼ばない**。notebook-proxy は `wrangler-notebook.toml` の `AI_QUOTA`（`script_name = "ai-proxy"`）で同じ実体を使うので、**ai-proxy を先にデプロイしてから** notebook-proxy をデプロイする
+- **IPv6 は /64 ごとに数える**（`clientKey`）。1台の手元が /64 の中のアドレスを渡り歩くと、毎回別人として制限・遮断を逃れられた
 
 ## 攻撃の遮断・シスログ・通知（2026-10-08）
 
@@ -178,6 +180,8 @@ Workers AI のモデルカタログ: https://developers.cloudflare.com/workers-a
 | 記録 | すべての拒否を **RFC 5424 形式のシスログ行**（facility=authpriv）で Worker のログへ出す。例: `<83>1 2026-10-08T… ai-proxy.….workers.dev ai-proxy - SECURITY [sec@32473 kind="scanner-probe" ip="…" path="/.env" status="403"] scanner-probe` |
 | 通知 | 重大度 err 以上（攻撃パターン・`/admin/` の管理トークン総当たり・IPの遮断・ページからの通報＝未検証と明記）を Slack へ。利用者のアクセスコード打ち間違い（401）と自己検査 `/__security-selftest/` は記録のみ。**同じ種別は10分に1通**にまとめる（洪水が通知の洪水にならない。ログには全件残る） |
 | ページからの通報 | `assets/js/frame-guard.js` が「別サイトに枠で埋め込まれた」「CSPが外部スクリプト・イベント属性の注入を遮断した」を `POST /security/report` へ送る |
+
+**通知の文字は無害化する（2026-10-19）**: 通報の中身・URL・UA は誰でも偽れる。そのまま Slack へ載せると `<!channel>` で全員を呼び出し、`<https://偽|ログイン確認>` で行き先を隠したリンクを持ち主の Slack に流し込めた（Discord は `@everyone`・`[文](URL)`）。`defang()` で `< > & @ [ ] | \`` を全角へ、`https://` を `hxxps[:]//`（押せない形）へ置き換え、Discord には `allowed_mentions: { parse: [] }` を付ける。**通知のまとめは「種別＋送信元のおおよそ（伏せたIP）」ごと**（種別だけだと、攻撃者が安い事件を10分ごとに起こして本物の通知を黙らせられた）。URL の攻撃パターンは 4KB までを見て、量指定子に上限を付けた（`<%[\s\S]*%>` は長い URL で CPU を使い切れた）。シスログの値は**切ってから逃がす**（逃がしてから切ると末尾の `\` が閉じの `"` を逃がして行が壊れた）
 
 ### 通知を受け取る設定（深澤の作業・1回だけ）
 

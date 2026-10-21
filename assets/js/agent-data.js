@@ -199,6 +199,11 @@
           desc:{ja:'3部の小さなサッカークラブのGMになり、育成・補強・施設・戦術で1部優勝を目指す経営シミュレーション',en:'Football club management sim — rise from the third division to the top with scouting, training, facilities and tactics'},
           themes:{ja:['サッカー','サッカークラブ'],en:['soccer','football']},
           aliases:{ja:['クラブロード','サッカー','サッカークラブ','クラブ経営','経営','経営シミュレーション','育成','サッカー経営','サカつく風'],en:['club road','soccer','football','club management','manager','management sim']} },
+        { slug:'frontline-zero', href:'frontline-zero/', cat:'action',
+          title:{ja:'フロントライン・ゼロ',en:'Frontline Zero'}, emoji:'🎯',
+          desc:{ja:'Unity 6 製の陣取り型チームFPS。5つの旗を奪い合う9対9の部隊戦（WebGL・初回約27MB）',en:'Unity 6 team FPS — 9v9 squad battle capturing five flags (WebGL, ~27MB first load)'},
+          themes:{ja:['FPS','銃','戦争'],en:['fps','shooter','war']},
+          aliases:{ja:['フロントライン','フロントラインゼロ','FPS','シューター','銃','バトルフィールド風','戦場','Unity','3D'],en:['frontline zero','fps','shooter','battlefield','team shooter','unity','3d']} },
         { slug:'bakumatsu', href:'bakumatsu.html', cat:'sim', thumb:'assets/maps/strategic-japan.png',
           title:{ja:'幕末風雲記',en:'Bakumatsu Fuunki'}, emoji:'⚓',
           desc:{ja:'嘉永6年の黒船来航〜明治元年の戊辰戦争まで6シナリオ。幕府・雄藩を率いて内政・外交・軍事と近代化を進める幕末戦略シミュレーション',en:'Bakumatsu-era strategy sim: 6 scenarios from Perry\'s arrival to the Boshin War, modernize a han through politics, diplomacy and military'},
@@ -224,6 +229,14 @@
           title:{ja:'ターボカート・グランプリ',en:'Turbo Kart Grand Prix'}, emoji:'🏎️',
           desc:{ja:'オリジナルキャラのカートで3周レース。擬似3D三人称視点、ドリフトでミニターボ発動、ニトロ・オイル缶・スターショット等のアイテムでライバル5台を抜き去る',en:'3-lap kart race with original characters, pseudo-3D third-person view — drift for mini-turbos and use items to pass 5 rivals'},
           aliases:{ja:['ターボカート','カートレース','グランプリ','ドリフト','ミニターボ'],en:['turbo kart','kart racer','grand prix','drift']} },
+        { slug:'iroha-karuta', href:'iroha_karuta.html', cat:'card', thumb:'assets/karuta-gpt/iroha-thumb-gpt-image-2.webp',
+          title:{ja:'いろはかるた',en:'Iroha Karuta'}, emoji:'🎴',
+          desc:{ja:'江戸いろは48枚。読み札を聞いて絵札を取る伝統のかるた',en:'Traditional Edo iroha karuta — 48 cards, grab the matching picture card'},
+          aliases:{ja:['かるた','カルタ','いろは','伝統ゲーム'],en:['karuta','iroha','card grabbing']} },
+        { slug:'blokus-trigon', href:'blokus_trigon.html', cat:'board', thumb:'assets/blokus-trigon-thumb.svg',
+          title:{ja:'トライ陣地',en:'Tri Territory'}, emoji:'🔺',
+          desc:{ja:'三角形ピースをひし形の盤に敷き詰める陣取りAI対戦。角タッチルール',en:'Triangle-piece territory game on a hex-diamond board vs AI, corner-touch rule'},
+          aliases:{ja:['トライ陣地','トライゴン','三角形','三角ブロックス'],en:['trigon','blokus trigon','triangle territory']} },
       ];
       const RECOMMENDS = ['zelda','shogi','mahjong'];
 
