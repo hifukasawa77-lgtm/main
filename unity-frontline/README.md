@@ -1,7 +1,7 @@
 # FRONTLINE ZERO（Unity 6 / WebGL）
 
 オリジナルの陣取り型チームFPS。5つの拠点を奪い合い、チケット（持ち点）を先に0にされた側が負け。
-素材・音・HUDはすべてコード生成（外部アセット無し）。Battlefield 等の既存IPは使っていない。
+表面テクスチャーは生成画像、形状・音・HUDはコード生成。Battlefield 等の既存IPは使っていない。
 
 - ソース: `Assets/Scripts/`（`FrontlineGame.cs` が全体、`Soldier.cs` が兵士）
 - 公開ビルド: リポジトリ直下の `frontline-zero/`（GitHub Pages から `…/frontline-zero/`）
@@ -22,7 +22,15 @@
 
 ## 車両・テクスチャ（2026-10-21 追加）
 - 軽戦車は各軍2両。1両目（青軍）はプレイヤー用に75秒基地で待つ。E で乗降、マウス/F で主砲（着弾点に範囲ダメージ）。AI戦車は拠点へ向かい敵を撃つ。撃破で −5チケット、30秒後に基地で復活。
-- 質感は `Textures.cs` が実行時に生成（地面・迷彩・鋼板・コンクリ・土のう・木箱・布・クレーター・樹皮・焦げ）。外部画像なし。
+- 質感は `Assets/Resources/FrontlineTextures/` の15種類の生成PNGを `Textures.cs` が読み込む。地面・両軍迷彩・鋼板・コンクリ・土のう・木箱・布・クレーター・樹皮・焦げ・肌に適用。
+
+## 生成テクスチャーとMCP（2026-10-21）
+- 内蔵image_genで15種類の画像を生成。モデルIDはツールに公開されていないため未確認。
+- 生成用プロンプトは `TexturePrompts.json` と `TexturePromptTemplate.txt`。
+- `FrontlineTextureImporter.cs` がRepeat、Trilinear、ミップマップ、異方性4、最大1024を設定する。
+- 両軍の兵士・戦車・武器・全環境オブジェクトで既存マテリアルを生成画像へ切り替え。識別バンド／パネルにも布画像を適用。
+- MCP for Unity 10.3.0を追加。HTTP URLは `http://127.0.0.1:8080`、Codex側は `http://127.0.0.1:8080/mcp`。
+- MCP経由でBootシーンの再生とWebGLビルドを実施。実行時エラー0件、WebGLビルド成功（エラー0件）。ブラウザーで表示確認済み。
 - **`Mathf.SmoothStep(from,to,t)` は補間関数で、しきい値用の smoothstep ではない**。しきい値で使うと錆・泥の割合が常に高くなり、
   全部の金属が赤茶になる（例外もエラーも出ない）。`Textures.Sst` を使う。
 - 確認用ブラウザペインは操作を送っていない間はゲーム時間が進まない（画面が止まって見えるが固まりではない）。

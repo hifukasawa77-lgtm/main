@@ -1,4 +1,4 @@
-// FRONTLINE ZERO — オリジナルの陣取り型チームFPS。外部アセット無し（形・質感・音・HUDすべてコード生成）。
+// FRONTLINE ZERO — オリジナルの陣取り型チームFPS。質感は生成画像、形・音・HUDはコード生成。
 // 2チーム(AZURE / EMBER)が5つの拠点を奪い合い、チケット(持ち点)を先に0にした側が負け。軽戦車に乗れる。
 using System.Collections.Generic;
 using UnityEngine;
@@ -120,8 +120,8 @@ public class FrontlineGame : MonoBehaviour
         tickets[0] = tickets[1] = StartTickets;
         Random.InitState(seed);
 
-        matAzure = Mat(new Color(0.20f, 0.52f, 0.95f));
-        matEmber = Mat(new Color(0.95f, 0.45f, 0.15f));
+        matAzure = TM(Textures.Cloth, 1, 1, .08f, new Color(0.20f, 0.52f, 0.95f));
+        matEmber = TM(Textures.Cloth, 1, 1, .08f, new Color(0.95f, 0.45f, 0.15f));
         var tsh = Shader.Find("Sprites/Default"); if (tsh == null) tsh = Shader.Find("Unlit/Color");
         matTracer = new Material(tsh) { color = new Color(1f, 0.9f, 0.5f) };
 
