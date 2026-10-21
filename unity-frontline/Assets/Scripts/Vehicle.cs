@@ -21,4 +21,5 @@ public class Vehicle : MonoBehaviour
     public Soldier tSoldier; public Vehicle tVehicle; public float scan;
     public float reverseUntil, strafeDir = 1f;
     public Vector3 lastPos; public float stuckT;
+    public float kick;                // 発砲の反動（砲身を引く）
 }
