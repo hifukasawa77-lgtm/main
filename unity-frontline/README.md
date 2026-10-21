@@ -19,3 +19,10 @@
   `Can't add component because class 'BoxCollider' doesn't exist!` で起動はするが何も当たらない。
 - Standard / Unlit/Color / Sprites/Default は Always Included Shaders に入れる（実行時 `Shader.Find` は削られる）。
 - 圧縮は Disabled（GitHub Pages が転送時に圧縮するため、Brotli/gzip ヘッダの問題を避ける）。
+
+## 車両・テクスチャ（2026-10-21 追加）
+- 軽戦車は各軍2両。1両目（青軍）はプレイヤー用に75秒基地で待つ。E で乗降、マウス/F で主砲（着弾点に範囲ダメージ）。AI戦車は拠点へ向かい敵を撃つ。撃破で −5チケット、30秒後に基地で復活。
+- 質感は `Textures.cs` が実行時に生成（地面・迷彩・鋼板・コンクリ・土のう・木箱・布・クレーター・樹皮・焦げ）。外部画像なし。
+- **`Mathf.SmoothStep(from,to,t)` は補間関数で、しきい値用の smoothstep ではない**。しきい値で使うと錆・泥の割合が常に高くなり、
+  全部の金属が赤茶になる（例外もエラーも出ない）。`Textures.Sst` を使う。
+- 確認用ブラウザペインは操作を送っていない間はゲーム時間が進まない（画面が止まって見えるが固まりではない）。

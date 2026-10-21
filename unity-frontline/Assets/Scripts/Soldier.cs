@@ -26,4 +26,8 @@ public class Soldier : MonoBehaviour
     public float aimErr;           // 個体差
     public Transform body;
     public Vector3 lookDir = Vector3.forward;
+    public Vehicle vtarget;        // 狙っている敵車両
+    public Vehicle inVehicle;      // 搭乗中（プレイヤーのみ）
+    public Transform legL, legR;   // 歩行アニメ用
+    public float walkT;
 }
