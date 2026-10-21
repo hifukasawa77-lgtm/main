@@ -115,7 +115,7 @@ public class FrontlineGame : MonoBehaviour
     void BuildWorld()
     {
         if (world != null) Destroy(world.gameObject);
-        soldiers.Clear(); points.Clear(); vehicles.Clear();
+        soldiers.Clear(); points.Clear(); vehicles.Clear(); decals.Clear(); pending.Clear();
         world = new GameObject("World").transform;
         tickets[0] = tickets[1] = StartTickets;
         Random.InitState(seed);
@@ -246,7 +246,11 @@ public class FrontlineGame : MonoBehaviour
                     P(root, PrimitiveType.Cube, new Vector3(-0.3f, 1.5f, 0), new Vector3(1.8f, 0.7f, 1.7f), burnt);
                     for (int wx = -1; wx <= 1; wx += 2) for (int wz = -1; wz <= 1; wz += 2)
                             P(root, PrimitiveType.Cylinder, new Vector3(wx * 1.3f, 0.4f, wz * 0.95f), new Vector3(0.8f, 0.12f, 0.8f), burnt, new Vector3(90, 0, 0));
-                    if (Random.value < 0.75f) Boom(root.position + Vector3.up * 2f, 1.3f, new Color(.16f, .15f, .15f), 3.2f, 1.8f, 2.2f, true);
+                    if (Random.value < 0.75f)
+                    {
+                        Boom(root.position + Vector3.up * 2f, 1.3f, Smoke0, 3.2f, 1.8f, 2.2f, true).c1 = Smoke1;
+                        var fl = Boom(root.position + Vector3.up * 1.4f, 0.9f, new Color(1f, 0.7f, 0.2f), 0.5f, 0.7f, 1.3f, true); fl.c1 = new Color(0.7f, 0.1f, 0.02f);
+                    }
                     break;
                 }
             case 4:
@@ -440,6 +444,14 @@ public class FrontlineGame : MonoBehaviour
     void Update()
     {
         float dt = Mathf.Min(Time.deltaTime, 0.05f);
+        // 演出の目視確認用: URL に ?fxtest を付けたときだけ、X で目の前に爆発を出す
+        if (Input.GetKeyDown(KeyCode.X) && Application.absoluteURL.Contains("fxtest"))
+        {
+            Vector3 fp = cam.transform.position + cam.transform.forward * 16f; fp.y = 0.2f;
+            BigBoom(fp, 1.8f);
+        }
+        for (int pi = pending.Count - 1; pi >= 0; pi--)
+            if (Time.time >= pending[pi].at) { var pd = pending[pi]; pending.RemoveAt(pi); BigBoom(pd.p, pd.k); Play(clipBoom, 0.7f); }
         if (phase == Phase.Title || phase == Phase.Over)
         {
             UpdateBots(dt, true);
@@ -458,6 +470,17 @@ public class FrontlineGame : MonoBehaviour
         UpdatePoints(dt);
         recoil = Mathf.Lerp(recoil, 0, dt * 14f);
         if (gunModel != null) gunModel.localPosition = gunBase + new Vector3(0, 0, -recoil * 0.08f);
+    }
+
+    void LateUpdate()
+    {
+        if (shake > 0.002f)
+        {
+            cam.transform.position += Random.insideUnitSphere * shake;
+            cam.transform.rotation *= Quaternion.Euler(0, 0, Random.Range(-1f, 1f) * shake * 3f);
+        }
+        shake = Mathf.MoveTowards(shake, 0f, Time.deltaTime * 1.6f);
+        whiteFlash = Mathf.MoveTowards(whiteFlash, 0f, Time.deltaTime * 1.2f);
     }
 
     void StartMatch()
@@ -567,7 +590,11 @@ public class FrontlineGame : MonoBehaviour
                 if (shooter.isPlayer) { hitMarkerUntil = Time.time + 0.12f; Play(clipHit, 0.4f); }
             }
         }
-        SpawnTracer(shooter.isPlayer ? origin + cam.transform.right * 0.2f + Vector3.down * 0.2f + dir * 0.6f : origin, end, 0.035f);
+        Vector3 mo = shooter.isPlayer ? origin + cam.transform.right * 0.2f + Vector3.down * 0.2f + dir * 0.6f : origin;
+        SpawnTracer(mo, end, 0.035f);
+        if (hit.collider != null) Impact(hit.point, hit.normal);
+        if (shooter.isPlayer || (Vector3.Distance(cam.transform.position, origin) < 45f && Random.value < 0.5f))
+            Blob(mo + dir * 0.7f, shooter.isPlayer ? 0.18f : 0.28f, new Color(1f, 0.95f, 0.6f), new Color(1f, 0.5f, 0.1f), 0.06f, 1.5f, Vector3.zero, 0f);
         float dist = shooter.isPlayer ? 0 : Vector3.Distance(cam.transform.position, origin);
         if (dist < 70f) Play(clipShot, shooter.isPlayer ? 0.5f : Mathf.Clamp01(1f - dist / 70f) * 0.35f);
     }
@@ -580,22 +607,116 @@ public class FrontlineGame : MonoBehaviour
         Destroy(go, 0.06f);
     }
 
-    Fx Boom(Vector3 p, float size, Color c, float life, float grow, float rise, bool loop)
+    // ================= 演出（爆発・煙・火花・破片・閃光・画面揺れ） =================
+    readonly List<Transform> decals = new List<Transform>();
+    struct Pending { public float at; public Vector3 p; public float k; }
+    readonly List<Pending> pending = new List<Pending>();
+    float shake, whiteFlash;
+    static readonly Color Fire0 = new Color(1f, 0.8f, 0.28f), Fire1 = new Color(0.55f, 0.08f, 0.02f);
+    static readonly Color Smoke0 = new Color(0.24f, 0.22f, 0.2f), Smoke1 = new Color(0.06f, 0.06f, 0.06f);
+
+    Fx Boom(Vector3 p, float size, Color c, float life, float grow, float rise, bool loop, PrimitiveType shape = PrimitiveType.Sphere)
     {
-        var g = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        var g = GameObject.CreatePrimitive(shape);
         var col = g.GetComponent<Collider>(); if (col != null) DestroyImmediate(col);
         g.transform.SetParent(world); g.transform.position = p; g.transform.localScale = Vector3.one * size;
-        var r = g.GetComponent<Renderer>(); r.sharedMaterial = FxMat(c); r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        var f = g.AddComponent<Fx>(); f.life = life; f.grow = grow; f.rise = rise; f.loop = loop;
+        var r = g.GetComponent<Renderer>(); r.sharedMaterial = FxMat(Color.white);
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
+        var f = g.AddComponent<Fx>(); f.life = life; f.grow = grow; f.rise = rise; f.loop = loop; f.c0 = c; f.c1 = c;
         return f;
+    }
+
+    // 色が a→b に変わりながら膨らむ球
+    Fx Blob(Vector3 p, float size, Color a, Color b, float life, float grow, Vector3 vel, float drag, float rise = 0f)
+    {
+        var f = Boom(p, size, a, life, grow, rise, false); f.c1 = b; f.vel = vel; f.drag = drag; return f;
+    }
+
+    // 飛び散って落ちる小片（破片・火花）
+    Fx Chunk(Vector3 p, Vector3 size, Color a, Color b, Vector3 vel, float life, float gravity)
+    {
+        var g = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        var col = g.GetComponent<Collider>(); if (col != null) DestroyImmediate(col);
+        g.transform.SetParent(world); g.transform.position = p; g.transform.localScale = size; g.transform.rotation = Random.rotation;
+        var r = g.GetComponent<Renderer>(); r.sharedMaterial = FxMat(Color.white);
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; r.receiveShadows = false;
+        var f = g.AddComponent<Fx>(); f.life = life; f.grow = 0f; f.vel = vel; f.gravity = gravity; f.ground = true; f.groundY = size.y * 0.5f;
+        f.spinSpeed = new Vector3(R(-600f, 600f), R(-600f, 600f), R(-600f, 600f)); f.c0 = a; f.c1 = b;
+        return f;
+    }
+
+    void AddShake(Vector3 p, float amp)
+    {
+        float d = Vector3.Distance(cam.transform.position, p);
+        float s = amp * Mathf.Clamp01(1f - d / 90f);
+        if (s > shake) shake = s;
+    }
+
+    void Scorch(Vector3 p, float r)
+    {
+        var d = P(world, PrimitiveType.Cylinder, new Vector3(p.x, 0.02f + decals.Count * 0.0004f, p.z), new Vector3(r * 2f, 0.01f, r * 2f), TM(Textures.Crater, 1, 1, 0.02f), new Vector3(0, R(0, 360f), 0));
+        decals.Add(d.transform);
+        if (decals.Count > 40) { if (decals[0] != null) Destroy(decals[0].gameObject); decals.RemoveAt(0); }
     }
 
     void BigBoom(Vector3 p, float k)
     {
-        Boom(p, 2.4f * k, new Color(1f, 0.55f, 0.12f), 0.5f, 2.4f, 0f, false);
-        Boom(p, 1.4f * k, new Color(1f, 0.9f, 0.5f), 0.3f, 1.8f, 0f, false);
-        Boom(p + Vector3.up * 0.8f, 2.2f * k, new Color(0.2f, 0.19f, 0.18f), 1.8f, 1.8f, 2.6f, false);
-        Boom(p + new Vector3(0.8f, 0.4f, 0.5f), 1.5f * k, new Color(0.3f, 0.28f, 0.25f), 1.4f, 1.6f, 1.8f, false);
+        float dist = Vector3.Distance(cam.transform.position, p);
+        float q = dist < 90f ? 1f : 0.35f;
+        // 火球: 白→黄→赤へ変わりながら膨らむ
+        for (int i = 0; i < 7; i++)
+        {
+            var fb = Blob(p + Vector3.up * (0.9f + i * 0.35f) * k + Random.insideUnitSphere * 1.3f * k, R(1.6f, 3.4f) * k, Color.Lerp(new Color(1f, 0.92f, 0.45f), new Color(1f, 0.45f, 0.08f), Random.value), Color.Lerp(Fire1, new Color(0.25f, 0.06f, 0.03f), Random.value), R(0.5f, 0.9f), 2.0f, new Vector3(R(-2f, 2f), R(1f, 4f), R(-2f, 2f)), 0f, 1.5f);
+            fb.delay = i < 3 ? 0f : R(0.05f, 0.3f);
+        }
+        Blob(p + Vector3.up * 1.0f * k, 1.4f * k, new Color(1f, 0.97f, 0.8f), new Color(1f, 0.55f, 0.1f), 0.2f, 2.4f, Vector3.zero, 0f);   // 白熱の芯
+        // 衝撃波: 地面を走る平たいリング
+        var ring = Boom(new Vector3(p.x, Mathf.Max(0.15f, p.y * 0.2f + 0.1f), p.z), 2.2f * k, new Color(0.62f, 0.52f, 0.38f), 0.5f, 7f, 0f, false);
+        ring.flat = true; ring.c1 = new Color(0.36f, 0.3f, 0.21f); ring.transform.localScale = new Vector3(2.2f * k, 0.1f, 2.2f * k);
+        // 黒煙の柱
+        int ns = Mathf.RoundToInt(4 * q);
+        for (int i = 0; i < ns; i++)
+            Blob(p + Vector3.up * (0.9f + i * 0.6f) + Random.insideUnitSphere * 0.6f, R(2.4f, 3.6f) * k, Smoke0, Smoke1, R(2.2f, 3.4f), 1.8f,
+                new Vector3(R(-1f, 1f), 0, R(-1f, 1f)), 0.5f, R(2.2f, 4.2f));
+        // 破片（燃える欠片と黒い鉄片）
+        int nd = Mathf.RoundToInt(14 * k * q);
+        for (int i = 0; i < nd; i++)
+        {
+            Vector3 v = new Vector3(R(-1f, 1f), R(0.6f, 1.6f), R(-1f, 1f)).normalized * R(7f, 17f);
+            Chunk(p, Vector3.one * R(0.18f, 0.5f), i % 3 == 0 ? new Color(1f, 0.55f, 0.15f) : new Color(0.14f, 0.12f, 0.1f), new Color(0.05f, 0.05f, 0.05f), v, R(1.6f, 3f), 24f);
+        }
+        // 火花
+        int nsp = Mathf.RoundToInt(22 * q);
+        for (int i = 0; i < nsp; i++)
+        {
+            Vector3 v = Random.onUnitSphere; v.y = Mathf.Abs(v.y) + 0.3f; v *= R(9f, 24f);
+            Chunk(p, Vector3.one * R(0.07f, 0.13f), new Color(1f, 0.95f, 0.5f), new Color(1f, 0.35f, 0.05f), v, R(0.5f, 0.95f), 14f);
+        }
+        FxLight.Spawn(p + Vector3.up, new Color(1f, 0.65f, 0.25f), 30f * k, 7f, 0.4f, world);
+        AddShake(p, 0.55f * k);
+        if (dist < 14f) whiteFlash = Mathf.Max(whiteFlash, 0.35f * (1f - dist / 14f));
+        if (p.y < 3f) Scorch(p, 2.8f * k);
+    }
+
+    void MuzzleFlash(Vehicle v)
+    {
+        Vector3 o = v.muzzle.position, f = v.muzzle.forward;
+        Blob(o + f * 0.6f, 1.3f, Color.white, new Color(1f, 0.6f, 0.15f), 0.14f, 2.2f, f * 8f, 0f);
+        Blob(o + f * 1.8f, 0.7f, Fire0, Fire1, 0.18f, 2f, f * 14f, 0f);
+        for (int i = 0; i < 3; i++)
+            Blob(o + f * (1f + i * 0.8f), 1.0f, new Color(0.6f, 0.6f, 0.58f), new Color(0.25f, 0.25f, 0.25f), 0.9f, 2.2f, f * (7f - i * 2f) + Vector3.up * 0.8f, 2f, 0.6f);
+        FxLight.Spawn(o + f * 2f, new Color(1f, 0.8f, 0.4f), 22f, 5f, 0.15f, world);
+        AddShake(o, v.driver != null && v.driver.isPlayer ? 0.45f : 0.2f);
+        v.kick = 1f;
+    }
+
+    // 小銃弾の着弾（土ぼこり＋火花）。遠いものは出さない
+    void Impact(Vector3 p, Vector3 n)
+    {
+        if (Vector3.Distance(cam.transform.position, p) > 45f || Random.value > 0.5f) return;
+        Blob(p + n * 0.1f, 0.5f, new Color(0.55f, 0.48f, 0.38f), new Color(0.3f, 0.26f, 0.2f), 0.35f, 2.2f, n * 1.5f, 2f, 0.5f);
+        for (int i = 0; i < 2; i++)
+            Chunk(p + n * 0.1f, Vector3.one * 0.06f, new Color(1f, 0.9f, 0.4f), new Color(1f, 0.4f, 0.1f), (n + Random.insideUnitSphere * 0.8f) * R(3f, 7f), 0.4f, 12f);
     }
 
     // ---------- ダメージ ----------
@@ -612,6 +733,8 @@ public class FrontlineGame : MonoBehaviour
         killFeed = (by != null ? by.label : "?") + "  >  " + t.label; killFeedUntil = Time.time + 2.5f;
         foreach (var r in t.GetComponentsInChildren<Renderer>()) r.enabled = false;
         t.cc.enabled = false;
+        if (Vector3.Distance(cam.transform.position, t.transform.position) < 70f)
+            Blob(t.transform.position + Vector3.up * 0.9f, 1.0f, new Color(0.55f, 0.5f, 0.42f), new Color(0.3f, 0.27f, 0.22f), 0.6f, 2f, Vector3.up * 1f, 1f, 0.5f);
         CheckEnd();
     }
 
@@ -628,11 +751,25 @@ public class FrontlineGame : MonoBehaviour
         var d = v.driver;
         if (d != null) ExitVehicle(v);
         Vector3 c = v.transform.position + Vector3.up * 1.2f;
-        BigBoom(c, 1.6f); Play(clipBoom, 0.9f);
+        BigBoom(c, 2.6f); Play(clipBoom, 1f);
+        pending.Add(new Pending { at = Time.time + 0.45f, p = c + new Vector3(R(-1.5f, 1.5f), 0.5f, R(-1.5f, 1.5f)), k = 1.6f });   // 誘爆
+        pending.Add(new Pending { at = Time.time + 0.95f, p = c + new Vector3(R(-1.5f, 1.5f), 0.8f, R(-1.5f, 1.5f)), k = 1.1f });
         v.cc.enabled = false;
         var burnt = TM(Textures.Burnt, 2, 1, 0.05f);
         foreach (var r in v.GetComponentsInChildren<Renderer>()) r.sharedMaterial = burnt;
-        Boom(c + Vector3.up * 1.5f, 1.8f, new Color(.14f, .13f, .13f), 3.4f, 1.8f, 2.4f, true);
+        // 砲塔が吹き飛ぶ
+        var tur = v.turret; tur.SetParent(world, true);
+        var tf = tur.gameObject.AddComponent<Fx>();
+        tf.life = 3.2f; tf.grow = 0f; tf.shrinkEnd = false; tf.keep = true; tf.ground = true; tf.groundY = 1.0f; tf.gravity = 24f;
+        tf.vel = new Vector3(R(-4f, 4f), R(13f, 18f), R(-4f, 4f)); tf.spinSpeed = new Vector3(R(-200f, 200f), R(-120f, 120f), R(-200f, 200f));
+        Destroy(tur.gameObject, 28f);
+        // 燃え続ける炎と黒煙
+        Boom(c + Vector3.up * 1.5f, 1.8f, Smoke0, 3.4f, 1.8f, 2.4f, true).c1 = Smoke1;
+        for (int i = 0; i < 2; i++)
+        {
+            var fl = Boom(c + new Vector3(R(-0.8f, 0.8f), 0.6f, R(-1.2f, 1.2f)), 1.1f, new Color(1f, 0.7f, 0.2f), 0.5f, 0.8f, 1.6f, true);
+            fl.c1 = new Color(0.7f, 0.1f, 0.02f);
+        }
         SplashDamage(c, 6f, 100f, Team.None, by);
         if (d != null) Damage(d, 999f, by);
         CheckEnd();
@@ -664,8 +801,11 @@ public class FrontlineGame : MonoBehaviour
         RaycastHit h;
         if (Physics.Raycast(o, dir, out h, 220f, ~0, QueryTriggerInteraction.Ignore)) end = h.point;
         SpawnTracer(o, end, 0.14f);
-        Boom(o, 0.9f, new Color(1f, 0.85f, 0.4f), 0.12f, 1.5f, 0f, false);
-        BigBoom(end, 0.8f);
+        MuzzleFlash(v);
+        float len = Vector3.Distance(o, end);
+        for (float sdist = 4f, n = 0; sdist < len && n < 18; sdist += 7f, n++)   // 砲弾の航跡
+            Blob(o + dir * sdist, 0.35f, new Color(0.85f, 0.85f, 0.8f), new Color(0.5f, 0.5f, 0.5f), 0.5f, 1.4f, Vector3.zero, 0f);
+        BigBoom(end, 1.0f);
         SplashDamage(end, CannonRadius, CannonDmg, v.team, v.driver);
         float dist = Vector3.Distance(cam.transform.position, o);
         Play(clipBoom, Mathf.Clamp01(1f - dist / 120f) * 0.8f);
@@ -685,6 +825,8 @@ public class FrontlineGame : MonoBehaviour
     {
         v.turret.rotation = Quaternion.Euler(0, v.turretYaw, 0);
         v.barrel.localRotation = Quaternion.Euler(v.turretPitch, 0, 0);
+        v.kick = Mathf.MoveTowards(v.kick, 0f, Time.deltaTime * 3.5f);
+        v.barrel.localPosition = new Vector3(0f, 0.38f, 1.35f - v.kick * 0.7f);
     }
 
     bool AimPoint(Vector3 o, Vector3 d, Vehicle ignore, out Vector3 point)
@@ -1078,6 +1220,7 @@ public class FrontlineGame : MonoBehaviour
         float W = Screen.width, H = Screen.height; float k = Mathf.Clamp(H / 720f, 0.7f, 1.6f);
         sBig.fontSize = (int)(46 * k); sMid.fontSize = (int)(24 * k); sSmall.fontSize = (int)(16 * k);
         var azure = new Color(0.35f, 0.65f, 1f); var ember = new Color(1f, 0.55f, 0.25f);
+        if (whiteFlash > 0.01f) Box(new Rect(0, 0, W, H), new Color(1f, 0.95f, 0.85f, whiteFlash));
 
         Box(new Rect(W / 2 - 210 * k, 10, 420 * k, 44 * k), new Color(0, 0, 0, 0.45f));
         Text(new Rect(W / 2 - 200 * k, 10, 190 * k, 44 * k), "AZURE  " + Mathf.CeilToInt(tickets[0]), sMid, azure);
