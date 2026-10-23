@@ -63,6 +63,9 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0034-agent-contract-and-least-privilege]] — 全エージェントに契約・最小権限・必須検査を導入し検査#14で強制（19体→22体）
 - [[0035-self-improve-2026-09-27-promotions]] — Routine修正後初の/self-improve実行。検査#15の盲点修正（ブランチ側成果物を見ていなかった）＋学び5件をverifier/design/seo-audit/CLAUDE.mdへ昇格＋未マージPRバックログ発見
 - [[0036-legal-corpus-and-legal-checker-upgrade]] — リーガルチェッカーを法令コーパス（e-Gov・30法令5,459条）＋検査可能な知識ベースで強化。「引いてから書く」・引用を実条文と機械照合・改正ダイジェスト
+- [[0037-self-improve-2026-10-04-promotions]] — /self-improve 2回目。Routine全5本成果物確認（検査#15全✓）＋固定ブランチのunrelated histories新パターン発見・CLAUDE.md反映＋Canvas DPR複利膨張バグ昇格＋Vault破損修復＋PRバックログ再点検
+- [[0038-self-improve-2026-10-11-promotions]] — /self-improve 3回目。Routine継続確認（3週連続で検査#15全✓）＋grep行アンカーの罠をharness-maintenance-patternsへ昇格＋PRバックログ報告（滞留変化なし・open PR計10本に増加）。**ADR番号は0036との衝突のため0037→0038へ繰り下げ済み**
+- [[0039-self-improve-2026-10-18-promotions]] — /self-improve 4回目。予言していたADR番号衝突が別経路（legal-checker強化の0036）で実現し解消＋Vault多重コンフリクト（Daily5件・MOC.md）を統合解決＋WebP違反2回連続発見分は解消確認のみ
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
