@@ -116,3 +116,16 @@ git diff HEAD~1 HEAD # 直前コミットの確認
 
 - 完了タスクは詳細を削除し、1 行サマリーに置き換える
 - プランファイルは「現在未完了のタスク」のみ保持する
+
+## Review guidelines（Codex レビュー用）
+
+PR に `@codex review` とコメントすると Codex がこの節を読んでレビューする。
+このサイトは「例外もエラーも出ないのに壊れる」不具合が主なので、次を優先して見ること。
+
+- **P0/P1 として指摘する**: XSS（外部・共有リンク・モデル出力・保存データを `innerHTML` へ入れている）／APIキーや `.edge-test-profile/` の混入／
+  別オリジン通信への Service Worker の介入／CDN の `integrity` の長さ不一致・版未固定／CSP ハッシュ（インライン script の変更）の陳腐化
+- **無言で壊れる型**: 肖像アトラス等の index 依存配列の途中挿入（末尾追加のみ）／`drawImage` の source-rect 直書きとアセット縮小／
+  `let`/`const` の TDZ／`MutationObserver` 内での同値再代入／共通CSSを変えたのに `?v=` を上げていない
+- **方針**: 黒背景＋シアン/パープル。サイバーパンク調は不可。UIは日英併記。画像は WebP（例外: `assets/marketing/ig-*.jpg`, `assets/og/*`）
+- 触ったページに対応する `scripts/verify-*.mjs` が実行され緑か（対応表は `.claude/agent-conventions.md` §4）。検査自体を弱めていないか
+- 指摘には再現できる入力・状態を添える。好みの問題は「nit」と明記する

@@ -737,6 +737,16 @@ node scripts/verify-routine-delivery.mjs   # 表の各Routineが成果物を出�
   Routineが動くかはAPI側の設定に依存し、リポジトリのコードでは直せないため）。
   **△が出たら必ず中身を見ること**
 
+## Codex レビューの受け方
+
+PR には Codex のレビュー（`@codex review`）を受けてよい。観点の正本は `AGENTS.md` の「Review guidelines」。
+
+- Codex の指摘は**主張として検証してから**直す。実在する経路（実際の呼び出し元・入力）をたどれたものだけ修正し、
+  たどれないものは「経路が無い」理由を返信して閉じる。鵜呑みにすると検査を緩める方向の修正が混ざる
+- 直したら該当する `scripts/verify-*.mjs` を再実行して緑を確認してから push する。**検査を通すために検査側を弱めない**
+- 同じ種類の指摘が2度来たら、`/self-improve` で CLAUDE.md か機械検査へ昇格させる（例: 2026-10-13 リーガルの取得失敗握り潰し）
+- Codex 用の指針は `AGENTS.md` と `.codex/agents/*.toml`。**CLAUDE.md を変えたら AGENTS.md の該当部分も合わせる**（片方だけ古くなる）
+
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
 - セッション開始時に `.claude/hooks/second-brain-recall.sh`（SessionStart hook）が `MOC.md`・知見クイックインデックス（`04-Knowledge/`）・直近のDaily Noteを自動でコンテキストに読み込む
