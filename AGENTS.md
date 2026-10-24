@@ -9,7 +9,10 @@ hide の個人ポートフォリオサイト。GitHub Pages でホスティン�
 ## ファイル構成
 
 - `index.html` — メインポートフォリオページ（シングルページ）
-- `game.html` — ZELDA QUEST（Canvas API のみで作ったトップビュー RPG）
+- `zelda_like.html` — ファーレンクエスト（Canvas API のみで作ったトップビュー RPG）※旧 `game.html` / 旧称 ZELDA QUEST（法務チェックで改称）
+- `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
+- `zero-1-mobile.html` — ZERO-1 Mobile（WebGPU の端末内ローカル LLM）＋エアタッチ（`assets/js/gesture-pointer.js`）
+- `sw.js` — サイト全体の Service Worker。**別オリジンの通信には触らない**
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋 RPG
 
