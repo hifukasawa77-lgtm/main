@@ -708,7 +708,7 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 
 | スキル | スケジュール（JST） | 成果物 | mainへの直接push |
 |---|---|---|---|
-| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-09-30`・PR #363。旧`claude/agent-evolve`はPR #272と共にclose。理由は下記） | 禁止（深澤承認制） |
+| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-10-14`・PR #411。`claude/agent-evolve-2026-09-30`はPR #363として2026-10-12にマージ済み。旧`claude/agent-evolve`はPR #272と共にclose。理由は下記） | 禁止（深澤承認制） |
 | `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ。Vaultの写しと痕跡は `claude/site-proposal-vault` | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
