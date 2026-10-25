@@ -14,6 +14,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `assets/js/zero1-worker.js` — ZERO-1 Mobile のモデルを画面とは別の糸で動かす worker（同じ糸でやると読み込み中に画面が固まる）
 - `assets/js/zero1-tools.js` — ZERO-1 Mobile の端末内ツール層（時計・タイマー・メモ・単位換算・計算・サイト内検索）と、サイト知識の取り出し（ローカルRAG）。純粋ロジックのみで作用を持たない
 - `sw.js` — サイト全体の Service Worker。**別オリジンの通信には触らない**（触ると失敗の理由が消える）
+- `frontline-zero/` — Unity 6 製チームFPS「フロントライン・ゼロ」のWebGLビルド出力（ソース・再ビルド手順・落とし穴は `unity-frontline/README.md`。**ビルド出力は手編集しない**。「ビルドツール不使用」の例外はここだけ）
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。`obsidian-vault/`（第二の脳）とは別物。使い分けは「Obsidian メモリ層（Claudechord Vault）」節の早見表を参照。詳細: `claudechord-vault/README.md`）
 
 ## デザイン・スタイルのルール
@@ -211,6 +212,12 @@ node scripts/verify-known-bug-patterns.mjs # generals.jsonの末尾追加チェ�
 node scripts/verify-bakumatsu-map.mjs   # 拠点14件が地図の陸に載っているか（切り取り位置の整合・見切れ・ラベル重なりも検査）
 ```
 
+- **`MutationObserver` の中で、観測している DOM を書き換えるときは「変わるときだけ」書く**。
+  `bakumatsu-guide.js` は `body` の子孫を観測する `MutationObserver(u)` の中で `textContent = …` / `innerHTML = …` を
+  毎回代入していた。**同じ値の代入でも子ノードは置き換わり、変更として通知される**ので、`u` が自分を呼び直し続け、
+  「戦の準備」ボタンや開戦ダイアログが出た瞬間にページが**例外もエラーも出さず永久に固まる**
+  （`playtest-fuzz` の無作為入力で発見。Space 連打で再現。2026-10-20）。タイトルも地図も無事に出るので起動検査は素通りする。
+  代入前に現在値と比べる（`if (el.textContent !== next) el.textContent = next`）。
 - **拠点のずれは例外もエラーも出さない**。「起動して例外0件」の検査では素通りするので、
   実際に描かれた拠点の画面座標を地図画像へ逆写像して陸/海を確かめるところまでやる
   （2026-08-25: 全14拠点のうち鶴岡・新潟・長岡・佐賀・鹿児島・高知が海の上に置かれていた）
@@ -631,6 +638,28 @@ node scripts/verify-oshi-research.mjs --inject   # 防御を壊して ❌ が出
 - 検査用ブリッジ `window.OSHI_DEBUG` は `window.__OSHI_TEST` のときだけ開く。関数を足したらここにも足す
 - 検査の**スクロール位置に注意**: 画面外のCanvasは `page.mouse.click` の座標が合わない（`scrollIntoViewIfNeeded` してから）
 
+## スマホ幅の崩れと、操作したときの壊れ方の機械検査（ui-reviewer / playtester）
+
+```bash
+node scripts/verify-responsive.mjs <ページ>... | --changed | --all   # 390px・768px で横はみ出し・viewport メタ（--inject で故障注入）
+node scripts/playtest-fuzz.mjs <ページ> --seconds 10 [--seed N]      # 無作為なキー・クリックで固まり・無反応・操作中の例外（--inject で故障注入）
+```
+
+- **どちらも「例外もエラーも出ない」壊れ方を見る**。横はみ出しは例外を出さずに横スクロールが生えるだけ、入力が死んだゲームはタイトルが無事に出る
+  （`dynamic-test` は「起動して例外が無いか」しか見ない）。
+- **既知のはみ出しは `scripts/responsive-baseline.json` に記録済み**（2026-10-20 時点で 4 ページ・7 件。同日に typing_dojo・learn-python・cyber-city・shogi・go・beat_em_up を直した。残りは bakumatsu・battle＝レイアウトの作り直しが要る、no-luck-poker＝固定幅の盤、calculator＝画面外へ伸びる装飾の円で実害は小さい）。目的は**悪化させない**こと:
+  記録以下なら `△ 既知` で通し、増えたら ❌。直ったページは「改善済み」と出るので baseline から外す（外さないと再発が通る）。
+  棚卸しは `node scripts/verify-responsive.mjs --all --write-baseline`（`--all` と一緒でないと書かない＝一部のページだけで記録して他の記録を消さない）。
+- **playtest-fuzz の画面変化は「キャンバスの標本画素＋DOM構造」で見る**。本文の文字だけを見る実装は、盤面を DOM で描く将棋を
+  「入力が死んでいる」と誤報した。乱数は種付き（`--seed`）で、同じ種なら同じ入力列＝落ちたら再現できる。
+  固まったページは入力の送信も `context.close()` も返ってこないので、時間で見切る（`within`）。
+- **`--all` の棚卸しはノイズが多い**（2026-10-20: 107ページ中28項目が❌。盤面のマスを狙ってクリックしないと変わらない将棋・チェス系、
+  文章中心の `learn-*` ページは「反応しない」と出る）。**新作ゲームを1本ずつ**見る道具で、全ページの合否には使わない。
+  本物の兆候は「応答なし（3秒超）」と「操作中の例外」。`bakumatsu.html` はこれで無限ループを見つけて直した（上の MutationObserver の項）。
+- **検査自身のクリックで起きた遷移の中断（`ERR_ABORTED`）は、実体が在るときだけ数えない**（`index.html` のリンクを踏んで偽の404が出た）。
+- **無作為入力はゲームを進めない**ことがある（タイトルで止まる等）。「反応する」が緑でも「最後まで遊べる」ことは意味しない。
+  ゲーム内の後半は各 `verify-*-boot.mjs` / `*-balance.mjs` の担当。
+
 ## GameKit（ゲーム制作フレームワーク）
 - 新規ゲームは `gamekit/gamekit.js`（自作マイクロエンジン）を土台にする。ループ・入力・衝突・SFX・パーティクル・Glassmorphism UI・セーブを提供（詳細: `gamekit/README.md`）
 - スターター: `gamekit/template.html` をリポジトリ直下にコピーして開始する
@@ -822,25 +851,36 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 
 ### Securityエージェント (`security`)
 - ソースコードの脆弱性（XSS・eval系・安全でないDOM操作・SRI未設定・外部ライブラリリスク）を静的解析する品質ゲート
-- **Legal-Checker・i18n・Asset-Guardianと並列で実行**し、Dynamic-Testerの前に完了させる
+- **Legal-Checker・i18n・Asset-Guardian・A11y-Auditor・UI-Reviewerと並列で実行**し、Dynamic-Testerの前に完了させる
 - リスクを CRITICAL / WARN / OK の3段階で分類し、該当行と修正案を添えて報告する
 - **CRITICALが1件でも残る場合はDynamic-Testerへ進ませない**（Code-Generatorへ差し戻す）。Evaluatorの「セキュリティ即不合格」まで持ち越すと手戻りが大きい
 - 単独起動（「セキュリティチェックして」）も可能
 
 ### i18nエージェント (`i18n`)
 - 「UIは日英バイリンガル表記」方針を担保する品質ゲート。翻訳漏れの検出・用語統一・対訳適用を担当
-- **Legal-Checker・Security・Asset-Guardianと並列で実行**し、Dynamic-Testerの前に完了させる
+- **Legal-Checker・Security・Asset-Guardian・A11y-Auditor・UI-Reviewerと並列で実行**し、Dynamic-Testerの前に完了させる
 - 機械検査（`.claude/skills/i18n-check/i18n-check.sh`）を先に回し、その検出結果に訳語を当てて用語を統一する役割
 - デザイン・ロジック・スタイルの変更は行わない。漏れが残る場合は対訳付きでCode-Generatorへ差し戻す
 
 ### Asset-Guardianエージェント (`asset-guardian`)
 - 画像・音声アセットが方針どおりか（WebP・解像度不変・アルファ保持・参照整合・容量）を検査する品質ゲート
-- **Legal-Checker・Security・i18nと並列で実行**し、Dynamic-Testerの前に完了させる
+- **Legal-Checker・Security・i18n・A11y-Auditor・UI-Reviewerと並列で実行**し、Dynamic-Testerの前に完了させる
 - 判定は BLOCK / WARN / OK。**BLOCKが1件でも残る場合はDynamic-Testerへ進ませない**
 - 検査は `verify-asset-format.mjs` / `verify-game-assets.mjs` / `verify-known-bug-patterns.mjs` の3本＋容量確認。
   **新規アセットは git add 前＝未追跡**なので未追跡ファイルも対象にする
 - 絵の良し悪しは見ない（それは Graphic-Designer）。見るのは「方針から外れていないか」「無言で壊れていないか」だけ
 - 画像そのものの作り直しは Graphic-Designer、参照コードの修正は Code-Generator へ回す
+
+### A11y-Auditorエージェント (`a11y-auditor`)
+- アクセシビリティ（キーボード操作・読み上げ・コントラスト・動きの抑制）を検査する品質ゲート。`/a11y-audit` スキルの機械検査（`a11y-audit.sh`）を土台に、Canvasゲーム固有の指針（キーボードだけで遊べる・一時停止・光感受性）まで確かめる
+- **Legal-Checker・Security・i18n・Asset-Guardian・UI-Reviewerと並列で実行**し、Dynamic-Testerの前に完了させる
+- 判定は ERROR / WARN / OK。**ERRORが1件でも残る場合はDynamic-Testerへ進ませない**
+- 直してよいのは**属性・ラベル・フォールバック文・`prefers-reduced-motion` の分岐だけ**（Edit のみ）。配色・ロジック・レイアウトは担当外。操作系の欠落は Code-Generator へ
+
+### UI-Reviewerエージェント (`ui-reviewer`)
+- 画面をスマホ幅（390px・768px）で実ブラウザに映して確かめる品質ゲート。横はみ出し・viewport メタ・デザイン方針（黒背景＋シアン/パープル、サイバーパンク調の禁止）からの逸脱を、`node scripts/verify-responsive.mjs` とスクリーンショットで見る
+- **Legal-Checker・Security・i18n・Asset-Guardian・A11y-Auditorと並列で実行**し、Dynamic-Testerの前に完了させる
+- 判定は BLOCK / WARN / OK。**直さず報告する**（Edit/Write なし）。既知のはみ出しは `scripts/responsive-baseline.json` に記録し、**悪化させない**運用（増えたら BLOCK、直ったら baseline から外す）
 
 ### Dynamic-Testerエージェント (`dynamic-tester`)
 - Playwright（ヘッドレスChromium）でHTMLファイルを実際に起動し動作確認する品質ゲート
@@ -848,6 +888,12 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - 対象: 変更されたHTMLファイル（`git diff HEAD` から自動検出）
 - PASS時: Evaluatorへ結果サマリーを渡す
 - FAIL時: Code-Generatorへブロッキングフィードバックを返す（Evaluatorには渡さない）
+
+### Playtesterエージェント (`playtester`)
+- ゲームに無作為なキー・クリックを浴びせ、**入力が死んでいないか・固まらないか・操作中に例外が出ないか**を確かめる。Dynamic-Tester が「起動して例外が無いか」しか見ないのを補う
+- 検査は `node scripts/playtest-fuzz.mjs <ページ> --seconds 10`（種付きの乱数。`--seed` が同じなら同じ入力列＝落ちたら再現できる）。**Dynamic-Tester の PASS 後、Evaluator の前**に走る
+- 画面の変化は**キャンバスの標本画素＋DOM構造**で見る（盤面を DOM で描く将棋・囲碁は本文が変わらない）。判定は PASS / FAIL。FAIL は Evaluator に渡さず Code-Generator へ
+- **直さず報告する**（Edit/Write なし）。難易度の偏りは Game-Balance、原因不明は Triage へ
 
 ### Evaluatorエージェント (`evaluator`)
 - Code-Generatorの成果物を仕様書と照らし合わせ100点満点で採点する
@@ -862,6 +908,12 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
 - **前提**: Evaluatorが合格（80点以上 かつ 仕様適合性16点以上）を出し、`kai_001` へのプッシュが完了していること
 - `/game-release` スキルから起動された場合は、そのスキルの手順（動的テスト→SEO/a11y監査→index.htmlへのカード追加→スクリーンショット→デプロイ検証）完了後に本作業へ入る
 - リリース完了後はPMOへ結果（バージョン・公開URL・CHANGELOG差分）を渡しKPIへ反映する
+
+### Ops-Monitorエージェント (`ops-monitor`)
+- 公開後の**本番が壊れていないか**を点検する運用監視。Release の後（リリース直後・週1回の定点・「本番がおかしい」の報告）に走る
+- 点検は既存の検査を束ねる: `deploy-verify.sh`（疎通・実ブラウザのスモーク）／`seo-tags.mjs`／`verify-routine-delivery.mjs`／`security-baseline.mjs`／`release-check.sh`（CSP・SRI）／`verify-service-worker.mjs`
+- 判定は 正常 / 要対応 / 障害。**直さず報告する**（Edit/Write なし）。Secret の登録・Worker の再デプロイ・Pages 設定の変更は深澤の判断
+- 本番（github.io）へ届かない環境では「実ブラウザ確認は未実施」と書く（緑扱いにしない）
 
 ### Marketerエージェント (`marketer`)
 - 完成した成果物のマーケティング戦略立案とコンテンツ生成を一貫して担当
@@ -956,9 +1008,10 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
           ├→ [Music-Generator]  音楽・SE制作（並行）
           └→ [Code-Generator]   実装（グラフィック・音楽納品後）
                ↓
-     ┌──────────────── 品質ゲート（4体を並列実行）────────────────┐
+     ┌──────────────── 品質ゲート（6体を並列実行）────────────────┐
      │ [Legal-Checker] 法務   [Security] 脆弱性                     │
      │ [i18n] 日英            [Asset-Guardian] アセット方針・参照整合 │
+     │ [A11y-Auditor] アクセシビリティ  [UI-Reviewer] スマホ幅・デザイン方針 │
      └────────────────────────────────────────────────────────────┘
                ↓ RED/YELLOW（グラフィック起因）
             [Graphic-Designer] 修正 → [Code-Generator] へ再連携 → [Legal-Checker] 再チェック
@@ -968,10 +1021,16 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
             [Code-Generator] 修正 → 該当ゲートへ再チェック
                ↓ BLOCK（アセット方針違反・参照切れ）
             [Asset-Guardian] 指摘 → [Graphic-Designer]（画像） / [Code-Generator]（参照） → 再チェック
-               ↓ GREEN / OK / 非BLOCK（4体すべて通過）
+               ↓ ERROR（アクセシビリティ）／ BLOCK（スマホ幅のはみ出し・デザイン方針違反）
+            [A11y-Auditor] / [UI-Reviewer] 指摘 → [Code-Generator]（実装） / [Graphic-Designer]（配色・画像） → 再チェック
+               ↓ GREEN / OK / 非BLOCK（6体すべて通過）
           → [Dynamic-Tester] 動的実行チェック（Playwright）※必須
                ↓ FAIL
             [Code-Generator] 修正・再提出 → [Dynamic-Tester] 再検証
+               ↓ PASS（ゲームのみ）
+          → [Playtester] 無作為入力で固まり・無反応・操作中の例外を検出
+               ↓ FAIL（再現コマンド付き）
+            [Code-Generator] 修正・再提出 → [Playtester] 再検証
                ↓ PASS
           → [Evaluator] 検証・採点
                ↓ 不合格
@@ -980,6 +1039,8 @@ PM（プロジェクトマネージャー）は深澤。PMOエージェントが
             深澤(PM)へ報告 → [PMO] 記録・KPI更新 → GitHub push (kai_001)
                ↓
           → [Release] kai_001→main マージ・バージョンタグ・CHANGELOG・Pages疎通確認
+               ↓
+          → [Ops-Monitor] 本番の点検（疎通・Routine・CSP/SRI。報告のみ）
                ↓ ※任意
             [Marketer] 戦略立案・コンテンツ生成 → 深澤(PM)へ納品
                ↓
@@ -1095,6 +1156,13 @@ node --test tests/security.test.mjs          # Worker: 全応答に nosniff / CS
 - **401 は既定で「利用者のアクセスコード打ち間違い」（notice＝通知しない・遮断カウントのみ）**。
   通知するのは `/admin/` の 401（管理トークンの総当たり）だけ。全401を攻撃扱いすると、打ち間違えた利用者が通報・遮断される
 - **ページからの通報は Origin を偽装できるので「未検証」として扱う**（通知に明記・通報も遮断カウントに入れる＝偽の洪水は送信元ごと遮断）
+- **AI を呼ぶ口には「1日の上限（全員で共有）」がある**（`cloudflare-worker/ai-quota.js`・`AI_DAILY_UNITS`）。Origin の照合は curl で名乗れるので認証ではない。
+  新しく AI を呼ぶ口を足したら `aiUnitsFor` に重さを足すこと（足し忘れると、その口だけ上限なしで無料枠を使い切れる）。数えられないときは呼ばない（fail closed）
+- **通知に載せる文字は `defang()` を通す**（通報の中身は誰でも偽れる。Slack の `<!channel>`・隠しリンク、Discord の `@everyone` をそのまま流し込めた。2026-10-19）
+- **共有リンク・取り込んだデータを innerHTML へ入れない**。`sengoku.html` の `#scn=` 共有リンクは、忠誠の欄に `<img onerror>` を入れるだけで
+  武将一覧を開いた瞬間に**同じサイトの全ページの保存データ**（推し活の家計・レシート家計簿・ノート等）を読み書きできた（2026-10-19）。
+  全ページが同じオリジン `hifukasawa77-lgtm.github.io` なので、**1ページの XSS が全ページの問題になる**。受け取る側で形を確かめ（タグの形を含む共有コードは拒否）、
+  描く側でも逃がす（`esc`）。`verify-sengoku-boot.mjs` の手順5が「普通のコードは読める・タグ入りは拒否・一覧で実行されない」を見る
 - **「必ず防ぎきる」は仕組みで近づけるもので、保証はできない**。静的ページ（GitHub Pages）への大量アクセスや
   未知の手口は、この層では止められない。限界は `SECURITY.md` に書いてある
 - 脆弱性の報告窓口は `SECURITY.md` と `.well-known/security.txt`（`Expires` は1年以内に更新すること）

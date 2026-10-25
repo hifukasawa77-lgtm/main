@@ -9215,6 +9215,8 @@ function normalizeGameState(state){
   Object.values(state.generals).forEach(g=>{
     if (!g || typeof g!=='object') return;
     if (g.location && !state.provinces[g.location]){ g.location=null; g.daimyo=null; }
+    // 忠誠は数に限る（画面へそのまま出る値なので、数でない物を残さない）。無い場合は今までどおり各所の既定値に任せる
+    if (g.loyalty!==undefined && g.loyalty!==null && (typeof g.loyalty!=='number' || !Number.isFinite(g.loyalty))) delete g.loyalty;
   });
   Object.values(state.daimyo).forEach(d=>{
     if (!d || typeof d!=='object') return;
@@ -9798,6 +9800,19 @@ function b64DecodeUtf8(b64){
   const bin=atob(b64); const bytes=Uint8Array.from(bin, c=>c.charCodeAt(0));
   return new TextDecoder().decode(bytes);
 }
+// ★共有リンクの中身は「他人が書いた物」。画面の一部は innerHTML で組むので、文字列にタグやスクリプトの形が
+//   混ざっていたら丸ごと受け取らない（2026-10-19 の点検: 忠誠の欄に <img onerror=…> を入れたリンクで、
+//   武将一覧を開いた瞬間に同じサイトの全ページの保存データを読み書きできた）。ゲームの正当なデータには現れない形だけを見る
+const SHARE_MARKUP_RE=/<\s*[a-zA-Z!\/?]|javascript:|\bon[a-z]+\s*=/i;
+function shareStateHasMarkup(value, depth){
+  if (depth>40) return true;
+  if (typeof value==='string') return SHARE_MARKUP_RE.test(value);
+  if (!value || typeof value!=='object') return false;
+  for (const key of Object.keys(value)){
+    if (SHARE_MARKUP_RE.test(key) || shareStateHasMarkup(value[key], depth+1)) return true;
+  }
+  return false;
+}
 function decodeShareState(input){
   try{
     let c=(input||'').trim(); if(!c) return null;
@@ -9805,6 +9820,7 @@ function decodeShareState(input){
     c=c.split('&')[0].trim();
     const st=JSON.parse(b64DecodeUtf8(c));
     if(!st || typeof st!=='object' || st.version!==SAVE_VERSION) return null;
+    if (shareStateHasMarkup(st, 0)) return null;
     return st;
   }catch(_){ return null; }
 }
@@ -13139,7 +13155,7 @@ class MapScene extends GameKit.Scene {
     const gens=this._getAllGensSorted().filter(g=>{ const gs=st.generals[g.id]; return gs&&gs.alive; });
     // 行構築
     body.innerHTML='';
-    const esc=(s)=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    const esc=(s)=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     gens.forEach(g=>{
       const gs=st.generals[g.id]; if (!gs) return;
       // 一覧は閲覧専用（編集は詳細画面で行う）
@@ -13148,7 +13164,7 @@ class MapScene extends GameKit.Scene {
       const homeName = homeProv ? castleNameForProvince(homeProv) : '(なし)';
       const tr=document.createElement('tr');
       tr.dataset.id=g.id;
-      tr.innerHTML=`<td class="gl-name-cell">${esc(g.nameJP)}</td><td>${esc(daimyoName)}</td><td>${esc(homeName)}</td><td class="gl-num">${g.stats.tou}</td><td class="gl-num">${g.stats.bu}</td><td class="gl-num">${g.stats.chi}</td><td class="gl-num">${g.stats.sei}</td><td class="gl-num">${gs.loyalty}</td>`;
+      tr.innerHTML=`<td class="gl-name-cell">${esc(g.nameJP)}</td><td>${esc(daimyoName)}</td><td>${esc(homeName)}</td><td class="gl-num">${g.stats.tou}</td><td class="gl-num">${g.stats.bu}</td><td class="gl-num">${g.stats.chi}</td><td class="gl-num">${g.stats.sei}</td><td class="gl-num">${esc(gs.loyalty)}</td>`;
       tr.onclick=()=>{
         body.querySelectorAll('tr.gl-selected').forEach(r=>r.classList.remove('gl-selected'));
         tr.classList.add('gl-selected');
@@ -13215,7 +13231,7 @@ class MapScene extends GameKit.Scene {
     const st=this.state, gid=this._gdGid;
     const g=DATA.genById[gid], gs=st.generals[gid];
     if (!g || !gs) return;
-    const esc=(s)=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    const esc=(s)=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const idx=this._gdOrder.indexOf(gid);
     const posEl=document.getElementById('gdPos');
     if (posEl) posEl.textContent=(idx>=0?(idx+1):'?')+' / '+this._gdOrder.length+'名';
@@ -13225,10 +13241,10 @@ class MapScene extends GameKit.Scene {
     document.getElementById('gdName').value=g.nameJP;
     // 所属大名
     const daimyos=daimyoOf(st).filter(d=>st.daimyo[d.id]&&st.daimyo[d.id].alive!==false);
-    document.getElementById('gdDaimyo').innerHTML='<option value="">(なし)</option>'+daimyos.map(d=>`<option value="${d.id}"${d.id===gs.daimyo?' selected':''}>${esc(d.nameJP)}家</option>`).join('');
+    document.getElementById('gdDaimyo').innerHTML='<option value="">(なし)</option>'+daimyos.map(d=>`<option value="${esc(d.id)}"${d.id===gs.daimyo?' selected':''}>${esc(d.nameJP)}家</option>`).join('');
     // 居城
     const provinces=DATA.provinces.filter(p=>!isCastleDeleted(p.id)&&st.provinces[p.id]);
-    document.getElementById('gdLoc').innerHTML='<option value="">(なし)</option>'+provinces.map(p=>`<option value="${p.id}"${p.id===gs.location?' selected':''}>${esc(castleNameForProvince(p))}</option>`).join('');
+    document.getElementById('gdLoc').innerHTML='<option value="">(なし)</option>'+provinces.map(p=>`<option value="${esc(p.id)}"${p.id===gs.location?' selected':''}>${esc(castleNameForProvince(p))}</option>`).join('');
     // 能力値
     document.getElementById('gdTou').value=g.stats.tou;
     document.getElementById('gdBu').value=g.stats.bu;
