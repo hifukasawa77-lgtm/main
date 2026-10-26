@@ -35,6 +35,22 @@
     ctx.fillStyle = '#101010'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText((o.label || '?').slice(0, 1), Math.round(x), Math.round(y - 5));
   }
   function gate(ctx, x, y) { rect(ctx, x - 20, y - 56, 40, 56, '#503020'); rect(ctx, x - 14, y - 50, 28, 50, '#100808'); }
+  // ボス（仮描画）。種類ごとの目印を付けて、弱点の癖が画面から読めるようにする
+  function boss(ctx, x, y, o) {
+    const e = o.state; if (!e) return;
+    ctx.save(); if (o.alpha != null) ctx.globalAlpha = o.alpha; if (e.flash > 0 && (e.flash & 1)) ctx.globalAlpha = 0.5;
+    ctx.translate(Math.round(x), Math.round(y)); if (o.flip) ctx.scale(-1, 1);
+    const w = e.w, h = e.h, c = e.def.color;
+    rect(ctx, -w / 2, -h, w, h, c);
+    rect(ctx, w / 2 - 8, -h + 8, 4, 4, '#ffe040'); rect(ctx, w / 2 - 15, -h + 8, 4, 4, '#ffe040');   // 目
+    if (e.kind === 'guardian') rect(ctx, -w / 2, -h, w, 24, '#e8a070');                                // 頭（ここだけ有効）
+    if (e.kind === 'oni') rect(ctx, -w / 2, -h + 14, 5, h - 28, '#ffd0e0');                            // 背中（弱点）
+    if (e.kind === 'monk' && e.st === 'spin') { ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.arc(0, -h / 2, w * 0.8, e.t / 2, e.t / 2 + 4.5); ctx.stroke(); }
+    if (e.kind === 'matron' && e.ring) { ctx.strokeStyle = '#d070ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, -h / 2, Math.max(w, h) * 0.7, 0, 7); ctx.stroke(); }
+    if (e.kind === 'armor') rect(ctx, w / 2 - 14, -h + 20, 10, 10, '#ff9040');                         // 胸の顔
+    if (e.kind === 'overlord') { rect(ctx, -w / 2 - 6, -h - 8, 8, 14, '#d8d0b0'); rect(ctx, w / 2 - 2, -h - 8, 8, 14, '#d8d0b0'); }
+    ctx.restore();
+  }
   function generic(ctx, x, y, o, key) { rect(ctx, x - 8, y - 16, 16, 16, '#ff00ff'); }
 
   K.installPlaceholders = function (assets) {
@@ -42,21 +58,23 @@
     ['enemy_plain', 'enemy_ember', 'enemy_frost', 'enemy_knight', 'enemy_ghoul', 'enemy_naga', 'enemy_bat'].forEach(function (k) { assets.registerPlaceholder(k, enemy); });
     assets.registerPlaceholder('shot_orb', shot); assets.registerPlaceholder('enemy_shot', eshot);
     assets.registerPlaceholder('item', item); assets.registerPlaceholder('gate', gate);
+    ['r1s1', 'r1s2', 'r1s3', 'r1s4', 'r2s1', 'r2s2', 'r2s3', 'r2s4', 'r3s1', 'r3s2', 'r3s3', 'r3s4', 'r4s1'].forEach(function (id) { assets.registerPlaceholder('boss_' + id, boss); });
     assets.registerPlaceholder('*', generic);
   };
 
   // 背景の仮描画（画像が無いとき）。遠景のゆるい帯と地面
   K.drawBackgroundPlaceholder = function (ctx, camX, stage) {
+    const th = stage.theme || { sky: ['#0a0818', '#2a1838'], far: '#1a1028', ground: '#3a2a1a' };
     const g = ctx.createLinearGradient(0, 0, 0, K.GROUND);
-    g.addColorStop(0, '#0a0818'); g.addColorStop(1, '#2a1838'); ctx.fillStyle = g; ctx.fillRect(0, 0, K.W, K.H);
-    ctx.fillStyle = '#1a1028';
+    g.addColorStop(0, th.sky[0]); g.addColorStop(1, th.sky[1]); ctx.fillStyle = g; ctx.fillRect(0, 0, K.W, K.H);
+    ctx.fillStyle = th.far;
     for (let i = -1; i < 8; i++) { const bx = i * 48 - (camX * 0.5 % 48); ctx.fillRect(bx, K.GROUND - 60 - ((i * 37) % 30), 30, 70); }
-    ctx.fillStyle = '#3a2a1a';
+    ctx.fillStyle = th.ground;
     const pits = stage.pits || [];
     let x0 = 0;
     for (const p of pits.concat([[stage.width + 1, stage.width + 1]])) {
       const a = Math.max(0, x0 - camX), b = Math.min(K.W, p[0] - camX);
-      if (b > a) { ctx.fillRect(a, K.GROUND, b - a, K.H - K.GROUND); ctx.fillStyle = '#5a4a2a'; ctx.fillRect(a, K.GROUND, b - a, 3); ctx.fillStyle = '#3a2a1a'; }
+      if (b > a) { ctx.fillRect(a, K.GROUND, b - a, K.H - K.GROUND); ctx.fillStyle = '#7a6a4a'; ctx.fillRect(a, K.GROUND, b - a, 3); ctx.fillStyle = th.ground; }
       x0 = p[1];
     }
     for (const p of stage.platforms || []) { ctx.fillStyle = '#6a5a3a'; ctx.fillRect(p.x - camX, p.y, p.w, 6); }
