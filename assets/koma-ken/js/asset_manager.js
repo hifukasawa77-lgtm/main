@@ -38,7 +38,7 @@
     has(key) { return !!this.images[key]; }
     summary() {
       let loaded = 0, ph = 0, failed = 0;
-      for (const k in this.status) { const s = this.status[k]; if (s === 'loaded') loaded++; else if (s === 'placeholder') ph++; else failed++; }
+      for (const k in this.status) { const s = this.status[k]; if (s === 'loaded' || s === 'generated') loaded++; else if (s === 'placeholder') ph++; else failed++; }
       return { loaded: loaded, placeholder: ph, failed: failed, total: loaded + ph + failed };
     }
 
@@ -48,7 +48,7 @@
       if (img && d) {
         const an = (d.anims && d.anims[opts.anim || 'idle']) || { row: 0, frames: 1, fps: 1 };
         const t = opts.t != null ? opts.t : this.tick;
-        const f = an.frames > 1 ? Math.floor(t * an.fps / K.FPS) % an.frames : 0;
+        const f = opts.frame != null ? Math.min(opts.frame, an.frames - 1) : (an.frames > 1 ? Math.floor(t * an.fps / K.FPS) % an.frames : 0);
         const fw = d.frameW, fh = d.frameH, dw = opts.w || d.drawW || fw, dh = opts.h || d.drawH || fh;
         ctx.save(); if (opts.alpha != null) ctx.globalAlpha = opts.alpha;
         ctx.translate(Math.round(x), Math.round(y)); if (opts.flip) ctx.scale(-1, 1);

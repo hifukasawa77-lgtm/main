@@ -57,7 +57,7 @@ await setup();
 
 console.log('\n[1] 起動・アセット管理');
 const sm = await run(() => window.__KOMA.assets.summary());
-check('全アセットが仮描画で起動（読込失敗0）', sm.failed === 0 && sm.placeholder === sm.total && sm.total >= 30, JSON.stringify(sm));
+check('全アセットが読み込み失敗なしで起動（実画像なし＝コード生成のドット絵＋仮描画）', sm.failed === 0 && sm.total >= 30, JSON.stringify(sm));
 const st0 = await run(() => window.__KOMA.game.state);
 check('タイトルから開始できる', st0 === 'title');
 await run(() => { window.H.tap('Enter'); });
