@@ -52,7 +52,7 @@
       } else if (this.onGround) {
         if (this.atk > 0 || this.crouch) this.vx = 0;
         else { this.vx = ((R ? 1 : 0) - (L ? 1 : 0)) * speed; if (this.vx) this.dir = this.vx > 0 ? 1 : -1; }
-        if (inp.pressed.jump && !this.crouch) {       // 真上(vx=0)も斜め(vx≠0)も、離陸時の向きで弧が決まる
+        if (inp.pressed.jump && !this.crouch && !(g.nearDoor && inp.pressed.up)) {       // 真上(vx=0)も斜め(vx≠0)も、離陸時の向きで弧が決まる
           this.vy = -JUMP_V; this.onGround = false; this.takeoffVx = this.vx;
         }
       } else {
@@ -61,7 +61,7 @@
       if (!flying) this.vy = Math.min(this.vy + K.GRAV, K.MAXFALL);
 
       // 移動と着地
-      this.x = K.clamp(this.x + this.vx, 8, g.stage.width - 8);
+      this.x = K.clamp(this.x + this.vx, g.minX, g.stage.width - 8);
       const y0 = this.y; this.y += this.vy;
       const sup = g.supportY(this.x, y0, this.y);
       if (this.vy >= 0 && sup != null && !flying) { this.y = sup; this.vy = 0; this.onGround = true; if (!g.inPit(this.x)) this.safeX = this.x; }

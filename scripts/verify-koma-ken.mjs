@@ -238,6 +238,172 @@ r = await run(() => {
 });
 check('訓練場: 倒した敵が一定時間後に再出現する', r.after === r.n - 1 && r.back === r.n, JSON.stringify(r));
 
+// ===================== フェーズ4 =====================
+console.log('\n[P4-1] ステージデータ（全13面）');
+const sd = await run(() => {
+  const K = window.KOMA, out = { ids: K.STAGE_LIST.map(s => s.id), bad: [] };
+  K.STAGE_LIST.forEach(s => {
+    const st = K.STAGES[s.id], lock = st.lockX;
+    if (!(st.width >= 2000)) out.bad.push(s.id + ': 幅');
+    if (!K.BOSS_DEFS[s.id]) out.bad.push(s.id + ': ボス定義なし');
+    if (!st.gate) out.bad.push(s.id + ': 結界門なし');
+    const key = st.pickups.find(p => p.id === 'key'); if (!key || key.x >= st.gate.x) out.bad.push(s.id + ': 鍵が門より手前にない');
+    st.pits.forEach(p => { if (p[1] - p[0] > 36) out.bad.push(s.id + ': 穴が広すぎる'); if (p[1] > lock - 80) out.bad.push(s.id + ': 穴がボス部屋に近い'); if (p[0] < 280) out.bad.push(s.id + ': 穴がスタート地点に近い'); });
+    st.platforms.forEach(p => { if (p.y !== 168 && p.y !== 136) out.bad.push(s.id + ': 足場の高さ'); });
+    st.enemies.forEach(e => { st.pits.forEach(p => { if (e.x > p[0] - 50 && e.x < p[1] + 50 && !['bat', 'ghostfire', 'icicle'].includes(e.type)) out.bad.push(s.id + ': 敵が穴の近く ' + e.type + '@' + e.x); }); if (!K.ENEMY_TYPES[e.type]) out.bad.push(s.id + ': 不明な敵 ' + e.type); if (e.x >= lock - 60) out.bad.push(s.id + ': 敵がボス部屋'); });
+    if (st.gate.x >= lock - 100) out.bad.push(s.id + ': 門がボス部屋に近い');
+  });
+  return out;
+});
+check('全13面の定義が揃う（R1〜R3×4＋LAST）', sd.ids.length === 13 && sd.ids[0] === 'r1s1' && sd.ids[12] === 'r4s1', sd.ids.join(','));
+check('各面: ボス・結界門・鍵・穴(≤36px。ジャンプは約47px)・足場の高さ・敵の配置が妥当', sd.bad.length === 0, sd.bad.slice(0, 4).join(' | '));
+check('ステージの連結: r1s1→r1s2→…→r4s1→終わり', await run(() => { const L = window.KOMA.STAGE_LIST; return L[0].next === 'r1s2' && L[11].next === 'r4s1' && L[12].next === null; }));
+
+console.log('\n[P4-2] 全13面を走破（無敵のボットが穴・敵を越えてボス部屋へ着く）');
+for (const id of ['r1s1', 'r1s2', 'r1s3', 'r1s4', 'r2s1', 'r2s2', 'r2s3', 'r2s4', 'r3s1', 'r3s2', 'r3s3', 'r3s4', 'r4s1']) {
+  const rr = await run((id) => {
+    const G = window.__KOMA.game, p = G.player; G.newGame(id); const K = window.KOMA;
+    let f = 0, lost = 0, prevLives = G.lives;
+    for (; f < 12000 && !G.boss; f++) {
+      p.hp = 6; p.inv = Math.max(p.inv, 3);
+      const nextPit = (G.stage.pits || []).find(q => q[1] > p.x && q[0] - p.x < 8 && q[0] - p.x > -2);
+      const foe = G.enemies.find(e => !e.dead && e.x > p.x && e.x - p.x < 36 && Math.abs(e.y - p.y) < 40 && e.def.ai !== 'drop');
+      const nearPit = (G.stage.pits || []).some(q => q[1] > p.x && q[0] - p.x < 70);   // 穴の手前では敵より穴を優先する
+      const near = foe && foe.x - p.x < 26 && !nearPit;   // 剣の届く距離まで近づいてから振る（攻撃中は動けないので、遠くから振り続けると詰む）
+      G.input.set('ArrowRight', true);
+      G.input.set('Space', !!((nextPit || (foe && !near && !nearPit)) && p.onGround));
+      G.input.set('KeyZ', !!near && (f & 3) === 0);
+      window.__KOMA.step(1);
+      if (G.lives < prevLives) lost += prevLives - G.lives; prevLives = G.lives;   // 1UPで増えるのは構わない。減ったら（落下・被弾）数える
+    }
+    G.input.set('ArrowRight', false); G.input.set('Space', false); G.input.set('KeyZ', false);
+    return { x: p.x, lock: G.lockX, boss: !!G.boss, lost, f };
+  }, id);
+  check(`${id}: ボス部屋まで走破（落下・ミス0）`, rr.boss && rr.lost === 0 && rr.x >= rr.lock, `x=${rr.x | 0}/${rr.lock} frames=${rr.f}`);
+}
+
+console.log('\n[P4-3] ボス13体: AIが生きている（900フレーム・例外なし・動く/撃つ）');
+for (const id of ['r1s1', 'r1s2', 'r1s3', 'r1s4', 'r2s1', 'r2s2', 'r2s3', 'r2s4', 'r3s1', 'r3s2', 'r3s3', 'r3s4', 'r4s1']) {
+  const rr = await run((id) => {
+    const G = window.__KOMA.game, p = G.player; G.newGame(id); p.reset(G.lockX + 20); G.minX = G.lockX + 10;
+    window.__KOMA.step(2);
+    const b = G.boss; if (!b) return { ok: false, why: 'no boss' };
+    const x0 = b.x, y0 = b.y; let shots = 0, moved = 0, hurt = 0;
+    for (let i = 0; i < 900; i++) { p.hp = 6; p.inv = 3; window.__KOMA.step(1); shots = Math.max(shots, G.eshots.length); moved = Math.max(moved, Math.abs(b.x - x0) + Math.abs(b.y - y0)); }
+    return { ok: true, alive: !b.dead && G.boss === b, shots, moved, name: b.name, cam: G.camX === G.lockX };
+  }, id);
+  check(`${id}: ${rr.name || '?'} が出現し、動く/撃つ（画面固定）`, rr.ok && rr.alive && (rr.shots > 0 || rr.moved > 10) && rr.cam, JSON.stringify(rr));
+}
+
+console.log('\n[P4-4] ボスごとの弱点の癖');
+const bossSetup = (id, fn) => run(({ id, fn }) => {
+  const G = window.__KOMA.game, p = G.player; G.newGame(id); p.reset(G.lockX + 20); G.minX = G.lockX + 10; window.__KOMA.step(2);
+  return (new Function('G', 'p', 'K', fn))(G, p, window.KOMA);
+}, { id, fn });
+let rb = await bossSetup('r1s1', `const b = G.boss; b.dir = -1; p.x = b.x - 40; const h0 = b.hp; G.damageEnemy(b, {dmg:2}, b.x - 10, b.y - 20); const front = h0 - b.hp; p.x = b.x + 40; G.damageEnemy(b, {dmg:2}, b.x + 10, b.y - 20); return { front, back: h0 - b.hp - front };`);
+check('鬼面の女: 正面からは効かず、背中なら効く', rb.front === 0 && rb.back === 2, JSON.stringify(rb));
+rb = await bossSetup('r1s1', `const b = G.boss; b.st='walk'; p.x = b.x - 60; b.noTurn = 0; b.sc = 151; b.cool = 0; let behind = false; for (let i=0;i<200;i++){ p.hp=6; p.inv=3; window.__KOMA.step(1); if ((p.x - b.x) * b.dir < 0 && b.st === 'walk') { behind = true; break; } } return { behind, st: b.st };`);
+check('鬼面の女: 高く跳んで背後へ回り込み、着地後しばらく向き直らない', rb.behind, JSON.stringify(rb));
+rb = await bossSetup('r1s2', `const b = G.boss; const h0 = b.hp; b.st = 'spin'; G.damageEnemy(b, {dmg:2}, b.x, b.y - 20); const spin = h0 - b.hp; b.st = 'tired'; G.damageEnemy(b, {dmg:2}, b.x, b.y - 20); return { spin, tired: h0 - b.hp - spin };`);
+check('岩坊主: 回転中は無敵、止まれば効く', rb.spin === 0 && rb.tired === 2, JSON.stringify(rb));
+rb = await bossSetup('r1s3', `const b = G.boss; const h0 = b.hp; G.damageEnemy(b, {dmg:2}, b.x, b.y - 10); const body = h0 - b.hp; G.damageEnemy(b, {dmg:2}, b.x, b.y - b.h + 10); return { body, head: h0 - b.hp - body };`);
+check('門番の金剛: 胴体は効かず、頭だけ効く', rb.body === 0 && rb.head === 2, JSON.stringify(rb));
+rb = await bossSetup('r1s4', `const b = G.boss, d = G.enemies.filter(e => e.decoy); const dh = d.length; d.forEach(x => G.damageEnemy(x, {dmg:50}, x.x, x.y - 10)); const alive = G.enemies.filter(e => e.decoy).length; b.st = 'show'; const h0 = b.hp; G.damageEnemy(b, {dmg:2}, b.x, b.y - 10); let touch = false; p.x = d[0].x; window.__KOMA.step(2); touch = p.hp < 6; return { decoys: dh, alive, real: h0 - b.hp, touch };`);
+check('闇の導師: 分身は2体いて何を当てても効かず、触れても害がない。本物だけ効く', rb.decoys === 2 && rb.alive === 2 && rb.real === 2 && !rb.touch, JSON.stringify(rb));
+rb = await bossSetup('r3s4', `const b = G.boss; b.ring = true; const h0 = b.hp; G.damageEnemy(b, {dmg:2}, b.x, b.y - 10); const barrier = h0 - b.hp; b.ring = false; G.damageEnemy(b, {dmg:2}, b.x, b.y - 10); return { barrier, open: h0 - b.hp - barrier };`);
+check('邪鬼の長: 結界の間は無敵、解ければ効く', rb.barrier === 0 && rb.open === 2, JSON.stringify(rb));
+rb = await bossSetup('r2s1', `const b = G.boss, snow = K.SELECT.find(s => s.id === 'snow'), white = K.SELECT[0]; const h0 = b.hp; G.damageEnemy(b, snow, b.x, b.y - 10); const a = h0 - b.hp; G.damageEnemy(b, white, b.x, b.y - 10); return { a, b: h0 - b.hp - a };`);
+check('炎の邪神: 火属性＝雪珠で3倍（白珠は1倍）', rb.a === 3 && rb.b === 1, JSON.stringify(rb));
+rb = await bossSetup('r3s3', `const b = G.boss, th = K.SELECT.find(s => s.id === 'thunder'); const h0 = b.hp; G.damageEnemy(b, th, b.x, b.y - 10); return { a: h0 - b.hp };`);
+check('鎧の大将: 鎧属性＝雷閃で3倍', rb.a === 3, JSON.stringify(rb));
+rb = await bossSetup('r2s3', `const b = G.boss; b.sc = 89; window.__KOMA.step(1); const beam = G.eshots.find(s => s.solid && s.w >= 200); const warned = true; return { beam: !!beam, h: beam ? beam.h : 0 };`);
+check('雪の精: 長い光線(solid)を放つ（剣で消せない）', rb.beam, JSON.stringify(rb));
+rb = await bossSetup('r1s1', `const b = G.boss; const s = new K.EShot(p.x + 2, p.y - 20, 0, 0, { solid: true, life: 30, w: 20, h: 16 }); G.eshots.push(s); G.input.set('KeyZ', true); window.__KOMA.step(1); G.input.set('KeyZ', false); window.__KOMA.step(6); return { still: G.eshots.includes(s) || s.dead && p.hp < 6, hp: p.hp };`);
+check('solid の斬撃は七星剣で消せず、当たる', rb.hp < 6, JSON.stringify(rb));
+
+console.log('\n[P4-5] ボス撃破→成長→次の面→エンディング');
+rb = await run(() => {
+  const G = window.__KOMA.game, p = G.player; G.newGame('r1s1'); G.score = 1234; G.lives = 2; G.inv.addSingle('wind'); G.inv.auto.decoy = 1;
+  p.reset(G.lockX + 20); G.minX = G.lockX + 10; window.__KOMA.step(2); const sel0 = G.inv.selectIndex, b = G.boss;
+  G.damageEnemy(b, { dmg: 999 }, b.x - 10, b.y - 10);
+  b.guard = () => true; G.damageEnemy(b, { dmg: 999 }, b.x - 10, b.y - 10);
+  const afterKill = { state: G.state, sel: G.inv.selectIndex - sel0, boss: G.boss };
+  window.__KOMA.step(270);
+  return { afterKill: { state: afterKill.state, sel: afterKill.sel, boss: !!afterKill.boss }, id: G.stage.id, score: G.score, lives: G.lives, single: G.inv.single.length, decoy: G.inv.auto.decoy, hp: p.hp, state: G.state, x: p.x };
+});
+check('ボスを倒すとクリア表示・セレクトアイテムが1つ成長', rb.afterKill.state === 'clear' && rb.afterKill.sel === 1 && !rb.afterKill.boss, JSON.stringify(rb.afterKill));
+check('約4秒後に次の面（r1s2）へ。得点・残機・持ち物を引き継ぎ、体力は全回復', rb.id === 'r1s2' && rb.score >= 1234 + 3000 && rb.lives === 2 && rb.single === 1 && rb.decoy === 1 && rb.hp === 6 && rb.state === 'play' && rb.x < 50, JSON.stringify(rb));
+rb = await run(() => {
+  const G = window.__KOMA.game, p = G.player; G.newGame('r4s1'); p.reset(G.lockX + 20); G.minX = G.lockX + 10; window.__KOMA.step(2);
+  const b = G.boss; b.guard = () => true; G.damageEnemy(b, { dmg: 999 }, b.x, b.y - 10); window.__KOMA.step(270); const st = G.state;
+  window.__KOMA.step(130); G.input.set('KeyZ', true); window.__KOMA.step(1); G.input.set('KeyZ', false); return { st, after: G.state };
+});
+check('最終ボスを倒すとエンディング→Zでタイトルへ戻る', rb.st === 'ending' && rb.after === 'title', JSON.stringify(rb));
+rb = await run(() => {
+  const G = window.__KOMA.game, p = G.player; G.newGame('r4s1'); p.reset(G.lockX + 20); G.minX = G.lockX + 10; window.__KOMA.step(2); const b = G.boss;
+  const phase = []; p.hp = 6; p.inv = 999; b.hp = b.maxHp * 0.4; for (let i = 0; i < 700; i++) { p.hp = 6; p.inv = 3; window.__KOMA.step(1); } const ghoul = G.enemies.some(e => e.type === 'ghoul'); const top = G.eshots.some(s => s.solid && s.y < 120);
+  return { ghoul, anyShots: G.eshots.length > 0 };
+});
+check('黒翁(最終ボス)は体力が半分を切ると第2形態（亡者を呼ぶ）', rb.ghoul, JSON.stringify(rb));
+
+console.log('\n[P4-6] ボス部屋: 画面固定・戻れない／ミスで復帰');
+rb = await run(() => {
+  const G = window.__KOMA.game, p = G.player; G.newGame('r1s1'); p.reset(G.lockX + 20); window.__KOMA.step(2);
+  G.input.set('ArrowLeft', true); window.__KOMA.step(200); G.input.set('ArrowLeft', false);
+  const minPos = p.x; p.hp = 1; const lives = G.lives; p.hurtBy(); window.__KOMA.step(2);
+  return { minPos, lock: G.lockX, lives: G.lives - lives, x: p.x, bossStill: !!G.boss };
+});
+check('ボス戦中は左へ戻れない（画面固定）', rb.minPos >= rb.lock + 9, `x=${rb.minPos.toFixed(1)} lock=${rb.lock}`);
+check('ボス戦でミスしても、ボス部屋の入口から再開（ボスは残る）', rb.lives === -1 && rb.x >= rb.lock + 20 && rb.bossStill, JSON.stringify(rb));
+
+console.log('\n[P4-7] 結界門（鍵・天界・冥界・隠し報酬）');
+const gateRun = (code) => run((code) => { const G = window.__KOMA.game, p = G.player; G.newGame('r1s1'); p.reset(G.stage.gate.x - 4); G.pickups = []; window.__KOMA.step(2); return (new Function('G', 'p', 'K', code))(G, p, window.KOMA); }, code);
+rb = await gateRun(`G.inv.auto.key = 0; G.input.set('ArrowUp', true); window.__KOMA.step(1); G.input.set('ArrowUp', false); window.__KOMA.step(2); return { room: G.room, vy: p.vy };`);
+check('鍵が無いと結界門に入れない（ジャンプもしない）', rb.room === null, JSON.stringify(rb));
+rb = await gateRun(`G.inv.auto.key = 1; G.input.set('ArrowUp', true); window.__KOMA.step(1); G.input.set('ArrowUp', false); window.__KOMA.step(2); return { room: G.room, key: G.inv.auto.key, id: G.stage.id, y: p.y };`);
+check('鍵があると入れる（鍵を1つ消費・上キーでジャンプしない）', rb.room === 'hub' && rb.key === 0 && rb.id === 'gate_hub' && rb.y === 208, JSON.stringify(rb));
+rb = await gateRun(`G.inv.auto.key = 1; const x0 = G.stage.gate.x; const tap = c => { G.input.set(c, true); window.__KOMA.step(1); G.input.set(c, false); window.__KOMA.step(2); };
+  tap('ArrowUp'); p.x = G.stage.doors.find(d => d.to === 'heaven').x; tap('ArrowUp'); const inHeaven = G.room === 'heaven' && !G.stage.dark;
+  p.hp = 2; p.x = G.pickups.find(q => q.cat === 'heal').x; window.__KOMA.step(3); const healed = p.hp === 6; const singles0 = G.inv.single.length;
+  G.pickups.filter(q => q.cat === 'single').forEach(q => { p.x = q.x; window.__KOMA.step(3); }); const gotSingles = G.inv.single.length - singles0;
+  p.x = G.stage.doors.find(d => d.to === 'outside').x; tap('ArrowUp');
+  return { inHeaven, healed, gotSingles, back: G.room === null && G.stage.id === 'r1s1', used: G.stage.gate.used, px: Math.abs(p.x - x0) < 2 };`);
+check('天界: 体力が全回復し単発アイテムが2個手に入る。出口で外へ戻る（門は使用済み）', rb.inHeaven && rb.healed && rb.gotSingles === 2 && rb.back && rb.used && rb.px, JSON.stringify(rb));
+rb = await gateRun(`G.inv.auto.key = 1; const tap = c => { G.input.set(c, true); window.__KOMA.step(1); G.input.set(c, false); window.__KOMA.step(2); };
+  tap('ArrowUp'); p.x = G.stage.doors.find(d => d.to === 'hell').x; tap('ArrowUp');
+  const hell = { room: G.room, dark: !!G.stage.dark, enemies: G.enemies.length, width: G.stage.width, reward: G.pickups.filter(q => q.cat === 'instant').length, single: G.pickups.filter(q => q.cat === 'single').length };
+  G.inv.addSingle('escape'); G.state = 'pause'; G.input.set('KeyZ', true); window.__KOMA.step(1); G.input.set('KeyZ', false); window.__KOMA.step(1);
+  return { hell, escaped: G.room === null && G.stage.id === 'r1s1', usedUp: G.inv.single.indexOf('escape') < 0 };`);
+check('冥界: 暗闇・敵4体・隠し報酬（1UPか金仏）と単発アイテム', rb.hell.room === 'hell' && rb.hell.dark && rb.hell.enemies === 4 && rb.hell.width === 512 && rb.hell.reward === 1 && rb.hell.single === 1, JSON.stringify(rb.hell));
+check('冥界で「脱出の法」を使うと外へ脱出（使い切り）', rb.escaped && rb.usedUp, JSON.stringify(rb));
+rb = await gateRun(`G.inv.auto.key = 1; G.inv.auto.torch = 0; const tap = c => { G.input.set(c, true); window.__KOMA.step(1); G.input.set(c, false); window.__KOMA.step(2); };
+  tap('ArrowUp'); p.x = G.stage.doors.find(d => d.to === 'hell').x; tap('ArrowUp'); G.state = 'play';
+  const cv = document.getElementById('screen'), cx = cv.getContext('2d'); window.__KOMA.step(1); G.draw(); const a = cx.getImageData(240, 120, 1, 1).data; const dark = a[0] + a[1] + a[2] < 30;
+  G.inv.auto.torch = 1; G.draw(); const ring = (() => { let n = 0; const d = cx.getImageData(0, 0, 256, 240).data; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 30) n++; return n; })();
+  G.inv.auto.torch = 0; G.draw(); const ring0 = (() => { let n = 0; const d = cx.getImageData(0, 0, 256, 240).data; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 30) n++; return n; })();
+  return { dark, ring, ring0 };`);
+check('冥界は暗く、松明があると照らす範囲が広がる', rb.dark && rb.ring > rb.ring0, JSON.stringify(rb));
+rb = await gateRun(`G.inv.auto.key = 1; const tap = c => { G.input.set(c, true); window.__KOMA.step(1); G.input.set(c, false); window.__KOMA.step(2); };
+  tap('ArrowUp'); p.x = G.stage.doors.find(d => d.to === 'hell').x; tap('ArrowUp'); G.inv.auto.decoy = 0; const lives = G.lives; p.hp = 1; p.inv = 0; p.hurtBy(); window.__KOMA.step(2);
+  return { lives: G.lives - lives, room: G.room, id: G.stage.id };`);
+check('冥界でミスすると外へ戻って再開（残機-1）', rb.lives === -1 && rb.room === null && rb.id === 'r1s1', JSON.stringify(rb));
+
+console.log('\n[P4-8] 新しい雑魚の動き・タイトル');
+rb = await run(() => {
+  window.H.fresh(); const G = window.__KOMA.game, p = G.player; p.reset(300);
+  const h = new window.KOMA.Enemy('hopper', 500), ic = new window.KOMA.Enemy('icicle', 100, 60), sk = new window.KOMA.Enemy('skeleton', 700); G.enemies.push(h, ic, sk);
+  let hy = 0; for (let i = 0; i < 200; i++) { p.hp = 6; p.inv = 3; window.__KOMA.step(1); hy = Math.max(hy, 208 - h.y); }
+  const x0 = sk.x; window.__KOMA.step(60); const walked = Math.abs(sk.x - x0) > 5;
+  p.x = 100; window.__KOMA.step(60); const fell = ic.dead || ic.y >= 200;
+  return { hy, walked, fell };
+});
+check('跳ね鬼は跳ぶ・骸骨は歩く・氷柱は真下に来ると落ちる', rb.hy > 15 && rb.walked && rb.fell, JSON.stringify(rb));
+rb = await run(() => {
+  const G = window.__KOMA.game; G.state = 'title'; G.menuIdx = 0; window.H.tap('Enter'); const a = G.stage.id;
+  G.state = 'title'; G.menuIdx = 0; window.H.tap('ArrowDown'); const m = G.menuIdx; window.H.tap('Enter'); return { a, m, b: G.stage.id };
+});
+check('タイトル: 「冒険を始める」でR1-1、「訓練場」で訓練場', rb.a === 'r1s1' && rb.m === 1 && rb.b === 'training', JSON.stringify(rb));
+
 const errsBefore = errors.length;
 console.log('\n[8] フェーズ3: アセットマネージャー');
 r = await run(async () => {

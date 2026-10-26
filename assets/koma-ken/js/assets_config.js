@@ -23,7 +23,7 @@ window.KOMA = window.KOMA || {};
       item: { src: null, frameW: 16, frameH: 16, anims: { idle: anim(0, 1, 1) } },
       gate: { src: null, frameW: 48, frameH: 64, anims: { idle: anim(0, 1, 1) } },
     },
-    backgrounds: { training: { src: null, parallax: 0.5 } },
+    backgrounds: { training: { src: null, parallax: 0.5 }, gate_hub: { src: null }, gate_heaven: { src: null }, gate_hell: { src: null } },
     ui: { title: { src: null }, hud_frame: { src: null }, pause_panel: { src: null }, gameover: { src: null } },
   };
   // ボス13体（ラウンド×ステージ）と、各ステージの背景。フェーズ4で順に実装する。画像だけ先に差し込める
