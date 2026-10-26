@@ -298,7 +298,10 @@
       g.font = '8px "MS Gothic", "Yu Gothic", monospace'; g.textBaseline = 'alphabetic';
       if (this.state === 'title') { this.drawTitle(); return; }
       if (this.state === 'ending') { this.drawEnding(); return; }
-      if (!A.drawImage(g, this.stage.bg, 0, 0, K.W, K.H)) K.drawBackgroundPlaceholder(g, cam, this.stage);
+      const bgImg = A.images[this.stage.bg];
+      if (bgImg) { const sx = -Math.floor((this.room ? 0 : cam * 0.35) % K.W); g.drawImage(bgImg, sx, 0, K.W, K.H); g.drawImage(bgImg, sx + K.W, 0, K.W, K.H); }   // 横にゆっくり流れる遠景
+      else K.drawBackgroundPlaceholder(g, cam, this.stage);
+      K.drawTerrain(g, cam, this.stage);
       if (this.stage.gate && !this.stage.gate.used) A.drawSprite(g, 'gate', this.stage.gate.x - cam, K.GROUND, { w: 40, h: 56 });
       for (const d of this.stage.doors || []) { A.drawSprite(g, 'gate', d.x - cam, K.GROUND, { w: 28, h: 44 }); this.txt(d.label, d.x - cam, K.GROUND - 48, '#fff', 'center'); }
 
@@ -307,7 +310,7 @@
         if (pk.x - cam > -16 && pk.x - cam < K.W + 16) A.drawSprite(g, 'item', pk.x - cam, pk.y + Math.sin(this.tick / 12 + pk.x) * 2, { cat: pk.cat, label: d ? d.name : '?' });
       }
       for (const e of this.enemies) if (!e.invisible || this.player.fx.see > 0 || this.inv.auto.charm > 0)
-        A.drawSprite(g, e.def.sprite, e.x - cam, e.y, { anim: e.def.ai === 'fly' ? 'fly' : 'walk', flip: e.dir < 0, t: e.t, state: e, alpha: e.alpha != null && e.alpha < 1 ? e.alpha : null });
+        A.drawSprite(g, e.def.sprite, e.x - cam, e.y, { anim: e.isBoss ? (e.flash > 0 ? 'hurt' : (['wind', 'dash', 'spin', 'jump', 'leap', 'dive'].indexOf(e.st) >= 0 ? 'attack' : 'idle')) : e.decoy ? 'idle' : (e.def.ai === 'fly' ? 'fly' : (e.def.ai === 'walk' || e.def.ai === 'hop' ? 'walk' : 'idle')), flip: e.dir < 0, t: e.t, state: e, alpha: e.alpha != null && e.alpha < 1 ? e.alpha : null });
       for (const e of this.enemies) if (e.warn) this.drawWarn(e, cam);
       for (const s of this.shots) A.drawSprite(g, 'shot_orb', s.x - cam, s.y, { color: s.weapon.color, w: s.w > 12 ? s.w : undefined, h: s.h > 12 ? s.h : undefined });
       for (const s of this.eshots) {
@@ -343,7 +346,9 @@
       for (let i = bodies.length - 1; i >= 0; i--) {
         const b = bodies[i];
         if (i === 0 && blink) continue;
-        A.drawSprite(g, 'player', b.x - cam, b.y, { anim: i ? 'idle' : anim, flip: b.dir < 0, t: p.t, alpha: i ? 0.55 : null, state: { crouch: b.crouch, atk: b.atk } });
+        const an = i ? (b.atk > 0 ? (b.crouch ? 'crouchAttack' : 'attack') : (b.crouch ? 'crouch' : 'idle')) : anim;
+        const fr = (an === 'attack' || an === 'crouchAttack') ? (b.atk > 11 ? 0 : b.atk > 4 ? 1 : 2) : undefined;   // 刃が出るコマと判定を同期させる
+        A.drawSprite(g, 'player', b.x - cam, b.y, { anim: an, frame: fr, flip: b.dir < 0, t: p.t, alpha: i ? 0.55 : null, state: { crouch: b.crouch, atk: b.atk } });
       }
       if (p.fx.after > 0) for (let k = 6; k <= 18; k += 6) { const h = p.hist[p.hist.length - 1 - k]; if (h) A.drawSprite(g, 'player', h.x - cam, h.y, { anim: 'idle', flip: h.dir < 0, alpha: 0.3, state: { crouch: h.crouch, atk: 0 } }); }
       if (p.fx.spin > 0) { g.strokeStyle = '#d8f0ff'; g.beginPath(); g.arc(p.x - cam, p.y - 16, 20, p.t / 3, p.t / 3 + 4); g.stroke(); }

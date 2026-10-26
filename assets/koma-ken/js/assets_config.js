@@ -12,7 +12,7 @@ window.KOMA = window.KOMA || {};
   const C = {
     basePath: 'assets/koma-ken/img/',
     sprites: {
-      player: { src: null, frameW: 32, frameH: 48, drawW: 32, drawH: 48, anims: {
+      player: { src: null, frameW: 64, frameH: 48, drawW: 64, drawH: 48, anims: {
         idle: anim(0, 2, 3), walk: anim(1, 4, 10), jump: anim(2, 1), crouch: anim(3, 1),
         attack: anim(4, 3, 18), crouchAttack: anim(5, 3, 18), hurt: anim(6, 1), dragon: anim(7, 4, 10) } },
       enemy_plain: walker(), enemy_ember: walker(), enemy_frost: walker(), enemy_knight: walker(32),

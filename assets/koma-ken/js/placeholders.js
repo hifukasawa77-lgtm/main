@@ -62,21 +62,50 @@
     assets.registerPlaceholder('*', generic);
   };
 
-  // 背景の仮描画（画像が無いとき）。遠景のゆるい帯と地面
+  // 背景の仮描画（画像が無いとき）。空と遠景だけ。地面・穴・足場は drawTerrain が常に描く
   K.drawBackgroundPlaceholder = function (ctx, camX, stage) {
     const th = stage.theme || { sky: ['#0a0818', '#2a1838'], far: '#1a1028', ground: '#3a2a1a' };
     const g = ctx.createLinearGradient(0, 0, 0, K.GROUND);
     g.addColorStop(0, th.sky[0]); g.addColorStop(1, th.sky[1]); ctx.fillStyle = g; ctx.fillRect(0, 0, K.W, K.H);
     ctx.fillStyle = th.far;
     for (let i = -1; i < 8; i++) { const bx = i * 48 - (camX * 0.5 % 48); ctx.fillRect(bx, K.GROUND - 60 - ((i * 37) % 30), 30, 70); }
-    ctx.fillStyle = th.ground;
-    const pits = stage.pits || [];
-    let x0 = 0;
-    for (const p of pits.concat([[stage.width + 1, stage.width + 1]])) {
-      const a = Math.max(0, x0 - camX), b = Math.min(K.W, p[0] - camX);
-      if (b > a) { ctx.fillRect(a, K.GROUND, b - a, K.H - K.GROUND); ctx.fillStyle = '#7a6a4a'; ctx.fillRect(a, K.GROUND, b - a, 3); ctx.fillStyle = th.ground; }
-      x0 = p[1];
+  };
+
+  function mix(c, k) {                       // 色を明るく(k>0)/暗く(k<0)
+    const n = parseInt(c.slice(1), 16), f = v => Math.max(0, Math.min(255, Math.round(k >= 0 ? v + (255 - v) * k : v * (1 + k))));
+    return 'rgb(' + f(n >> 16 & 255) + ',' + f(n >> 8 & 255) + ',' + f(n & 255) + ')';
+  }
+  // 地形（地面・穴・足場）をドット絵で。テーマの地面色から陰影を作る。位置から決まる模様なのでスクロールしても揺れない
+  K.drawTerrain = function (ctx, camX, stage) {
+    const gc = (stage.theme && stage.theme.ground) || '#3a2a1a', cam = Math.round(camX);
+    const pits = stage.pits || [], segs = []; let x0 = 0;
+    for (const p of pits.concat([[stage.width + 1, stage.width + 1]])) { segs.push([x0, p[0]]); x0 = p[1]; }
+    for (const s of segs) {
+      const a = Math.max(0, Math.floor(s[0] - cam)), b = Math.min(K.W, Math.ceil(s[1] - cam));
+      if (b <= a) continue;
+      ctx.fillStyle = gc; ctx.fillRect(a, K.GROUND, b - a, K.H - K.GROUND);
+      ctx.fillStyle = mix(gc, 0.35); ctx.fillRect(a, K.GROUND, b - a, 3);              // 地表のハイライト
+      ctx.fillStyle = mix(gc, 0.15); ctx.fillRect(a, K.GROUND + 3, b - a, 2);
+      for (let x = a; x < b; x++) {                                                      // 土のまだら
+        const wx = x + cam, h = (wx * 2654435761 >>> 0) % 97;
+        if (h < 9) { ctx.fillStyle = mix(gc, -0.3); ctx.fillRect(x, K.GROUND + 6 + (h % 5) * 5, 2, 2); }
+        else if (h < 14) { ctx.fillStyle = mix(gc, 0.2); ctx.fillRect(x, K.GROUND + 8 + (h % 4) * 6, 1, 1); }
+        if (wx % 24 === 0) { ctx.fillStyle = mix(gc, 0.3); ctx.fillRect(x, K.GROUND - 2, 1, 2); ctx.fillRect(x + 2, K.GROUND - 3, 1, 3); }   // 草
+      }
+      ctx.fillStyle = mix(gc, -0.45); ctx.fillRect(a, K.H - 6, b - a, 6);
     }
-    for (const p of stage.platforms || []) { ctx.fillStyle = '#6a5a3a'; ctx.fillRect(p.x - camX, p.y, p.w, 6); }
+    for (const p of pits) {                                                              // 穴の縁
+      const a = Math.round(p[0] - cam), b = Math.round(p[1] - cam);
+      if (b < 0 || a > K.W) continue;
+      ctx.fillStyle = '#05030a'; ctx.fillRect(Math.max(0, a), K.GROUND, Math.min(K.W, b) - Math.max(0, a), K.H - K.GROUND);
+      ctx.fillStyle = mix(gc, -0.5); ctx.fillRect(a - 1, K.GROUND, 1, K.H - K.GROUND); ctx.fillRect(b, K.GROUND, 1, K.H - K.GROUND);
+    }
+    for (const p of stage.platforms || []) {                                            // 足場（板と支柱）
+      const x = Math.round(p.x - cam); if (x > K.W || x + p.w < 0) continue;
+      ctx.fillStyle = '#6a4a28'; ctx.fillRect(x, p.y, p.w, 7); ctx.fillStyle = '#b88848'; ctx.fillRect(x, p.y, p.w, 2);
+      ctx.fillStyle = '#4a321c'; ctx.fillRect(x, p.y + 6, p.w, 1);
+      for (let i = 8; i < p.w; i += 12) { ctx.fillStyle = '#4a321c'; ctx.fillRect(x + i, p.y + 2, 1, 4); }
+      ctx.fillStyle = '#3a2a18'; ctx.fillRect(x + 2, p.y + 7, 3, 3); ctx.fillRect(x + p.w - 5, p.y + 7, 3, 3);
+    }
   };
 })(window.KOMA);

@@ -56,7 +56,7 @@
           this.vy = -JUMP_V; this.onGround = false; this.takeoffVx = this.vx;
         }
       } else {
-        this.vx = this.takeoffVx;                     // 空中は舵が効かない（ファミコンのアクションの作法）
+        this.vx = this.takeoffVx;                     // 空中は舵が効かない（古典的なアクションの作法）
       }
       if (!flying) this.vy = Math.min(this.vy + K.GRAV, K.MAXFALL);
 
