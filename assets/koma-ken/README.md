@@ -35,10 +35,12 @@
 ```sh
 node scripts/verify-koma-input.mjs
 CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-koma-ken.mjs
+CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-koma-cache.mjs
 ```
 
 ブラウザー検証には開発依存のPlaywrightとChromiumが必要。
 ブラウザー検証187項目合格、入力単体検証合格。
+キャッシュ更新の実ブラウザー検証5項目も合格。
 効果音とBGMの音声バッファ生成、無音時の出力0、音源解放、場面切替、音設定の保持、休止・画面離脱時の停止、音声API非対応時のフォールバックを検証。
 320×568、390×844、844×390、568×320で画面と44px以上の操作ボタンが重ならず、横にはみ出さないことを検証。
 ブラウザーへのタッチイベント送信で開始・同時押し・中断・手引の操作を確認。
@@ -78,6 +80,12 @@ CHROMIUM_PATH=/usr/bin/chromium node scripts/verify-koma-ken.mjs
 - 実機スピーカー・イヤホンでの音量バランスと聴感を確認。
 
 ## 確認版の配布ファイル
+
+JavaScriptを変更した場合は `node scripts/version-koma-assets.mjs --write` で読み込みURLを更新する。
+各モジュールの内容からハッシュを生成するため、同じURLの古いファイルがブラウザーや旧Service Workerから再利用されるのを防ぐ。
+ゲーム本体の検証はハッシュの一致も検査する。
+ゲームを直接開いた場合は、既存のService Workerがあるときだけ更新を確認する。新規登録は行わない。
+2026.10.27-2版ではサイト用キャッシュをv10に更新し、旧cache-firstキャッシュを残した再現環境で、新モジュールの取得・起動・旧キャッシュ削除・モデルキャッシュ維持を確認した。
 
 ```sh
 python scripts/package-koma-ken.py /tmp/koma-ken-preview.zip
