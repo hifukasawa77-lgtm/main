@@ -20,6 +20,22 @@
     r4s1: { kind: 'overlord',  name: '闇の支配者', hp: 90, w: 38, h: 56, tags: [],         color: '#302040', score: 20000 },
   };
 
+  K.BOSS_TIPS = {
+    oni: { ja: '跳んだ後、背中が開く隙を狙う', en: 'Strike from behind after its leap.' },
+    monk: { ja: '回転中は避け、止まった隙に攻撃', en: 'Avoid the spin; attack when resting.' },
+    guardian: { ja: '頭が弱点。跳んで剣や道具を当てる', en: 'Jump and aim at the head.' },
+    sorcerer: { ja: '分身は無害。本物が現れたら攻撃', en: 'Decoys are harmless. Hit the real one.' },
+    flame: { ja: '火柱の予告地点から離れる', en: 'Move away from marked ground.' },
+    wraith: { ja: '足元の衝撃波をジャンプで越える', en: 'Jump over ground shockwaves.' },
+    yuki: { ja: '高い光線はしゃがみ、低い光線は跳ぶ', en: 'Duck high beams; jump low beams.' },
+    tengu: { ja: '急降下してきた隙に攻撃する', en: 'Attack during its dive.' },
+    swordsman: { ja: '溜め動作の後の突進に注意', en: 'Watch for the dash after charging.' },
+    samurai: { ja: '光線と跳びかかりの着地を避ける', en: 'Avoid beams and leap landings.' },
+    armor: { ja: '大太刀から離れ、衝撃波は跳ぶ', en: 'Keep clear of slashes; jump waves.' },
+    matron: { ja: '結界が解けてから攻撃を当てる', en: 'Wait for the barrier to open.' },
+    overlord: { ja: '地を走る龍は跳び、上からの龍に注意', en: 'Jump ground dragons; watch overhead.' },
+  };
+
   class Boss {
     constructor(id, x) {
       const d = K.BOSS_DEFS[id]; if (!d) throw new Error('unknown boss: ' + id);

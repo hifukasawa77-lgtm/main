@@ -74,6 +74,7 @@
       // 七星剣（Aボタン）
       if (inp.pressed.attack && this.atk <= 0 && this.hurt <= 0) {
         this.atk = ATK_FRAMES; this.swingHit.clear();
+        g.audio.effect('sword');
         if (this.fx.eight > 0) g.fireEight(this);
       }
       if (this.atk > 0) this.atk--;
@@ -87,6 +88,7 @@
     // 被弾。無敵中は false。体力が尽きたら game.playerDown() へ
     hurtBy() {
       if (this.invincible()) return false;
+      this.g.audio.effect('hurt');
       this.hp--; this.inv = 60; this.hurt = 16; this.vy = -2.4; this.takeoffVx = -this.dir * 1.2; this.vx = this.takeoffVx;
       this.onGround = false; this.atk = 0;
       if (this.hp <= 0) this.g.playerDown();
