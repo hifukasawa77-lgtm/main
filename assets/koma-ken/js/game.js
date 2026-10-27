@@ -9,12 +9,17 @@
     constructor(canvas, assets) {
       this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.assets = assets;
       canvas.width = K.W; canvas.height = K.H; this.ctx.imageSmoothingEnabled = false;
-      this.input = new K.Input(); this.inv = new K.Inventory(); this.player = new K.Player(this);
+      this.input = new K.Input(); this.inv = new K.Inventory(); this.player = new K.Player(this); this.audio = new K.Audio();
       this.state = 'title'; this.tick = 0; this.score = 0; this.lives = 3; this.debug = false; this.menuIdx = 0;
       this.stage = clone(K.STAGES.training); this.enemies = []; this.shots = []; this.eshots = []; this.pickups = [];
       this.popups = []; this.msgs = []; this.queue = []; this.camX = 0; this.spawnHalt = 0; this.pauseIdx = 0; this.sparks = [];
       this.boss = null; this.bossDone = false; this.lockX = 0; this.minX = 8; this.room = null; this.outer = null; this.nearDoor = false; this.clearT = 0;
       this.roomSeed = 1;
+      this.checkpoint = K.SaveStore.read(); this.saveFailed = false;
+      this.pauseView = 'items'; this.guidePage = 0; this.guideIdx = 0; this.quitIdx = 0;
+      const suspend = () => { if (this.state === 'play') { this.state = 'pause'; this.pauseIdx = 0; } };
+      window.addEventListener('blur', suspend);
+      document.addEventListener('visibilitychange', () => { if (document.hidden) suspend(); });
     }
 
     // ---------- 開始・ステージ進行 ----------
@@ -32,6 +37,25 @@
       this.pickups = this.stage.pickups.map(p => ({ cat: p.cat, id: p.id, x: p.x, y: p.y != null ? p.y : K.GROUND, taken: false }));
       this.state = 'play'; this.camX = 0;
       this.msg((this.stage.label ? this.stage.label + '  ' : '') + this.stage.name, 160);
+      if (K.STAGE_LIST.some(s => s.id === this.stage.id)) {
+        this.checkpoint = { version: 1, stageId: this.stage.id, score: this.score, lives: this.lives,
+          selectIndex: this.inv.selectIndex, auto: clone(this.inv.auto), single: this.inv.single.slice() };
+        this.saveFailed = !K.SaveStore.write(this.checkpoint);
+        if (this.saveFailed) this.msg('自動保存できません / Save unavailable', 200);
+      }
+    }
+    continueGame() {
+      const s = this.checkpoint;
+      if (!s) return;
+      this.inv = new K.Inventory(); this.inv.selectIndex = s.selectIndex;
+      for (const id of Object.keys(this.inv.auto)) this.inv.auto[id] = s.auto[id];
+      this.inv.single = s.single.slice(); this.score = s.score; this.lives = s.lives;
+      this.loadStage(s.stageId);
+    }
+    clearCheckpoint() { this.checkpoint = null; this.saveFailed = !K.SaveStore.clear(); }
+    guideEntries() {
+      if (this.guidePage === 1) return K.SELECT;
+      return Object.values([null, null, K.AUTO, K.INSTANT, K.SINGLE][this.guidePage] || {});
     }
     nextStageId() { const s = K.STAGE_LIST.find(x => x.id === this.stage.id); return s ? s.next : null; }
 
@@ -51,6 +75,7 @@
       const w = this.inv.select;
       let n = 0; for (const s of this.shots) if (s.sub && !s.dead) n++;
       if (n >= 3) return;
+      this.audio.effect('sub');
       const sp = w.pierce ? 3.4 : 2.8, y = p.y - (p.crouch ? 10 : 20);
       const s = new K.Shot(p.x + p.dir * 8, y, p.dir * sp, 0, w, { life: 90 }); s.sub = true; this.shots.push(s);
     }
@@ -67,6 +92,7 @@
       }
       const r = K.calcDamage(weapon, e);
       const killed = e.hit(r.dmg);
+      this.audio.effect('hit');
       this.popups.push({ x: x != null ? x : e.x, y: y != null ? y : e.y - e.h, text: (Number.isInteger(r.dmg) ? r.dmg : r.dmg.toFixed(1)) + (r.weak ? ' 弱点!' : ''), weak: r.weak, life: 36 });
       if (killed) this.killEnemy(e);
     }
@@ -85,8 +111,10 @@
       if (b.kind === 'sorcerer') for (let i = 0; i < 2; i++) { const d = new K.Decoy(s.width - 60, b.def); b.decoys.push(d); this.enemies.push(d); }
       this.enemies.push(b); this.minX = this.lockX + 10;
       this.msg('強敵  ' + b.name, 150);
+      this.msg(K.BOSS_TIPS[b.kind].ja, 240);
     }
     onBossDead(b) {
+      this.audio.effect('clear');
       this.boss = null; this.bossDone = true; this.eshots = []; this.enemies = [];
       for (let i = 0; i < 8; i++) this.sparks.push({ x: b.x + (i - 4) * 6, y: b.y - 10 - (i % 3) * 10, life: 30 + i * 4 });
       this.inv.growSelect(); this.msg(this.inv.select.name + ' に成長した', 200);
@@ -145,7 +173,7 @@
         case 'bomb': live.forEach(e => this.damageEnemy(e, { dmg: 30 })); p.hp = 1; p.inv = 60; this.sparks.push({ x: p.x, y: p.y - 14, life: 20 }); break;
         default: return false;
       }
-      this.msg(K.SINGLE[id].name, 90); return true;
+      this.audio.effect('sub'); this.msg(K.SINGLE[id].name, 90); return true;
     }
 
     // ---------- 取得 ----------
@@ -159,7 +187,7 @@
         this.msg(d.name + '  ' + d.desc, 100);
       } else if (pk.cat === 'single') { if (!this.inv.addSingle(pk.id)) { this.msg('これ以上持てない', 80); return false; } this.msg(K.SINGLE[pk.id].name + ' を手に入れた', 100); }
       else if (pk.cat === 'select') { const i = K.SELECT.findIndex(s => s.id === pk.id); if (i >= 0) { this.inv.selectIndex = i; this.msg(K.SELECT[i].name, 100); } }
-      return true;
+      this.audio.effect('pickup'); return true;
     }
 
     // ---------- ミス・穴 ----------
@@ -171,7 +199,8 @@
         return;
       }
       this.lives--;
-      if (this.lives < 0) { this.state = 'over'; return; }
+      this.audio.effect('defeat');
+      if (this.lives < 0) { this.state = 'over'; if (!this.stage.respawn) this.clearCheckpoint(); return; }
       if (this.room) this.exitRoom();
       p.reset(this.boss ? this.lockX + 30 : 32); p.inv = 120; this.shots = []; this.eshots = []; this.msg('ミス  残り ' + this.lives, 100);
     }
@@ -186,12 +215,18 @@
 
     // ---------- 更新 ----------
     update() {
+      try { this.updateFrame(); } finally { this.audio.sync(this); }
+    }
+    updateFrame() {
       this.input.update(); const inp = this.input;
-      if (inp.pressed.pause && (this.state === 'play' || this.state === 'pause')) { this.state = this.state === 'play' ? 'pause' : 'play'; this.pauseIdx = 0; }
+      if (inp.pressed.pause && (this.state === 'play' || this.state === 'pause')) { this.state = this.state === 'play' ? 'pause' : 'play'; this.pauseIdx = 0; this.pauseView = 'items'; }
       if (this.state === 'title') {
         this.assets.tick++; this.tick++;
-        if (inp.pressed.down || inp.pressed.up) this.menuIdx = 1 - this.menuIdx;
-        if (inp.pressed.attack || inp.pressed.pause) { if (this.menuIdx === 0) this.newGame('r1s1'); else this.newGame('training'); }
+        const count = this.checkpoint ? 3 : 2;
+        this.menuIdx = Math.min(this.menuIdx, count - 1);
+        if (inp.pressed.down) this.menuIdx = (this.menuIdx + 1) % count;
+        if (inp.pressed.up) this.menuIdx = (this.menuIdx + count - 1) % count;
+        if (inp.pressed.attack || inp.pressed.pause) { if (this.menuIdx === 2) this.continueGame(); else this.newGame(this.menuIdx === 0 ? 'r1s1' : 'training'); }
         return;
       }
       if (this.state === 'over') { if (inp.pressed.attack || inp.pressed.pause) this.state = 'title'; return; }
@@ -200,15 +235,38 @@
         this.clearT++; this.assets.tick++;
         for (const q of this.sparks) q.life--; this.sparks = this.sparks.filter(q => q.life > 0);
         for (const m of this.msgs) m.life--; this.msgs = this.msgs.filter(m => m.life > 0);
-        if (this.clearT > 260) { const n = this.nextStageId(); if (n) { const hp = this.player.maxHp; this.loadStage(n); this.player.hp = hp; } else { this.state = 'ending'; this.clearT = 0; } }
+        if (this.clearT > 260) { const n = this.nextStageId(); if (n) { const hp = this.player.maxHp; this.loadStage(n); this.player.hp = hp; } else { this.state = 'ending'; this.clearT = 0; this.clearCheckpoint(); } }
         return;
       }
       if (this.state === 'pause') {
+        if (inp.pressed.sub) { this.pauseView = this.pauseView === 'guide' ? 'items' : 'guide'; this.guidePage = 0; this.guideIdx = 0; return; }
+        if (this.pauseView === 'guide') {
+          if (inp.pressed.left || inp.pressed.right) { this.guidePage = (this.guidePage + (inp.pressed.right ? 1 : 4)) % 5; this.guideIdx = 0; }
+          const count = this.guideEntries().length;
+          if (count && (inp.pressed.up || inp.pressed.down)) this.guideIdx = (this.guideIdx + (inp.pressed.down ? 1 : count - 1)) % count;
+          return;
+        }
+        if (this.pauseView === 'quit') {
+          if (inp.pressed.up || inp.pressed.down) this.quitIdx = 1 - this.quitIdx;
+          if (inp.pressed.attack) {
+            if (this.quitIdx === 1) { this.state = 'title'; this.menuIdx = this.checkpoint ? 2 : 0; }
+            this.pauseView = 'items';
+          }
+          return;
+        }
         const n = this.inv.single.length;
+        if (inp.pressed.down) this.pauseIdx = (this.pauseIdx + 1) % (n + 1);
+        if (inp.pressed.up) this.pauseIdx = (this.pauseIdx + n) % (n + 1);
+        if (inp.pressed.attack && this.pauseIdx === n) { this.pauseView = 'quit'; this.quitIdx = 0; return; }
         if (n) {
-          if (inp.pressed.down) this.pauseIdx = (this.pauseIdx + 1) % n;
-          if (inp.pressed.up) this.pauseIdx = (this.pauseIdx + n - 1) % n;
-          if (inp.pressed.attack) { const id = this.inv.single[this.pauseIdx]; if (this.useSingle(id)) { this.inv.takeSingle(this.pauseIdx); this.state = 'play'; } }
+          if (inp.pressed.attack) {
+            const id = this.inv.single[this.pauseIdx];
+            if (this.useSingle(id)) {
+              this.inv.takeSingle(this.pauseIdx);
+              // 攻撃アイテムでボスを倒した場合は、クリア状態を維持する。
+              if (this.state === 'pause') this.state = 'play';
+            }
+          }
         }
         return;
       }
@@ -223,6 +281,7 @@
       // ボス部屋へ入ったらボス出現・画面固定
       if (this.stage.boss && !this.boss && !this.bossDone && !this.room && p.x >= this.lockX + 12) this.spawnBoss();
       p.update(inp);
+      if (this.state !== 'play') return;
 
       // 敵の更新と再出現
       for (const e of this.enemies) e.update(this);
@@ -275,8 +334,12 @@
         if (s.x < this.camX - m || s.x > this.camX + K.W + m || s.y > K.H + 20 || s.y < -40) s.dead = true;
       }
       this.eshots = this.eshots.filter(s => !s.dead);
+      if (this.state !== 'play') return;
       // 敵との接触
-      for (const e of this.enemies) if (!e.dead && !e.harmless && K.overlap(p.hb, K.box(e))) p.hurtBy();
+      for (const e of this.enemies) if (!e.dead && !e.harmless && K.overlap(p.hb, K.box(e))) {
+        p.hurtBy();
+        if (this.state !== 'play') return;
+      }
 
       // アイテム取得
       for (const pk of this.pickups) {
@@ -372,13 +435,48 @@
       if (b) { g.fillStyle = '#300'; g.fillRect(40, K.H - 14, 176, 6); g.fillStyle = '#e03030'; g.fillRect(40, K.H - 14, 176 * Math.max(0, b.hp) / b.maxHp, 6); this.txt(b.name, 40, K.H - 17, '#fff'); }
     }
     drawPause() {
-      const g = this.ctx; g.fillStyle = 'rgba(0,0,40,.82)'; g.fillRect(24, 28, K.W - 48, K.H - 56);
+      const g = this.ctx; g.fillStyle = 'rgba(0,0,40,.94)'; g.fillRect(24, 28, K.W - 48, K.H - 40);
+      if (this.pauseView === 'guide') { this.drawGuide(); return; }
+      if (this.pauseView === 'quit') {
+        this.txt('タイトルへ戻る？ / QUIT?', 128, 56, '#fff', 'center');
+        this.txt('続きからは面の開始時に戻ります', 128, 84, '#9cf', 'center');
+        this.txt('Continue restarts the saved stage.', 128, 98, '#9cf', 'center');
+        ['戻らない / CANCEL', 'タイトルへ / TITLE'].forEach((s, i) => this.txt((this.quitIdx === i ? '▶ ' : '   ') + s, 40, 130 + i * 16, this.quitIdx === i ? '#ffe040' : '#fff'));
+        this.txt('↑↓ 選択  Z 決定 / Select, Sword', 128, 190, '#ccc', 'center');
+        this.txt('Enter: 再開 / Resume', 128, 210, '#ccc', 'center');
+        return;
+      }
       this.txt('ポーズ / PAUSE', K.W / 2, 46, '#fff', 'center');
       const list = this.inv.single;
-      if (!list.length) this.txt('単発アイテムを持っていない', K.W / 2, 100, '#aaa', 'center');
+      if (!list.length) this.txt('単発アイテムなし / No items', K.W / 2, 100, '#aaa', 'center');
       list.forEach((id, i) => { const d = K.SINGLE[id]; this.txt((i === this.pauseIdx ? '▶ ' : '   ') + d.name, 40, 68 + i * 12, i === this.pauseIdx ? '#ffe040' : '#fff'); });
-      if (list.length) this.txt(K.SINGLE[list[this.pauseIdx]].desc, 40, 150, '#9cf');
+      this.txt((this.pauseIdx === list.length ? '▶ ' : '   ') + 'タイトルへ / TITLE', 40, 68 + list.length * 12, this.pauseIdx === list.length ? '#ffe040' : '#fff');
+      if (this.pauseIdx < list.length) (K.SINGLE[list[this.pauseIdx]].desc.match(/.{1,23}/gu) || []).forEach((line, i) => this.txt(line, 36, 154 + i * 10, '#9cf'));
+      if (this.boss) {
+        const tip = K.BOSS_TIPS[this.boss.kind];
+        this.txt(tip.ja, 128, 178, '#ffdfa0', 'center');
+        this.txt(tip.en, 128, 188, '#ffdfa0', 'center');
+      }
       this.txt('↑↓ 選択   Z 使う   Enter 再開', K.W / 2, 200, '#ccc', 'center');
+      this.txt('X: 手引 / Guide', K.W / 2, 216, '#9cf', 'center');
+    }
+    drawGuide() {
+      const names = ['操作 / Controls', '武器 / Weapons', '自動 / Auto', '即効 / Effects', '単発 / Single-use'];
+      this.txt('手引 / GUIDE  ' + (this.guidePage + 1) + '/5', 128, 44, '#ffe040', 'center');
+      this.txt(names[this.guidePage], 128, 58, '#fff', 'center');
+      if (this.guidePage === 0) {
+        ['←→ 移動 / Move', '↑/Space 跳ぶ / Jump', '↓ しゃがむ / Crouch', 'Z 斬る・弾消し / Sword', 'X 道具を投げる / Throw', '↑ 門に入る / Enter gate', 'Enter 休止・再開 / Pause', 'C 訓練の武器切替 / Cycle'].forEach((s, i) => this.txt(s, 36, 76 + i * 14, '#fff'));
+      } else {
+        const entries = this.guideEntries();
+        entries.forEach((e, i) => this.txt((i === this.guideIdx ? '▶ ' : '   ') + e.name, 36, 72 + i * 9, i === this.guideIdx ? '#ffe040' : '#fff'));
+        const e = entries[this.guideIdx];
+        let desc = e.desc;
+        if (this.guidePage === 1) desc = e.allMult ? '全ての敵に' + e.allMult + '倍ダメージ' : e.weak ? K.TAG_JP[e.weak] + '属性の敵に3倍ダメージ' : e.pierce ? '敵を貫通する遠距離武器' : '基本の遠距離武器';
+        if (this.guidePage === 3 && e.frames) desc += '（' + (e.frames / K.FPS) + '秒）';
+        (desc.match(/.{1,23}/gu) || []).forEach((line, i) => this.txt(line, 36, 170 + i * 10, '#9cf'));
+      }
+      this.txt('←→ 分類  ↑↓ 選択 / Browse', 128, 207, '#ccc', 'center');
+      this.txt('X 戻る / Back   Enter 再開', 128, 220, '#ccc', 'center');
     }
     drawTitle() {
       const g = this.ctx;
@@ -389,10 +487,13 @@
       g.font = '8px "MS Gothic", "Yu Gothic", monospace';
       this.txt('SHICHISEI-KEN  /  Retro side-scrolling action', K.W / 2, 98, '#ccc', 'center');
       const items = ['冒険を始める  /  START (ROUND 1-1)', '訓練場  /  TRAINING'];
-      items.forEach((t, i) => this.txt((this.menuIdx === i ? '▶ ' : '   ') + t, K.W / 2, 140 + i * 14, this.menuIdx === i ? '#ffd040' : '#aaa', 'center'));
-      this.txt('↑↓ 選択   Z / Enter 決定', K.W / 2, 176, '#888', 'center');
-      this.txt('矢印:移動 ↓:しゃがみ ↑/Space:ジャンプ Z:七星剣 X:セレクト Enter:ポーズ ↑:門に入る', K.W / 2, 196, '#aaa', 'center');
-      this.txt('C: セレクト切替（訓練場）  `: 判定表示', K.W / 2, 208, '#aaa', 'center');
+      if (this.checkpoint) items.push('続きから / CONTINUE ' + this.checkpoint.stageId.toUpperCase());
+      items.forEach((t, i) => this.txt((this.menuIdx === i ? '▶ ' : '   ') + t, K.W / 2, 128 + i * 14, this.menuIdx === i ? '#ffd040' : '#aaa', 'center'));
+      this.txt(this.saveFailed ? '保存できません / Save unavailable' : '↑↓ 選択   Z / Enter 決定', K.W / 2, 176, '#888', 'center');
+      this.txt('←→ 移動 / Move   ↓ しゃがむ / Crouch', K.W / 2, 190, '#ccc', 'center');
+      this.txt('↑/Space 跳ぶ / Jump   ↑ 門 / Gate', K.W / 2, 202, '#ccc', 'center');
+      this.txt('Z 剣 / Sword  X 道具 / Item  Enter 休止', K.W / 2, 214, '#ccc', 'center');
+      this.txt('C 訓練の武器 / Cycle  ` 判定 / Hitboxes', K.W / 2, 226, '#aaa', 'center');
     }
     drawEnding() {
       const g = this.ctx; g.fillStyle = '#05000c'; g.fillRect(0, 0, K.W, K.H);

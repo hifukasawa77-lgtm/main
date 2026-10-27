@@ -259,13 +259,16 @@ check('全13面の定義が揃う（R1〜R3×4＋LAST）', sd.ids.length === 13 
 check('各面: ボス・結界門・鍵・穴(≤36px。ジャンプは約47px)・足場の高さ・敵の配置が妥当', sd.bad.length === 0, sd.bad.slice(0, 4).join(' | '));
 check('ステージの連結: r1s1→r1s2→…→r4s1→終わり', await run(() => { const L = window.KOMA.STAGE_LIST; return L[0].next === 'r1s2' && L[11].next === 'r4s1' && L[12].next === null; }));
 
-console.log('\n[P4-2] 全13面を走破（無敵のボットが穴・敵を越えてボス部屋へ着く）');
+for (const normalDamage of [false, true]) {
+console.log(normalDamage ? '\n[P4-2b] 通常被弾・残機消費で全13面のボス部屋に到達' : '\n[P4-2] 全13面を走破（無敵のボットが穴・敵を越えてボス部屋へ着く）');
 for (const id of ['r1s1', 'r1s2', 'r1s3', 'r1s4', 'r2s1', 'r2s2', 'r2s3', 'r2s4', 'r3s1', 'r3s2', 'r3s3', 'r3s4', 'r4s1']) {
-  const rr = await run((id) => {
+  const rr = await run(({id, normalDamage}) => {
     const G = window.__KOMA.game, p = G.player; G.newGame(id); const K = window.KOMA;
+    // 通常被弾の検証では、その面までにボス撃破で成長する武器だけを装備する。
+    if (normalDamage) G.inv.selectIndex = Math.min(K.STAGE_LIST.findIndex(s => s.id === id), K.SELECT.length - 1);
     let f = 0, lost = 0, prevLives = G.lives;
-    for (; f < 12000 && !G.boss; f++) {
-      p.hp = 6; p.inv = Math.max(p.inv, 3);
+    for (; f < 12000 && !G.boss && G.state === 'play'; f++) {
+      if (!normalDamage) { p.hp = 6; p.inv = Math.max(p.inv, 3); }
       const nextPit = (G.stage.pits || []).find(q => q[1] > p.x && q[0] - p.x < 8 && q[0] - p.x > -2);
       const foe = G.enemies.find(e => !e.dead && e.x > p.x && e.x - p.x < 36 && Math.abs(e.y - p.y) < 40 && e.def.ai !== 'drop');
       const nearPit = (G.stage.pits || []).some(q => q[1] > p.x && q[0] - p.x < 70);   // 穴の手前では敵より穴を優先する
@@ -273,13 +276,15 @@ for (const id of ['r1s1', 'r1s2', 'r1s3', 'r1s4', 'r2s1', 'r2s2', 'r2s3', 'r2s4'
       G.input.set('ArrowRight', true);
       G.input.set('Space', !!((nextPit || (foe && !near && !nearPit)) && p.onGround));
       G.input.set('KeyZ', !!near && (f & 3) === 0);
+      G.input.set('KeyX', normalDamage && f % 14 === 0);
       window.__KOMA.step(1);
       if (G.lives < prevLives) lost += prevLives - G.lives; prevLives = G.lives;   // 1UPで増えるのは構わない。減ったら（落下・被弾）数える
     }
-    G.input.set('ArrowRight', false); G.input.set('Space', false); G.input.set('KeyZ', false);
-    return { x: p.x, lock: G.lockX, boss: !!G.boss, lost, f };
-  }, id);
-  check(`${id}: ボス部屋まで走破（落下・ミス0）`, rr.boss && rr.lost === 0 && rr.x >= rr.lock, `x=${rr.x | 0}/${rr.lock} frames=${rr.f}`);
+    G.input.set('ArrowRight', false); G.input.set('Space', false); G.input.set('KeyZ', false); G.input.set('KeyX', false);
+    return { x: p.x, lock: G.lockX, boss: !!G.boss, lost, f, hp: p.hp, lives: G.lives };
+  }, {id, normalDamage});
+  check(`${id}: ボス部屋まで走破（${normalDamage ? '通常被弾' : '落下・ミス0'}）`, rr.boss && (normalDamage || rr.lost === 0) && rr.x >= rr.lock, `x=${rr.x | 0}/${rr.lock} frames=${rr.f} hp=${rr.hp} lives=${rr.lives} misses=${rr.lost}`);
+}
 }
 
 console.log('\n[P4-3] ボス13体: AIが生きている（900フレーム・例外なし・動く/撃つ）');
@@ -294,6 +299,46 @@ for (const id of ['r1s1', 'r1s2', 'r1s3', 'r1s4', 'r2s1', 'r2s2', 'r2s3', 'r2s4'
   }, id);
   check(`${id}: ${rr.name || '?'} が出現し、動く/撃つ（画面固定）`, rr.ok && rr.alive && (rr.shots > 0 || rr.moved > 10) && rr.cam, JSON.stringify(rr));
 }
+
+console.log('\n[P4-3b] ボス13体を通常被弾・通常攻撃で撃破（各戦は体力6・残機3から）');
+for (const [index, id] of sd.ids.entries()) {
+  const combat = await run(({ id, index }) => {
+    const G = window.__KOMA.game, K = window.KOMA;
+    G.newGame(id); G.inv.selectIndex = Math.min(index, K.SELECT.length - 1);
+    G.input.keys = {}; G.input.update();
+    // 戦闘だけを独立検証する開始位置。以降、体力・位置・無敵時間・ボス状態は変更しない。
+    G.player.reset(G.lockX + 50); G.update();
+    const p = G.player, b = G.boss;
+    let frames = 0;
+    for (; frames < 18000 && G.state === 'play'; frames++) {
+      const dx = b.x - p.x, distance = Math.abs(dx), toward = Math.sign(dx) || 1;
+      let move = 0, jump = false, duck = false;
+      if (b.kind === 'oni') {
+        if (p.x < G.lockX + 140) move = 1;
+        else if (p.x > G.lockX + 160) move = -1;
+        else if (p.onGround && p.atk <= 0 && p.dir !== toward) move = toward;
+      } else if (distance > 100) move = toward;
+      else if (distance < 60 && p.onGround) move = -toward;
+      else if (p.onGround && p.atk <= 0 && p.dir !== toward) move = toward;
+      if (b.kind === 'guardian') jump = p.onGround;
+      if (b.kind === 'tengu') jump = p.onGround && distance < 90;
+      const danger = G.eshots.some(s => !s.dead && Math.abs(s.x - p.x) < 55 && s.y > p.y - 40 && s.y < p.y + 8);
+      if (danger && p.onGround) jump = true;
+      if (b.kind === 'oni') jump = false;
+      if (b.kind === 'yuki' && b.sc >= 75 && b.sc <= 115) { jump = !b.lane && p.onGround; duck = !!b.lane; }
+      G.input.set('ArrowRight', move > 0); G.input.set('ArrowLeft', move < 0);
+      G.input.set('Space', jump && frames % 2 === 0); G.input.set('ArrowDown', duck);
+      G.input.set('KeyZ', distance < 36 && frames % 16 === 0); G.input.set('KeyX', frames % 14 === 0);
+      G.update();
+    }
+    G.input.keys = {}; G.input.update();
+    return { state: G.state, bossHp: b.hp, hp: p.hp, lives: G.lives, frames, score: G.score };
+  }, { id, index });
+  check(`${id}: 剣・投擲で撃破（無敵化・回復・アイテム支給なし）`, combat.state === 'clear' && combat.bossHp <= 0 && combat.hp > 0 && combat.lives >= 0 && combat.score > 0, JSON.stringify(combat));
+}
+check('全ボスの攻略ヒントが日英で定義されている', await run(() => Object.values(window.KOMA.BOSS_DEFS).every(b => {
+  const tip = window.KOMA.BOSS_TIPS[b.kind]; return tip && tip.ja && tip.en;
+})));
 
 console.log('\n[P4-4] ボスごとの弱点の癖');
 const bossSetup = (id, fn) => run(({ id, fn }) => {
@@ -431,6 +476,308 @@ const inkd = await run(() => { const c = document.getElementById('screen'); cons
 check('画面が実際に描かれている', inkd > 1500, `px=${inkd}`);
 check('ページ例外・404・コンソールエラーが0件', errors.length === 0, errors.join(' | '));
 
+console.log('\n[進行の回帰検証] アイテムでのボス撃破・ゲームオーバー');
+for (const item of ['wind', 'thunder', 'bomb']) {
+  const result = await run(item => {
+    const G = window.__KOMA.game;
+    G.newGame('r2s1'); G.player.reset(G.lockX + 20); window.__KOMA.step(2);
+    G.boss.hp = 1; G.inv.single = [item]; G.pauseIdx = 0;
+    window.H.tap('Enter'); window.H.tap('KeyZ');
+    const clear = G.state === 'clear', consumed = G.inv.single.length === 0;
+    window.__KOMA.step(261);
+    return { clear, consumed, next: G.stage.id, state: G.state };
+  }, item);
+  check(`${item}: 休止画面のアイテムで倒してもクリア表示→次の面へ進む`, result.clear && result.consumed && result.next === 'r2s2' && result.state === 'play', JSON.stringify(result));
+}
+const fatal = await run(() => {
+  const G = window.__KOMA.game, K = window.KOMA;
+  G.newGame('r1s1'); G.enemies = [new K.Enemy('plain', 100)]; G.queue = [];
+  G.player.reset(100); G.player.hp = 1; G.lives = 0; G.score = 0;
+  G.pickups = [{ cat: 'heal', id: 'heal', x: 100, y: K.GROUND, taken: false },
+    { cat: 'instant', id: 'float', x: 100, y: K.GROUND, taken: false }];
+  window.__KOMA.step(1);
+  return { state: G.state, lives: G.lives, hp: G.player.hp, taken: G.pickups.some(p => p.taken) };
+});
+check('致命傷のフレームで回復・1UPを拾ってゲームオーバー状態を変更しない', fatal.state === 'over' && fatal.lives === -1 && fatal.hp === 0 && !fatal.taken, JSON.stringify(fatal));
+
+console.log('\n[連続進行] 全13面の走破→アイテムでボス撃破→エンディング（無敵の検証ボット）');
+const campaign = await run(() => {
+  const G = window.__KOMA.game, K = window.KOMA, results = [];
+  G.newGame('r1s1');
+  for (const spec of K.STAGE_LIST) {
+    const p = G.player, lives = G.lives;
+    if (G.stage.id !== spec.id) return { results, error: 'unexpected stage ' + G.stage.id };
+    let frames = 0;
+    for (; frames < 12000 && !G.boss && G.state === 'play'; frames++) {
+      p.inv = Math.max(p.inv, 3);
+      const pit = G.stage.pits.find(q => q[1] > p.x && q[0] - p.x < 8 && q[0] - p.x > -2);
+      G.input.set('ArrowRight', true);
+      G.input.set('Space', !!pit && p.onGround);
+      window.__KOMA.step(1);
+    }
+    G.input.set('ArrowRight', false); G.input.set('Space', false);
+    window.__KOMA.step(1);
+    if (!G.boss || G.lives < lives) return { results, error: 'route ' + spec.id, x: p.x, frames };
+    // 部屋の左端に貼り付くと鬼面の女が背後へ着地できないため、入口から少し進む。
+    G.input.set('ArrowRight', true);
+    for (let i = 0; i < 30; i++) { p.inv = Math.max(p.inv, 3); window.__KOMA.step(1); }
+    G.input.set('ArrowRight', false); window.__KOMA.step(1);
+    // 弱点が開くまで実際のAIを動かす。被弾だけ無効にし、攻撃アイテムを1個支給する。
+    let wait = 0;
+    for (; wait < 1200 && !G.boss.guard(G, { dmg: 999 }); wait++) { p.inv = Math.max(p.inv, 3); window.__KOMA.step(1); }
+    if (wait === 1200) return { results, error: 'guard ' + spec.id };
+    G.inv.single = ['wind']; G.pauseIdx = 0;
+    window.H.tap('Enter'); window.H.tap('KeyZ');
+    const cleared = G.state === 'clear', score = G.score, weapon = G.inv.selectIndex;
+    window.__KOMA.step(261);
+    const saved = K.SaveStore.read();
+    results.push({ id: spec.id, frames, cleared, next: G.stage.id, state: G.state,
+      carried: G.score === score && G.inv.selectIndex === weapon,
+      saved: spec.next ? saved && saved.stageId === spec.next && saved.score === score && saved.selectIndex === weapon : saved === null });
+    if (!cleared) return { results, error: 'clear ' + spec.id };
+  }
+  return { results, ending: G.state === 'ending', score: G.score };
+});
+for (const result of campaign.results) {
+  const spec = sd.ids.indexOf(result.id), next = sd.ids[spec + 1];
+  check(`${result.id}: 走破・撃破・得点/武器引継ぎ・次面の保存`, result.cleared && result.carried && result.saved && (next ? result.next === next && result.state === 'play' : result.state === 'ending'), JSON.stringify(result));
+}
+check('13面を連続してエンディングまで進行できる', campaign.results.length === 13 && campaign.ending && !campaign.error, campaign.error || `score=${campaign.score}`);
+
+console.log('\n[10] スマートフォンの配置・マルチタッチ');
+const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+const touchPage = await mobile.newPage();
+touchPage.on('pageerror', e => errors.push('mobile: ' + e.message));
+await touchPage.addInitScript(() => { window.requestAnimationFrame = () => 0; });
+await touchPage.goto(BASE + '/koma_ken.html');
+await touchPage.waitForFunction(() => window.__KOMA && window.__KOMA.assets.summary().total > 0);
+for (const [width, height] of [[320, 568], [390, 844], [844, 390], [568, 320]]) {
+  await touchPage.setViewportSize({ width, height });
+  const layout = await touchPage.evaluate(() => {
+    const canvas = document.querySelector('canvas').getBoundingClientRect();
+    const buttons = [...document.querySelectorAll('[data-koma-action]')].map(b => b.getBoundingClientRect());
+    return {
+      fit: canvas.width >= 160 && canvas.bottom <= innerHeight && buttons.every(b => b.width >= 44 && b.height >= 44 && b.left >= 0 && b.right <= innerWidth && b.bottom <= innerHeight),
+      overlap: buttons.some(b => b.left < canvas.right && b.right > canvas.left && b.top < canvas.bottom && b.bottom > canvas.top),
+      overflow: document.documentElement.scrollWidth > innerWidth,
+    };
+  });
+  check(`${width}×${height}: 画面と44px以上の操作ボタンが収まり、重ならない`, layout.fit && !layout.overlap && !layout.overflow, JSON.stringify(layout));
+}
+await touchPage.setViewportSize({ width: 390, height: 844 });
+const cdp = await mobile.newCDPSession(touchPage);
+const touchPoint = async (action, id) => {
+  const b = await touchPage.locator(`[data-koma-action="${action}"]`).boundingBox();
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2, id };
+};
+const stepTouch = () => touchPage.evaluate(() => window.__KOMA.step(1));
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [await touchPoint('pause', 1)] });
+await stepTouch();
+check('実タッチイベントで冒険を開始', await touchPage.evaluate(() => window.__KOMA.game.state === 'play' && window.__KOMA.game.stage.id === 'r1s1'));
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await stepTouch();
+await touchPage.evaluate(() => { const G = window.__KOMA.game; G.newGame('training'); G.player.reset(100); G.enemies = []; G.queue = []; });
+const beforeTouch = await touchPage.evaluate(() => ({ x: window.__KOMA.game.player.x, y: window.__KOMA.game.player.y }));
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [await touchPoint('right', 2), await touchPoint('jump', 3), await touchPoint('attack', 4)] });
+await stepTouch();
+const moved = await touchPage.evaluate(() => { const G = window.__KOMA.game; return { x: G.player.x, y: G.player.y, attack: G.input.pressed.attack, jump: G.input.pressed.jump }; });
+check('実マルチタッチで移動・ジャンプ・斬撃が同時に働く', moved.x > beforeTouch.x && moved.y < beforeTouch.y && moved.attack && moved.jump, JSON.stringify(moved));
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+await stepTouch();
+check('タッチ中断後に入力と押下表示が残らない', await touchPage.evaluate(() => Object.values(window.__KOMA.game.input.down).every(v => !v) && !document.querySelector('#touch-controls .held')));
+await touchPage.locator('[data-koma-action="pause"]').click();
+await stepTouch();
+check('更新フレームの間に押して離した短いクリックも受け付ける', await touchPage.evaluate(() => window.__KOMA.game.state === 'pause'));
+await stepTouch();
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [await touchPoint('pause', 20)] });
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await stepTouch();
+check('更新前に指を離した短いタップも1回だけ受け付ける', await touchPage.evaluate(() => window.__KOMA.game.state === 'play' && window.__KOMA.game.input.pressed.pause));
+await stepTouch();
+check('短いタップの次のフレームに再度休止せず、押下入力も残らない', await touchPage.evaluate(() => window.__KOMA.game.state === 'play' && !window.__KOMA.game.input.down.pause));
+await touchPage.locator('[data-koma-action="pause"]').focus();
+await touchPage.keyboard.press('Enter'); await stepTouch();
+check('フォーカスした画面ボタンをEnterでも操作できる', await touchPage.evaluate(() => window.__KOMA.game.state === 'pause'));
+await stepTouch();
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [await touchPoint('pause', 21)] });
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+await stepTouch();
+check('更新前に中断されたタップは実行しない', await touchPage.evaluate(() => window.__KOMA.game.state === 'pause' && !window.__KOMA.game.input.down.pause));
+await touchPage.locator('[data-koma-action="pause"]').focus();
+await touchPage.keyboard.press('Enter'); await stepTouch(); await stepTouch();
+await touchPage.evaluate(() => { window.__KOMA.game.player.reset(100); });
+await touchPage.keyboard.down('ArrowRight'); await stepTouch();
+check('操作ボタンをEnterで押した後も矢印キーで移動できる', await touchPage.evaluate(() => window.__KOMA.game.state === 'play' && window.__KOMA.game.input.down.right && window.__KOMA.game.player.x > 100));
+await touchPage.keyboard.up('ArrowRight'); await stepTouch();
+await touchPage.evaluate(() => { const G = window.__KOMA.game; G.state = 'title'; G.menuIdx = 0; });
+await touchPage.locator('canvas').focus(); await touchPage.keyboard.press('Enter'); await stepTouch();
+check('更新前に押して離したEnterでもタイトルから開始できる', await touchPage.evaluate(() => window.__KOMA.game.state === 'play' && window.__KOMA.game.stage.id === 'r1s1'));
+await stepTouch();
+console.log('\n[11] 自動休止・ステージ開始時の保存と再開');
+let saved = await touchPage.evaluate(() => {
+  const G = window.__KOMA.game;
+  G.newGame('r1s1'); G.score = 4321; G.lives = 2;
+  G.inv.selectIndex = 4; G.inv.auto.key = 2; G.inv.auto.decoy = 3; G.inv.single = ['fly', 'wind'];
+  G.loadStage('r2s3');
+  const checkpoint = JSON.stringify(G.checkpoint);
+  G.player.x = 250; G.score = 9999; G.inv.single.pop();
+  window.dispatchEvent(new Event('blur'));
+  const paused = G.state === 'pause', x = G.player.x, tick = G.tick;
+  window.__KOMA.step(30);
+  return { paused, frozen: G.player.x === x && G.tick === tick, checkpoint };
+});
+check('画面を離れると自動休止し、プレイヤーもゲーム時間も進まない', saved.paused && saved.frozen);
+await touchPage.reload();
+await touchPage.waitForFunction(() => window.__KOMA);
+let resumed = await touchPage.evaluate(() => {
+  const G = window.__KOMA.game;
+  const hasSave = !!G.checkpoint;
+  const tap = code => { G.input.set(code, true); window.__KOMA.step(1); G.input.set(code, false); window.__KOMA.step(1); };
+  tap('ArrowUp'); const menu = G.menuIdx; tap('Enter');
+  return { hasSave, menu, stage: G.stage.id, score: G.score, lives: G.lives, select: G.inv.selectIndex,
+    auto: G.inv.auto, single: G.inv.single, hp: G.player.hp, x: G.player.x, room: G.room, boss: !!G.boss };
+});
+check('再読込後、タイトルの「続きから」で保存した面を再開', resumed.hasSave && resumed.menu === 2 && resumed.stage === 'r2s3', JSON.stringify(resumed));
+check('得点・残機・武器・所持品はステージ開始時の値に戻る', resumed.score === 4321 && resumed.lives === 2 && resumed.select === 4 && resumed.auto.key === 2 && resumed.auto.decoy === 3 && resumed.single.join(',') === 'fly,wind');
+check('全回復して面の入口から再開し、門やボス戦の途中状態を引き継がない', resumed.hp === 6 && resumed.x === 32 && resumed.room === null && !resumed.boss);
+let saveChecks = await touchPage.evaluate(() => {
+  const G = window.__KOMA.game;
+  G.newGame('training'); const training = JSON.stringify(window.KOMA.SaveStore.read());
+  G.inv.auto.decoy = 0; G.lives = 0; G.loseLife(false);
+  const trainingOver = JSON.stringify(window.KOMA.SaveStore.read());
+  G.newGame('r1s1'); const fresh = window.KOMA.SaveStore.read();
+  G.inv.auto.decoy = 0; G.lives = 0; G.loseLife(false);
+  return { training, trainingOver, fresh, cleared: window.KOMA.SaveStore.read() === null && G.checkpoint === null };
+});
+check('訓練場を開始・ゲームオーバーにしても冒険の保存は変わらない', saveChecks.training === saved.checkpoint && saveChecks.trainingOver === saved.checkpoint);
+check('新しい冒険は初期状態で保存を置き換える', saveChecks.fresh.stageId === 'r1s1' && saveChecks.fresh.score === 0 && saveChecks.fresh.lives === 3 && saveChecks.fresh.single.length === 0);
+check('冒険でゲームオーバーになるとチェックポイントを消す', saveChecks.cleared);
+console.log('\n[12] 手引・タイトルへ戻る');
+const guideChecks = await touchPage.evaluate(() => {
+  const G = window.__KOMA.game;
+  const tap = code => { G.input.set(code, true); window.__KOMA.step(1); G.input.set(code, false); window.__KOMA.step(1); };
+  G.newGame('r1s1'); G.inv.single = ['fly', 'wind'];
+  tap('Enter'); const before = { tick: G.tick, x: G.player.x, single: G.inv.single.join(',') };
+  tap('KeyX'); const opened = G.pauseView === 'guide';
+  const pages = [];
+  for (let i = 0; i < 5; i++) {
+    tap('ArrowRight'); tap('ArrowDown'); G.draw();
+    pages.push(G.guidePage);
+    tap('KeyZ'); window.__KOMA.step(10);
+  }
+  const frozen = G.tick === before.tick && G.player.x === before.x && G.inv.single.join(',') === before.single;
+  tap('KeyX'); const back = G.state === 'pause' && G.pauseView === 'items';
+  tap('ArrowUp'); tap('KeyZ'); const confirm = G.pauseView === 'quit' && G.quitIdx === 0;
+  tap('KeyZ'); const cancel = G.state === 'pause' && G.pauseView === 'items' && G.inv.single.join(',') === before.single;
+  tap('KeyZ'); tap('ArrowDown'); tap('KeyZ');
+  const title = G.state === 'title' && G.menuIdx === 2 && G.checkpoint.stageId === 'r1s1';
+  tap('Enter'); const continued = G.state === 'play' && G.stage.id === 'r1s1' && G.inv.single.length === 0;
+  tap('Enter'); tap('KeyX'); tap('Enter'); const resumed = G.state === 'play' && G.pauseView === 'items';
+  return { opened, pages, frozen, back, confirm, cancel, title, continued, resumed };
+});
+check('休止中に手引を開き、全5分類を切替・描画できる', guideChecks.opened && guideChecks.pages.join(',') === '1,2,3,4,0');
+check('手引の閲覧・決定操作で時間が進まず、所持品を消費しない', guideChecks.frozen && guideChecks.back);
+check('タイトルへ戻る際は確認を表示し、初期選択のキャンセルで所持品を維持', guideChecks.confirm && guideChecks.cancel);
+check('タイトルへ戻ると「続きから」を選択し、開始時の保存から再開できる', guideChecks.title && guideChecks.continued);
+check('手引からEnterでプレイを再開できる', guideChecks.resumed);
+await touchPage.evaluate(() => { const G = window.__KOMA.game; G.state = 'pause'; G.pauseView = 'items'; });
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [await touchPoint('sub', 7)] });
+await stepTouch();
+check('スマホの道具ボタンでも手引を開ける', await touchPage.evaluate(() => window.__KOMA.game.pauseView === 'guide'));
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await stepTouch();
+const invalid = await touchPage.evaluate(() => {
+  const G = window.__KOMA.game, store = window.KOMA.SaveStore;
+  G.newGame('r1s1'); const valid = G.checkpoint;
+  const key = 'koma-ken.checkpoint.v1';
+  const bad = ['{', JSON.stringify({ ...valid, version: 99 }), JSON.stringify({ ...valid, stageId: 'training' }),
+    JSON.stringify({ ...valid, selectIndex: -1 }), JSON.stringify({ ...valid, score: -1 }),
+    JSON.stringify({ ...valid, single: ['__proto__'] }), JSON.stringify({ ...valid, auto: { ...valid.auto, key: 99 } })];
+  const rejected = bad.every(raw => { localStorage.setItem(key, raw); return store.read() === null; });
+  G.newGame('r4s1'); G.spawnBoss(); G.onBossDead(G.boss); window.__KOMA.step(261);
+  return { rejected, ending: G.state === 'ending' && store.read() === null && G.checkpoint === null };
+});
+check('破損・未知の形式・範囲外の保存データを安全に無視', invalid.rejected);
+check('最終面クリアでチェックポイントを消す', invalid.ending);
+await touchPage.evaluate(() => {
+  Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new DOMException('Blocked', 'SecurityError'); } });
+});
+const blocked = await touchPage.evaluate(() => {
+  const G = new window.KOMA.Game(document.querySelector('canvas'), window.__KOMA.assets);
+  const initial = G.checkpoint; G.newGame('r1s1');
+  return { initial, state: G.state, failed: G.saveFailed, readable: window.KOMA.SaveStore.read(), cleared: window.KOMA.SaveStore.clear() };
+});
+check('保存領域が使えなくても起動・プレイでき、保存不可を通知', blocked.initial === null && blocked.state === 'play' && blocked.failed && blocked.readable === null && !blocked.cleared);
+console.log('\n[13] 合成効果音・BGM・音量・中断');
+await touchPage.reload();
+await touchPage.waitForFunction(() => window.__KOMA);
+check('初期状態は無音でAudioContextを自動作成しない', await touchPage.evaluate(() => window.__KOMA.game.audio.mode === 'off' && window.__KOMA.game.audio.ctx === null));
+const rendered = await touchPage.evaluate(async () => {
+  async function render(mode, volume, scene) {
+    const context = new OfflineAudioContext(1, 22050, 44100), audio = new window.KOMA.Audio();
+    audio.mode = mode; audio.volume = volume;
+    audio.ctx = { currentTime: 0, state: 'running', createOscillator: () => context.createOscillator(), createGain: () => context.createGain() };
+    audio.master = context.createGain(); audio.master.gain.value = volume; audio.master.connect(context.destination);
+    if (scene) audio.sync({ state: scene, boss: scene === 'play', room: null }); else audio.effect('sword');
+    const buffer = await context.startRendering();
+    let peak = 0; for (const v of buffer.getChannelData(0)) peak = Math.max(peak, Math.abs(v));
+    return { peak, voices: audio.voices.size };
+  }
+  return { effect: await render('effects', .3), muted: await render('off', .3), zero: await render('effects', 0),
+    music: await render('all', .3, 'play'), effectsOnly: await render('effects', .3, 'play') };
+});
+check('効果音を実際の音声バッファへ合成でき、終了後に音源を解放', rendered.effect.peak > .001 && rendered.effect.peak < 1 && rendered.effect.voices === 0, JSON.stringify(rendered.effect));
+check('無音モード・音量0では出力サンプルも0', rendered.muted.peak === 0 && rendered.zero.peak === 0);
+check('BGMを合成でき、効果音のみの設定ではBGMを鳴らさない', rendered.music.peak > .001 && rendered.effectsOnly.peak === 0);
+await touchPage.locator('#sound-mode').click();
+await touchPage.locator('#sound-mode').selectOption('all');
+await touchPage.waitForFunction(() => window.__KOMA.game.audio.ctx?.state === 'running');
+const audioStates = await touchPage.evaluate(() => {
+  const G = window.__KOMA.game, A = G.audio;
+  G.state = 'play'; G.boss = null; A.sync(G); const stage = A.scene === 'stage' && A.music.size > 0;
+  G.boss = {}; A.sync(G); const boss = A.scene === 'boss';
+  G.room = 'hub'; A.sync(G); const gate = A.scene === 'gate'; G.room = null; G.boss = null;
+  G.state = 'clear'; A.sync(G); const clear = A.scene === 'clear';
+  G.state = 'ending'; A.sync(G); const ending = A.scene === 'ending';
+  G.state = 'pause'; A.effect('hurt'); A.sync(G); const paused = A.voices.size === 0;
+  G.state = 'play'; A.sync(G); window.dispatchEvent(new Event('blur'));
+  const blurred = A.blocked && A.voices.size === 0 && G.state === 'pause';
+  window.dispatchEvent(new Event('focus')); A.sync(G); const stayedPaused = A.voices.size === 0;
+  A.setMode('effects'); A.effect('pickup'); A.setMode('off'); const stopped = A.voices.size === 0 && A.master.gain.value === 0;
+  return { stage, boss, gate, clear, ending, paused, blurred, stayedPaused, stopped };
+});
+check('通常面・ボス・門・クリア・エンディングでBGMを切り替える', audioStates.stage && audioStates.boss && audioStates.gate && audioStates.clear && audioStates.ending, JSON.stringify(audioStates));
+check('休止・画面離脱・無音への切替で音を止め、戻っても休止を維持', audioStates.paused && audioStates.blurred && audioStates.stayedPaused && audioStates.stopped);
+await touchPage.locator('#sound-mode').selectOption('effects');
+await touchPage.locator('#sound-volume').fill('55');
+const focused = await touchPage.evaluate(() => {
+  const G = window.__KOMA.game; G.state = 'title'; G.input.keys = {};
+  document.querySelector('#sound-mode').focus(); return G.menuIdx;
+});
+await touchPage.keyboard.press('Enter'); await stepTouch();
+check('音設定の操作がゲームの開始入力として扱われない', await touchPage.evaluate(menu => window.__KOMA.game.state === 'title' && window.__KOMA.game.menuIdx === menu, focused));
+await touchPage.reload(); await touchPage.waitForFunction(() => window.__KOMA);
+check('音設定と音量を再読込後にも保持', await touchPage.evaluate(() => window.__KOMA.game.audio.mode === 'effects' && window.__KOMA.game.audio.volume === .55 && document.querySelector('#sound-mode').value === 'effects' && document.querySelector('#sound-volume').value === '55'));
+await touchPage.locator('#play-guide summary').focus();
+await touchPage.keyboard.press('Enter'); await stepTouch();
+check('説明をEnterで開閉しても冒険が勝手に始まらない', await touchPage.evaluate(() => document.querySelector('#play-guide').open && window.__KOMA.game.state === 'title'));
+await page.setViewportSize({ width: 844, height: 390 });
+check('小型の横長画面では精密ポインター判定でも操作ボタンを表示', await page.evaluate(() => {
+  const c = document.querySelector('canvas').getBoundingClientRect();
+  return [...document.querySelectorAll('[data-koma-action]')].every(b => {
+    const r = b.getBoundingClientRect(); return r.width >= 44 && r.height >= 44 && r.bottom <= innerHeight && (r.right <= c.left || r.left >= c.right);
+  });
+}));
+const noAudio = await mobile.newPage();
+await noAudio.addInitScript(() => { window.AudioContext = undefined; window.webkitAudioContext = undefined; window.requestAnimationFrame = () => 0; });
+await noAudio.goto(BASE + '/koma_ken.html'); await noAudio.waitForFunction(() => window.__KOMA);
+check('音声APIがない環境でも案内を表示し、ゲームを開始できる', await noAudio.evaluate(() => {
+  const G = window.__KOMA.game; G.newGame('r1s1'); window.__KOMA.step(1);
+  return !G.audio.supported && G.state === 'play' && document.querySelector('#sound-mode').disabled && document.querySelector('#sound-status').textContent.includes('Audio unavailable');
+}));
+await noAudio.close();
+check('モバイルもページ例外なし', errors.length === 0, errors.join(' | '));
+await mobile.close();
 await browser.close(); server.close();
 console.log(`\n${fail ? '❌' : '✅'} ${pass} 件合格 / ${fail} 件不合格`);
 process.exit(fail ? 1 : 0);
