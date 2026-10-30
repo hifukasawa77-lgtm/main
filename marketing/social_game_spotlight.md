@@ -1581,6 +1581,76 @@ Free in your browser, no install required.
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
 ```
 
+## 降魔七星剣 / Shichisei-Ken (`koma-ken`)
+
+### game-koma-ken-x-ja
+```
+⚔️ 降魔七星剣
+
+8ビット風の横スクロールアクション。七星剣で敵の弾を消し、属性相性で3倍。全13面・ボス13体・結界門
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/koma_ken.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-koma-ken-x-en
+```
+⚔️ Shichisei-Ken
+
+8-bit-style side-scrolling action — sword cancels shots, elemental 3x damage, 13 stages, 13 bosses and warded gates
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/koma_ken.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-koma-ken-bsky-ja
+```
+⚔️ 降魔七星剣
+8ビット風の横スクロールアクション。七星剣で敵の弾を消し、属性相性で3倍。全13面・ボス13体・結界門
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/koma_ken.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## フロントライン・ゼロ / Frontline Zero (`frontline-zero`)
+
+### game-frontline-zero-x-ja
+```
+🎯 フロントライン・ゼロ
+
+Unity 6 製の陣取り型チームFPS。5つの旗を奪い合う9対9の部隊戦（WebGL・初回約27MB）
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/frontline-zero/
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-frontline-zero-x-en
+```
+🎯 Frontline Zero
+
+Unity 6 team FPS — 9v9 squad battle capturing five flags (WebGL, ~27MB first load)
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/frontline-zero/
+
+#indiedev #browsergames #actiongame
+```
+
+### game-frontline-zero-bsky-ja
+```
+🎯 フロントライン・ゼロ
+Unity 6 製の陣取り型チームFPS。5つの旗を奪い合う9対9の部隊戦（WebGL・初回約27MB）
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/frontline-zero/
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
 ## 幕末風雲記 / Bakumatsu Fuunki (`bakumatsu`)
 
 ### game-bakumatsu-x-ja
