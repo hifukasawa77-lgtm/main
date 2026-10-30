@@ -113,7 +113,27 @@
       if(!e.isBoss)this.sfx('enemy_down');
       this.score += e.def.score; this.sparks.push({ x: e.x, y: e.y - e.h / 2, life: 14 });
       if (e.isBoss) { this.onBossDead(e); return; }
-      if (this.stage.respawn || (!this.room && this.stage.reconstruction)) this.queue.push({ type: e.type, x: e.x0, y: e.y0, at: this.tick + 180, offscreenOnly:!this.stage.respawn });
+      if ((this.stage.respawn || (!this.room && this.stage.reconstruction)) && !e.respawnQueued) {
+        e.respawnQueued=true;this.queue.push({type:e.type,x:e.x0,y:e.y0,at:this.tick+90});
+      }
+    }
+    respawnEnemies() {
+      if(this.spawnHalt>0){this.spawnHalt--;return;}
+      for(let i=this.queue.length-1;i>=0;i--){
+        const q=this.queue[i];if(this.tick<q.at)continue;
+        const visible=this.enemies.filter(e=>!e.dead&&this.onScreen(e)).length;
+        if(visible>=8)break;
+        let x=q.x,y=q.y;
+        if(Math.abs(x-this.player.x)<40&&Math.abs(y-this.player.y)<48){
+          const geo=this.geometry();
+          const candidates=[q.x+56,q.x-56,q.x+88,q.x-88],flying=K.ENEMY_TYPES[q.type].ai==='fly';
+          const safe=candidates.find(at=>at>=16&&at<=geo.width-16&&Math.abs(at-this.player.x)>=40&&(flying||geo.supportY(at,q.y-8,q.y+8,6)!=null)&&!geo.solids.some(r=>at+6>r.x&&at-6<r.x+r.w&&q.y>r.y&&q.y-28<r.y+r.h));
+          if(safe==null){q.at=this.tick+12;continue;}
+          x=safe;y=flying?q.y:geo.supportY(x,q.y-8,q.y+8,6);
+        }
+        const enemy=new K.Enemy(q.type,x,y);enemy.x0=q.x;enemy.y0=q.y;
+        this.queue.splice(i,1);this.enemies.push(enemy);
+      }
     }
     onScreen(e) { return e.x >= this.camX - 8 && e.x <= this.camX + K.W + 8 && e.y >= this.camY - 8 && e.y - e.h <= this.camY + K.H + 8; }
 
@@ -304,8 +324,7 @@
       // 敵の更新と再出現
       for (const e of this.enemies) e.update(this);
       this.enemies = this.enemies.filter(e => !e.dead);
-      if (this.spawnHalt > 0) this.spawnHalt--;
-      else for (let i = this.queue.length - 1; i >= 0; i--) if (this.tick >= this.queue[i].at && (!this.queue[i].offscreenOnly || this.queue[i].x < this.camX-32 || this.queue[i].x > this.camX+K.W+32 || this.queue[i].y < this.camY-32 || this.queue[i].y > this.camY+K.H+32)) { const q = this.queue.splice(i, 1)[0]; this.enemies.push(new K.Enemy(q.type, q.x, q.y)); }
+      this.respawnEnemies();
       if (this.state !== 'play') return;
 
       // 七支刀・旋風斬・分身の刃
