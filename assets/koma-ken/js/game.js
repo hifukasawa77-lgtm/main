@@ -431,7 +431,14 @@
       else K.drawBackgroundPlaceholder(g, cam, this.stage);
       g.save(); g.translate(0, -Math.round(this.camY));
       K.drawTerrain(g, cam, this.stage, A, this.camY);
-      if (this.stage.gate && !this.stage.gate.used) A.drawSprite(g, 'gate', this.stage.gate.x - cam, this.stage.gate.y ?? K.GROUND, { w: this.stage.gate.wall?24:40, h: 56 });
+      if (this.stage.gate && !this.stage.gate.used) {
+        const gate=this.stage.gate,wall=gate.wall;
+        if(wall){
+          // The wall occludes the right half: the door is fixed to its vertical face.
+          g.save();g.beginPath();g.rect(wall.x-cam-48,gate.y-60,48,60);g.clip();
+          A.drawSprite(g,'gate',wall.x-cam+1,gate.y,{w:48,h:56});g.restore();
+        }else A.drawSprite(g,'gate',gate.x-cam,gate.y??K.GROUND,{w:40,h:56});
+      }
       for (const d of this.stage.doors || []) { A.drawSprite(g, 'gate', d.x - cam, d.y ?? K.GROUND, { w: 28, h: 44 }); this.txt(d.label, d.x - cam, (d.y ?? K.GROUND) - 48, '#fff', 'center'); }
 
       for (const pk of this.pickups) if (!pk.taken) {

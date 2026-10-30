@@ -78,7 +78,8 @@
    }
   }
   s.pickups.unshift({cat:'auto',id:'key',x:route[0][0]+48,y:route[0][1]});
-  const gateNode=route[Math.max(1,Math.floor(route.length/2))];s.gate={x:gateNode[0],y:gateNode[1],used:false,wall:{x:gateNode[0]+12,y:gateNode[1]-80,w:32,h:80,backgroundWall:true}};
+  const gateNode=route[Math.max(1,Math.floor(route.length/2))];s.gate={x:gateNode[0],y:gateNode[1],used:false,wall:{x:gateNode[0]+12,y:gateNode[1]-80,w:32,h:80,surface:'ground'}};
+  d.solids.push({...s.gate.wall});
   K.RECONSTRUCTION_CATALOG.push({id,name:s.name,width,height,viewport:{width:256,height:240},projectScreenSpan:{horizontal:width/256,vertical:height/240},originalScreenCount:null,status:'推定復元：原作の画面数・各座標は未確認',topology,route:d.route});
  }
 })(window.KOMA);
