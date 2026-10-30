@@ -109,13 +109,24 @@
       if (killed) this.killEnemy(e);
     }
     killEnemy(e) {
+      if (e.defeatedHandled) return;
       if (e.fallen === true && e.def && e.def.ai === 'drop') return;
+      e.defeatedHandled=true;
       if(!e.isBoss)this.sfx('enemy_down');
       this.score += e.def.score; this.sparks.push({ x: e.x, y: e.y - e.h / 2, life: 14 });
       if (e.isBoss) { this.onBossDead(e); return; }
+      this.dropEnemyItem(e);
       if ((this.stage.respawn || (!this.room && this.stage.reconstruction)) && !e.respawnQueued) {
         e.respawnQueued=true;this.queue.push({type:e.type,x:e.x0,y:e.y0,at:this.tick+90});
       }
+    }
+    dropEnemyItem(e) {
+      // Auto items, recovery and instant effects only; spells remain gate rewards.
+      const random=this.lootRandom||Math.random;
+      if(random()>=0.35)return;
+      const pool=[...Object.keys(K.AUTO).map(id=>({cat:'auto',id})),{cat:'heal',id:'heal'},...Object.keys(K.INSTANT).map(id=>({cat:'instant',id}))];
+      const item=pool[Math.min(pool.length-1,Math.floor(random()*pool.length))];
+      this.pickups.push({...item,x:e.x,y:e.y,taken:false,dropped:true,vy:-1.5});
     }
     respawnEnemies() {
       if(this.spawnHalt>0){this.spawnHalt--;return;}
@@ -377,6 +388,7 @@
       // アイテム取得
       for (const pk of this.pickups) {
         if (pk.taken) continue;
+        if(pk.dropped){pk.vy=Math.min((pk.vy||0)+K.GRAV,6);const next=pk.y+pk.vy,floor=pk.vy>=0?this.supportY(pk.x,pk.y,next):null;pk.y=floor==null?next:floor;if(floor!=null)pk.vy=0;if(pk.y>this.geometry().height+32){pk.taken=true;continue;}}
         if (K.overlap(p.hb, { x: pk.x - 8, y: pk.y - 16, w: 16, h: 16 }) && this.applyPickup(pk)) { pk.taken = true;this.sfx('pickup'); }
       }
 
