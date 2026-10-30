@@ -20,28 +20,12 @@
     r4s1: { kind: 'overlord',  name: '闇の支配者', hp: 90, w: 38, h: 56, tags: [],         color: '#302040', score: 20000 },
   };
 
-  K.BOSS_TIPS = {
-    oni: { ja: '跳んだ後、背中が開く隙を狙う', en: 'Strike from behind after its leap.' },
-    monk: { ja: '回転中は避け、止まった隙に攻撃', en: 'Avoid the spin; attack when resting.' },
-    guardian: { ja: '頭が弱点。跳んで剣や道具を当てる', en: 'Jump and aim at the head.' },
-    sorcerer: { ja: '分身は無害。本物が現れたら攻撃', en: 'Decoys are harmless. Hit the real one.' },
-    flame: { ja: '火柱の予告地点から離れる', en: 'Move away from marked ground.' },
-    wraith: { ja: '足元の衝撃波をジャンプで越える', en: 'Jump over ground shockwaves.' },
-    yuki: { ja: '高い光線はしゃがみ、低い光線は跳ぶ', en: 'Duck high beams; jump low beams.' },
-    tengu: { ja: '急降下してきた隙に攻撃する', en: 'Attack during its dive.' },
-    swordsman: { ja: '溜め動作の後の突進に注意', en: 'Watch for the dash after charging.' },
-    samurai: { ja: '光線と跳びかかりの着地を避ける', en: 'Avoid beams and leap landings.' },
-    armor: { ja: '大太刀から離れ、衝撃波は跳ぶ', en: 'Keep clear of slashes; jump waves.' },
-    matron: { ja: '結界が解けてから攻撃を当てる', en: 'Wait for the barrier to open.' },
-    overlord: { ja: '地を走る龍は跳び、上からの龍に注意', en: 'Jump ground dragons; watch overhead.' },
-  };
-
   class Boss {
-    constructor(id, x) {
+    constructor(id, x, floorY = GROUND) {
       const d = K.BOSS_DEFS[id]; if (!d) throw new Error('unknown boss: ' + id);
       this.id = id; this.kind = d.kind; this.def = { name: d.name, color: d.color, score: d.score, sprite: 'boss_' + id, ai: 'boss' };
       this.isBoss = true; this.name = d.name; this.tags = d.tags.slice();
-      this.x = x; this.y = GROUND; this.w = d.w; this.h = d.h; this.hp = this.maxHp = d.hp;
+      this.floorY = floorY; this.x = x; this.y = floorY; this.w = d.w; this.h = d.h; this.hp = this.maxHp = d.hp;
       this.dir = -1; this.vx = 0; this.vy = 0; this.onGround = true; this.t = 0; this.flash = 0; this.frozen = 0; this.dead = false;
       this.swordCd = 0; this.invisible = false; this.harmless = false;
       this.st = 'walk'; this.sc = 0; this.cool = 60; this.alpha = 1; this.warn = null; this.decoys = []; this.ring = false;
@@ -50,7 +34,7 @@
     sign(p) { return p.x < this.x ? -1 : 1; }
     phys() {
       this.vy += K.GRAV; this.y += this.vy;
-      if (this.y >= GROUND) { this.y = GROUND; this.vy = 0; this.onGround = true; } else this.onGround = false;
+      if (this.y >= this.floorY) { this.y = this.floorY; this.vy = 0; this.onGround = true; } else this.onGround = false;
     }
     shoot(g, x, y, vx, vy, o) { g.eshots.push(new K.EShot(x, y, vx, vy, o)); }
     slash(g, w, h, dx, dy, life) { g.eshots.push(new K.EShot(this.x + dx, this.y + dy, 0, 0, { w: w, h: h, life: life, solid: true, color: '#ffffff' })); }
@@ -71,7 +55,7 @@
       if (this.frozen > 0) { this.frozen--; return; }
       if (this.cool > 0) this.cool--;
       const ai = K.BOSS_AI[this.kind]; if (ai) ai(this, g, g.player);
-      this.x = K.clamp(this.x, g.lockX + 16, g.stage.width - 16);
+      this.x = K.clamp(this.x, g.lockX + 16, g.arenaRight() - 16);
       if (this.warn && this.warn.until < this.t) this.warn = null;
     }
     hit(dmg) { this.hp -= dmg; this.flash = 6; if (this.hp <= 0) this.dead = true; return this.dead; }
@@ -79,7 +63,7 @@
 
   // 分身（闇の導師用）。触れても害はなく、何を当てても効かない
   class Decoy {
-    constructor(x, def) { this.isBoss = false; this.decoy = true; this.harmless = true; this.x = x; this.y = GROUND; this.w = def.w; this.h = def.h; this.hp = 9999; this.maxHp = 9999; this.tags = []; this.def = def; this.dir = -1; this.t = 0; this.flash = 0; this.frozen = 0; this.dead = false; this.swordCd = 0; this.invisible = false; this.alpha = 0.55; }
+    constructor(x, def, floorY = GROUND) { this.isBoss = false; this.decoy = true; this.harmless = true; this.x = x; this.y = floorY; this.w = def.w; this.h = def.h; this.hp = 9999; this.maxHp = 9999; this.tags = []; this.def = def; this.dir = -1; this.t = 0; this.flash = 0; this.frozen = 0; this.dead = false; this.swordCd = 0; this.invisible = false; this.alpha = 0.55; }
     update() { this.t++; }
     guard() { return false; }
     hit() { return false; }
@@ -108,7 +92,7 @@
       if (b.st === 'walk') b.st = 'idle';
       if (b.st === 'idle') {
         b.dir = b.sign(p);
-        if (b.sc % 100 === 50) b.shoot(g, p.x + ((b.t * 7) % 50 - 25), 30, 0, 0.5, { g: 0.12, w: 10, h: 10, life: 200, color: '#8a7a6a' });
+        if (b.sc % 100 === 50) b.shoot(g, p.x + ((b.t * 7) % 50 - 25), b.floorY - 178, 0, 0.5, { g: 0.12, w: 10, h: 10, life: 200, color: '#8a7a6a' });
         if (b.sc > 110) { b.st = 'spin'; b.sc = 0; }
       } else if (b.st === 'spin') {
         b.dir = b.sign(p); b.x += b.dir * 1.5; if (b.sc > 110) { b.st = 'tired'; b.sc = 0; }
@@ -143,16 +127,16 @@
       b.x = b.homeX + Math.sin(b.t / 90) * 10;
       if (b.sc % 110 === 60) for (let i = -2; i <= 2; i++) b.shoot(g, b.x - 14, b.y - 34, -1.6, i * 0.32 - 0.2, { g: 0.02, life: 150, w: 10, h: 10, color: '#ff7020' });
       if (b.sc % 170 === 100) b.warn = { x: p.x, until: b.t + 30 };
-      if (b.sc % 170 === 130) b.shoot(g, p.x, GROUND, 0, -5.4, { g: 0.2, life: 70, w: 12, h: 14, solid: true, color: '#ff4010' });
+      if (b.sc % 170 === 130) b.shoot(g, p.x, b.floorY, 0, -5.4, { g: 0.2, life: 70, w: 12, h: 14, solid: true, color: '#ff4010' });
     },
     // 水底の亡霊: 宙に漂い、金棒で地面に衝撃波を走らせ、水妖を呼ぶ
     wraith(b, g, p) {
       b.dir = b.sign(p); b.sc++;
-      b.y = GROUND - 6 - 14 * Math.sin(b.t / 30);
+      b.y = b.floorY - 6 - 14 * Math.sin(b.t / 30);
       if (Math.abs(p.x - b.x) > 40) b.x += b.dir * 0.35;
       if (b.sc % 120 === 100) b.warn = { x: b.x, until: b.t + 20, bar: true };
-      if (b.sc % 120 === 0 && b.sc > 0) { b.shoot(g, b.x - 14, GROUND - 5, -1.8, 0, { w: 14, h: 10, solid: true, life: 110, color: '#60c0ff' }); b.shoot(g, b.x + 14, GROUND - 5, 1.8, 0, { w: 14, h: 10, solid: true, life: 110, color: '#60c0ff' }); }
-      if (b.sc % 240 === 200) { const n = g.enemies.filter(e => e.type === 'naga' && !e.dead).length; if (n < 2) g.enemies.push(new K.Enemy('naga', K.clamp(b.x - 36, g.lockX + 24, g.stage.width - 24))); }
+      if (b.sc % 120 === 0 && b.sc > 0) { b.shoot(g, b.x - 14, b.floorY - 5, -1.8, 0, { w: 14, h: 10, solid: true, life: 110, color: '#60c0ff' }); b.shoot(g, b.x + 14, b.floorY - 5, 1.8, 0, { w: 14, h: 10, solid: true, life: 110, color: '#60c0ff' }); }
+      if (b.sc % 240 === 200) { const n = g.enemies.filter(e => e.type === 'naga' && !e.dead).length; if (n < 2) g.enemies.push(new K.Enemy('naga', K.clamp(b.x - 36, g.lockX + 24, g.arenaRight() - 24), b.floorY)); }
     },
     // 雪の精: 位置を転じ、高い/低い光線を予告してから放つ（しゃがむ・跳ぶで避ける）
     yuki(b, g, p) {
@@ -161,18 +145,18 @@
       b.dir = b.sign(p);
       b.alpha = b.sc < 30 ? 0.35 : 1;
       if (b.sc === 60) b.warn = { x: b.x + b.dir * (b.w / 2 + 105), until: b.t + 28, beam: true, lane: b.lane, w: 210 };
-      if (b.sc === 90) { b.shoot(g, b.x + b.dir * (b.w / 2 + 105), GROUND - (b.lane ? 24 : 4), 0, 0, { w: 210, h: 8, solid: true, life: 24, color: '#c0f8ff' }); }
+      if (b.sc === 90) { b.shoot(g, b.x + b.dir * (b.w / 2 + 105), b.floorY - (b.lane ? 24 : 4), 0, 0, { w: 210, h: 8, solid: true, life: 24, color: '#c0f8ff' }); }
       if (b.sc > 140) b.sc = 0;
     },
     // 空の天狗: 空を舞い、跳ねる独楽を落とし、時おり急降下する
     tengu(b, g, p) {
       b.sc++;
       if (b.st === 'walk') {
-        b.x = g.lockX + 128 + Math.sin(b.t / 80) * 90; b.y = GROUND - 78 + Math.sin(b.t / 23) * 10; b.dir = b.sign(p);
+        b.x = g.lockX + 128 + Math.sin(b.t / 80) * 90; b.y = b.floorY - 78 + Math.sin(b.t / 23) * 10; b.dir = b.sign(p);
         if (b.sc % 70 === 35) b.shoot(g, b.x, b.y, 0, 0.5, { g: 0.12, bounce: true, life: 260, w: 10, h: 10, color: '#e0a040' });
         if (b.sc > 300) { b.st = 'dive'; b.sc = 0; b.tx = p.x; }
       } else if (b.st === 'dive') {
-        const k = b.sc / 40; b.x += (b.tx - b.x) * 0.06; b.y = GROUND - 78 + (k < 1 ? 56 * k : 56 * (2 - k > 0 ? 2 - k : 0)) ;
+        const k = b.sc / 40; b.x += (b.tx - b.x) * 0.06; b.y = b.floorY - 78 + (k < 1 ? 56 * k : 56 * (2 - k > 0 ? 2 - k : 0)) ;
         if (b.sc > 80) { b.st = 'walk'; b.sc = 0; }
       }
     },
@@ -205,7 +189,7 @@
       if (b.sc % 100 === 60) { const a = Math.atan2(p.y - 20 - (b.y - 34), p.x - b.x); for (let i = -1; i <= 1; i++) b.shoot(g, b.x + b.dir * 10, b.y - 34, Math.cos(a + i * 0.25) * 1.5, Math.sin(a + i * 0.25) * 1.5, { life: 160, w: 8, h: 8, color: '#ff8020' }); }
       if (Math.abs(p.x - b.x) < 56 && b.cool <= 0) { b.cool = 110; b.warn = { x: b.x, until: b.t + 18, bar: true }; b.swing = b.t + 18; }
       if (b.swing && b.t === b.swing) b.slash(g, 46, 18, b.dir * (b.w / 2 + 22), -34, 12);
-      if (b.sc % 260 === 200) { b.shoot(g, b.x - 16, GROUND - 5, -1.8, 0, { w: 14, h: 10, solid: true, life: 100, color: '#ffa060' }); b.shoot(g, b.x + 16, GROUND - 5, 1.8, 0, { w: 14, h: 10, solid: true, life: 100, color: '#ffa060' }); }
+      if (b.sc % 260 === 200) { b.shoot(g, b.x - 16, b.floorY - 5, -1.8, 0, { w: 14, h: 10, solid: true, life: 100, color: '#ffa060' }); b.shoot(g, b.x + 16, b.floorY - 5, 1.8, 0, { w: 14, h: 10, solid: true, life: 100, color: '#ffa060' }); }
     },
     // 邪鬼の長: 結界で身を守りながら怨みの玉を放つ。結界が解けた隙に攻める
     matron(b, g, p) {
@@ -223,15 +207,21 @@
     overlord(b, g, p) {
       b.sc++; b.dir = b.sign(p); const phase2 = b.hp < b.maxHp / 2;
       if (!phase2) {
-        if (b.sc % 200 === 120) for (let i = 0; i < 7; i++) b.shoot(g, g.lockX + 262 + i * 14, GROUND - 8, -2.2, 0, { w: 16, h: 14, solid: true, life: 260, color: '#d8d0b0' });
+        if (b.sc % 200 === 120) for (let i = 0; i < 7; i++) b.shoot(g, g.lockX + 262 + i * 14, b.floorY - 8, -2.2, 0, { w: 16, h: 14, solid: true, life: 260, color: '#d8d0b0' });
         if (b.sc % 90 === 45) for (let i = -1; i <= 1; i++) { const a = Math.atan2(p.y - 20 - (b.y - 40), p.x - b.x); b.shoot(g, b.x + b.dir * 12, b.y - 40, Math.cos(a + i * 0.3) * 1.6, Math.sin(a + i * 0.3) * 1.6, { life: 200, w: 8, h: 8, color: '#8040c0' }); }
       } else {
-        if (b.sc % 140 === 1) { const xs = [g.lockX + 60, g.lockX + 128, g.lockX + 196, g.stage.width - 40]; b.x = xs[(b.t >> 2) % 4]; }
-        if (b.sc % 220 === 120) for (let i = 0; i < 7; i++) b.shoot(g, g.lockX + 262 + i * 14, 40 + i * 4, -1.8, 0.9, { w: 16, h: 14, solid: true, life: 260, color: '#d8d0b0' });
-        if (b.sc % 150 === 75) { const n = g.enemies.filter(e => e.type === 'ghoul' && !e.dead).length; if (n < 2) g.enemies.push(new K.Enemy('ghoul', K.clamp(b.x - 40, g.lockX + 24, g.stage.width - 24))); }
+        if (b.sc % 140 === 1) { const xs = [g.lockX + 60, g.lockX + 128, g.lockX + 196, g.arenaRight() - 40]; b.x = xs[(b.t >> 2) % 4]; }
+        if (b.sc % 220 === 120) for (let i = 0; i < 7; i++) b.shoot(g, g.lockX + 262 + i * 14, b.floorY - 168 + i * 4, -1.8, 0.9, { w: 16, h: 14, solid: true, life: 260, color: '#d8d0b0' });
+        if (b.sc % 150 === 75) { const n = g.enemies.filter(e => e.type === 'ghoul' && !e.dead).length; if (n < 2) g.enemies.push(new K.Enemy('ghoul', K.clamp(b.x - 40, g.lockX + 24, g.arenaRight() - 24), b.floorY)); }
         if (b.sc % 80 === 40) { const a = Math.atan2(p.y - 20 - (b.y - 40), p.x - b.x); b.shoot(g, b.x + b.dir * 12, b.y - 40, Math.cos(a) * 1.8, Math.sin(a) * 1.8, { life: 200, w: 9, h: 9, color: '#a050e0' }); }
       }
     },
+  };
+  AI.gate_guard=(b,g,p)=>{
+    b.phys();b.dir=b.sign(p);b.sc++;
+    if(b.st==='walk'){b.x+=b.dir*.35;if(Math.abs(p.x-b.x)<48&&b.cool<=0){b.st='wind';b.sc=0;}}
+    else if(b.st==='wind'&&b.sc>=16){b.slash(g,32,14,b.dir*22,-24,8);b.st='recover';b.sc=0;}
+    else if(b.st==='recover'&&b.sc>=24){b.st='walk';b.sc=0;b.cool=60;}
   };
   K.BOSS_AI = AI;
   K.Boss = Boss; K.Decoy = Decoy;
