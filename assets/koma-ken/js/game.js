@@ -1,28 +1,28 @@
 // ゲーム本体: メインループ・戦闘判定・ステージ進行・ボス戦・結界門・ポーズ(単発アイテム)・HUD。
 // 固定1/60秒の更新で、描画は画面に合わせて整数倍に拡大。
 (function (K) {
-  const SWORD = { dmg: 2 };            // 七星剣のダメージ（属性なし）
+  const SWORD = { dmg: 2 };            // 七支刀のダメージ（属性なし）
   const FALCON = { dmg: 1 }, FIREORB = { dmg: 2 };
   const clone = o => JSON.parse(JSON.stringify(o));
 
   class Game {
     constructor(canvas, assets) {
       this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.assets = assets;
-      canvas.width = K.W; canvas.height = K.H; this.ctx.imageSmoothingEnabled = false;
-      this.input = new K.Input(); this.inv = new K.Inventory(); this.player = new K.Player(this); this.audio = new K.Audio();
+      canvas.width = K.W * 3; canvas.height = K.H * 3; this.ctx.setTransform(3, 0, 0, 3, 0, 0); this.ctx.imageSmoothingEnabled = true;
+      this.input = new K.Input(); this.inv = new K.Inventory(); this.player = new K.Player(this);
       this.state = 'title'; this.tick = 0; this.score = 0; this.lives = 3; this.debug = false; this.menuIdx = 0;
       this.stage = clone(K.STAGES.training); this.enemies = []; this.shots = []; this.eshots = []; this.pickups = [];
-      this.popups = []; this.msgs = []; this.queue = []; this.camX = 0; this.spawnHalt = 0; this.pauseIdx = 0; this.sparks = [];
+      this.popups = []; this.msgs = []; this.queue = []; this.camX = 0; this.camY = 0; this.spawnHalt = 0; this.pauseIdx = 0; this.sparks = [];
       this.boss = null; this.bossDone = false; this.lockX = 0; this.minX = 8; this.room = null; this.outer = null; this.nearDoor = false; this.clearT = 0;
       this.roomSeed = 1;
-      this.checkpoint = K.SaveStore.read(); this.saveFailed = false;
-      this.pauseView = 'items'; this.guidePage = 0; this.guideIdx = 0; this.quitIdx = 0;
-      const suspend = () => { if (this.state === 'play') { this.state = 'pause'; this.pauseIdx = 0; } };
-      window.addEventListener('blur', suspend);
-      document.addEventListener('visibilitychange', () => { if (document.hidden) suspend(); });
+      this.checkpoint=K.SaveStore?.read()||null;this.saveFailed=false;
+      this.pauseView='items';this.guidePage=0;this.guideIdx=0;this.quitIdx=0;
+      const suspend=()=>{if(this.state==='play'){this.state='pause';this.pauseIdx=0;}};
+      window.addEventListener('blur',suspend);document.addEventListener?.('visibilitychange',()=>{if(document.hidden)suspend();});
     }
 
     // ---------- 開始・ステージ進行 ----------
+    sfx(key) { if(key==='death'&&this.music)this.music.silenceUntil=Date.now()+3000;if(this.sound)this.sound.play(key); }
     newGame(stageId) {          // 最初から（持ち物・得点・残機を初期化）
       this.inv = new K.Inventory(); this.score = 0; this.lives = 3;
       this.loadStage(stageId || 'r1s1');
@@ -30,44 +30,58 @@
     start(stageId) { this.newGame(stageId); }   // 旧名（検査・訓練場から）
     loadStage(id) {             // 次の面へ（持ち物・得点・残機は引き継ぐ）
       this.stage = clone(K.STAGES[id] || K.STAGES.training);
-      this.tick = 0; this.room = null; this.outer = null; this.boss = null; this.bossDone = false; this.minX = 8; this.lockX = this.stage.lockX || 0;
-      this.player.reset(32);
+      this.tick = 0; this.room = null; this.roomBoss=null; this.outer = null; this.boss = null; this.bossDone = false; this.minX = 8; this.lockX = this.stage.lockX || 0;
+      if (this.stage.geometry) this.stage.width = this.geometry().width;
+      this.resetPlayer();
       this.shots = []; this.eshots = []; this.popups = []; this.msgs = []; this.queue = []; this.sparks = []; this.spawnHalt = 0;
       this.enemies = this.stage.enemies.map(e => new K.Enemy(e.type, e.x, e.y));
       this.pickups = this.stage.pickups.map(p => ({ cat: p.cat, id: p.id, x: p.x, y: p.y != null ? p.y : K.GROUND, taken: false }));
-      this.state = 'play'; this.camX = 0;
+      this.state = 'play'; this.camX = 0; this.camY = 0; this.updateCamera();
       this.msg((this.stage.label ? this.stage.label + '  ' : '') + this.stage.name, 160);
-      if (K.STAGE_LIST.some(s => s.id === this.stage.id)) {
-        this.checkpoint = { version: 1, stageId: this.stage.id, score: this.score, lives: this.lives,
-          selectIndex: this.inv.selectIndex, auto: clone(this.inv.auto), single: this.inv.single.slice() };
-        this.saveFailed = !K.SaveStore.write(this.checkpoint);
-        if (this.saveFailed) this.msg('自動保存できません / Save unavailable', 200);
+      if(K.SaveStore&&K.STAGE_LIST.some(s=>s.id===this.stage.id)){
+        this.checkpoint={version:1,stageId:this.stage.id,score:this.score,lives:this.lives,selectIndex:this.inv.selectIndex,auto:clone(this.inv.auto),single:this.inv.single.slice()};
+        this.saveFailed=!K.SaveStore.write(this.checkpoint);
       }
     }
     continueGame() {
-      const s = this.checkpoint;
-      if (!s) return;
-      this.inv = new K.Inventory(); this.inv.selectIndex = s.selectIndex;
-      for (const id of Object.keys(this.inv.auto)) this.inv.auto[id] = s.auto[id];
-      this.inv.single = s.single.slice(); this.score = s.score; this.lives = s.lives;
-      this.loadStage(s.stageId);
+      const c=this.checkpoint;if(!c)return;this.inv=new K.Inventory();this.inv.selectIndex=c.selectIndex;
+      Object.assign(this.inv.auto,c.auto);this.inv.single=c.single.slice();this.score=c.score;this.lives=c.lives;this.loadStage(c.stageId);
     }
-    clearCheckpoint() { this.checkpoint = null; this.saveFailed = !K.SaveStore.clear(); }
-    guideEntries() {
-      if (this.guidePage === 1) return K.SELECT;
-      return Object.values([null, null, K.AUTO, K.INSTANT, K.SINGLE][this.guidePage] || {});
+    guideEntries() {if(this.guidePage===1)return K.SELECT;return Object.values([null,null,K.AUTO,K.INSTANT,K.SINGLE][this.guidePage]||{});}
+    resetPlayer() {
+      const p = this.player, d = this.stage.geometry;
+      const spawn = d && (this.boss && d.bossArena ? d.bossArena.playerSpawn : d.spawn);
+      p.reset(spawn ? spawn.x : (this.boss ? this.lockX + 30 : 32));
+      if (spawn) { p.y = spawn.y; p.onGround = this.supportY(p.x, p.y, p.y) != null; }
+      p.safeX = p.x; p.safeY = p.y;
     }
+    updateCamera() {
+      if (this.stage.geometry) {
+        const d = this.stage.geometry, a = this.boss && d.bossArena;
+        const p=this.player;
+        const targetY=p.onGround||p.climbing||p.y>p.safeY+20?p.y:p.safeY;
+        const c = this.geometry().camera(p.x, targetY, undefined, a || undefined);
+        if(!a&&p.y-c.y<40)c.y=K.clamp(p.y-40,0,this.geometry().height-K.H);
+        this.camX = c.x; this.camY = c.y;
+      } else { this.camX = this.boss ? this.lockX : K.clamp(this.player.x - 112, 0, this.stage.width - K.W); this.camY = 0; }
+    }
+    bossReady() {
+      const a = this.stage.geometry && this.stage.geometry.bossArena;
+      if (!a) return this.player.x >= this.lockX + 12;
+      const t = a.trigger || a;
+      return K.overlap(this.player.hb, t);
+    }
+    arenaFloor() { const a = this.stage.geometry && this.stage.geometry.bossArena; return a ? a.floorY : K.GROUND; }
+    arenaRight() { const a = this.stage.geometry && this.stage.geometry.bossArena; return a ? a.x + a.w : this.stage.width; }
     nextStageId() { const s = K.STAGE_LIST.find(x => x.id === this.stage.id); return s ? s.next : null; }
 
     // ---------- 地形 ----------
     inPit(x) { const p = this.stage.pits || []; for (let i = 0; i < p.length; i++) if (x >= p[i][0] && x <= p[i][1]) return true; return false; }
-    supportY(x, y0, y1) {
-      let best = null;
-      if (!this.inPit(x) && y0 <= K.GROUND && y1 >= K.GROUND) best = K.GROUND;
-      for (const p of this.stage.platforms || [])
-        if (x >= p.x && x <= p.x + p.w && y0 <= p.y && y1 >= p.y && (best == null || p.y < best)) best = p.y;
-      return best;
+    geometry() {
+      if (!this._geometry || this._geometry.stage !== this.stage) this._geometry = new K.StageGeometry(this.stage);
+      return this._geometry;
     }
+    supportY(x, y0, y1) { return this.geometry().supportY(x, y0, y1); }
     msg(text, frames) { this.msgs.push({ text: text, life: frames || 120 }); if (this.msgs.length > 3) this.msgs.shift(); }
 
     // ---------- 攻撃 ----------
@@ -75,7 +89,7 @@
       const w = this.inv.select;
       let n = 0; for (const s of this.shots) if (s.sub && !s.dead) n++;
       if (n >= 3) return;
-      this.audio.effect('sub');
+      this.sfx('shot');
       const sp = w.pierce ? 3.4 : 2.8, y = p.y - (p.crouch ? 10 : 20);
       const s = new K.Shot(p.x + p.dir * 8, y, p.dir * sp, 0, w, { life: 90 }); s.sub = true; this.shots.push(s);
     }
@@ -91,30 +105,32 @@
         return;
       }
       const r = K.calcDamage(weapon, e);
-      const killed = e.hit(r.dmg);
-      this.audio.effect('hit');
-      this.popups.push({ x: x != null ? x : e.x, y: y != null ? y : e.y - e.h, text: (Number.isInteger(r.dmg) ? r.dmg : r.dmg.toFixed(1)) + (r.weak ? ' 弱点!' : ''), weak: r.weak, life: 36 });
+      const killed = e.hit(r.dmg);if(!killed)this.sfx('hit');
       if (killed) this.killEnemy(e);
     }
     killEnemy(e) {
       if (e.fallen === true && e.def && e.def.ai === 'drop') return;
+      if(!e.isBoss)this.sfx('enemy_down');
       this.score += e.def.score; this.sparks.push({ x: e.x, y: e.y - e.h / 2, life: 14 });
       if (e.isBoss) { this.onBossDead(e); return; }
-      if (this.stage.respawn) this.queue.push({ type: e.type, x: e.x0, y: e.y0, at: this.tick + 360 });
+      if (this.stage.respawn || (!this.room && this.stage.reconstruction)) this.queue.push({ type: e.type, x: e.x0, y: e.y0, at: this.tick + 180, offscreenOnly:!this.stage.respawn });
     }
-    onScreen(e) { return e.x >= this.camX - 8 && e.x <= this.camX + K.W + 8; }
+    onScreen(e) { return e.x >= this.camX - 8 && e.x <= this.camX + K.W + 8 && e.y >= this.camY - 8 && e.y - e.h <= this.camY + K.H + 8; }
 
     // ---------- ボス ----------
     spawnBoss() {
       const s = this.stage; this.enemies = []; this.queue = []; this.eshots = [];
-      const b = new K.Boss(s.boss, s.width - 60); this.boss = b;
-      if (b.kind === 'sorcerer') for (let i = 0; i < 2; i++) { const d = new K.Decoy(s.width - 60, b.def); b.decoys.push(d); this.enemies.push(d); }
+      const a = s.geometry && s.geometry.bossArena;
+      if (a) this.lockX = a.x;
+      const b = new K.Boss(s.boss, a ? a.bossSpawn.x : s.width - 60, this.arenaFloor());
+      if (a) b.y = a.bossSpawn.y;
+      this.boss = b;
+      if (b.kind === 'sorcerer') for (let i = 0; i < 2; i++) { const d = new K.Decoy(b.x, b.def, b.floorY); b.decoys.push(d); this.enemies.push(d); }
       this.enemies.push(b); this.minX = this.lockX + 10;
       this.msg('強敵  ' + b.name, 150);
-      this.msg(K.BOSS_TIPS[b.kind].ja, 240);
     }
     onBossDead(b) {
-      this.audio.effect('clear');
+      if(b.isRoomBoss){this.enemies=this.enemies.filter(e=>e!==b);this.roomBoss=null;this.eshots=[];this.pickups.push({cat:'heal',id:'heal',x:b.x,y:K.GROUND,taken:false});this.msg('中ボスを倒した',120);return;}
       this.boss = null; this.bossDone = true; this.eshots = []; this.enemies = [];
       for (let i = 0; i < 8; i++) this.sparks.push({ x: b.x + (i - 4) * 6, y: b.y - 10 - (i % 3) * 10, life: 30 + i * 4 });
       this.inv.growSelect(); this.msg(this.inv.select.name + ' に成長した', 200);
@@ -123,36 +139,40 @@
 
     // ---------- 結界門 ----------
     doorNear(p) {
-      if (this.room) { for (const d of this.stage.doors || []) if (Math.abs(p.x - d.x) < 14) return d; return null; }
-      const g = this.stage.gate; if (g && !g.used && Math.abs(p.x - g.x) < 16) return { x: g.x, to: 'gate' };
+      if (this.room) { for (const d of this.stage.doors || []) if (Math.abs(p.x - d.x) < 14 && Math.abs(p.y - (d.y ?? K.GROUND)) < 20) return d; return null; }
+      const g = this.stage.gate; if (g && !g.used && Math.abs(p.x - g.x) < 16 && Math.abs(p.y - (g.y ?? K.GROUND)) < 20) return { x: g.x, to: 'gate' };
       return null;
     }
     useDoor(d) {
       if (d.to === 'gate') {
         if (!this.inv.consumeAuto('key')) { this.msg('門の鍵が要る', 90); return; }
-        this.enterRoom('hub'); this.msg('結界門に入った（鍵を1つ使った）', 120); return;
+        const destination=(this.gateRandom?this.gateRandom():Math.random())<0.5?'heaven':'hell';
+        this.enterRoom(destination); this.msg('般若門を開いた（鍵を1つ使った）', 120); return;
       }
-      if (d.to === 'outside') { this.exitRoom(); return; }
+      if (d.to === 'outside') { if(this.roomBoss&&!this.roomBoss.dead){this.msg('中ボスを倒すと戻れる',90);return;}this.exitRoom(); return; }
       this.enterRoom(d.to);
     }
     enterRoom(kind) {
       const p = this.player;
-      if (!this.room) this.outer = { stage: this.stage, enemies: this.enemies, pickups: this.pickups, queue: this.queue, camX: this.camX, minX: this.minX, lockX: this.lockX, boss: this.boss };
+      if (!this.room) this.outer = { stage: this.stage, enemies: this.enemies, pickups: this.pickups, queue: this.queue, camX: this.camX, camY: this.camY, returnX: p.x, returnY: p.y, minX: this.minX, lockX: this.lockX, boss: this.boss };
       this.roomSeed = this.tick + 1; this.stage = K.makeRoom(kind, this.roomSeed); this.room = kind;
       this.enemies = this.stage.enemies.map(e => new K.Enemy(e.type, e.x, e.y));
+      this.roomBoss=null;
+      if(kind==='hell'){const mid=new K.Boss('r1s2',196);mid.isRoomBoss=true;mid.name='地獄の中ボス';if(/^r1s/.test(this.outer?.stage.id||'')){mid.kind='gate_guard';mid.def={...mid.def,sprite:'hell_midboss_r1',facingLeft:true};mid.w=24;mid.h=40;}mid.hp=mid.maxHp=24;this.roomBoss=mid;this.enemies=[mid];}
       this.pickups = this.stage.pickups.map(q => ({ cat: q.cat, id: q.id, x: q.x, y: q.y != null ? q.y : K.GROUND, taken: false }));
-      this.shots = []; this.eshots = []; this.queue = []; this.minX = 8; this.lockX = 0; this.camX = 0;
-      p.x = 40; p.y = K.GROUND; p.vy = 0; p.vx = 0; p.onGround = true; p.safeX = 40; p.inv = 30;
+      this.shots = []; this.eshots = []; this.queue = []; this.minX = 8; this.lockX = 0; this.camX = 0; this.camY = 0;
+      p.x = 40; p.y = K.GROUND; p.vy = 0; p.vx = 0; p.onGround = true; p.safeX = 40; p.safeY = p.y; p.inv = 30;
+      if(this.stage.geometry){const spawn=this.stage.geometry.spawn;p.x=spawn.x;p.y=spawn.y;p.safeX=p.x;p.safeY=p.y;this.updateCamera();}
       this.msg(this.stage.name, 100);
     }
     exitRoom() {
       if (!this.room || !this.outer) return;
-      const o = this.outer, p = this.player;
+      const o = this.outer, p = this.player; this.roomBoss=null;
       this.stage = o.stage; this.enemies = o.enemies; this.pickups = o.pickups; this.queue = o.queue; this.minX = o.minX; this.lockX = o.lockX; this.boss = o.boss;
       if (this.stage.gate) this.stage.gate.used = true;
       this.room = null; this.outer = null; this.shots = []; this.eshots = [];
-      p.x = this.stage.gate ? this.stage.gate.x : p.x; p.y = K.GROUND; p.vy = 0; p.vx = 0; p.onGround = true; p.inv = 60; p.safeX = p.x;
-      this.camX = K.clamp(p.x - 112, 0, this.stage.width - K.W);
+      p.x = o.returnX; p.y = o.returnY; p.vy = 0; p.vx = 0; p.onGround = true; p.inv = 60; p.safeX = p.x; p.safeY = p.y;
+      this.updateCamera();
     }
 
     // ---------- 単発アイテム（ポーズ画面から） ----------
@@ -173,7 +193,7 @@
         case 'bomb': live.forEach(e => this.damageEnemy(e, { dmg: 30 })); p.hp = 1; p.inv = 60; this.sparks.push({ x: p.x, y: p.y - 14, life: 20 }); break;
         default: return false;
       }
-      this.audio.effect('sub'); this.msg(K.SINGLE[id].name, 90); return true;
+      this.msg(K.SINGLE[id].name, 90); return true;
     }
 
     // ---------- 取得 ----------
@@ -187,7 +207,7 @@
         this.msg(d.name + '  ' + d.desc, 100);
       } else if (pk.cat === 'single') { if (!this.inv.addSingle(pk.id)) { this.msg('これ以上持てない', 80); return false; } this.msg(K.SINGLE[pk.id].name + ' を手に入れた', 100); }
       else if (pk.cat === 'select') { const i = K.SELECT.findIndex(s => s.id === pk.id); if (i >= 0) { this.inv.selectIndex = i; this.msg(K.SELECT[i].name, 100); } }
-      this.audio.effect('pickup'); return true;
+      return true;
     }
 
     // ---------- ミス・穴 ----------
@@ -198,14 +218,13 @@
         if (fromPit) this.rescueFromPit();
         return;
       }
-      this.lives--;
-      this.audio.effect('defeat');
-      if (this.lives < 0) { this.state = 'over'; if (!this.stage.respawn) this.clearCheckpoint(); return; }
+      this.sfx('death');this.lives--;
+      if (this.lives < 0) { this.state = 'over'; return; }
       if (this.room) this.exitRoom();
-      p.reset(this.boss ? this.lockX + 30 : 32); p.inv = 120; this.shots = []; this.eshots = []; this.msg('ミス  残り ' + this.lives, 100);
+      this.resetPlayer(); this.updateCamera(); p.inv = 120; this.shots = []; this.eshots = []; this.msg('ミス  残り ' + this.lives, 100);
     }
     // 穴から引き上げる。縁ぎりぎりに戻すと、右キーを押したままなら即座にまた落ちるので、少し手前へ置く
-    rescueFromPit() { const p = this.player; p.x = Math.max(this.minX, p.safeX - 30); p.y = 60; p.vy = 0; p.vx = 0; p.takeoffVx = 0; }
+    rescueFromPit() { const p = this.player; p.x = this.stage.geometry ? p.safeX : Math.max(this.minX, p.safeX - 30); p.y = this.stage.geometry ? p.safeY : 60; p.vy = 0; p.vx = 0; p.takeoffVx = 0; }
     playerDown() { this.loseLife(false); }
     fellInPit() {
       const p = this.player;
@@ -215,11 +234,8 @@
 
     // ---------- 更新 ----------
     update() {
-      try { this.updateFrame(); } finally { this.audio.sync(this); }
-    }
-    updateFrame() {
       this.input.update(); const inp = this.input;
-      if (inp.pressed.pause && (this.state === 'play' || this.state === 'pause')) { this.state = this.state === 'play' ? 'pause' : 'play'; this.pauseIdx = 0; this.pauseView = 'items'; }
+      if (inp.pressed.pause && (this.state === 'play' || this.state === 'pause')) { this.state = this.state === 'play' ? 'pause' : 'play'; this.pauseIdx = 0; }
       if (this.state === 'title') {
         this.assets.tick++; this.tick++;
         const count = this.checkpoint ? 3 : 2;
@@ -235,7 +251,7 @@
         this.clearT++; this.assets.tick++;
         for (const q of this.sparks) q.life--; this.sparks = this.sparks.filter(q => q.life > 0);
         for (const m of this.msgs) m.life--; this.msgs = this.msgs.filter(m => m.life > 0);
-        if (this.clearT > 260) { const n = this.nextStageId(); if (n) { const hp = this.player.maxHp; this.loadStage(n); this.player.hp = hp; } else { this.state = 'ending'; this.clearT = 0; this.clearCheckpoint(); } }
+        if (this.clearT > 260) { const n = this.nextStageId(); if (n) { const hp = this.player.maxHp; this.loadStage(n); this.player.hp = hp; } else { this.state = 'ending'; this.clearT = 0; } }
         return;
       }
       if (this.state === 'pause') {
@@ -279,18 +295,20 @@
       if (door && inp.pressed.up && p.onGround) this.useDoor(door);
 
       // ボス部屋へ入ったらボス出現・画面固定
-      if (this.stage.boss && !this.boss && !this.bossDone && !this.room && p.x >= this.lockX + 12) this.spawnBoss();
+      if (this.stage.boss && !this.boss && !this.bossDone && !this.room && this.bossReady()) this.spawnBoss();
       p.update(inp);
-      if (this.state !== 'play') return;
+      for(const h of this.stage.geometry?.hazards||[]){
+        if(h.kind!=='water'&&K.overlap(p.hb,h)&&p.inv<=0)this.fellInPit();
+      }
 
       // 敵の更新と再出現
       for (const e of this.enemies) e.update(this);
       this.enemies = this.enemies.filter(e => !e.dead);
       if (this.spawnHalt > 0) this.spawnHalt--;
-      else for (let i = this.queue.length - 1; i >= 0; i--) if (this.tick >= this.queue[i].at) { const q = this.queue.splice(i, 1)[0]; this.enemies.push(new K.Enemy(q.type, q.x, q.y)); }
+      else for (let i = this.queue.length - 1; i >= 0; i--) if (this.tick >= this.queue[i].at && (!this.queue[i].offscreenOnly || this.queue[i].x < this.camX-32 || this.queue[i].x > this.camX+K.W+32 || this.queue[i].y < this.camY-32 || this.queue[i].y > this.camY+K.H+32)) { const q = this.queue.splice(i, 1)[0]; this.enemies.push(new K.Enemy(q.type, q.x, q.y)); }
       if (this.state !== 'play') return;
 
-      // 七星剣・旋風斬・分身の刃
+      // 七支刀・旋風斬・分身の刃
       const boxes = p.swordBoxes();
       for (const e of this.enemies) {
         const eb = K.box(e);
@@ -325,114 +343,136 @@
       this.shots = this.shots.filter(s => !s.dead); this.enemies = this.enemies.filter(e => !e.dead);
       if (this.state !== 'play') return;
 
-      // 敵の弾: 七星剣に触れると消える（バリア）。solid（斬撃・衝撃波・光線）は消せない。自分に当たるとダメージ
+      // 敵の弾: 七支刀に触れると消える（バリア）。solid（斬撃・衝撃波・光線）は消せない。自分に当たるとダメージ
       for (const s of this.eshots) {
         s.update(this); const sb = s.box;
-        if (!s.solid) for (const b of boxes) if (K.overlap(b, sb)) { s.dead = true; this.sparks.push({ x: s.x, y: s.y, life: 8 }); break; }
+        if (!s.solid) for (const b of boxes) if (K.overlap(b, sb)) { s.dead = true; this.sfx('deflect'); this.sparks.push({ x: s.x, y: s.y, life: 8 }); break; }
         if (!s.dead && K.overlap(sb, p.hb)) { if (!s.solid) s.dead = true; p.hurtBy(); }
         const m = s.solid ? 160 : 40;
-        if (s.x < this.camX - m || s.x > this.camX + K.W + m || s.y > K.H + 20 || s.y < -40) s.dead = true;
+        if (s.x < this.camX - m || s.x > this.camX + K.W + m || s.y > this.camY + K.H + 20 || s.y < this.camY - 40) s.dead = true;
       }
       this.eshots = this.eshots.filter(s => !s.dead);
-      if (this.state !== 'play') return;
       // 敵との接触
-      for (const e of this.enemies) if (!e.dead && !e.harmless && K.overlap(p.hb, K.box(e))) {
-        p.hurtBy();
-        if (this.state !== 'play') return;
-      }
+      for (const e of this.enemies) if (!e.dead && !e.harmless && K.overlap(p.hb, K.box(e))) p.hurtBy();
 
       // アイテム取得
       for (const pk of this.pickups) {
         if (pk.taken) continue;
-        if (K.overlap(p.hb, { x: pk.x - 8, y: pk.y - 16, w: 16, h: 16 }) && this.applyPickup(pk)) pk.taken = true;
+        if (K.overlap(p.hb, { x: pk.x - 8, y: pk.y - 16, w: 16, h: 16 }) && this.applyPickup(pk)) { pk.taken = true;this.sfx('pickup'); }
       }
 
       // 演出の寿命・カメラ
       for (const q of this.popups) { q.life--; q.y -= 0.3; } this.popups = this.popups.filter(q => q.life > 0);
       for (const q of this.sparks) q.life--; this.sparks = this.sparks.filter(q => q.life > 0);
       for (const m of this.msgs) m.life--; this.msgs = this.msgs.filter(m => m.life > 0);
-      this.camX = this.boss ? this.lockX : K.clamp(p.x - 112, 0, this.stage.width - K.W);
+      this.updateCamera();
     }
 
     // ---------- 描画 ----------
     txt(s, x, y, c, align) { const g = this.ctx; g.fillStyle = '#000'; g.textAlign = align || 'left'; g.fillText(s, x + 1, y + 1); g.fillStyle = c || '#fff'; g.fillText(s, x, y); }
+    backgroundKey() {
+      return this.stage.traversalBg && !this.boss && !this.bossDone ? this.stage.traversalBg : this.stage.bg;
+    }
     draw() {
       const g = this.ctx, A = this.assets, cam = Math.round(this.camX);
       g.font = '8px "MS Gothic", "Yu Gothic", monospace'; g.textBaseline = 'alphabetic';
       if (this.state === 'title') { this.drawTitle(); return; }
       if (this.state === 'ending') { this.drawEnding(); return; }
-      const bgImg = A.images[this.stage.bg];
-      if (bgImg) { const sx = -Math.floor((this.room ? 0 : cam * 0.35) % K.W); g.drawImage(bgImg, sx, 0, K.W, K.H); g.drawImage(bgImg, sx + K.W, 0, K.W, K.H); }   // 横にゆっくり流れる遠景
+      g.fillStyle = '#000'; g.fillRect(0, 0, K.W, K.H);
+      g.save();g.beginPath();g.rect(0,0,K.W,K.HUD_TOP);g.clip();
+      const bgKey=this.backgroundKey(), bgImg=A.images[bgKey];
+      if (bgImg) {
+        const def=K.ASSET_CONFIG.backgrounds[bgKey] || {}, tw=def.renderWidth || K.W;
+        const arena=this.stage.traversalBg && (this.boss || this.bossDone);
+        const offset=this.room ? 0 : arena ? cam-this.lockX : cam*0.35;
+        const sx=-Math.floor(((offset%tw)+tw)%tw);
+        const crop=def.sourceRect||{x:0,y:0,w:1,h:(K.BG_FLOOR||{})[bgKey]||0.88};
+        const source=[crop.x*bgImg.width,crop.y*bgImg.height,crop.w*bgImg.width,crop.h*bgImg.height];
+        const bh=this.stage.geometry ? K.HUD_TOP : K.GROUND;
+        const tileIndex=Math.floor(offset/tw);
+        const drawTile=(x,index)=>{
+          if (def.mirrorRepeat && (index&1)) { g.save(); g.translate(x+tw,0); g.scale(-1,1); g.drawImage(bgImg,...source,0,0,tw,bh); g.restore(); }
+          else g.drawImage(bgImg,...source,x,0,tw,bh);
+        };
+        if(def.tileSize){for(let y=0;y<bh;y+=def.tileSize)for(let x=0;x<K.W;x+=def.tileSize)g.drawImage(bgImg,0,0,bgImg.width,bgImg.height,x,y,def.tileSize,def.tileSize);}
+        else {drawTile(sx,tileIndex);drawTile(sx+tw,tileIndex+1);}
+      }
       else K.drawBackgroundPlaceholder(g, cam, this.stage);
-      K.drawTerrain(g, cam, this.stage);
-      if (this.stage.gate && !this.stage.gate.used) A.drawSprite(g, 'gate', this.stage.gate.x - cam, K.GROUND, { w: 40, h: 56 });
-      for (const d of this.stage.doors || []) { A.drawSprite(g, 'gate', d.x - cam, K.GROUND, { w: 28, h: 44 }); this.txt(d.label, d.x - cam, K.GROUND - 48, '#fff', 'center'); }
+      g.save(); g.translate(0, -Math.round(this.camY));
+      K.drawTerrain(g, cam, this.stage, A, this.camY);
+      if (this.stage.gate && !this.stage.gate.used) A.drawSprite(g, 'gate', this.stage.gate.x - cam, this.stage.gate.y ?? K.GROUND, { w: this.stage.gate.wall?24:40, h: 56 });
+      for (const d of this.stage.doors || []) { A.drawSprite(g, 'gate', d.x - cam, d.y ?? K.GROUND, { w: 28, h: 44 }); this.txt(d.label, d.x - cam, (d.y ?? K.GROUND) - 48, '#fff', 'center'); }
 
       for (const pk of this.pickups) if (!pk.taken) {
         const d = pk.cat === 'auto' ? K.AUTO[pk.id] : pk.cat === 'instant' ? K.INSTANT[pk.id] : pk.cat === 'single' ? K.SINGLE[pk.id] : pk.cat === 'heal' ? { name: '回復' } : K.SELECT.find(s => s.id === pk.id);
-        if (pk.x - cam > -16 && pk.x - cam < K.W + 16) A.drawSprite(g, 'item', pk.x - cam, pk.y + Math.sin(this.tick / 12 + pk.x) * 2, { cat: pk.cat, label: d ? d.name : '?' });
+        if (pk.x - cam > -16 && pk.x - cam < K.W + 16) A.drawSprite(g, 'item_' + pk.cat + '_' + pk.id, pk.x - cam, pk.y + Math.sin(this.tick / 12 + pk.x) * 2, { cat: pk.cat, label: d ? d.name : '?' });
       }
       for (const e of this.enemies) if (!e.invisible || this.player.fx.see > 0 || this.inv.auto.charm > 0)
-        A.drawSprite(g, e.def.sprite, e.x - cam, e.y, { anim: e.isBoss ? (e.flash > 0 ? 'hurt' : (['wind', 'dash', 'spin', 'jump', 'leap', 'dive'].indexOf(e.st) >= 0 ? 'attack' : 'idle')) : e.decoy ? 'idle' : (e.def.ai === 'fly' ? 'fly' : (e.def.ai === 'walk' || e.def.ai === 'hop' ? 'walk' : 'idle')), flip: e.dir < 0, t: e.t, state: e, alpha: e.alpha != null && e.alpha < 1 ? e.alpha : null });
+        A.drawSprite(g, e.def.sprite, e.x - cam, e.y, { anim: e.isBoss ? (e.flash > 0 ? 'hurt' : (['wind', 'dash', 'spin', 'jump', 'leap', 'dive'].indexOf(e.st) >= 0 ? 'attack' : 'idle')) : e.decoy ? 'idle' : (e.def.ai === 'fly' ? 'fly' : (e.def.ai === 'walk' || e.def.ai === 'hop' ? 'walk' : 'idle')), flip: e.def.facingLeft?e.dir>0:e.dir<0, t: e.t, state: e, alpha: e.alpha != null && e.alpha < 1 ? e.alpha : null });
       for (const e of this.enemies) if (e.warn) this.drawWarn(e, cam);
-      for (const s of this.shots) A.drawSprite(g, 'shot_orb', s.x - cam, s.y, { color: s.weapon.color, w: s.w > 12 ? s.w : undefined, h: s.h > 12 ? s.h : undefined });
+      for (const s of this.shots) A.drawSprite(g, s.weapon.id ? 'item_select_' + s.weapon.id : 'shot_orb', s.x - cam, s.y + s.h / 2, { color: s.weapon.color, w: s.w, h: s.h });
       for (const s of this.eshots) {
-        if (s.solid || s.w > 12) { g.fillStyle = s.color; g.globalAlpha = 0.85; g.fillRect(Math.round(s.x - s.w / 2 - cam), Math.round(s.y - s.h / 2), s.w, s.h); g.globalAlpha = 1; }
-        else A.drawSprite(g, 'enemy_shot', s.x - cam, s.y, { color: s.color });
+        if (s.solid || s.w > 12) A.drawSprite(g, 'solid_shot', s.x - cam, s.y + s.h / 2, { w:s.w, h:s.h });
+        else A.drawSprite(g, 'enemy_shot', s.x - cam, s.y + s.h / 2, { color: s.color });
       }
       this.drawPlayer(cam);
-      for (const q of this.sparks) { g.fillStyle = '#fff'; g.fillRect(q.x - cam - 3, q.y - 3, 6, 6); }
+      for (const q of this.sparks) A.drawSprite(g, 'spark', q.x - cam, q.y + 3, { w:8, h:8 });
       for (const q of this.popups) this.txt(q.text, q.x - cam, q.y, q.weak ? '#ffe040' : '#fff', 'center');
-      if (this.stage.dark) this.drawDark(cam);
       if (this.debug) this.drawDebug(cam);
+      g.restore();
+      if (this.stage.dark) this.drawDark(cam);
+      g.restore();
       this.drawHud();
       if (this.state === 'pause') this.drawPause();
       if (this.state === 'clear') { this.txt('ROUND CLEAR', K.W / 2, 100, '#ffe040', 'center'); this.txt(this.stage.name + ' ― ' + (this.stage.boss ? K.BOSS_DEFS[this.stage.boss].name + ' 撃破' : ''), K.W / 2, 116, '#fff', 'center'); }
-      if (this.state === 'over') { g.fillStyle = 'rgba(0,0,0,.7)'; g.fillRect(0, 0, K.W, K.H); this.txt('GAME OVER', K.W / 2, 110, '#ff6060', 'center'); this.txt('Z / Enter でタイトルへ', K.W / 2, 130, '#fff', 'center'); }
+      if (this.state === 'over') { g.fillStyle = 'rgba(0,0,0,.7)'; g.fillRect(0, 0, K.W, K.H); this.assets.drawImage(g,'gameover',40,76,176,72); this.txt('GAME OVER', K.W / 2, 110, '#ff6060', 'center'); this.txt('Z / Enter でタイトルへ', K.W / 2, 130, '#fff', 'center'); }
     }
     drawWarn(e, cam) {
       const g = this.ctx, w = e.warn;
-      if (w.beam) { g.fillStyle = 'rgba(180,240,255,.35)'; const x0 = w.x - w.w / 2 - cam; g.fillRect(Math.round(x0), K.GROUND - (w.lane ? 24 : 4) - 3, w.w, 6); }
+      if (w.beam) { g.fillStyle = 'rgba(180,240,255,.35)'; const x0 = w.x - w.w / 2 - cam; g.fillRect(Math.round(x0), this.arenaFloor() - (w.lane ? 24 : 4) - 3, w.w, 6); }
       else if (w.bar) { this.txt('!', e.x - cam, e.y - e.h - 6, '#ff4040', 'center'); }
-      else { g.fillStyle = 'rgba(255,120,40,.5)'; g.fillRect(Math.round(w.x - cam - 6), K.GROUND - 6, 12, 6); }
+      else { g.fillStyle = 'rgba(255,120,40,.5)'; g.fillRect(Math.round(w.x - cam - 6), this.arenaFloor() - 6, 12, 6); }
     }
     drawDark(cam) {
       const g = this.ctx, p = this.player, r = this.inv.auto.torch > 0 ? 78 : 26;
-      g.save(); g.beginPath(); g.rect(0, 0, K.W, K.H); g.arc(Math.round(p.x - cam), Math.round(p.y - 14), r, 0, Math.PI * 2);
+      g.save(); g.beginPath(); g.rect(0, 0, K.W, K.H); g.arc(Math.round(p.x - cam), Math.round(p.y - this.camY - 14), r, 0, Math.PI * 2);
       g.fillStyle = 'rgba(0,0,0,0.95)'; g.fill('evenodd'); g.restore();
     }
     drawPlayer(cam) {
       const p = this.player, A = this.assets, g = this.ctx;
-      const anim = p.fx.dragon > 0 ? 'dragon' : p.hurt > 0 ? 'hurt' : p.atk > 0 ? (p.crouch ? 'crouchAttack' : 'attack') : p.crouch ? 'crouch' : !p.onGround ? 'jump' : p.vx ? 'walk' : 'idle';
+      const anim = p.climbing ? ((this.input.down.up||this.input.down.down)?'walk':'idle') : p.fx.dragon > 0 ? 'dragon' : p.hurt > 0 ? 'hurt' : p.atk > 0 ? (p.crouch ? 'crouchAttack' : 'attack') : p.crouch ? 'crouch' : !p.onGround ? 'jump' : p.vx ? 'walk' : 'idle';
       const blink = p.inv > 0 && p.fx.dragon <= 0 && (p.t & 2);
       const bodies = p.bodies();
       for (let i = bodies.length - 1; i >= 0; i--) {
         const b = bodies[i];
         if (i === 0 && blink) continue;
-        const an = i ? (b.atk > 0 ? (b.crouch ? 'crouchAttack' : 'attack') : (b.crouch ? 'crouch' : 'idle')) : anim;
-        const fr = (an === 'attack' || an === 'crouchAttack') ? (b.atk > 11 ? 0 : b.atk > 4 ? 1 : 2) : undefined;   // 刃が出るコマと判定を同期させる
-        A.drawSprite(g, 'player', b.x - cam, b.y, { anim: an, frame: fr, flip: b.dir < 0, t: p.t, alpha: i ? 0.55 : null, state: { crouch: b.crouch, atk: b.atk } });
+        const climbing=i===0&&p.climbing&&p.atk<=0&&p.hurt<=0&&!(p.fx.dragon>0);
+        const an = climbing?'climb':i ? (b.atk > 0 ? (b.crouch ? 'crouchAttack' : 'attack') : (b.crouch ? 'crouch' : 'idle')) : anim;
+        const wheel=b.atk>0&&!(p.fx.dragon>0);
+        const fr = wheel?Math.floor((16-b.atk)*4/16)%4:climbing?((this.input.down.up||this.input.down.down)?((Math.floor(p.climbPhase)%4+4)%4):1):(an === 'attack' || an === 'crouchAttack') ? (b.atk > 11 ? 0 : b.atk > 4 ? 1 : 2) : undefined;   // 刃が出るコマと判定を同期させる
+        A.drawSprite(g, wheel?'player_swordwheel':climbing?'player_climb':'player', b.x - cam, b.y, { anim: an, frame: fr, flip: climbing?false:b.dir < 0, t: p.t, alpha: i ? 0.55 : null, state: { crouch: b.crouch, atk: b.atk } });
       }
       if (p.fx.after > 0) for (let k = 6; k <= 18; k += 6) { const h = p.hist[p.hist.length - 1 - k]; if (h) A.drawSprite(g, 'player', h.x - cam, h.y, { anim: 'idle', flip: h.dir < 0, alpha: 0.3, state: { crouch: h.crouch, atk: 0 } }); }
-      if (p.fx.spin > 0) { g.strokeStyle = '#d8f0ff'; g.beginPath(); g.arc(p.x - cam, p.y - 16, 20, p.t / 3, p.t / 3 + 4); g.stroke(); }
-      if (p.fx.orbit > 0) for (let k = 0; k < 4; k++) { const a = this.tick / 14 + k * Math.PI / 2; g.fillStyle = '#ff7a20'; g.fillRect(p.x - cam + Math.cos(a) * 26 - 3, p.y - 16 + Math.sin(a) * 18 - 3, 6, 6); }
-      if (p.fx.falcon > 0) { g.fillStyle = '#c8a060'; g.fillRect(p.x - cam - 6, p.y - 52 + Math.sin(p.t / 6) * 3, 12, 5); }
+      if (p.fx.spin > 0) { g.save();g.translate(p.x-cam,p.y-16);g.rotate(p.t/3);A.drawSprite(g,'spin_arc',0,20,{w:40,h:40});g.restore(); }
+      if (p.fx.orbit > 0) for (let k = 0; k < 4; k++) { const a = this.tick / 14 + k * Math.PI / 2; A.drawSprite(g, 'fire_orb', p.x - cam + Math.cos(a) * 26, p.y - 13 + Math.sin(a) * 18, { w:8,h:8 }); }
+      if (p.fx.falcon > 0) A.drawSprite(g, 'falcon', p.x - cam, p.y - 47 + Math.sin(p.t / 6) * 3, { w:16, h:12, flip:p.dir<0 });
     }
     drawHud() {
-      const g = this.ctx, p = this.player;
-      g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, 0, K.W, 24);
-      for (let i = 0; i < p.maxHp; i++) { g.fillStyle = i < p.hp ? '#ff4040' : '#401010'; g.fillRect(6 + i * 9, 6, 7, 8); }
-      this.txt('命 ' + this.lives, 70, 14, '#fff'); this.txt('SCORE ' + String(this.score).padStart(7, '0'), 110, 14, '#fff');
-      const w = this.inv.select; g.fillStyle = w.color; g.fillRect(200, 5, 8, 8); this.txt(w.name, 211, 13, '#fff');
-      const a = this.inv.auto; let s = ''; for (const k in a) if (a[k]) s += K.AUTO[k].name.slice(0, 2) + a[k] + ' ';
-      this.txt(s || '', 6, 22, '#9f9');
-      let y = 32; for (const k in p.fx) if (p.fx[k] > 0) { const d = K.INSTANT[k]; const nm = d ? d.name : ({ fly: '飛翔', orbit: '護法火', see: '見破り' }[k] || k); this.txt(nm, 6, y, '#ffd040'); g.fillStyle = '#ffd040'; g.fillRect(44, y - 6, Math.min(40, p.fx[k] / 15), 3); y += 9; }
-      this.txt('単発 ' + this.inv.single.length + '/6', 214, 22, '#f8f', 'left');
-      if (this.stage.label) this.txt(this.stage.label + ' ' + this.stage.name, K.W - 4, 34, '#bbb', 'right');
-      const m = this.msgs[this.msgs.length - 1]; if (m) this.txt(m.text, K.W / 2, 64, '#fff', 'center');
-      if (this.spawnHalt > 0) this.txt('封魔', K.W - 30, 44, '#8cf');
-      const b = this.boss;                                         // ボスの体力
-      if (b) { g.fillStyle = '#300'; g.fillRect(40, K.H - 14, 176, 6); g.fillStyle = '#e03030'; g.fillRect(40, K.H - 14, 176 * Math.max(0, b.hp) / b.maxHp, 6); this.txt(b.name, 40, K.H - 17, '#fff'); }
+      const g=this.ctx,p=this.player,A=this.assets,top=K.HUD_TOP;
+      g.save();g.fillStyle='#000';g.fillRect(0,top,K.W,K.H-top);
+      g.font='bold 8px monospace';g.textBaseline='alphabetic';
+      this.txt(String(this.score),60,top+7,'#fff','center');
+      A.drawSprite(g,'item_instant_gold',9,top+22,{w:8,h:10});this.txt('-'+this.lives,16,top+21,'#fff');
+      // Original HUD uses a sword silhouette rather than a row of red HP blocks.
+      g.fillStyle='#ba782c';g.fillRect(4,top+31,7,2);g.fillRect(10,top+28,2,8);
+      g.fillStyle='#ffe6aa';g.fillRect(12,top+30,Math.max(0,p.hp/p.maxHp)*21,3);
+      A.drawSprite(g,'item_select_'+this.inv.select.id,83,top+28,{w:14,h:14});
+      const inventory=[];
+      for(const id of Object.keys(this.inv.auto))if(this.inv.auto[id]>0)inventory.push({key:'item_auto_'+id,count:this.inv.auto[id]});
+      for(const id of [...new Set(this.inv.single)])inventory.push({key:'item_single_'+id,count:this.inv.single.filter(x=>x===id).length});
+      inventory.slice(0,6).forEach((item,i)=>{const x=127+i*22;A.drawSprite(g,item.key,x,top+27,{w:13,h:18});this.txt(String(item.count).padStart(2,'0'),x,top+40,'#fff','center');});
+      const b=this.boss||this.roomBoss;if(b){g.fillStyle='#542222';g.fillRect(109,top+4,138,3);g.fillStyle='#e8c573';g.fillRect(109,top+4,138*Math.max(0,b.hp)/b.maxHp,3);}
+      g.restore();
     }
     drawPause() {
       const g = this.ctx; g.fillStyle = 'rgba(0,0,40,.94)'; g.fillRect(24, 28, K.W - 48, K.H - 40);
@@ -465,7 +505,7 @@
       this.txt('手引 / GUIDE  ' + (this.guidePage + 1) + '/5', 128, 44, '#ffe040', 'center');
       this.txt(names[this.guidePage], 128, 58, '#fff', 'center');
       if (this.guidePage === 0) {
-        ['←→ 移動 / Move', '↑/Space 跳ぶ / Jump', '↓ しゃがむ / Crouch', 'Z 斬る・弾消し / Sword', 'X 道具を投げる / Throw', '↑ 門に入る / Enter gate', 'Enter 休止・再開 / Pause', 'C 訓練の武器切替 / Cycle'].forEach((s, i) => this.txt(s, 36, 76 + i * 14, '#fff'));
+        ['←→ 移動 / Move', 'Space 跳ぶ / Jump', '↓ しゃがむ / Crouch', 'Z 斬る・弾消し / Sword', 'X 道具を投げる / Throw', '↑ 昇降・門 / Climb, gate', 'Enter 休止・再開 / Pause', 'C 訓練の武器切替 / Cycle'].forEach((s, i) => this.txt(s, 36, 76 + i * 14, '#fff'));
       } else {
         const entries = this.guideEntries();
         entries.forEach((e, i) => this.txt((i === this.guideIdx ? '▶ ' : '   ') + e.name, 36, 72 + i * 9, i === this.guideIdx ? '#ffe040' : '#fff'));
@@ -497,9 +537,9 @@
     }
     drawEnding() {
       const g = this.ctx; g.fillStyle = '#05000c'; g.fillRect(0, 0, K.W, K.H);
-      g.font = 'bold 20px "MS Gothic", "Yu Gothic", monospace'; this.txt('冥府に光が戻った', K.W / 2, 90, '#ffe8c0', 'center');
+      this.assets.drawImage(g,'ending',0,0,K.W,K.H); g.font = 'bold 20px "MS Gothic", "Yu Gothic", monospace'; this.txt('冥府に光が戻った', K.W / 2, 90, '#ffe8c0', 'center');
       g.font = '8px "MS Gothic", "Yu Gothic", monospace';
-      this.txt('THE END  ―  降魔七星剣', K.W / 2, 112, '#ccc', 'center');
+      this.txt('THE END  ―  不動明王伝', K.W / 2, 112, '#ccc', 'center');
       this.txt('SCORE ' + String(this.score).padStart(7, '0') + '    残機 ' + this.lives, K.W / 2, 140, '#fff', 'center');
       if (this.clearT > 120) this.txt('Z / Enter でタイトルへ', K.W / 2, 180, '#ffd040', 'center');
     }
