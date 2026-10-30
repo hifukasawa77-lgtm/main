@@ -109,13 +109,24 @@
       if (killed) this.killEnemy(e);
     }
     killEnemy(e) {
+      if (e.defeatedHandled) return;
       if (e.fallen === true && e.def && e.def.ai === 'drop') return;
+      e.defeatedHandled=true;
       if(!e.isBoss)this.sfx('enemy_down');
       this.score += e.def.score; this.sparks.push({ x: e.x, y: e.y - e.h / 2, life: 14 });
       if (e.isBoss) { this.onBossDead(e); return; }
+      this.dropEnemyItem(e);
       if ((this.stage.respawn || (!this.room && this.stage.reconstruction)) && !e.respawnQueued) {
         e.respawnQueued=true;this.queue.push({type:e.type,x:e.x0,y:e.y0,at:this.tick+90});
       }
+    }
+    dropEnemyItem(e) {
+      // Auto items, recovery and instant effects only; spells remain gate rewards.
+      const random=this.lootRandom||Math.random;
+      if(random()>=0.35)return;
+      const pool=[...Object.keys(K.AUTO).map(id=>({cat:'auto',id})),{cat:'heal',id:'heal'},...Object.keys(K.INSTANT).map(id=>({cat:'instant',id}))];
+      const item=pool[Math.min(pool.length-1,Math.floor(random()*pool.length))];
+      this.pickups.push({...item,x:e.x,y:e.y,taken:false,dropped:true,vy:-1.5});
     }
     respawnEnemies() {
       if(this.spawnHalt>0){this.spawnHalt--;return;}
@@ -377,6 +388,7 @@
       // アイテム取得
       for (const pk of this.pickups) {
         if (pk.taken) continue;
+        if(pk.dropped){pk.vy=Math.min((pk.vy||0)+K.GRAV,6);const next=pk.y+pk.vy,floor=pk.vy>=0?this.supportY(pk.x,pk.y,next):null;pk.y=floor==null?next:floor;if(floor!=null)pk.vy=0;if(pk.y>this.geometry().height+32){pk.taken=true;continue;}}
         if (K.overlap(p.hb, { x: pk.x - 8, y: pk.y - 16, w: 16, h: 16 }) && this.applyPickup(pk)) { pk.taken = true;this.sfx('pickup'); }
       }
 
@@ -419,7 +431,14 @@
       else K.drawBackgroundPlaceholder(g, cam, this.stage);
       g.save(); g.translate(0, -Math.round(this.camY));
       K.drawTerrain(g, cam, this.stage, A, this.camY);
-      if (this.stage.gate && !this.stage.gate.used) A.drawSprite(g, 'gate', this.stage.gate.x - cam, this.stage.gate.y ?? K.GROUND, { w: this.stage.gate.wall?24:40, h: 56 });
+      if (this.stage.gate && !this.stage.gate.used) {
+        const gate=this.stage.gate,wall=gate.wall;
+        if(wall){
+          // The wall occludes the right half: the door is fixed to its vertical face.
+          g.save();g.beginPath();g.rect(wall.x-cam-48,gate.y-60,48,60);g.clip();
+          A.drawSprite(g,'gate',wall.x-cam+1,gate.y,{w:48,h:56});g.restore();
+        }else A.drawSprite(g,'gate',gate.x-cam,gate.y??K.GROUND,{w:40,h:56});
+      }
       for (const d of this.stage.doors || []) { A.drawSprite(g, 'gate', d.x - cam, d.y ?? K.GROUND, { w: 28, h: 44 }); this.txt(d.label, d.x - cam, (d.y ?? K.GROUND) - 48, '#fff', 'center'); }
 
       for (const pk of this.pickups) if (!pk.taken) {
