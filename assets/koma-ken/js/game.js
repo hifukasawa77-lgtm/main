@@ -457,7 +457,7 @@
         if (pk.x - cam > -16 && pk.x - cam < K.W + 16) A.drawSprite(g, 'item_' + pk.cat + '_' + pk.id, pk.x - cam, pk.y + Math.sin(this.tick / 12 + pk.x) * 2, { cat: pk.cat, label: d ? d.name : '?' });
       }
       for (const e of this.enemies) if (!e.invisible || this.player.fx.see > 0 || this.inv.auto.charm > 0)
-        A.drawSprite(g, e.def.sprite, e.x - cam, e.y, { anim: e.isBoss ? (e.flash > 0 ? 'hurt' : (['wind', 'dash', 'spin', 'jump', 'leap', 'dive'].indexOf(e.st) >= 0 ? 'attack' : 'idle')) : e.decoy ? 'idle' : (e.def.ai === 'fly' ? 'fly' : (e.def.ai === 'walk' || e.def.ai === 'hop' ? 'walk' : 'idle')), flip: e.def.facingLeft?e.dir>0:e.dir<0, t: e.t, state: e, alpha: e.alpha != null && e.alpha < 1 ? e.alpha : null });
+        A.drawSprite(g, e.def.sprite, e.x - cam, e.y, { anim: e.isBoss ? (e.flash > 0 ? 'hurt' : ((e.isRoomBoss&&e.st==='recover'&&e.sc<6)||['wind', 'dash', 'spin', 'jump', 'leap', 'dive'].indexOf(e.st)>=0 ? 'attack' : 'idle')) : e.decoy ? 'idle' : (e.def.ai === 'fly' ? 'fly' : (e.def.ai === 'walk' || e.def.ai === 'hop' ? 'walk' : 'idle')), frame:e.isRoomBoss&&e.flash<=0?(e.st==='wind'?Math.min(2,Math.floor(e.sc/6)):e.st==='recover'&&e.sc<6?3:undefined):undefined, flip: e.def.facingLeft?e.dir>0:e.dir<0, t: e.t, state: e, alpha: e.alpha != null && e.alpha < 1 ? e.alpha : null });
       for (const e of this.enemies) if (e.warn) this.drawWarn(e, cam);
       for (const s of this.shots) A.drawSprite(g, s.weapon.id ? 'item_select_' + s.weapon.id : 'shot_orb', s.x - cam, s.y + s.h / 2, { color: s.weapon.color, w: s.w, h: s.h });
       for (const s of this.eshots) {
@@ -610,3 +610,4 @@
   }
   K.Game = Game;
 })(window.KOMA);
+
