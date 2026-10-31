@@ -39,6 +39,7 @@
   C.sprites.item.src='item_auto_key.webp'; C.sprites.item.frameW=64; C.sprites.item.frameH=64;
   C.sprites.item.drawW=16; C.sprites.item.drawH=16;
   for(const key in C.backgrounds) C.backgrounds[key].src=key+'.webp'; C.backgrounds.training.src='stage_r1s1.webp';
+  C.backgrounds.intro_bonji={src:'intro-bonji.png'};
   C.backgrounds.stage_r1s1_bamboo={src:'stage_r1s1_bamboo.webp',renderWidth:624,mirrorRepeat:true};
   K.BG_FLOOR.stage_r1s1_bamboo=1;
   K.STAGES.r1s1.traversalBg='stage_r1s1_bamboo';
