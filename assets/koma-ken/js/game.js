@@ -10,7 +10,7 @@
       this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.assets = assets;
       canvas.width = K.W * 3; canvas.height = K.H * 3; this.ctx.setTransform(3, 0, 0, 3, 0, 0); this.ctx.imageSmoothingEnabled = true;
       this.input = new K.Input(); this.inv = new K.Inventory(); this.player = new K.Player(this);
-      this.state = 'title'; this.tick = 0; this.score = 0; this.lives = 3; this.debug = false; this.menuIdx = 0;
+      this.state = 'intro'; this.introTick = 0; this.tick = 0; this.score = 0; this.lives = 3; this.debug = false; this.menuIdx = 0;
       this.stage = clone(K.STAGES.training); this.enemies = []; this.shots = []; this.eshots = []; this.pickups = [];
       this.popups = []; this.msgs = []; this.queue = []; this.camX = 0; this.camY = 0; this.spawnHalt = 0; this.pauseIdx = 0; this.sparks = [];
       this.boss = null; this.bossDone = false; this.lockX = 0; this.minX = 8; this.room = null; this.outer = null; this.nearDoor = false; this.clearT = 0;
@@ -267,6 +267,11 @@
     update() {
       this.input.update(); const inp = this.input;
       if (inp.pressed.pause && (this.state === 'play' || this.state === 'pause')) { this.state = this.state === 'play' ? 'pause' : 'play'; this.pauseIdx = 0; }
+      if(this.state==='intro'){
+        this.introTick++;
+        if(this.introTick>=1020||inp.pressed.attack||inp.pressed.pause){this.state='title';this.tick=0;}
+        return;
+      }
       if (this.state === 'title') {
         this.assets.tick++; this.tick++;
         const count = this.checkpoint ? 3 : 2;
@@ -407,6 +412,7 @@
     draw() {
       const g = this.ctx, A = this.assets, cam = Math.round(this.camX);
       g.font = '8px "MS Gothic", "Yu Gothic", monospace'; g.textBaseline = 'alphabetic';
+      if (this.state === 'intro') { this.drawIntro(); return; }
       if (this.state === 'title') { this.drawTitle(); return; }
       if (this.state === 'ending') { this.drawEnding(); return; }
       g.fillStyle = '#000'; g.fillRect(0, 0, K.W, K.H);
@@ -555,6 +561,15 @@
       }
       this.txt('←→ 分類  ↑↓ 選択 / Browse', 128, 207, '#ccc', 'center');
       this.txt('X 戻る / Back   Enter 再開', 128, 220, '#ccc', 'center');
+    }
+    drawIntro() {
+      const g=this.ctx,image=this.assets.images.intro_bonji;
+      g.fillStyle='#000';g.fillRect(0,0,K.W,K.H);
+      if(!image)return;
+      const width=28,height=image.height*width/image.width;
+      const y=K.H+16-Math.max(0,this.introTick-30)*64/K.FPS;
+      g.save();g.beginPath();g.rect(0,0,K.W,K.H);g.clip();
+      g.drawImage(image,(K.W-width)/2,y,width,height);g.restore();
     }
     drawTitle() {
       const g = this.ctx;
