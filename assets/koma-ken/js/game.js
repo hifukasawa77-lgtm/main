@@ -189,7 +189,12 @@
       this.roomSeed = this.tick + 1; this.stage = K.makeRoom(kind, this.roomSeed); this.room = kind;
       this.enemies = this.stage.enemies.map(e => new K.Enemy(e.type, e.x, e.y));
       this.roomBoss=null;
-      if(kind==='hell'){const mid=new K.Boss('r1s2',196);mid.isRoomBoss=true;mid.name='地獄の中ボス';if(/^r1s/.test(this.outer?.stage.id||'')){mid.kind='gate_guard';mid.def={...mid.def,sprite:'hell_midboss_r1',facingLeft:true};mid.w=24;mid.h=40;}mid.hp=mid.maxHp=24;this.roomBoss=mid;this.enemies=[mid];}
+      if(kind==='hell'){
+        const mid=new K.Boss('r1s2',196),round=Number((this.outer?.stage.id||'').match(/^r([123])s/)?.[1]);
+        mid.isRoomBoss=true;mid.name='地獄の中ボス';
+        if(round){mid.kind=round===1?'gate_guard':'gate_duelist_r'+round;mid.def={...mid.def,sprite:'hell_midboss_r'+round,facingLeft:true};mid.w=round===1?24:18;mid.h=round===1?40:round===2?60:48;mid.round=round;}
+        mid.hp=mid.maxHp=24;this.roomBoss=mid;this.enemies=[mid];
+      }
       this.pickups = this.stage.pickups.map(q => ({ cat: q.cat, id: q.id, x: q.x, y: q.y != null ? q.y : K.GROUND, taken: false }));
       this.shots = []; this.eshots = []; this.queue = []; this.minX = 8; this.lockX = 0; this.camX = 0; this.camY = 0;
       p.x = 40; p.y = K.GROUND; p.vy = 0; p.vx = 0; p.onGround = true; p.safeX = 40; p.safeY = p.y; p.inv = 30;

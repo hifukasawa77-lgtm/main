@@ -54,6 +54,8 @@
   // Character artwork was normalized to small NES-like bodies inside padded cells.
   // Increase the displayed characters around their fixed foot anchor.
   C.sprites.hell_midboss_r1={src:'hell_midboss_r1-reference.webp',frameW:256,frameH:256,drawW:72,drawH:72,anims:{idle:{row:0,frames:1,fps:1},attack:{row:0,frames:1,fps:1},hurt:{row:0,frames:1,fps:1}}};
+  C.sprites.hell_midboss_r2={src:'hell_midboss_r2-2d-hd.webp',frameW:768,frameH:512,drawW:108,drawH:72,anims:{idle:{row:0,frames:1,fps:1},attack:{row:0,frames:1,fps:1},hurt:{row:0,frames:1,fps:1}}};
+  C.sprites.hell_midboss_r3={src:'hell_midboss_r3-2d-hd.webp',frameW:512,frameH:640,drawW:64,drawH:80,anims:{idle:{row:0,frames:1,fps:1},attack:{row:0,frames:1,fps:1},hurt:{row:0,frames:1,fps:1}}};
   C.sprites.player_swordwheel={src:'player_swordwheel.webp',frameW:256,frameH:192,drawW:96,drawH:72,anims:{attack:{row:0,frames:4,fps:15},crouchAttack:{row:1,frames:4,fps:15}}};
   C.sprites.player_climb={src:'player_climb.webp',frameW:256,frameH:192,drawW:96,drawH:72,anims:{climb:{row:0,frames:4,fps:6}}};
   C.sprites.player.drawW=96; C.sprites.player.drawH=72;

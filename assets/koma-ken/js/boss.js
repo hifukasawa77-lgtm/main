@@ -223,6 +223,23 @@
     else if(b.st==='wind'&&b.sc>=16){b.slash(g,32,14,b.dir*22,-24,8);b.st='recover';b.sc=0;}
     else if(b.st==='recover'&&b.sc>=24){b.st='walk';b.sc=0;b.cool=60;}
   };
+  // Reference footage shows both later gate opponents hopping with straight swords.
+  // Exact frame timings remain inferred; identities are selected by the outer round.
+  const gateDuelist=(b,g,p,round)=>{
+    b.phys();b.dir=b.sign(p);b.sc++;
+    if(!b.onGround)b.x+=b.vx;
+    if(b.st==='walk'){
+      if(b.onGround)b.x+=b.dir*(round===2?.45:.5);
+      if(b.onGround&&b.t%120===60){b.vy=round===2?-6.4:-6.8;b.vx=b.dir*1.2;b.onGround=false;}
+      if(Math.abs(p.x-b.x)<(round===2?66:50)&&b.cool<=0){b.st='wind';b.sc=0;}
+    }else if(b.st==='wind'&&b.sc>=18){
+      if(round===2)b.slash(g,44,8,b.dir*29,-29,9);
+      else b.slash(g,24,40,b.dir*20,-26,9);
+      b.st='recover';b.sc=0;
+    }else if(b.st==='recover'&&b.sc>=24){b.st='walk';b.sc=0;b.cool=54;}
+  };
+  AI.gate_duelist_r2=(b,g,p)=>gateDuelist(b,g,p,2);
+  AI.gate_duelist_r3=(b,g,p)=>gateDuelist(b,g,p,3);
   K.BOSS_AI = AI;
   K.Boss = Boss; K.Decoy = Decoy;
 })(window.KOMA);
