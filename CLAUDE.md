@@ -1170,6 +1170,14 @@ node --test tests/security.test.mjs          # Worker: 全応答に nosniff / CS
 - **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。
   `--depth 1 --filter=blob:none --sparse` で18MBまで落ち、触るゲームのassetsだけ後から足せる。
   手順とスクリプト: `docs/クローンを軽くする.md` / `scripts/slim-clone.ps1`
+- **常駐セッションで「no space left on device」が出たら、まず `.git/objects/pack/tmp_pack_*` を見る**。
+  `git fetch` が中断（バックグラウンドのタイムアウト強制終了・ディスク枯渇自体）すると、確定しきれなかった
+  一時パックファイルが残り続け、参照されない「garbage」のまま積み上がる（`git count-objects -v` の
+  `size-garbage` で確認。2026-11-01、週次 `/self-improve` セッションで27GB・30本まで蓄積しリポジトリが
+  全体で30GB超に膨張していた）。`rm -f .git/objects/pack/tmp_pack_*` は未参照の一時ファイルなので安全に
+  削除できる（削除後は `git fsck --connectivity-only` で実害が無いことを確認）。
+  `verify-routine-delivery.mjs` のブランチ自動発見機能（`discoverBranches()`）は候補ブランチごとに
+  `git fetch` するため、他の検査より発生源になりやすい
 - `.edge-test-profile/` はMicrosoft Edgeのブラウザデータ。gitignoreすること
 - `shogi_rpg_enhanced.jsx` はJSX形式だがビルド環境なし。取り扱い注意
 

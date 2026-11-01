@@ -67,6 +67,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0038-self-improve-2026-10-11-promotions]] — /self-improve 3回目。Routine継続確認（3週連続で検査#15全✓）＋grep行アンカーの罠をharness-maintenance-patternsへ昇格＋PRバックログ報告（滞留変化なし・open PR計10本に増加）。**ADR番号は0036との衝突のため0037→0038へ繰り下げ済み**
 - [[0039-self-improve-2026-10-18-promotions]] — /self-improve 4回目。予言していたADR番号衝突が別経路（legal-checker強化の0036）で実現し解消＋Vault多重コンフリクト（Daily5件・MOC.md）を統合解決＋WebP違反2回連続発見分は解消確認のみ
 - [[0040-self-improve-2026-10-25-promotions]] — /self-improve 5回目。検査#15の「表の更新忘れ」3回目再発を`verify-routine-delivery.mjs`のブランチ自動発見機能で構造的に解消（負のテスト確認済み）＋故障注入の空振り学び（2回目）をverifier.md原則11へ昇格＋Dailyバックフィル5件
+- [[0041-self-improve-2026-11-01-promotions]] — /self-improve 6回目。Dailyバックフィル中に**koma_ken.htmlの法務再評価漏れ（RED）を発見**——2026-10-26「音声なし」前提のYELLOW判定が10-30の原作楽曲追加で無効化されたまま公開継続。legal-checker.mdへ「評価の前提が後から崩れたら無効」原則を追加し深澤へ緊急再スクリーニングを推奨
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
