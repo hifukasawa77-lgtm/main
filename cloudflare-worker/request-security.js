@@ -81,12 +81,28 @@ export async function readJson(request, maxBytes) {
   return body;
 }
 
+/**
+ * The key a limit or ban is counted under. IPv4 as is; IPv6 by its /64 prefix — one home or server
+ * usually gets a whole /64, so counting each address separately lets a single client rotate through
+ * 2^64 addresses and never hit the limit.
+ */
+export function clientKey(ip) {
+  const value = String(ip || '').trim().toLowerCase();
+  if (!value.includes(':')) return value || 'unknown';
+  const [head, tail = ''] = value.split('::');
+  const left = head ? head.split(':') : [];
+  const right = value.includes('::') && tail ? tail.split(':') : [];
+  const groups = value.includes('::') ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right] : left;
+  if (groups.length < 4) return value;
+  return groups.slice(0, 4).map(g => (g.replace(/^0+(?=.)/, '') || '0')).join(':') + '::/64';
+}
+
 // Cloudflare overwrites CF-Connecting-IP. Never use client-provided X-Forwarded-For.
 // Missing bindings fail closed so a deployment cannot silently remove the limit.
 export async function limitRequest(request, env, headers) {
   if (!env.RATE_LIMITER) return errorResponse(503, 'Rate limiter unavailable', headers);
   try {
-    const key = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const key = clientKey(request.headers.get('CF-Connecting-IP') || 'unknown');
     const { success } = await env.RATE_LIMITER.limit({ key });
     if (!success) return errorResponse(429, 'Too many requests', { ...headers, 'Retry-After': '60' });
   } catch { return errorResponse(503, 'Rate limiter unavailable', headers); }
