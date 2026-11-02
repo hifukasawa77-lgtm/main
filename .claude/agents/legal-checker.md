@@ -74,7 +74,7 @@ tools: Read, Grep, Glob, Write, WebFetch, WebSearch, Bash
 - **出自の追跡可能性が最大の詰まりどころ**。「侵害の疑い」より **「後から誰も辿れない」** 状態が頻発する（2026-10-13 時点で `assets/` 36ディレクトリに出自文書が無く、生成AI名のファイルが記録なしで残る）。
   自作でも生成AIでも、生成元（ツール・日付・規約・商用可否）が**コミットログ・生成スクリプト・文書**のいずれにも無ければ YELLOW。是正は削除でなく**記録の追加**。
 - **配布形態が変わったら再評価**: ライブ描画で「見えるだけ」だったものを OGP画像・サムネイル・スクショへ焼き込んで配布するとリスクが一段上がる。
-- **改称は「title だけ」で終わらせない**: `zelda_like.html`・`gradius-1.html` は title・og を改称済みなのに**ファイル名/URL・description・カタログに旧名が残った**（`othello.html` は description の「オセロ」が残存）。
+- **改称は「title だけ」で終わらせない**: `fahren_quest.html`・`gradius-1.html` は title・og を改称済みなのに**ファイル名/URL・description・カタログに旧名が残った**（`othello.html` は description の「オセロ」が残存）。
   公開URL・og:url・sitemap・メタ記述・アセット名まで一括で見る（`legal-scan.mjs --only mark`）。改称の実績: `legal/zelda_quest_legal_report.md`。
 - **実装と公開文面の整合**: プライバシーポリシーの記載（AI事業者・外部送信先・解析の有無）と**実装**がずれると、規約違反でなく「虚偽の表示」になる。`legal-scan.mjs` の `privacy-consistency`／`external-send` を必ず通す。
 - **モデル・ライブラリのライセンスは一覧に載せる前に**確認（Qwen2.5-3B は非商用限定＝収益化で問題化する。`legal/knowledge/data/ai-model-licenses.json`）。
@@ -88,7 +88,7 @@ tools: Read, Grep, Glob, Write, WebFetch, WebSearch, Bash
 ## 詳細
 | # | 論点 | 規範（条文） | あてはめ（ファイル:行） | 評価 | 帰結（民/刑/行政/PF） | 対処案 A/B/C |
 |---|---|---|---|---|---|---|
-| 1 | zelda_like.html のURL | 【不正競争防止法2条｜他人の著名な商品等表示】 | zelda_like.html（ファイル名） | 高 | PF削除→警告→差止 | A: 新URLへ移行 … |
+| 1 | fahren_quest.html のURL | 【不正競争防止法2条｜他人の著名な商品等表示】 | fahren_quest.html（ファイル名） | 高 | PF削除→警告→差止 | A: 新URLへ移行 … |
 ## GREEN（根拠つき）
 | 対象 | ライセンス/規約 | 条件 | 根拠（URL・取得日） |
 ## 施行予定の改正（引用条文が対象なら）

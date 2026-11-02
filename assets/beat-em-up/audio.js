@@ -1,5 +1,5 @@
 // audio.js — beat_em_up.html 用 Web Audio API 音声定義
-// 参考: zelda_like.html の playTone / scheduleAudio パターン
+// 参考: fahren_quest.html の playTone / scheduleAudio パターン
 // このファイルの内容を beat_em_up.html の <script> 内に埋め込む
 
 // ============================================================
@@ -7,7 +7,7 @@
 // ============================================================
 
 /**
- * 単音を指定時刻に鳴らす（zelda_like.html 版と同設計）
+ * 単音を指定時刻に鳴らす（fahren_quest.html 版と同設計）
  * @param {AudioContext} audioCtx
  * @param {number}  freq      - 周波数 [Hz]
  * @param {string}  type      - OscillatorType ('square'|'sawtooth'|'triangle'|'sine')

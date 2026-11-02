@@ -9,7 +9,7 @@ description: サイト全HTMLのSEO/OGP監査と是正。og:title・og:descripti
 
 ```bash
 bash .claude/skills/seo-audit/seo-audit.sh          # 全HTML監査（欠落テーブル出力）
-bash .claude/skills/seo-audit/seo-audit.sh zelda_like.html # 指定ファイルのみ
+bash .claude/skills/seo-audit/seo-audit.sh fahren_quest.html # 指定ファイルのみ
 ```
 
 終了コード: 欠落なし=0 / 欠落あり=1。admin系・テスト用HTMLは除外済み。

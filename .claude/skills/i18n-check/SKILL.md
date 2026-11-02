@@ -9,7 +9,7 @@ description: 日英バイリンガル表記の一貫性チェック。lang属性
 
 ```bash
 bash .claude/skills/i18n-check/i18n-check.sh            # 全HTML
-bash .claude/skills/i18n-check/i18n-check.sh zelda_like.html  # 指定ファイル
+bash .claude/skills/i18n-check/i18n-check.sh fahren_quest.html  # 指定ファイル
 ```
 
 終了コード: 必須項目OK=0 / 問題あり=1。検査項目:

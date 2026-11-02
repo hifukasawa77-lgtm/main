@@ -383,7 +383,7 @@ for n in names:
     for sk in set(re.findall(r'(\.claude/skills/[A-Za-z0-9_./-]+\.(?:sh|cjs|mjs))', body)):
         if not os.path.exists(sk):
             out.append('FAIL:%s: 存在しないスキルスクリプトを参照 → %s' % (n, sk))
-    # (d) 実在しないHTMLページ名の参照（改称の取りこぼし。例: game.html → zelda_like.html）
+    # (d) 実在しないHTMLページ名の参照（改称の取りこぼし。例: game.html → fahren_quest.html）
     for pg in set(re.findall(r'`([a-z0-9_-]+\.html)`', body)):
         if pg not in html_pages:
             out.append('FAIL:%s: 実在しないページを参照 → %s（改称の取りこぼし）' % (n, pg))
