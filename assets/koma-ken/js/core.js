@@ -2,7 +2,7 @@
 window.KOMA = window.KOMA || {};
 (function (K) {
   K.W = 256; K.H = 240;            // 内部解像度（8ビット機相当の低解像度）。画面へは整数倍で拡大する
-  K.GROUND = 208;                  // 地面の高さ（足元のY）
+  K.HUD_TOP = 192; K.GROUND = 160;                  // 地面の高さ（足元のY）
   K.GRAV = 0.22; K.MAXFALL = 6;
   K.FPS = 60;
 
