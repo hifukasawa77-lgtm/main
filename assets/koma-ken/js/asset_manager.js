@@ -52,7 +52,7 @@
         const fw = d.frameW, fh = d.frameH, dw = opts.w || d.drawW || fw, dh = opts.h || d.drawH || fh;
         ctx.save(); if (opts.alpha != null) ctx.globalAlpha = opts.alpha;
         ctx.translate(Math.round(x), Math.round(y)); if (opts.flip) ctx.scale(-1, 1);
-        ctx.drawImage(img, f * fw, an.row * fh, fw, fh, -dw / 2, -dh, dw, dh); ctx.restore();
+        ctx.drawImage(img, f * fw, an.row * fh, fw, fh, -dw * (d.anchorX ?? 0.5), -dh, dw, dh); ctx.restore();
         return;
       }
       const ph = this.placeholders[key] || this.placeholders['*'];

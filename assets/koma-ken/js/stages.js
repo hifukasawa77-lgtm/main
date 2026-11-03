@@ -102,13 +102,14 @@
     }
     if (kind === 'heaven') {
       return Object.assign(base, {
-        id: 'gate_heaven', name: '天界', bg: 'gate_heaven', theme: { sky: ['#20203a', '#5a5a8a'], far: '#3a3a6a', ground: '#8a8aaa' },
+        id: 'gate_heaven', name: '天国', bg: 'gate_heaven', theme: { sky: ['#20203a', '#5a5a8a'], far: '#3a3a6a', ground: '#8a8aaa' },
         doors: [{ x: 24, to: 'outside', label: '出口' }],
-        pickups: [{ cat: 'heal', id: 'heal', x: 90 }, { cat: 'single', id: SINGLES[Math.floor(R() * SINGLES.length)], x: 140 }, { cat: 'single', id: SINGLES[Math.floor(R() * SINGLES.length)], x: 180 }, { cat: 'auto', id: 'decoy', x: 220 }],
+        pickups: [{ cat: 'heal', id: 'heal', x: 90 }, { cat: 'single', id: 'wind', x: 140 }, { cat: 'single', id: SINGLES[Math.floor(R() * SINGLES.length)], x: 180 }, { cat: 'auto', id: 'decoy', x: 220 }],
       });
     }
     return Object.assign(base, {                      // hell
-      id: 'gate_hell', name: '冥界', bg: 'gate_hell', width: 512, dark: true, theme: { sky: ['#1a0000', '#400808'], far: '#2a0808', ground: '#3a1010' },
+      id: 'gate_hell', name: '地獄', bg: 'gate_hell', width: 256, dark: false,
+      geometry:{width:256,height:240,spawn:{x:30,y:88},solids:[{x:0,y:0,w:12,h:160},{x:12,y:88,w:36,h:24},{x:208,y:120,w:48,h:40},{x:0,y:160,w:256,h:80}],platforms:[{x:16,y:40,w:184}],ramps:[]}, theme: { sky: ['#1a0000', '#400808'], far: '#2a0808', ground: '#3a1010' },
       doors: [{ x: 24, to: 'outside', label: '出口' }],
       enemies: [{ type: 'skeleton', x: 150 }, { type: 'ghoul', x: 240 }, { type: 'emberhop', x: 330 }, { type: 'knight', x: 420 }],
       pickups: [{ cat: 'instant', id: R() < 0.5 ? 'float' : 'gold', x: 480 }, { cat: 'single', id: SINGLES[Math.floor(R() * SINGLES.length)], x: 470 }],
