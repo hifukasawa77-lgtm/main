@@ -9,7 +9,7 @@ description: パフォーマンスの実測。ページ重量（HTML＋参照ロ
 
 ```bash
 bash .claude/skills/perf-audit/perf-audit.sh            # 全HTMLのページ重量レポート
-bash .claude/skills/perf-audit/perf-audit.sh zelda_like.html  # 指定ファイル
+bash .claude/skills/perf-audit/perf-audit.sh fahren_quest.html  # 指定ファイル
 ```
 
 終了コード: 閾値内=0 / 超過あり=1。閾値: ページ重量合計 **1MB**（警告 500KB）。
@@ -54,7 +54,7 @@ FPSが低いと分かったら、最適化の前に**どの描画が支配的か
 const { chromium } = require('playwright');
 (async () => {
   const b = await chromium.launch(); const p = await b.newPage();
-  await p.goto('file://' + process.cwd() + '/zelda_like.html');
+  await p.goto('file://' + process.cwd() + '/fahren_quest.html');
   const t = await p.evaluate(() => {
     const n = performance.getEntriesByType('navigation')[0];
     return { domContentLoaded: n.domContentLoadedEventEnd, load: n.loadEventEnd,

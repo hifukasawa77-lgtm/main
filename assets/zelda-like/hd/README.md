@@ -1,6 +1,6 @@
 # Fahren Quest: painted HD assets and animation
 
-This set replaces every active character, terrain, building, object, equipment icon and projectile in `zelda_like.html`.
+This set replaces every active character, terrain, building, object, equipment icon and projectile in `fahren_quest.html`.
 
 Artwork was generated with the available image-generation tool. The tool does not expose a model-version selector; no GPT-Image2.5 model provenance is claimed. Original PNG outputs remain in the session's generated-image library. The deployed assets are WebP images embedded in self-contained SVG containers, retaining transparency and original dimensions.
 
