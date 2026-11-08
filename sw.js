@@ -3,7 +3,7 @@
 // 静的アセットは cache-first（速度維持）。バージョン更新で旧キャッシュを破棄する。
 //
 // ★このSWが見るのは**同じオリジンの通信だけ**。別オリジンへは一切触らない（下の理由を参照）。
-const CACHE_NAME = 'hide-portfolio-v10';
+const CACHE_NAME = 'hide-portfolio-v11';
 const SITE_SCOPE = new URL('./', self.location.href);
 
 // ★パスは必ず相対で書く。このサイトは https://…github.io/main/ 配下にあり、
@@ -31,7 +31,10 @@ const PRECACHE_URLS = [
   './assets/js/agent-data.js',
   // 全ページの <head> が読むクリックジャッキング対策。圏外で取れないと
   // ページごとに読み込み失敗のエラーが残る（scripts/security-baseline.mjs が挿入）
-  './assets/js/frame-guard.js'
+  './assets/js/frame-guard.js',
+  // ヘルスログ（記録アプリ）。ホーム画面から圏外で開くので、ページとマニフェストを確保する
+  './health-log.html',
+  './health-log.webmanifest'
 ];
 
 self.addEventListener('install', event => {
@@ -132,3 +135,18 @@ function cacheable(response) {
     !/\b(?:no-store|private)\b/i.test(response.headers.get('Cache-Control') || '') &&
     !response.headers.has('Set-Cookie');
 }
+
+// ヘルスログの通知をタップしたとき、開いているアプリを前面に出す（無ければ開く）。
+// これが無いと Android では通知を押してもアプリに戻れない。
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const target = new URL('health-log.html', SITE_SCOPE).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(list => {
+        const hit = list.find(c => c.url.startsWith(target));
+        return hit && hit.focus ? hit.focus() : self.clients.openWindow(target);
+      })
+      .catch(() => {})
+  );
+});

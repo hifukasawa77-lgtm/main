@@ -9,6 +9,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
+- `health-log.html` / `health-log.webmanifest` — ヘルスログ（食事・カロリー／体重・BMI・体脂肪／歩数・水分・睡眠・運動／リマインダー／週次レポート。Androidのホーム画面に追加して使うPWA。記録は端末のlocalStorageだけ）
 - `zero-1-mobile.html` — ZERO-1 Mobile（WebGPUで端末内実行するローカルLLM）＋エアタッチ
 - `assets/js/gesture-pointer.js` — エアタッチ（カメラに指をかざして画面を操作する）。他ページからも使える独立モジュール
 - `assets/js/zero1-worker.js` — ZERO-1 Mobile のモデルを画面とは別の糸で動かす worker（同じ糸でやると読み込み中に画面が固まる）
@@ -566,6 +567,32 @@ node scripts/verify-receipt-ocr.mjs --ocr   # 実物のTesseractで読む（npm�
   4.0.0（16MB）は撮影画像で best_int より低い（68% 対 88〜92%。合成レシートでの実測）
 - **家計簿はこのブラウザの localStorage だけ**。読み書きは必ず try/catch（シークレットタブで
   `localStorage` の参照自体が例外を投げる）。品目名はOCR由来の外部文字列なので `textContent` だけで描く
+
+## ヘルスログ（PWA）の必須チェック（health-log.html を触ったら必ず実行）
+
+```bash
+node scripts/verify-health-log.mjs           # 起動→壊れた保存データ→計算→食事/体重/活動→レポート→XSS・CSV→取込→リマインダー→保存不可→スマホ幅→PWA（76項目）
+node scripts/verify-health-log.mjs --inject  # 故障を6種仕込んで ❌ が出ることを確認（偽の緑の防止）
+node scripts/verify-service-worker.mjs       # sw.js（事前キャッシュ・通知タップ）に触れたとき
+```
+
+- **Androidアプリは「PWAをホーム画面へ追加」で作った**（深澤の選択・2026-11-08）。Kotlinのネイティブ版にしなかった理由:
+  この環境ではAPKをビルド・実機確認できず、サイトの方針（素のJS・ビルドツール不使用）とも合わない。
+  Play配布やヘルスコネクト（歩数の自動取得）が要るなら、TWA化かネイティブ化を別途検討する
+- **Webアプリは歩数計に触れない**ので歩数は手入力。画面にもそう書いてある（できないことを「連携」と書かない）
+- **通知はアプリを開いている間／開き直したときだけ**（サーバーが無いので閉じている間は送れない）。
+  未記録の項目は「今日」画面の上にも出す。Androidの Chrome は `new Notification()` が例外になるので
+  `registration.showNotification` を使う。通知をタップしたとき戻れるよう `sw.js` に `notificationclick` を置いた
+- **目標カロリーには下限を掛ける**（基礎代謝と1,200kcalの大きい方）。下限が外れると極端に低い数字を勧める
+  ——例外もエラーも出ない（検査が故障注入で見ている）。運動分は**足さない**（活動係数に含まれるので二重計上になる）
+- **読み込みは必ず `sanitize()` を通す**。日付が壊れた1件・範囲外の体重・文字列のkcalで、一覧もグラフも丸ごと描かれなくなる。
+  保存キーは `healthlog_v1`（項目を足すだけで後方互換）。`localStorage` が使えない端末では画面に出す（黙って消えるのが一番悪い）
+- **食事名はユーザー入力。`textContent` だけで描く**（全ページ同一オリジン＝1ページのXSSが全ページの問題）。
+  CSVは先頭が `= + - @` の文字列を `'` で無害化（複数の食事は ` / ` で連結されるので、検査は「先頭に来る」形で確かめる）
+- **Canvasの `height` 属性を読み書きしない**（`data-h` に固定。dpr>1で再描画のたびに倍々に膨らむ。故障注入で確認済み）
+- 食品の数値・METsは日本食品標準成分表・身体活動のMETsに基づく**概算**。画面にも「目安」と明記。診断・治療の代わりではない旨を「今日」画面に常設
+- **検査の動かし方**: このリポジトリの検査は `import 'playwright'` を使う。`node_modules` に無い環境では
+  `/opt/node-tools/node_modules/playwright` を解決させる（`node --import <resolve hook>`）
 
 ## 推し活ログの必須チェック（oshikatsu.html を触ったら必ず実行）
 

@@ -86,6 +86,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `synth-eq.html` | `node scripts/verify-synth-eq.mjs` |
 | `receipt-ocr.html` | `node scripts/verify-receipt-ocr.mjs`（OCRの精度に手を入れたら `--ocr` も） |
 | `oshikatsu.html` | `node scripts/verify-oshikatsu.mjs`（見た目を変えたら `--shots DIR` で撮って目視。`--inject` で故障注入） |
+| `health-log.html` / `health-log.webmanifest`（ヘルスログ・PWA） | `node scripts/verify-health-log.mjs`（`--inject` で故障注入6種）＋ `node scripts/verify-service-worker.mjs`（SW事前キャッシュ・通知タップに触れたとき） |
 | `assets/js/oshi-research.js` / `cloudflare-worker/oshi-research.js`（推し活ログのイベントリサーチ） | `node scripts/verify-oshi-research.mjs`（`--inject` で故障注入）＋ `node --test tests/security.test.mjs` ＋ `node scripts/verify-oshikatsu.mjs`（画面側の連携） |
 | 新規ページ・新作ゲーム・CSS/レイアウトを触ったHTML（スマホ幅の崩れ） | `node scripts/verify-responsive.mjs <ページ>`（`--inject` で故障注入。既知のはみ出しは `scripts/responsive-baseline.json`＝悪化させない） |
 | 新作ゲーム・入力処理／シーン遷移を触ったゲーム（操作したときの壊れ方） | `node scripts/playtest-fuzz.mjs <ページ> --seconds 10`（`--inject` で故障注入。落ちたら同じ `--seed` で再現） |
