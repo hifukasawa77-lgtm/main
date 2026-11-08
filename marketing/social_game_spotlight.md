@@ -50,7 +50,7 @@ Free in your browser, no install required.
 Canvas APIで作ったトップビューRPG
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fahren_quest.html
 
 #個人開発 #ブラウザゲーム #RPG
 ```
@@ -62,7 +62,7 @@ Canvas APIで作ったトップビューRPG
 Top-down RPG built with Canvas API
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fahren_quest.html
 
 #indiedev #browsergames #rpg
 ```
@@ -72,7 +72,7 @@ Free in your browser, no install required.
 🗡️ ファーレンクエスト
 Canvas APIで作ったトップビューRPG
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/zelda_like.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/fahren_quest.html
 #ブラウザゲーム #個人開発 #RPG
 ```
 
@@ -82,7 +82,7 @@ Canvas APIで作ったトップビューRPG
 ```
 ♟️ AI将棋
 
-藤井棋風AIと3段階難易度で対局
+AI電竜・AI幻石の2つの棋風と3段階難易度で対局
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
@@ -94,7 +94,7 @@ Canvas APIで作ったトップビューRPG
 ```
 ♟️ AI Shogi
 
-Play vs Fujii-style AI, 3 difficulties
+Play vs two AI styles (Denryu / Genseki), 3 difficulties
 
 Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
@@ -105,7 +105,7 @@ Free in your browser, no install required.
 ### game-shogi-bsky-ja
 ```
 ♟️ AI将棋
-藤井棋風AIと3段階難易度で対局
+AI電竜・AI幻石の2つの棋風と3段階難易度で対局
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/shogi.html
 #ブラウザゲーム #個人開発 #ボードゲーム
@@ -286,13 +286,13 @@ UCT-MCTS搭載 9路盤/13路盤
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
-## AIオセロ / Reversi AI (`othello`)
+## AIリバーシ / Reversi AI (`othello`)
 
 ### game-othello-x-ja
 ```
-⚪ AIオセロ
+⚪ AIリバーシ
 
-ミニマックスAI搭載のオセロ
+ミニマックスAI搭載のリバーシ
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/othello.html
@@ -314,8 +314,8 @@ Free in your browser, no install required.
 
 ### game-othello-bsky-ja
 ```
-⚪ AIオセロ
-ミニマックスAI搭載のオセロ
+⚪ AIリバーシ
+ミニマックスAI搭載のリバーシ
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/othello.html
 #ブラウザゲーム #個人開発 #ボードゲーム
@@ -601,73 +601,73 @@ Free in your browser, no install required.
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
-## ConHex / ConHex (`conhex`)
+## Cell Connect / Cell Connect (`conhex`)
 
 ### game-conhex-x-ja
 ```
-🔷 ConHex
+🔷 Cell Connect
 
 穴・石・セル獲得のボードゲーム
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cell_connect.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
 
 ### game-conhex-x-en
 ```
-🔷 ConHex
+🔷 Cell Connect
 
 Board game with pegs, holes, and cells
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cell_connect.html
 
 #indiedev #browsergames #boardgame
 ```
 
 ### game-conhex-bsky-ja
 ```
-🔷 ConHex
+🔷 Cell Connect
 穴・石・セル獲得のボードゲーム
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/conhex.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cell_connect.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
-## Indigo / Indigo (`indigo`)
+## Gem Gates / Gem Gates (`indigo`)
 
 ### game-indigo-x-ja
 ```
-💎 Indigo
+💎 Gem Gates
 
-クニツィア設計 × 宝石誘導
+ヘックスタイル × 宝石誘導
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/gem_gates.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
 
 ### game-indigo-x-en
 ```
-💎 Indigo
+💎 Gem Gates
 
-Knizia design — guide gems to the edges
+Hex tiles — guide gems to the gates
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/gem_gates.html
 
 #indiedev #browsergames #boardgame
 ```
 
 ### game-indigo-bsky-ja
 ```
-💎 Indigo
-クニツィア設計 × 宝石誘導
+💎 Gem Gates
+ヘックスタイル × 宝石誘導
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/indigo.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/gem_gates.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -747,7 +747,7 @@ Free in your browser, no install required.
 ```
 🀫 麻雀ソリティア
 
-上海パズル × 144枚
+牌ペア消しパズル × 144枚
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
@@ -759,7 +759,7 @@ Free in your browser, no install required.
 ```
 🀫 Mahjong Solitaire
 
-Shanghai-style solitaire with 144 tiles
+Tile-matching solitaire with 144 tiles
 
 Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
@@ -770,7 +770,7 @@ Free in your browser, no install required.
 ### game-mahjong-solitaire-bsky-ja
 ```
 🀫 麻雀ソリティア
-上海パズル × 144枚
+牌ペア消しパズル × 144枚
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/mahjong-solitaire.html
 #ブラウザゲーム #個人開発 #パズルゲーム
@@ -922,7 +922,7 @@ Free in your browser, no install required.
 ```
 🏙️ CITY BUILDER
 
-シムシティ風 × 電力管理
+都市育成 × 電力管理
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
@@ -934,7 +934,7 @@ Free in your browser, no install required.
 ```
 🏙️ City Builder
 
-SimCity-style with power grid
+City-building with power grid
 
 Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
@@ -945,7 +945,7 @@ Free in your browser, no install required.
 ### game-city-bsky-ja
 ```
 🏙️ CITY BUILDER
-シムシティ風 × 電力管理
+都市育成 × 電力管理
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/cyber-city.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
@@ -1342,7 +1342,7 @@ Free in your browser, no install required.
 ```
 🔥 ルミナ・テイマー
 
-モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・バトルタワー・セーブ対応
+モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・ひかりの塔・セーブ対応
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
@@ -1365,7 +1365,7 @@ Free in your browser, no install required.
 ### game-lumina-tamer-bsky-ja
 ```
 🔥 ルミナ・テイマー
-モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・バトルタワー・セーブ対応
+モンスターを仲間にしてジムリーダーに挑む育成RPG。38種・4ジム・ひかりの塔・セーブ対応
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/lumina_tamer.html
 #ブラウザゲーム #個人開発 #RPG
@@ -1579,6 +1579,76 @@ Free in your browser, no install required.
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/club_road.html
 #ブラウザゲーム #個人開発 #シミュレーションゲーム
+```
+
+## 降魔七星剣 / Shichisei-Ken (`koma-ken`)
+
+### game-koma-ken-x-ja
+```
+⚔️ 降魔七星剣
+
+8ビット風の横スクロールアクション。七星剣で敵の弾を消し、属性相性で3倍。全13面・ボス13体・結界門
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/koma_ken.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-koma-ken-x-en
+```
+⚔️ Shichisei-Ken
+
+8-bit-style side-scrolling action — sword cancels shots, elemental 3x damage, 13 stages, 13 bosses and warded gates
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/koma_ken.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-koma-ken-bsky-ja
+```
+⚔️ 降魔七星剣
+8ビット風の横スクロールアクション。七星剣で敵の弾を消し、属性相性で3倍。全13面・ボス13体・結界門
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/koma_ken.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## フロントライン・ゼロ / Frontline Zero (`frontline-zero`)
+
+### game-frontline-zero-x-ja
+```
+🎯 フロントライン・ゼロ
+
+Unity 6 製の陣取り型チームFPS。5つの旗を奪い合う9対9の部隊戦（WebGL・初回約27MB）
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/frontline-zero/
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-frontline-zero-x-en
+```
+🎯 Frontline Zero
+
+Unity 6 team FPS — 9v9 squad battle capturing five flags (WebGL, ~27MB first load)
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/frontline-zero/
+
+#indiedev #browsergames #actiongame
+```
+
+### game-frontline-zero-bsky-ja
+```
+🎯 フロントライン・ゼロ
+Unity 6 製の陣取り型チームFPS。5つの旗を奪い合う9対9の部隊戦（WebGL・初回約27MB）
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/frontline-zero/
+#ブラウザゲーム #個人開発 #アクションゲーム
 ```
 
 ## 幕末風雲記 / Bakumatsu Fuunki (`bakumatsu`)

@@ -14,7 +14,7 @@ export const SITE_FACTS = {
   ],
   "sections": "トップ・三郷市のこと・趣味・ペット紹介・ブログ・Claudeツール・ダッシュボード・ゲーム一覧・AI解説スライド・連絡先",
   "about": "hide は埼玉県三郷市在住。Claude AI とペアプロしながらブラウザゲーム55本・各種ツールを開発しています。",
-  "generatedAt": "2026-10-26"
+  "generatedAt": "2026-11-02"
 };
 
 export function buildSystemPrompt() {

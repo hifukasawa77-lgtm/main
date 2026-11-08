@@ -10,11 +10,11 @@ description: GitHub Pages デプロイ後の本番検証。公開URLのHTTPス�
 ## 使い方
 
 ```bash
-# ステータス確認のみ（デフォルト: index.html zelda_like.html shogi.html）
+# ステータス確認のみ（デフォルト: index.html fahren_quest.html shogi.html）
 bash .claude/skills/deploy-verify/deploy-verify.sh
 
 # ページ指定＋Playwrightスモーク（実ブラウザでpageerror検知）
-bash .claude/skills/deploy-verify/deploy-verify.sh --smoke zelda_like.html shogi.html
+bash .claude/skills/deploy-verify/deploy-verify.sh --smoke fahren_quest.html shogi.html
 ```
 
 終了コード: 全OK=0 / NG（非200・pageerror）あり=1。

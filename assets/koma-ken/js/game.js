@@ -597,7 +597,7 @@
       const g = this.ctx; g.fillStyle = '#05000c'; g.fillRect(0, 0, K.W, K.H);
       this.assets.drawImage(g,'ending',0,0,K.W,K.H); g.font = 'bold 20px "MS Gothic", "Yu Gothic", monospace'; this.txt('冥府に光が戻った', K.W / 2, 90, '#ffe8c0', 'center');
       g.font = '8px "MS Gothic", "Yu Gothic", monospace';
-      this.txt('THE END  ―  不動明王伝', K.W / 2, 112, '#ccc', 'center');
+      this.txt('THE END  ―  降魔七星剣', K.W / 2, 112, '#ccc', 'center');
       this.txt('SCORE ' + String(this.score).padStart(7, '0') + '    残機 ' + this.lives, K.W / 2, 140, '#fff', 'center');
       if (this.clearT > 120) this.txt('Z / Enter でタイトルへ', K.W / 2, 180, '#ffd040', 'center');
     }
