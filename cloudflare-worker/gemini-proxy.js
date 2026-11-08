@@ -19,6 +19,7 @@ import { allowedOrigin, publicHeaders, securityHeaders, errorResponse, readJson,
 import { aiUnitsFor, takeAiQuota } from './ai-quota.js';
 import { withSecurityGate } from './security-monitor.js';
 import { researchOshi } from './oshi-research.js';
+import { estimateFoodPhoto, PHOTO_BODY_LIMIT } from './food-photo.js';
 import { handleVocalSong, handleVocalPortrait } from './vocalis-ai.js';
 
 // 上から順に試行（先頭が利用不可・エラーの場合は次へフォールバック）
@@ -237,7 +238,7 @@ export default withSecurityGate('ai-proxy', {
     }
     if (!isAllowed) return errorResponse(403, 'Forbidden');
     if (request.method !== 'POST') return errorResponse(405, 'Method Not Allowed', corsHeaders(origin));
-    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts', '/oshi/research', '/vocal/song', '/vocal/portrait', '/vocal/budget'].includes(url.pathname)) {
+    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts', '/oshi/research', '/health/photo', '/vocal/song', '/vocal/portrait', '/vocal/budget'].includes(url.pathname)) {
       return errorResponse(404, 'Not Found', corsHeaders(origin));
     }
     const limited = await limitRequest(request, env, corsHeaders(origin));
@@ -245,7 +246,8 @@ export default withSecurityGate('ai-proxy', {
 
     let body;
     try {
-      body = await readJson(request, 16384);
+      // 写真推定だけは画像（縮小済みJPEG）を運ぶので上限が大きい。他の経路は 16KB のまま
+      body = await readJson(request, url.pathname === '/health/photo' ? PHOTO_BODY_LIMIT : 16384);
     } catch (error) {
       return errorResponse(error.status || 400, error.status ? error.message : 'Invalid request', corsHeaders(origin));
     }
@@ -304,6 +306,12 @@ export default withSecurityGate('ai-proxy', {
     if (url.pathname === '/video/script') return handleVideoScript(env, body, origin);
     if (url.pathname === '/video/image')  return handleVideoImage(env, body, origin);
     if (url.pathname === '/video/tts')    return handleVideoTts(env, body, origin);
+
+    // ── ヘルスログ: 食べ物の写真 → カロリー推定（写真は保存・記録しない）──
+    if (url.pathname === '/health/photo') {
+      const r = await estimateFoodPhoto(env, body);
+      return jsonResponse(r.body, origin, r.status);
+    }
 
     // ── フィードバック受付（👍/👎 → 共有メモリのスコア更新） ──
     if (url.pathname === '/feedback') {

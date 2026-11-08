@@ -107,7 +107,7 @@ export function applyBaseline(html) {
     if (!allowsReport(d)) {
       // 通報先の1ホストだけを足す（https: 全体へは広げない）
       next = d.has('connect-src')
-        ? next.replace(/(connect-src\b[^;]*?)\s*(;|$)/i, `$1 ${REPORT_ORIGIN}$2`)
+        ? next.replace(/(connect-src\b)([^;]*?)\s*(;|$)/i, (m, k, vals, end) => `${k}${vals.replace(/\s*'none'/i, '')} ${REPORT_ORIGIN}${end}`) // 'none' は他の値と併記すると全体が無効になるため外す
         : next.trim().replace(/;\s*$/, '') + `; connect-src ${[...d.get('default-src').filter(v => v !== "'none'"), REPORT_ORIGIN].join(' ')};`;
     }
     if (add.length) {

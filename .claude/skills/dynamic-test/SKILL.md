@@ -11,7 +11,7 @@ description: HTMLファイルをPlaywright（ヘッドレスChromium）で実際
 
 ```bash
 # 指定ファイルをテスト
-bash .claude/skills/dynamic-test/run.sh zelda_like.html shogi.html
+bash .claude/skills/dynamic-test/run.sh fahren_quest.html shogi.html
 
 # git diff HEAD から変更されたHTMLを自動検出してテスト
 bash .claude/skills/dynamic-test/run.sh --changed
