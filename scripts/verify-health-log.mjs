@@ -33,6 +33,9 @@ const INJECTIONS = [
   ['CSVの数式無害化を外す', "if (/^[=+\\-@\\t\\r]/.test(s) && isNaN(Number(s))) s = \"'\" + s;", ''],
   ['保存失敗の通知を消す', "$('saveErr').hidden = false;", ''],
   ['目標カロリーの下限を外す', 'target = Math.max(raw, floor)', 'target = raw'],
+  ['写真を縮小しない', 'var PHOTO_MAX_PX = 1024,', 'var PHOTO_MAX_PX = 100000,'],
+  ['写真を選んだだけで自動送信する', "$('phFile').addEventListener('change', onPhotoFile);", "$('phFile').addEventListener('change', function () { onPhotoFile(); setTimeout(sendPhoto, 400); });"],
+  ['サーバー応答の料理名を検疫しない', "str(String(it.name == null ? '' : it.name).replace(/[<>]/g, ' '), 60)", "String(it.name == null ? '' : it.name)"],
   ['Canvasの高さを属性から読む', 'var w = cv.clientWidth, hh = +cv.dataset.h,', 'var w = cv.clientWidth, hh = (cv.height || +cv.dataset.h),'],
 ];
 
@@ -72,6 +75,19 @@ async function run(overrideHtml, quiet) {
   });
   page.on('response', (r) => { if (r.status() >= 400 && r.url().startsWith(base)) missing.push(`${r.status()} ${r.url()}`); });
   page.on('dialog', (d) => d.accept());
+  // 写真推定のWorkerは本物へ出さない。呼ばれた回数と中身を記録し、応答は検査が決める
+  const WORKER = 'https://ai-proxy.hi-fukasawa77.workers.dev';
+  const workerCalls = [];
+  let photoReply = () => ({ status: 404, body: '{}' });
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'POST,OPTIONS' };
+  await page.route(`${WORKER}/**`, async (route) => {
+    const r = route.request();
+    if (r.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    workerCalls.push({ url: r.url(), method: r.method(), headers: r.headers(), body: r.postData() });
+    const rep = photoReply(r);
+    if (rep === 'abort') return route.abort('failed');
+    return route.fulfill({ status: rep.status, headers: { ...cors, 'content-type': 'application/json' }, body: rep.body });
+  });
 
   const day = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const fresh = async (seed) => {
@@ -204,6 +220,86 @@ async function run(overrideHtml, quiet) {
   for (let i = 0; i < 4; i++) await page.click('#p-today [data-water="-200"]');
   check('水分は0未満にならず、0になれば項目ごと消える', (await st()).days[day(0)].water === undefined);
 
+  // 6b. 写真でカロリー推定
+  const PNG1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const photoCalls = () => workerCalls.filter((c) => c.url.endsWith('/health/photo'));
+  const okItems = { notFood: false, model: 'm', items: [{ name: '白ごはん', grams: 150, kcal: 252, p: 3.8, f: 0.5, c: 55.7 }, { name: '<img src=x onerror="window.__xss2=1">サラダ', grams: 80, kcal: 100, p: 2, f: 5, c: 10 }, { name: '作り話', kcal: 'たくさん' }, { name: '巨大', kcal: 99999999, p: 0, f: 0, c: 0 }] };
+  await fresh();
+  await tab('meals');
+  workerCalls.length = 0; photoReply = () => ({ status: 200, body: JSON.stringify(okItems) });
+  check('写真カードがある・最初は送信ボタンが隠れている', (await page.isVisible('#phBtn')) && !(await page.isVisible('#phSend')));
+  await page.setInputFiles('#phFile', { name: 'a.png', mimeType: 'image/png', buffer: PNG1 });
+  await page.waitForTimeout(800);
+  check('写真を選んだだけでは1バイトも送らない（確認の画面が出るだけ）', photoCalls().length === 0 && (await page.isVisible('#phSend')) && (await page.isVisible('#phImg')), `calls=${photoCalls().length}`);
+  check('送信前に「写真が外部のAIへ送られる」旨が出る', /クラウドのAI/.test(await page.textContent('#phSendBox')));
+  await page.click('#phSend'); await page.waitForTimeout(500);
+  const call = photoCalls()[0];
+  check('「推定する」を押すと1回だけ、Workerの/health/photoへPOSTする', photoCalls().length === 1 && call.method === 'POST' && /application\/json/.test(call.headers['content-type']));
+  const sent = JSON.parse(call.body);
+  check('送るのは縮小済みJPEG(data URL)1枚だけ', Object.keys(sent).join() === 'image' && /^data:image\/jpeg;base64,/.test(sent.image) && sent.image.length <= 1100000);
+  const rows = await page.locator('#phRes .ph-row').count();
+  check('結果を直せる形で出す（不正な2件は捨て、有効2件）', rows === 2, `rows=${rows}`);
+  check('料理名のタグは実行されない（記号は落ちる）', (await page.evaluate(() => window.__xss2)) === undefined && !(await page.locator('#phRes input[type=text]').nth(1).inputValue()).includes('<'));
+  check('推定である旨の注意が出る', /推定です/.test(await page.textContent('#phRes')));
+  const t0 = await page.textContent('#phTotal');
+  await page.selectOption('#phRes .ph-row >> nth=1 >> select', '1.5');
+  const t1 = await page.textContent('#phTotal');
+  check('量を「かなり多め」にすると合計が変わる（352→402）', /352 kcal/.test(t0) && /402 kcal/.test(t1), `${t0} → ${t1}`);
+  await page.click('#phRes .ph-row >> nth=0 >> input[type=checkbox]');
+  check('チェックを外すと合計から引かれる', /150 kcal/.test(await page.textContent('#phTotal')), await page.textContent('#phTotal'));
+  await page.selectOption('#mType', 'dinner');
+  await page.click('#phAdd');
+  const s6b = await st();
+  const added = s6b.days[day(0)].meals;
+  check('追加すると選んだ区分で、スケール後のkcalが記録される（サラダ150kcal）', added.length === 1 && added[0].kcal === 150 && added[0].type === 'dinner', JSON.stringify(added));
+  check('追加後は写真と結果が片付く', !(await page.isVisible('#phImg')) && (await page.locator('#phRes .ph-row').count()) === 0);
+
+  // 失敗の見せ方（理由と次の一手が画面に残る）
+  const photoFail = async (rep, re, label) => {
+    photoReply = rep;
+    await page.setInputFiles('#phFile', { name: 'a.png', mimeType: 'image/png', buffer: PNG1 }); await page.waitForTimeout(500);
+    await page.click('#phSend'); await page.waitForTimeout(500);
+    const msg = await page.textContent('#phStatus');
+    check(`写真推定の失敗: ${label}（理由と次の一手を出す・再試行できる）`, re.test(msg) && !(await page.isDisabled('#phSend')), msg);
+  };
+  await photoFail(() => ({ status: 404, body: '{}' }), /反映待ち/, 'サーバー未反映(404)');
+  await photoFail(() => ({ status: 429, body: '{"error":"x"}' }), /上限|待つ/, '上限(429)');
+  await photoFail(() => ({ status: 502, body: '{"error":"unreadable"}' }), /撮り直して/, '推定不能(502)');
+  await photoFail(() => ({ status: 200, body: '{"notFood":true,"items":[]}' }), /食べ物が写っていない/, '食べ物でない写真');
+  await photoFail(() => ({ status: 200, body: '<html>proxy error</html>' }), /読み取れませんでした/, '壊れた応答');
+  await photoFail(() => ({ status: 200, body: '{"items":[{"name":"x","kcal":"abc"}]}' }), /読み取れませんでした/, '全品目が不正');
+  await photoFail(() => 'abort', /ネットワーク/, '通信できない');
+  await page.click('#phCancel');
+  check('「やめる」で写真が消える', !(await page.isVisible('#phImg')) && !(await page.isVisible('#phSend')));
+  check('写真推定の失敗でも例外なし', errors.length === 0, errors[0] || '');
+
+  // 撮影データ(EXIF)の除去と縮小
+  const exifJpeg = await page.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 3000; c.height = 2000; const g = c.getContext('2d');
+    for (let i = 0; i < 400; i++) { g.fillStyle = `rgb(${(i * 37) % 255},${(i * 91) % 255},${(i * 17) % 255})`; g.fillRect((i * 53) % 3000, (i * 29) % 2000, 300, 300); }
+    return c.toDataURL('image/jpeg', 0.95).split(',')[1];
+  });
+  const raw = Buffer.from(exifJpeg, 'base64');
+  const app1 = Buffer.concat([Buffer.from('Exif\0\0GPS-LAT-35.6812N-LON-139.7671E', 'latin1')]);
+  const seg = Buffer.concat([Buffer.from([0xff, 0xe1, (app1.length + 2) >> 8, (app1.length + 2) & 255]), app1]);
+  const withExif = Buffer.concat([raw.subarray(0, 2), seg, raw.subarray(2)]);
+  check('（準備）検査用JPEGに位置情報が入っている', withExif.includes('GPS-LAT-35.6812N'));
+  photoReply = () => ({ status: 200, body: JSON.stringify(okItems) });
+  workerCalls.length = 0;
+  await page.setInputFiles('#phFile', { name: 'big.jpg', mimeType: 'image/jpeg', buffer: withExif }); await page.waitForTimeout(1200);
+  await page.click('#phSend'); await page.waitForTimeout(500);
+  const sentBig = photoCalls()[0] ? JSON.parse(photoCalls()[0].body).image : '';
+  const bytesBig = Buffer.from(sentBig.split(',')[1] || '', 'base64');
+  check('送る写真から位置情報・撮影データ(EXIF)が消えている', sentBig && !bytesBig.includes('GPS-LAT') && !bytesBig.includes('Exif'));
+  const dims = await page.evaluate(() => { const i = document.getElementById('phImg'); return [i.naturalWidth, i.naturalHeight]; });
+  check('3000×2000の写真は1024px以内に縮めて送る', Math.max(...dims) <= 1024 && Math.max(...dims) > 500, dims.join('x'));
+  check('送る量が上限(約1.1MB)以内', sentBig.length > 0 && sentBig.length <= 1100000, String(sentBig.length));
+  await page.click('#phCancel');
+  await page.setInputFiles('#phFile', { name: 'x.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') }); await page.waitForTimeout(300);
+  check('画像でないファイルは受け付けない（送信ボタンも出ない）', !(await page.isVisible('#phSend')));
+  const sanit = await page.evaluate(() => window.HEALTH_DEBUG.sanitizePhotoResult({ items: [{ name: 'a<b>', kcal: 10 }, { name: 'x', kcal: -5 }, { name: 'y', kcal: 3001 }, { name: 'z', kcal: 5, p: 'x', grams: 'y' }] }));
+  check('応答の検疫: 範囲外・不正な値を落とし、数値以外は0/nullへ', sanit.length === 2 && !sanit[0].name.includes('<') && sanit[1].p === 0 && sanit[1].grams === null, JSON.stringify(sanit));
+
   // 7. 週次レポート
   const wk = {};
   for (let i = 0; i < 7; i++) wk[day(-i)] = { weight: 72 - (6 - i) * 0.1 + 0.6 - 0.6, steps: 4000, sleep: 5.5, meals: [{ id: 'm' + i, type: 'lunch', name: 'x', kcal: 2000, p: 0, f: 0, c: 0 }], ex: [{ id: 'e' + i, type: 'walk', min: 20, kcal: 70 }] };
@@ -292,10 +388,13 @@ async function run(overrideHtml, quiet) {
   check('SWの事前キャッシュにページとmanifestがある（実体も在る）', sw.includes("'./health-log.html'") && sw.includes("'./health-log.webmanifest'"));
   check('SWに通知タップでアプリへ戻す処理がある', /addEventListener\('notificationclick'/.test(sw));
   const html = fs.readFileSync(path.join(ROOT, PAGE), 'utf8');
-  // connect-src は 'self' と、security-baseline が足す通報先Worker(frame-guard.js用)だけを許す。他のホストが増えたら外部送信が入ったということ
-  const connect = (html.match(/connect-src ([^;]*);/) || [, ''])[1].split(/\s+/).filter(Boolean);
-  check('外部へ通信しない（connect-srcは自分＋通報先Workerだけ・外部URLの読込なし）', connect.every((c) => c === "'self'" || c === 'https://ai-proxy.hi-fukasawa77.workers.dev') && !/<(script|link|img)[^>]+(src|href)="https?:\/\/(?!hifukasawa77)/.test(html), connect.join(' '));
-  check('fetch / XMLHttpRequest / sendBeacon / WebSocket を使っていない', !/\bfetch\(|XMLHttpRequest|sendBeacon|new WebSocket|new EventSource/.test(html));
+  // 外へ出る通信は、写真推定の1本（Worker）だけ。connect-src も fetch も、それ以外のホストを増やさない
+  const WORKER_HOST = 'https://ai-proxy.hi-fukasawa77.workers.dev';
+  const connect = ((html.match(/Content-Security-Policy" content="([^"]*)"/) || [, ''])[1].match(/connect-src ([^;]*);/) || [, ''])[1].split(/\s+/).filter(Boolean);
+  check('connect-srcは自分＋Workerだけ・外部URLの読込なし', connect.every((c) => c === "'self'" || c === WORKER_HOST) && !/<(script|link|img)[^>]+(src|href)="https?:\/\/(?!hifukasawa77)/.test(html), connect.join(' '));
+  const fetches = html.match(/\bfetch\(/g) || [];
+  check('fetchは1か所だけで、宛先は写真推定のWorker', fetches.length === 1 && html.includes(`var PHOTO_URL = '${WORKER_HOST}/health/photo'`) && !/XMLHttpRequest|sendBeacon|new WebSocket|new EventSource/.test(html));
+  check('写真推定を使わない限り、Workerへの通信は0件', workerCalls.filter((c) => !c.url.endsWith('/health/photo')).length === 0);
   check('eval / new Function / document.write を使っていない', !/\beval\(|new Function\(|document\.write\(/.test(html));
 
   await browser.close(); server.close();

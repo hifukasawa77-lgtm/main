@@ -9,7 +9,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
-- `health-log.html` / `health-log.webmanifest` — ヘルスログ（食事・カロリー／体重・BMI・体脂肪／歩数・水分・睡眠・運動／リマインダー／週次レポート。Androidのホーム画面に追加して使うPWA。記録は端末のlocalStorageだけ）
+- `health-log.html` / `health-log.webmanifest` — ヘルスログ（食事・カロリー／体重・BMI・体脂肪／歩数・水分・睡眠・運動／リマインダー／週次レポート。Androidのホーム画面に追加して使うPWA。記録は端末のlocalStorageだけ。写真でカロリー推定のみ、押したときに写真1枚をWorker経由でAIへ送る）
 - `zero-1-mobile.html` — ZERO-1 Mobile（WebGPUで端末内実行するローカルLLM）＋エアタッチ
 - `assets/js/gesture-pointer.js` — エアタッチ（カメラに指をかざして画面を操作する）。他ページからも使える独立モジュール
 - `assets/js/zero1-worker.js` — ZERO-1 Mobile のモデルを画面とは別の糸で動かす worker（同じ糸でやると読み込み中に画面が固まる）
@@ -592,6 +592,15 @@ node scripts/verify-service-worker.mjs       # sw.js（事前キャッシュ・�
   CSVは先頭が `= + - @` の文字列を `'` で無害化（複数の食事は ` / ` で連結されるので、検査は「先頭に来る」形で確かめる）
 - **Canvasの `height` 属性を読み書きしない**（`data-h` に固定。dpr>1で再描画のたびに倍々に膨らむ。故障注入で確認済み）
 - 食品の数値・METsは日本食品標準成分表・身体活動のMETsに基づく**概算**。画面にも「目安」と明記。診断・治療の代わりではない旨を「今日」画面に常設
+- **写真でカロリー推定（2026-11-08 追加・深澤の選択＝クラウドの視覚AI）は、このページで唯一「外へ出る」通信**。
+  ①**選んだだけでは送らない**（縮小して確認画面を出す→「推定する」を押した1枚だけ送る）。検査が「選択後に0件」を見て、
+  自動送信に壊した版を故障注入で検出する ②**送る前に端末内で縮小・再描画**＝EXIF（位置・撮影日時）が消える（検査は位置文字列入りJPEGで確かめる）。
+  ③**モデルの出力も、サーバーの応答も信用しない**: Worker（`cloudflare-worker/food-photo.js`）とページ（`sanitizePhotoResult`）の両方で検疫し、
+  kcal が PFC と食い違えば PFC から再計算、料理名は textContent だけで描く。**推定は目安**と画面に常設し、結果は直してから記録に入れる
+  ④**Workerは自動デプロイされていない**（`CLOUDFLARE_API_TOKEN` 未登録）。反映前は404なので「サーバー側がまだ有効になっていません」と案内して手入力へ誘導する
+  ⑤**実モデルでの動作は未確認**（作業環境から Workers AI へ届かない）。反映後に実際の料理写真で確かめる。画像入力の書式は `food-photo.js` の `messages`
+  ⑥外部送信を足したので `privacy.html` を更新した（虚偽の表示を避ける）。送信先を変えたら必ず同時に直す
+  ⑦Worker側は `node --test tests/food-photo.test.mjs`
 - **検査の動かし方**: このリポジトリの検査は `import 'playwright'` を使う。`node_modules` に無い環境では
   `/opt/node-tools/node_modules/playwright` を解決させる（`node --import <resolve hook>`）
 

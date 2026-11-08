@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <!-- CSP: 外部への通信は一切しない（保存先は端末の localStorage のみ）。 -->
+  <!-- CSP: 記録の保存先は端末の localStorage のみ。外へ出る通信は「写真でカロリー推定」を押したときの1本だけ（connect-src の Worker）。 -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://ai-proxy.hi-fukasawa77.workers.dev; worker-src 'self'; manifest-src 'self'; font-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none';">
   <script src="assets/js/frame-guard.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -93,6 +93,12 @@
     .banner.err{border-color:#e0b6b1;background:var(--red-soft)}
     .banner p{margin:0 0 6px}
     canvas{width:100%;display:block}
+    .photo-prev{margin:10px 0}
+    .photo-prev img{display:block;width:100%;max-height:300px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
+    .ph-row{border-top:1px solid var(--line);padding:12px 0}
+    .ph-row:first-child{border-top:0}
+    .ph-row .row{align-items:center}
+    .ph-warn{font-size:12px;color:var(--warn);background:var(--warn-soft);border-radius:10px;padding:8px 10px;margin:8px 0}
     pre.report{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px;font:13px/1.8 inherit;margin:8px 0}
     nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
     nav.tabs .in{max-width:560px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr)}
@@ -161,6 +167,20 @@
 
   <!-- 食事 -->
   <section id="p-meals" class="panel" role="tabpanel" aria-label="食事 Meals" hidden>
+    <div class="card" id="photoCard">
+      <h2>写真で記録 <span class="en">Photo estimate</span></h2>
+      <p class="muted">料理を撮ると、AIが料理名・量・カロリー・PFCを推定します。結果は確認・修正してから記録に入ります。</p>
+      <input type="file" id="phFile" accept="image/*" hidden>
+      <div class="row"><button class="btn primary" id="phBtn" type="button">写真を撮る・選ぶ Take photo</button></div>
+      <div class="photo-prev" id="phPrev" hidden><img id="phImg" alt="推定する料理の写真"></div>
+      <div id="phSendBox" hidden>
+        <p class="ph-warn">「推定する」を押すと、<b>この写真1枚がクラウドのAIへ送られます</b>（縮小後・位置情報などの撮影データは除去済み）。写真は保存されません。送る前に、人の顔や個人情報が写っていないか確認してください。</p>
+        <div class="row"><button class="btn primary" id="phSend" type="button">AIで推定する（写真を送信） Estimate</button><button class="btn fit" id="phCancel" type="button">やめる</button></div>
+      </div>
+      <p class="muted" id="phStatus" role="status" aria-live="polite"></p>
+      <div id="phRes"></div>
+    </div>
+
     <div class="card">
       <h2>食事を記録 <span class="en">Log a meal</span></h2>
       <div class="row">
@@ -346,6 +366,9 @@ var FOODS = [
   ['バナナ 1本', 86, 1.1, 0.2, 22.5], ['牛乳 200ml', 134, 6.6, 7.6, 9.6], ['無糖ヨーグルト 100g', 62, 3.6, 3.0, 4.9],
   ['ビール 350ml', 140, 1.1, 0, 10.9]
 ];
+var PHOTO_URL = 'https://ai-proxy.hi-fukasawa77.workers.dev/health/photo'; // 写真推定（Worker）。ここ以外へは送らない
+var PHOTO_MAX_PX = 1024, PHOTO_MAX_CHARS = 1100000;
+var SCALES = [[0.75, '少なめ ×0.75'], [1, '普通 ×1'], [1.25, '多め ×1.25'], [1.5, 'かなり多め ×1.5']];
 var DEFAULT_REM = [
   { id: 'weight', label: '朝の体重 Weigh-in', time: '07:30', on: false },
   { id: 'meal', label: '食事の記録（朝昼夕が揃うまで）Log meals', time: '21:00', on: false },
@@ -360,6 +383,9 @@ var range = 30;
 var saveFailed = false;
 var deferredInstall = null;
 var tbl = null; // toast timer
+var photo = null;   // 縮小済みJPEGのdata URL（まだ送っていない）
+var phItems = [];   // 推定結果（画面で直せる）
+var phBusy = false;
 
 function blank() {
   return {
@@ -654,6 +680,131 @@ function delMeal(id) {
   var d = S.days[cur]; if (!d) return;
   d.meals = d.meals.filter(function (m) { return m.id !== id; });
   prune(cur); save(); render();
+}
+
+
+/* ───────── 写真でカロリー推定（送るのは「推定する」を押した1枚だけ） ───────── */
+function sanitizePhotoResult(j) { // サーバーの応答も信用しない（形・範囲・文字を確かめる）
+  var out = [];
+  if (!j || typeof j !== 'object' || !Array.isArray(j.items)) return out;
+  j.items.slice(0, 8).forEach(function (it) {
+    if (!it || typeof it !== 'object') return;
+    var name = str(String(it.name == null ? '' : it.name).replace(/[<>]/g, ' '), 60), kcal = num(it.kcal, 0, 3000, 0);
+    if (!name || kcal === null) return;
+    out.push({ inc: true, name: name, scale: 1, grams: num(it.grams, 1, 2000, 0), kcal: kcal,
+      p: num(it.p, 0, 300, 1) || 0, f: num(it.f, 0, 300, 1) || 0, c: num(it.c, 0, 500, 1) || 0, adjusted: it.adjusted === true });
+  });
+  return out;
+}
+function setPhoto(dataUrl) {
+  photo = dataUrl;
+  $('phPrev').hidden = !dataUrl; $('phSendBox').hidden = !dataUrl;
+  if (dataUrl) $('phImg').src = dataUrl; else $('phImg').removeAttribute('src');
+}
+function resetPhoto() { setPhoto(null); phItems = []; clear($('phRes')); $('phStatus').textContent = ''; $('phFile').value = ''; }
+function shrinkImage(file, done, fail) {
+  // 端末内で縮小して JPEG に描き直す。これで撮影日時・位置情報(EXIF)は写真から消え、送る量も小さくなる
+  var url = URL.createObjectURL(file), img = new Image();
+  img.onload = function () {
+    try {
+      var w = img.naturalWidth, hh = img.naturalHeight, k = Math.min(1, PHOTO_MAX_PX / Math.max(w, hh));
+      if (!w || !hh) throw new Error('size');
+      var q = [0.82, 0.7, 0.55, 0.4], px = [1, 0.8, 0.6], i, j, out = '';
+      for (j = 0; j < px.length && !out; j++) for (i = 0; i < q.length; i++) {
+        var cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(w * k * px[j])); cv.height = Math.max(1, Math.round(hh * k * px[j]));
+        var g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(img, 0, 0, cv.width, cv.height);
+        var d = cv.toDataURL('image/jpeg', q[i]);
+        if (d.length <= PHOTO_MAX_CHARS) { out = d; break; }
+      }
+      URL.revokeObjectURL(url);
+      if (!out) fail(); else done(out);
+    } catch (e) { URL.revokeObjectURL(url); fail(); }
+  };
+  img.onerror = function () { URL.revokeObjectURL(url); fail(); };
+  img.src = url;
+}
+function onPhotoFile() {
+  var f = $('phFile').files[0]; if (!f) return;
+  phItems = []; clear($('phRes')); $('phStatus').textContent = '';
+  if (!/^image\//.test(f.type) || f.size > 30e6) { toast('画像ファイルを選んでください（30MBまで）', true); $('phFile').value = ''; return; }
+  $('phStatus').textContent = '写真を縮小しています…';
+  shrinkImage(f, function (d) { setPhoto(d); $('phStatus').textContent = ''; }, function () { setPhoto(null); $('phStatus').textContent = ''; toast('この写真を読み込めませんでした。別の写真でお試しください', true); });
+}
+function photoError(status) {
+  if (status === 404 || status === 405) return '写真推定のサーバー側がまだ有効になっていません（管理者の反映待ち）。手入力で記録できます。';
+  if (status === 429) return '今日の写真推定の利用が上限に達したか、短時間に多く送りました。少し待つか、明日またお試しください。手入力は使えます。';
+  if (status === 413) return '写真が大きすぎます。別の写真で試してください。';
+  if (status === 503) return '写真推定が一時的に使えません。しばらくしてからお試しください。';
+  if (status === 502) return '推定できませんでした。明るい場所で、料理全体が写るように撮り直してください。';
+  return '推定に失敗しました（' + status + '）。手入力で記録できます。';
+}
+function sendPhoto() {
+  if (!photo || phBusy) return;
+  phBusy = true; $('phSend').disabled = true; clear($('phRes')); phItems = [];
+  $('phStatus').textContent = 'AIが推定しています…（最大40秒）';
+  var opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: photo }) };
+  if (window.AbortSignal && AbortSignal.timeout) opts.signal = AbortSignal.timeout(40000);
+  fetch(PHOTO_URL, opts).then(function (r) {
+    return r.json().then(function (j) { return { status: r.status, ok: r.ok, j: j }; }, function () { return { status: r.status, ok: false, j: null }; });
+  }).then(function (r) {
+    phBusy = false; $('phSend').disabled = false;
+    if (r.status === 200 && r.j === null) { $('phStatus').textContent = '推定結果を読み取れませんでした（応答が壊れています）。もう一度試すか、手入力で記録してください。'; return; }
+    if (!r.ok) { $('phStatus').textContent = photoError(r.status); return; }
+    if (r.j && r.j.notFood === true) { $('phStatus').textContent = '食べ物が写っていないようです。料理が真ん中に大きく写るように撮り直してください。'; return; }
+    phItems = sanitizePhotoResult(r.j);
+    if (!phItems.length) { $('phStatus').textContent = '推定結果を読み取れませんでした。撮り直すか、手入力で記録してください。'; return; }
+    $('phStatus').textContent = '';
+    renderPhotoResult();
+  }).catch(function (e) {
+    phBusy = false; $('phSend').disabled = false;
+    $('phStatus').textContent = e && e.name === 'TimeoutError' ? '時間内に結果が返りませんでした。電波の良い所でもう一度お試しください。' : 'ネットワークに届きませんでした。電波を確認してもう一度お試しください。手入力は使えます。';
+  });
+}
+function phTotals() {
+  var t = { kcal: 0, p: 0, f: 0, c: 0, n: 0 };
+  phItems.forEach(function (it) { if (it.inc) { t.kcal += Math.round(it.kcal * it.scale); t.p += it.p * it.scale; t.f += it.f * it.scale; t.c += it.c * it.scale; t.n++; } });
+  return t;
+}
+function renderPhotoResult() {
+  var box = $('phRes'); clear(box);
+  box.appendChild(h('div', { class: 'ph-warn', text: 'あくまで推定です。写真からは油・調味料・量が分からないため、実際とずれることがあります。名前・量・カロリーは直してから追加してください。' }));
+  var total = h('p', { class: 'muted', id: 'phTotal' });
+  function refresh() {
+    var t = phTotals(); total.textContent = '追加する合計: ' + nf(t.kcal) + ' kcal（' + t.n + '品）　P ' + n1(t.p) + ' / F ' + n1(t.f) + ' / C ' + n1(t.c) + ' g';
+    $('phAdd').disabled = t.n === 0;
+  }
+  phItems.forEach(function (it, idx) {
+    var kc = h('span', { class: 'val', text: '' });
+    var sub = h('div', { class: 'sub' });
+    function line() {
+      kc.textContent = nf(it.kcal * it.scale) + ' kcal';
+      sub.textContent = (it.grams ? '約' + nf(it.grams * it.scale) + ' g　' : '') + 'P ' + n1(it.p * it.scale) + ' / F ' + n1(it.f * it.scale) + ' / C ' + n1(it.c * it.scale) + ' g' + (it.adjusted ? '　※PFCに合わせてkcalを補正' : '');
+    }
+    var cb = h('input', { type: 'checkbox', 'aria-label': it.name + 'を記録に入れる' }); cb.checked = it.inc;
+    cb.addEventListener('change', function () { it.inc = cb.checked; refresh(); });
+    var nm = h('input', { type: 'text', maxlength: '60', 'aria-label': '料理名 ' + (idx + 1), value: it.name });
+    nm.addEventListener('input', function () { it.name = str(nm.value, 60); });
+    var sc = h('select', { 'aria-label': it.name + 'の量' });
+    SCALES.forEach(function (x) { sc.appendChild(h('option', { value: String(x[0]), text: x[1] })); });
+    sc.value = '1';
+    sc.addEventListener('change', function () { it.scale = +sc.value; line(); refresh(); });
+    line();
+    box.appendChild(h('div', { class: 'ph-row' }, h('div', { class: 'row' }, h('div', { class: 'fit' }, cb), nm, kc), h('div', { class: 'row', style: 'margin-top:6px' }, sub, h('div', { class: 'fit', style: 'min-width:130px' }, sc))));
+  });
+  box.appendChild(total);
+  box.appendChild(h('div', { class: 'row' }, h('button', { class: 'btn primary', id: 'phAdd', type: 'button', text: 'この内容で食事に追加 Add', onclick: addPhotoMeals })));
+  refresh();
+}
+function addPhotoMeals() {
+  var type = $('mType').value, n = 0;
+  phItems.forEach(function (it) {
+    if (!it.inc) return;
+    day(cur).meals.push({ id: uid(), type: type, name: it.name || '(名称なし)', kcal: Math.min(5000, Math.round(it.kcal * it.scale)),
+      p: Math.round(it.p * it.scale * 10) / 10, f: Math.round(it.f * it.scale * 10) / 10, c: Math.round(it.c * it.scale * 10) / 10 }); n++;
+  });
+  if (!n) return;
+  if (save()) toast(n + '品を追加しました');
+  resetPhoto(); render(); checkReminders();
 }
 
 /* ───────── 体重 ───────── */
@@ -991,6 +1142,10 @@ function bind() {
   $('dateInput').addEventListener('change', function () { var v = $('dateInput').value; if (validDate(v) && v <= todayStr()) { cur = v; } render(); });
   Array.prototype.forEach.call(document.querySelectorAll('[data-water]'), function (b) { b.addEventListener('click', function () { addWater(+b.dataset.water); }); });
   $('mAdd').addEventListener('click', addMeal);
+  $('phBtn').addEventListener('click', function () { $('phFile').click(); });
+  $('phFile').addEventListener('change', onPhotoFile);
+  $('phSend').addEventListener('click', sendPhoto);
+  $('phCancel').addEventListener('click', resetPhoto);
   $('wSave').addEventListener('click', saveWeight);
   $('wDel').addEventListener('click', delWeight);
   Array.prototype.forEach.call($('rangeChips').children, function (c) { c.addEventListener('click', function () { range = +c.dataset.range; renderWeight(); }); });
@@ -1040,7 +1195,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', function () { 
 if (window.__HEALTH_TEST) window.HEALTH_DEBUG = {
   get S() { return S; }, setState: function (x) { S = sanitize(x); save(); render(); }, sanitize: sanitize, plan: plan, bmr: bmr, bmi: bmi, exKcal: exKcal,
   buildReport: buildReport, buildCsv: buildCsv, importJson: importJson, movingAvg: movingAvg, dueList: dueList, checkReminders: checkReminders,
-  setCur: function (d) { cur = d; render(); }, setTab: setTab, todayStr: todayStr, KEY: KEY, csvCell: csvCell, num: num
+  setCur: function (d) { cur = d; render(); }, setTab: setTab, todayStr: todayStr, KEY: KEY, csvCell: csvCell, num: num, sanitizePhotoResult: sanitizePhotoResult
 };
 })();
 </script>
