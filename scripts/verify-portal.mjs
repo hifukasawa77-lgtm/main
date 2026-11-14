@@ -67,6 +67,13 @@ function staticChecks(html, portalJs) {
   const missing = [...keys].filter(k => !new RegExp(`'${k.replace(/[-]/g, '\\-')}'\\s*:|\\b${k.replace(/-/g, '_')}\\s*:`).test(enBlock) && !new RegExp(`(^|[\\s{,])${k}\\s*:`).test(enBlock));
   ok('トップ刷新の文言に英語訳がある（data-pi18n）', missing.length === 0, missing.join(', '));
 
+  // カードのサムネは軽量版（assets/thumbs/。scripts/gen-top-thumbs.py）を使う。原画（1,000〜1,800px）を
+  // 360px の枠に出すとトップの転送量が 5MB を超え、スマホの初回表示が遅くなる（2026-11 Lighthouse で実測）
+  const grid = html.slice(html.indexOf('<div class="works-grid">'), html.indexOf('<section id="tools"'));
+  const heavy = [...grid.matchAll(/<img[^>]*src="(assets\/[^"]+)"/g)].map(m => m[1])
+    .filter(src => !src.startsWith('assets/thumbs/') && existsSync(src) && statSync(src).size > 60000);
+  ok('ゲームカードのサムネが軽量版（60KB超の原画を直接使わない）', heavy.length === 0, heavy.join(', ') + (heavy.length ? ' → python3 scripts/gen-top-thumbs.py' : ''));
+
   const meta = existsSync('data/catalog-meta.json') ? JSON.parse(readFileSync('data/catalog-meta.json', 'utf8')).items || {} : {};
   const hrefsCards = cards.map(a => (a.match(/href="([^"]+)"/) || [])[1]).filter(Boolean);
   const noDate = hrefsCards.filter(h => !meta[h]?.added);

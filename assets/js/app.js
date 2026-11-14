@@ -5955,6 +5955,15 @@ document.addEventListener('click', event => {
         return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
       }
       const grid = document.getElementById('indexBlogGrid');
+      if (!grid) return;
+      // blogs.json は本文ごと持つので数MBある。開いた直後に取ると初回表示（LCP）が遅れるため、
+      // ブログ欄が画面に近づいてから取る（2026-11 トップ刷新。Lighthouse で LCP の描画遅延の主因だった）
+      if ('IntersectionObserver' in window) {
+        await new Promise(res => {
+          const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { io.disconnect(); res(); } }, { rootMargin: '800px' });
+          io.observe(grid);
+        });
+      }
       let allBlogs;
       try {
         const resp = await fetch('./blogs.json?_=' + Date.now());
