@@ -14,7 +14,7 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `assets/js/gesture-pointer.js` — エアタッチ（カメラに指をかざして画面を操作する）。他ページからも使える独立モジュール
 - `assets/js/zero1-worker.js` — ZERO-1 Mobile のモデルを画面とは別の糸で動かす worker（同じ糸でやると読み込み中に画面が固まる）
 - `assets/js/zero1-tools.js` — ZERO-1 Mobile の端末内ツール層（時計・タイマー・メモ・単位換算・計算・サイト内検索）と、サイト知識の取り出し（ローカルRAG）。純粋ロジックのみで作用を持たない
-- `assets/css/portal.css` / `assets/js/portal.js` — トップページ刷新（2026-11）の見た目と機能（メニュー・サイト内検索・作品カタログ）。設計: `docs/portal-redesign/`
+- `assets/css/portal.css` / `assets/js/portal.js` — トップページ刷新（2026-11）の追加部品のレイアウトと機能（メニュー・サイト内検索・作品カタログ）。設計: `docs/portal-redesign/`
 - `sw.js` — サイト全体の Service Worker。**別オリジンの通信には触らない**（触ると失敗の理由が消える）
 - `frontline-zero/` — Unity 6 製チームFPS「フロントライン・ゼロ」のWebGLビルド出力（ソース・再ビルド手順・落とし穴は `unity-frontline/README.md`。**ビルド出力は手編集しない**。「ビルドツール不使用」の例外はここだけ）
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。`obsidian-vault/`（第二の脳）とは別物。使い分けは「Obsidian メモリ層（Claudechord Vault）」節の早見表を参照。詳細: `claudechord-vault/README.md`）
@@ -239,16 +239,17 @@ node scripts/verify-bakumatsu-map.mjs   # 拠点14件が地図の陸に載って
 
 ```bash
 node scripts/verify-portal.mjs            # 起動・リンク・ジャンル・カタログ（検索/並べ替え）・サイト内検索・メニュー・日英・保存データ・はみ出し（32項目）
-node scripts/verify-portal.mjs --inject   # 故障注入4種（テーマ色が背景を白に戻す／ジャンル無視／Escが効かない／既存キーの上書き）
+node scripts/verify-portal.mjs --inject   # 故障注入4種（上書き層が背景色を変える／ジャンル無視／Escが効かない／既存キーの上書き）
 node scripts/gen-catalog-meta.mjs         # ゲームを足したら公開日を再生成（git 履歴から。--check で欠落だけ見る）
 python3 scripts/gen-top-thumbs.py         # カードに画像を足したら軽量版（assets/thumbs/）を作って参照を差し替える
 ```
 
-- **見た目は `assets/css/portal.css`（main.css に重ねる上書き層）**。トップだけ**ダークネイビー＋ブルー/シアン**
-  （深澤の指示・2026-11-14）。`<link>` を外せば旧デザイン（白地＋オレンジ）へ戻る。機能は `assets/js/portal.js`。
+- **配色はトップ従来の白地＋オレンジのまま**。2026-11-14 に一度ダークネイビー×ブルー/シアンへ変えたが、
+  深澤の判断で戻した（「いかにもAIが作った色合い」）。`assets/css/portal.css` は追加部品の**レイアウトだけ**を持ち、
+  色は main.css のトークン（`--bg`/`--orange` 等）を使う——**ここで基調色を定義しない**（`verify-portal` が白地を検査）。機能は `assets/js/portal.js`。
   **app.js（465KB）には足さない**——既存DOMを読むだけにして、作品情報は index.html のカードを正本にする
-- **ダッシュボードの「テーマ色」は `:root` へ inline で変数を書く**。旧版は `--bg` を白へ書き戻しており、
-  portal.css の背景が保存済みテーマの人だけ白に戻った（例外は出ない）。テーマが書くのはアクセント色だけにした
+- **ダッシュボードの「テーマ色」は `:root` へ inline で `--bg`/`--line` 等を書く**。トップの基調色を変えるなら、
+  CSSだけでなくこの THEMES（app.js）も直さないと、保存済みテーマの人だけ元の色に戻る（例外は出ない）
 - **ゲームカードには必ず `data-category` を付け、そのジャンルの絞り込みボタンを置く**。無いカードは
   ジャンルを選ぶと二度と出ない（`typing_dojo`・`kotonoha`・`notebook` で実際にそうなっていた）
 - **新着順の日付は `data/catalog-meta.json`（git 履歴から生成）だけ**。手で書かない。**浅いクローンでは生成を拒否する**

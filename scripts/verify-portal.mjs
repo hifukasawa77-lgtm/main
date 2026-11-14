@@ -118,7 +118,8 @@ async function run(base, mutate) {
 
     const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     const [r, g, b] = bg.match(/\d+/g).map(Number);
-    ok('テーマ色を保存していても背景が暗い（ダークネイビー）', r + g + b < 120, bg);
+    // 配色は元のまま（白地＋オレンジ。2026-11-14 深澤「色合いは元に戻して」）。portal.css は色を持たない
+    ok('配色が元のまま（テーマ色を保存していても白地の背景）', r + g + b > 700, bg);
 
     // ジャンル
     await page.click('.works-filter-btn[data-filter="board"]');
@@ -238,9 +239,9 @@ async function run(base, mutate) {
 // ── 故障注入（壊したら ❌ が出ることを確かめる） ──
 const INJECTIONS = [
   {
-    name: 'テーマ色が --bg を白へ書き戻す（旧版の不具合）',
-    expect: 'テーマ色を保存していても背景が暗い（ダークネイビー）',
-    mutate: page => page.route(/assets\/js\/app\.js/, async r => { const res = await r.fetch(); const t = (await res.text()).replace("{ '--blue':'#a855f7',", "{ '--bg':'#fffbf5', '--blue':'#a855f7',"); r.fulfill({ response: res, body: t }); }),
+    name: '上書き層が背景色を勝手に変える（ダーク化の再発）',
+    expect: '配色が元のまま（テーマ色を保存していても白地の背景）',
+    mutate: page => page.route(/assets\/css\/portal\.css/, async r => { const res = await r.fetch(); const t = (await res.text()) + '\n:root{--bg:#070d1a !important}body{background:#070d1a !important}'; r.fulfill({ response: res, body: t }); }),
   },
   {
     name: 'カタログがジャンルを無視する',
