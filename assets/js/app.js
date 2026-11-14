@@ -22,12 +22,13 @@ document.addEventListener('click', event => {
       const SPARK_COUNT = isMobile ? 18 : 45;
       const CONNECT_DIST = 120;
 
+      // ダークネイビー基調（2026-11 トップ刷新）: ブルー／シアン中心、パープルは控えめに
       const ORB_COLORS = [
-        [249, 115,  22, 0.09],
-        [168,  85, 247, 0.07],
-        [ 14, 165, 233, 0.08],
-        [251, 191,  36, 0.09],
-        [244, 114, 182, 0.07],
+        [ 56, 189, 248, 0.10],
+        [ 34, 211, 238, 0.08],
+        [ 99, 102, 241, 0.08],
+        [ 59, 130, 246, 0.09],
+        [139,  92, 246, 0.06],
       ];
 
       let W, H, particles = [];
@@ -109,7 +110,7 @@ document.addEventListener('click', event => {
             if (dist < CONNECT_DIST) {
               const la = (1 - dist / CONNECT_DIST) * 0.07;
               ctx.beginPath();
-              ctx.strokeStyle = `rgba(249,115,22,${la.toFixed(3)})`;
+              ctx.strokeStyle = `rgba(125,211,252,${la.toFixed(3)})`;
               ctx.lineWidth = 0.6;
               ctx.moveTo(sparks[i].x, sparks[i].y);
               ctx.lineTo(sparks[j].x, sparks[j].y);
@@ -122,7 +123,7 @@ document.addEventListener('click', event => {
           const f = fade(p.life, p.maxLife, 30);
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(249,115,22,${(p.alpha * f).toFixed(3)})`;
+          ctx.fillStyle = `rgba(125,211,252,${(p.alpha * f).toFixed(3)})`;
           ctx.fill();
           p.x += p.vx;
           p.y += p.vy;
@@ -154,6 +155,7 @@ document.addEventListener('click', event => {
     (function () {
       const el = document.getElementById('typewriter');
       const twCursor = document.getElementById('tw-cursor');
+      if (!el) return; // 2026-11 のヒーロー刷新でタイプライターは外した（要素が無ければ何もしない）
       const texts = ['三郷市在住の', '埼玉から発信する', 'ゆるく開発する'];
       let ti = 0, ci = 0, deleting = false;
 
@@ -5533,12 +5535,14 @@ document.addEventListener('click', event => {
       // ── テーマカラー ──────────────────────────────────────────
       (function initDashboardTheme() {
         const THEME_KEY = 'home-dashboard-theme';
+        // 2026-11 トップ刷新でダークネイビー基調にした。面の色（--bg/--line/--card-tint）は
+        // portal.css が持つので、ここではアクセント色だけを差し替える（保存済みの選択はそのまま使える）
         const THEMES = [
-          { id: 'sky',    label: 'スカイ',   color: '#0ea5e9', vars: { '--blue':'#0ea5e9', '--blue-soft':'rgba(14,165,233,0.12)',  '--bg':'#fffbf5', '--surface-warm':'#fff3e6', '--line':'rgba(28,25,23,0.08)', '--card-tint':'white',                    '--card-border':'rgba(14,165,233,0.18)' }},
-          { id: 'purple', label: 'パープル', color: '#a855f7', vars: { '--blue':'#a855f7', '--blue-soft':'rgba(168,85,247,0.12)', '--bg':'#fffbf5', '--surface-warm':'#fff3e6', '--line':'rgba(28,25,23,0.08)', '--card-tint':'rgba(168,85,247,0.06)', '--card-border':'rgba(168,85,247,0.22)' }},
-          { id: 'green',  label: 'グリーン', color: '#22c55e', vars: { '--blue':'#22c55e', '--blue-soft':'rgba(34,197,94,0.12)',   '--bg':'#fffbf5', '--surface-warm':'#fff3e6', '--line':'rgba(28,25,23,0.08)', '--card-tint':'rgba(34,197,94,0.06)',   '--card-border':'rgba(34,197,94,0.22)'  }},
-          { id: 'orange', label: 'オレンジ', color: '#f97316', vars: { '--blue':'#f97316', '--blue-soft':'rgba(249,115,22,0.12)',  '--bg':'#fffbf5', '--surface-warm':'#fff3e6', '--line':'rgba(28,25,23,0.08)', '--card-tint':'rgba(249,115,22,0.06)',  '--card-border':'rgba(249,115,22,0.22)' }},
-          { id: 'rose',   label: 'ローズ',   color: '#f43f5e', vars: { '--blue':'#f43f5e', '--blue-soft':'rgba(244,63,94,0.12)',   '--bg':'#fffbf5', '--surface-warm':'#fff3e6', '--line':'rgba(28,25,23,0.08)', '--card-tint':'rgba(244,63,94,0.06)',   '--card-border':'rgba(244,63,94,0.22)'  }},
+          { id: 'sky',    label: 'スカイ',   color: '#0ea5e9', vars: { '--blue':'#0ea5e9', '--blue-soft':'rgba(14,165,233,0.12)',  '--card-border':'rgba(14,165,233,0.18)' }},
+          { id: 'purple', label: 'パープル', color: '#a855f7', vars: { '--blue':'#a855f7', '--blue-soft':'rgba(168,85,247,0.12)', '--card-border':'rgba(168,85,247,0.22)' }},
+          { id: 'green',  label: 'グリーン', color: '#22c55e', vars: { '--blue':'#22c55e', '--blue-soft':'rgba(34,197,94,0.12)',   '--card-border':'rgba(34,197,94,0.22)'  }},
+          { id: 'orange', label: 'オレンジ', color: '#f97316', vars: { '--blue':'#f97316', '--blue-soft':'rgba(249,115,22,0.12)',  '--card-border':'rgba(249,115,22,0.22)' }},
+          { id: 'rose',   label: 'ローズ',   color: '#f43f5e', vars: { '--blue':'#f43f5e', '--blue-soft':'rgba(244,63,94,0.12)',   '--card-border':'rgba(244,63,94,0.22)'  }},
         ];
 
         const container = document.getElementById('dashboard-theme-swatches');
