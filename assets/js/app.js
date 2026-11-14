@@ -422,15 +422,15 @@ document.addEventListener('click', event => {
 
       async function initVisitCard() {
         const local = incrementLocalVisit();
-        let total = local.total;
-        try {
-          const res = await fetchWithTimeout('https://api.countapi.xyz/get/hide-fukasawa-dashboard/visits', 5000);
-          if (res.ok) {
-            const data = await res.json();
-            if (typeof data.value === 'number') total = data.value;
-          }
-        } catch (e) { /* Fallback to local-only count. */ }
-        visitSub.textContent = `本日のアクセス: ${fmtNum(local.todayCount)} 回`;
+        // ★ここで数えているのは「このブラウザで開いた回数」だけ（localStorage）。サイト全体の
+        //   アクセス数ではない。旧版は api.countapi.xyz（2023年にサービス終了）を叩いて失敗し、
+        //   端末内の数を「サイト訪問数」と表示していた。サイト全体の数字は Cloudflare Web Analytics
+        //   等の管理画面で見る（docs/portal-redesign/03-analytics.md）。
+        const total = local.total;
+        const isEnVisit = document.documentElement.lang === 'en';
+        visitSub.textContent = isEnVisit
+          ? `Today: ${fmtNum(local.todayCount)} — counted in this browser only, not site-wide traffic`
+          : `本日 ${fmtNum(local.todayCount)} 回（このブラウザでの記録。サイト全体のアクセス数ではありません）`;
         // F: yesterday comparison
         const trendEl = document.getElementById('home-visit-trend');
         if (trendEl && local.yesterday > 0) {
@@ -5396,7 +5396,7 @@ document.addEventListener('click', event => {
 
         const STORAGE_KEY = 'home-dashboard-layout-v1';
         const CARD_DEFS = [
-          { id: 'dash-card-visit', ja: 'サイト訪問数', en: 'Site Visits' },
+          { id: 'dash-card-visit', ja: 'この端末での訪問回数', en: 'Visits from this browser' },
           { id: 'dash-card-weather', ja: '天気', en: 'Weather' },
           { id: 'dash-card-fx', ja: '円相場', en: 'Yen Rate' },
           { id: 'dash-card-stock', ja: '株価指数', en: 'Stock Index' },
@@ -5629,7 +5629,7 @@ document.addEventListener('click', event => {
       // ── ダッシュボード説明文 動的更新 ─────────────────────────
       (function initDashboardDesc() {
         const CARD_LABELS = {
-          'dash-card-visit':      { ja: 'アクセス数',        en: 'Site Visits' },
+          'dash-card-visit':      { ja: 'この端末での訪問回数', en: 'Visits from this browser' },
           'dash-card-weather':    { ja: '天気',              en: 'Weather' },
           'dash-card-fx':         { ja: '円相場',            en: 'Yen Rate' },
           'dash-card-stock':      { ja: '株価指数',          en: 'Stock Index' },
@@ -6701,7 +6701,7 @@ document.addEventListener('click', event => {
           'sec-label-faq': 'FAQ',
           'sec-title-faq': "❓ よくある質問",
           'faq-q1': "「hideの部屋」とは何ですか？",
-          'faq-a1': "埼玉県三郷市在住の個人開発者hideが運営するWebサイトです。Claude AIと共同開発したブラウザゲーム40本以上と便利ツールを無料で公開しています。",
+          'faq-a1': "埼玉県三郷市在住の個人開発者hideが運営するWebサイトです。Claude AIと共同開発したブラウザゲーム50本以上と便利ツールを無料で公開しています。",
           'faq-q2': "ゲームは無料ですか？",
           'faq-a2': "はい。すべて無料で、会員登録もアプリのインストールも不要です。ブラウザで開けばすぐに遊べます。",
           'faq-q3': "スマホでも遊べますか？",
@@ -6859,7 +6859,7 @@ document.addEventListener('click', event => {
           'dash-layout-reset': '初期配置に戻す',
           'dash-layout-title': 'ダッシュボードの表示設定',
           'dash-layout-note': 'チェックで表示/非表示を切り替え、上下ボタンでカードの位置を変更できます。この設定はこのブラウザに保存されます。',
-          'dash-visit-title': '👁️ サイト訪問数',
+          'dash-visit-title': '👁️ この端末での訪問回数',
           'dash-visit-link': '詳細ダッシュボードを開く →',
           'dash-fx-title': '💴 円相場（JPY）',
           'dash-fx-chart-label': '📉 過去30日間の対円レート推移（前月比%）',
@@ -7046,7 +7046,7 @@ document.addEventListener('click', event => {
           'sec-label-faq': 'FAQ',
           'sec-title-faq': "❓ FAQ",
           'faq-q1': "What is \"hide's room\"?",
-          'faq-a1': "A website run by hide, an indie developer living in Misato, Saitama. It offers 40+ free browser games and handy tools co-developed with Claude AI.",
+          'faq-a1': "A website run by hide, an indie developer living in Misato, Saitama. It offers 50+ free browser games and handy tools co-developed with Claude AI.",
           'faq-q2': "Are the games free?",
           'faq-a2': "Yes. Everything is free — no sign-up and no app install. Just open it in your browser and play.",
           'faq-q3': "Can I play on a smartphone?",
@@ -7204,7 +7204,7 @@ document.addEventListener('click', event => {
           'dash-layout-reset': 'Reset Layout',
           'dash-layout-title': 'Dashboard Display Settings',
           'dash-layout-note': 'Use checkboxes to show or hide cards, and arrow buttons to change their order. This layout is saved in this browser.',
-          'dash-visit-title': '👁️ Site Visits',
+          'dash-visit-title': '👁️ Visits from this browser',
           'dash-visit-link': 'Open Full Dashboard →',
           'dash-fx-title': '💴 Yen Rate (JPY)',
           'dash-fx-chart-label': '📉 30-Day JPY Rate Trend (MoM%)',
