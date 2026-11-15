@@ -69,6 +69,7 @@ hide_0001 Portfolio プロジェクトの記憶ハブ。Claude Codeはセッシ�
 - [[0040-self-improve-2026-10-25-promotions]] — /self-improve 5回目。検査#15の「表の更新忘れ」3回目再発を`verify-routine-delivery.mjs`のブランチ自動発見機能で構造的に解消（負のテスト確認済み）＋故障注入の空振り学び（2回目）をverifier.md原則11へ昇格＋Dailyバックフィル5件
 - [[0041-self-improve-2026-11-01-promotions]] — /self-improve 6回目。Dailyバックフィル中に**koma_ken.htmlの法務再評価漏れ（RED）を発見**——2026-10-26「音声なし」前提のYELLOW判定が10-30の原作楽曲追加で無効化されたまま公開継続。legal-checker.mdへ「評価の前提が後から崩れたら無効」原則を追加し深澤へ緊急再スクリーニングを推奨
 - [[0042-self-improve-2026-11-08-promotions]] — /self-improve 7回目。前回報告したkoma_ken.htmlの法務リスク（RED）が報告から1〜2日で解消されたことを確認——「評価の前提が後から崩れたら無効」原則の実効性が実証された。新規昇格なし
+- [[0043-self-improve-2026-11-15-promotions]] — /self-improve 8回目。配色全面変更が深澤に「AIが作った感じ」と拒否される再発（ヘルスログ11-08・トップ刷新11-14の2回目）を発見し、「実装前に1画面だけ確認を取る」をplanner.md停止条件へ昇格
 
 ## 🧩 知見
 - [[claude-md-project-rules]] — `CLAUDE.md` プロジェクトルールの要約
