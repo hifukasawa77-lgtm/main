@@ -12,6 +12,7 @@ export function aiUnitsFor(pathname, body = {}) {
   if (pathname === '/') return 1;                          // chat (8B model, short history)
   if (pathname === '/video/script') return 3;              // up to 1536 tokens + retries
   if (pathname === '/video/tts') return 1;
+  if (pathname === '/health/photo') return 6;              // 視覚モデル（画像入力は文章より重い）。無料枠の1日分を数分で使い切られないよう重めに数える
   if (pathname === '/video/image') {                       // image cost grows with steps
     const steps = Math.min(Math.max(parseInt(body.steps) || 4, 1), 8);
     return 2 + steps;

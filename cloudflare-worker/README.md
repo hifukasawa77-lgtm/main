@@ -32,6 +32,19 @@ Workers AI を使ったプロキシです。APIキーをブラウザへ配布せ
 
 ---
 
+## エンドポイント: ヘルスログの写真カロリー推定（`POST /health/photo`）
+
+`{ "image": "data:image/jpeg;base64,..." }`（縮小済み・約1.1MBまで。png/webp も可）を受け取り、
+`{ "items": [{ "name", "grams", "kcal", "p", "f", "c", "adjusted" }], "notFood": false, "model": "…" }` を返す。
+
+- 実装は `food-photo.js`。Workers AI の画像対応モデル（`FOOD_PHOTO_MODELS`）を上から順に試す。**写真は保存もログ記録もしない**
+- **モデルの出力は信用しない**: JSON が取り出せなければ 502 `unreadable`（空の成功にしない）、kcal が PFC（4P+9F+4C）と35%超ずれたら PFC から計算し直し `adjusted: true`、数値は範囲に丸め、料理名は制御文字・`<>` を落とす
+- この経路だけ本文の上限が大きい（1.4MB）。他の経路は 16KB のまま。1回あたり 6 単位を1日の上限（`AI_DAILY_UNITS`）から引く
+- **`@cf/meta/llama-3.2-11b-vision-instruct` は Meta の利用同意が一度だけ必要**（Cloudflare ダッシュボードの Workers AI で一度 `agree` を送る）。先頭の `llama-4-scout` が使えれば不要
+- **本番へ反映するまで、ヘルスログの写真推定は「サーバー側がまだ有効になっていません」と案内する**（手入力は使える）。反映手順は他のルートと同じ（上記の自動デプロイ）
+- **実モデルでの動作は未確認**（作業環境から Workers AI へ届かない）。反映後に、実際の料理写真で一度確かめること。画像入力の書式は OpenAI 互換の `content: [{type:'image_url', image_url:{url}}]` で書いてあり、モデルが別書式を要求するなら `food-photo.js` の `messages` だけ直せばよい
+- 検査: `node --test tests/food-photo.test.mjs`（偽のAIで形・検疫・フォールバック・本物のWorkerを通した上限とクォータ）
+
 ## エンドポイント: 推し活ログのイベントリサーチ（`POST /oshi/research`）
 
 `oshikatsu.html` のリサーチ機能が使う。**AI・キー・課金は不要**で、ニュースRSS（Google ニュース＋Bing ニュース）を取得して

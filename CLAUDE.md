@@ -9,10 +9,12 @@ hideの個人ポートフォリオサイト。GitHub Pages でホスティング
 - `synth-eq.html` — グラフィックEQ＆シンセサイザー（Web Audio API）
 - `shogi.html` — 将棋パズル
 - `shogi_rpg.html` / `shogi_rpg_enhanced.jsx` — 将棋RPG
+- `health-log.html` / `health-log.webmanifest` — ヘルスログ（食事・カロリー／体重・BMI・体脂肪／歩数・水分・睡眠・運動／リマインダー／週次レポート。Androidのホーム画面に追加して使うPWA。記録は端末のlocalStorageだけ。写真でカロリー推定のみ、押したときに写真1枚をWorker経由でAIへ送る）
 - `zero-1-mobile.html` — ZERO-1 Mobile（WebGPUで端末内実行するローカルLLM）＋エアタッチ
 - `assets/js/gesture-pointer.js` — エアタッチ（カメラに指をかざして画面を操作する）。他ページからも使える独立モジュール
 - `assets/js/zero1-worker.js` — ZERO-1 Mobile のモデルを画面とは別の糸で動かす worker（同じ糸でやると読み込み中に画面が固まる）
 - `assets/js/zero1-tools.js` — ZERO-1 Mobile の端末内ツール層（時計・タイマー・メモ・単位換算・計算・サイト内検索）と、サイト知識の取り出し（ローカルRAG）。純粋ロジックのみで作用を持たない
+- `assets/css/portal.css` / `assets/js/portal.js` — トップページ刷新（2026-11）の追加部品のレイアウトと機能（メニュー・サイト内検索・作品カタログ）。設計: `docs/portal-redesign/`
 - `sw.js` — サイト全体の Service Worker。**別オリジンの通信には触らない**（触ると失敗の理由が消える）
 - `frontline-zero/` — Unity 6 製チームFPS「フロントライン・ゼロ」のWebGLビルド出力（ソース・再ビルド手順・落とし穴は `unity-frontline/README.md`。**ビルド出力は手編集しない**。「ビルドツール不使用」の例外はここだけ）
 - `claudechord-vault/` — Obsidian メモリ層（全成果物・KPI・テンプレートの正本。`obsidian-vault/`（第二の脳）とは別物。使い分けは「Obsidian メモリ層（Claudechord Vault）」節の早見表を参照。詳細: `claudechord-vault/README.md`）
@@ -232,6 +234,29 @@ node scripts/verify-bakumatsu-map.mjs   # 拠点14件が地図の陸に載って
   必ず 13×13 画素のブロック平均で判定する（`verify-bakumatsu-map.mjs` の `isLand`）
 - 地図北西の雲は陸と誤判定するが、拠点は一つもその領域に無いので実害はない。
   閾値を触ったら「描画位置」の検査結果で校正すること
+
+## トップページ（index.html）の必須チェック — 2026-11 刷新
+
+```bash
+node scripts/verify-portal.mjs            # 起動・リンク・ジャンル・カタログ（検索/並べ替え）・サイト内検索・メニュー・日英・保存データ・はみ出し（32項目）
+node scripts/verify-portal.mjs --inject   # 故障注入4種（上書き層が背景色を変える／ジャンル無視／Escが効かない／既存キーの上書き）
+node scripts/gen-catalog-meta.mjs         # ゲームを足したら公開日を再生成（git 履歴から。--check で欠落だけ見る）
+python3 scripts/gen-top-thumbs.py         # カードに画像を足したら軽量版（assets/thumbs/）を作って参照を差し替える
+```
+
+- **配色はトップ従来の白地＋オレンジのまま**。2026-11-14 に一度ダークネイビー×ブルー/シアンへ変えたが、
+  深澤の判断で戻した（「いかにもAIが作った色合い」）。`assets/css/portal.css` は追加部品の**レイアウトだけ**を持ち、
+  色は main.css のトークン（`--bg`/`--orange` 等）を使う——**ここで基調色を定義しない**（`verify-portal` が白地を検査）。機能は `assets/js/portal.js`。
+  **app.js（465KB）には足さない**——既存DOMを読むだけにして、作品情報は index.html のカードを正本にする
+- **ダッシュボードの「テーマ色」は `:root` へ inline で `--bg`/`--line` 等を書く**。トップの基調色を変えるなら、
+  CSSだけでなくこの THEMES（app.js）も直さないと、保存済みテーマの人だけ元の色に戻る（例外は出ない）
+- **ゲームカードには必ず `data-category` を付け、そのジャンルの絞り込みボタンを置く**。無いカードは
+  ジャンルを選ぶと二度と出ない（`typing_dojo`・`kotonoha`・`notebook` で実際にそうなっていた）
+- **新着順の日付は `data/catalog-meta.json`（git 履歴から生成）だけ**。手で書かない。**浅いクローンでは生成を拒否する**
+  （全部がクローンした日になる）。`git fetch --filter=blob:none --unshallow origin main` で直る
+- **人気順・アクセスランキングは作らない**（元データが無い。解析は未導入＝`docs/portal-redesign/03-analytics.md`）。
+  訪問数カードは**この端末の回数**しか数えていないので、そう表示する
+- サムネは原画を直接使わず `assets/thumbs/` の軽量版（原画はゲームが原寸前提で使うので縮めない）
 
 ## Service Worker（sw.js）の必須チェック — 全ページの通信に効く
 
@@ -566,6 +591,42 @@ node scripts/verify-receipt-ocr.mjs --ocr   # 実物のTesseractで読む（npm�
   4.0.0（16MB）は撮影画像で best_int より低い（68% 対 88〜92%。合成レシートでの実測）
 - **家計簿はこのブラウザの localStorage だけ**。読み書きは必ず try/catch（シークレットタブで
   `localStorage` の参照自体が例外を投げる）。品目名はOCR由来の外部文字列なので `textContent` だけで描く
+
+## ヘルスログ（PWA）の必須チェック（health-log.html を触ったら必ず実行）
+
+```bash
+node scripts/verify-health-log.mjs           # 起動→壊れた保存データ→計算→食事/体重/活動→レポート→XSS・CSV→取込→リマインダー→保存不可→スマホ幅→PWA（76項目）
+node scripts/verify-health-log.mjs --inject  # 故障を6種仕込んで ❌ が出ることを確認（偽の緑の防止）
+node scripts/verify-service-worker.mjs       # sw.js（事前キャッシュ・通知タップ）に触れたとき
+```
+
+- **このページだけは黒背景ルールの例外**。深澤の指示（2026-11-08「いかにもAIが作った感じ」）で、オフホワイト地＋深い緑1色・ガラス/グラデ/絵文字アイコン無し（線画SVG）・大きく細い数字にした。`theme-color` はマニフェストと必ず揃える（検査が見る）。Canvasの色もJS内に直書きなので、配色を変えるときはCSSとグラフ描画の両方を直す
+- **Androidアプリは「PWAをホーム画面へ追加」で作った**（深澤の選択・2026-11-08）。Kotlinのネイティブ版にしなかった理由:
+  この環境ではAPKをビルド・実機確認できず、サイトの方針（素のJS・ビルドツール不使用）とも合わない。
+  Play配布やヘルスコネクト（歩数の自動取得）が要るなら、TWA化かネイティブ化を別途検討する
+- **Webアプリは歩数計に触れない**ので歩数は手入力。画面にもそう書いてある（できないことを「連携」と書かない）
+- **通知はアプリを開いている間／開き直したときだけ**（サーバーが無いので閉じている間は送れない）。
+  未記録の項目は「今日」画面の上にも出す。Androidの Chrome は `new Notification()` が例外になるので
+  `registration.showNotification` を使う。通知をタップしたとき戻れるよう `sw.js` に `notificationclick` を置いた
+- **目標カロリーには下限を掛ける**（基礎代謝と1,200kcalの大きい方）。下限が外れると極端に低い数字を勧める
+  ——例外もエラーも出ない（検査が故障注入で見ている）。運動分は**足さない**（活動係数に含まれるので二重計上になる）
+- **読み込みは必ず `sanitize()` を通す**。日付が壊れた1件・範囲外の体重・文字列のkcalで、一覧もグラフも丸ごと描かれなくなる。
+  保存キーは `healthlog_v1`（項目を足すだけで後方互換）。`localStorage` が使えない端末では画面に出す（黙って消えるのが一番悪い）
+- **食事名はユーザー入力。`textContent` だけで描く**（全ページ同一オリジン＝1ページのXSSが全ページの問題）。
+  CSVは先頭が `= + - @` の文字列を `'` で無害化（複数の食事は ` / ` で連結されるので、検査は「先頭に来る」形で確かめる）
+- **Canvasの `height` 属性を読み書きしない**（`data-h` に固定。dpr>1で再描画のたびに倍々に膨らむ。故障注入で確認済み）
+- 食品の数値・METsは日本食品標準成分表・身体活動のMETsに基づく**概算**。画面にも「目安」と明記。診断・治療の代わりではない旨を「今日」画面に常設
+- **写真でカロリー推定（2026-11-08 追加・深澤の選択＝クラウドの視覚AI）は、このページで唯一「外へ出る」通信**。
+  ①**選んだだけでは送らない**（縮小して確認画面を出す→「推定する」を押した1枚だけ送る）。検査が「選択後に0件」を見て、
+  自動送信に壊した版を故障注入で検出する ②**送る前に端末内で縮小・再描画**＝EXIF（位置・撮影日時）が消える（検査は位置文字列入りJPEGで確かめる）。
+  ③**モデルの出力も、サーバーの応答も信用しない**: Worker（`cloudflare-worker/food-photo.js`）とページ（`sanitizePhotoResult`）の両方で検疫し、
+  kcal が PFC と食い違えば PFC から再計算、料理名は textContent だけで描く。**推定は目安**と画面に常設し、結果は直してから記録に入れる
+  ④**Workerは自動デプロイされていない**（`CLOUDFLARE_API_TOKEN` 未登録）。反映前は404なので「サーバー側がまだ有効になっていません」と案内して手入力へ誘導する
+  ⑤**実モデルでの動作は未確認**（作業環境から Workers AI へ届かない）。反映後に実際の料理写真で確かめる。画像入力の書式は `food-photo.js` の `messages`
+  ⑥外部送信を足したので `privacy.html` を更新した（虚偽の表示を避ける）。送信先を変えたら必ず同時に直す
+  ⑦Worker側は `node --test tests/food-photo.test.mjs`
+- **検査の動かし方**: このリポジトリの検査は `import 'playwright'` を使う。`node_modules` に無い環境では
+  `/opt/node-tools/node_modules/playwright` を解決させる（`node --import <resolve hook>`）
 
 ## 推し活ログの必須チェック（oshikatsu.html を触ったら必ず実行）
 

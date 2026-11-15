@@ -78,6 +78,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `taihei.html` | `node scripts/verify-taihei-boot.mjs` / `node scripts/verify-taihei-balance.mjs` |
 | `genpei.html` | `node scripts/verify-genpei-boot.mjs` / `node scripts/verify-genpei-balance.mjs` / `node scripts/verify-genpei-kyoten.mjs` |
 | `bakumatsu.html` / `game.js` / `bakumatsu.css` / `bakumatsu-guide.js` | `node scripts/verify-bakumatsu-map.mjs` ＋ `node scripts/playtest-fuzz.mjs bakumatsu.html --seconds 8`（複数の `--seed` で。無限ループ型の固まりは操作しないと出ない） |
+| `index.html` / `assets/css/portal.css` / `assets/js/portal.js` / `assets/css/main.css`（トップページ） | `node scripts/verify-portal.mjs`（`--inject` で故障注入4種）＋ `node scripts/gen-catalog-meta.mjs --check`（カードを足したら引数なしで再生成・**浅いクローンでは拒否**）＋ `python3 scripts/gen-top-thumbs.py --check`（カードの画像を足したら引数なしで軽量版を生成） |
 | `sw.js` | `node scripts/verify-service-worker.mjs` |
 | `assets/js/frame-guard.js` / `scripts/security-baseline.mjs`（全ページのセキュリティ基礎線） | `node scripts/security-baseline.mjs`（`--inject` で故障注入）/ `node scripts/verify-frame-guard.mjs`（実ブラウザ。`--inject` で故障注入） |
 | `cloudflare-worker/request-security.js` / `cloudflare-worker/security-monitor.js` / `cloudflare-worker/gemini-proxy.js` / `cloudflare-worker/notebook-worker.js` | `node --test tests/security.test.mjs`（遮断・シスログ・通知・IP遮断・ページ通報） |
@@ -86,6 +87,8 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `synth-eq.html` | `node scripts/verify-synth-eq.mjs` |
 | `receipt-ocr.html` | `node scripts/verify-receipt-ocr.mjs`（OCRの精度に手を入れたら `--ocr` も） |
 | `oshikatsu.html` | `node scripts/verify-oshikatsu.mjs`（見た目を変えたら `--shots DIR` で撮って目視。`--inject` で故障注入） |
+| `health-log.html` / `health-log.webmanifest`（ヘルスログ・PWA） | `node scripts/verify-health-log.mjs`（`--inject` で故障注入6種）＋ `node scripts/verify-service-worker.mjs`（SW事前キャッシュ・通知タップに触れたとき） |
+| `cloudflare-worker/food-photo.js`（写真カロリー推定）/ `gemini-proxy.js` の `/health/photo` | `node --test tests/food-photo.test.mjs` ＋ `node --test tests/security.test.mjs` ＋ `node scripts/verify-health-log.mjs`（画面側の送信・検疫） |
 | `assets/js/oshi-research.js` / `cloudflare-worker/oshi-research.js`（推し活ログのイベントリサーチ） | `node scripts/verify-oshi-research.mjs`（`--inject` で故障注入）＋ `node --test tests/security.test.mjs` ＋ `node scripts/verify-oshikatsu.mjs`（画面側の連携） |
 | 新規ページ・新作ゲーム・CSS/レイアウトを触ったHTML（スマホ幅の崩れ） | `node scripts/verify-responsive.mjs <ページ>`（`--inject` で故障注入。既知のはみ出しは `scripts/responsive-baseline.json`＝悪化させない） |
 | 新作ゲーム・入力処理／シーン遷移を触ったゲーム（操作したときの壊れ方） | `node scripts/playtest-fuzz.mjs <ページ> --seconds 10`（`--inject` で故障注入。落ちたら同じ `--seed` で再現） |
