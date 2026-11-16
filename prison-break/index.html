@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#05070d">
+<title>脱獄 PRISON BREAK | hideの部屋</title>
+<meta name="description" content="独房から外壁まで、看守・監視カメラ・サーチライトをかいくぐって脱出する横スクロールアクション。Canvas＋Web Audioだけで動くブラウザゲーム。 / A stealth side-scroller: escape the prison. Pure Canvas + Web Audio.">
+<style>
+:root{--ui:64px;--bg:#05070d;--ink:#d8e2f2;--acc:#7fd6e8}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;overscroll-behavior:none}
+#app{height:100vh;height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  padding:max(6px,env(safe-area-inset-top)) max(8px,env(safe-area-inset-right)) max(6px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left))}
+#stage{position:relative;aspect-ratio:16/9;width:min(100%,calc((100vh - var(--ui))*16/9));width:min(100%,calc((100dvh - var(--ui))*16/9));
+  border:2px solid #1c2336;border-radius:6px;overflow:hidden;box-shadow:0 0 0 1px #000,0 10px 40px #000a;background:#000}
+canvas{display:block;width:100%;height:100%;outline:none}
+/* スキャンライン＋画面端ほど濃いビネット */
+.crt{position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.30) 3px);
+  -webkit-mask-image:radial-gradient(ellipse at center,rgba(0,0,0,.28) 28%,#000 100%);mask-image:radial-gradient(ellipse at center,rgba(0,0,0,.28) 28%,#000 100%)}
+.crt::after{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 58%,rgba(0,0,0,.5) 100%)}
+#bar{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+#bar button{font:inherit;font-size:12px;color:var(--ink);background:#101626;border:1px solid #2a3550;border-radius:6px;padding:6px 12px;cursor:pointer;touch-action:manipulation}
+#bar button:hover{border-color:var(--acc)}
+#bar button:focus-visible,.tb:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#touch{display:none;width:100%;max-width:640px;justify-content:space-between;align-items:center;padding:4px 6px}
+body.touch #touch{display:flex}
+.grp{display:flex;gap:10px}
+.tb{width:74px;height:74px;border-radius:16px;background:rgba(30,40,64,.88);border:2px solid #3a4a72;color:#dbe6ff;font:inherit;font-size:26px;line-height:1;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;touch-action:none;padding:0}
+.tb small{font-size:9px;opacity:.85;margin-top:3px;letter-spacing:.02em}
+.tb.on{background:#33507f;border-color:var(--acc)}
+body.touch{--ui:236px}
+body.touch #app{justify-content:flex-start}
+body.touch #touch{margin-top:auto}
+@media (orientation:landscape) and (max-height:560px){
+  body.touch{--ui:58px}
+  body.touch #app{justify-content:center}
+  body.touch #touch{position:fixed;left:0;right:0;bottom:0;max-width:none;margin:0;pointer-events:none;opacity:.82;
+    padding:0 max(10px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left))}
+  .tb{pointer-events:auto;width:62px;height:62px;font-size:22px}
+}
+@media (prefers-reduced-motion:reduce){.crt{display:none}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="c" width="640" height="360" tabindex="0" aria-label="脱獄ゲーム画面 / Prison break game screen"></canvas>
+    <div class="crt" aria-hidden="true"></div>
+  </div>
+  <div id="bar">
+    <button id="bPause" type="button">ポーズ PAUSE (P)</button>
+    <button id="bMute" type="button">音 SOUND: ON (M)</button>
+  </div>
+  <div id="touch" aria-label="タッチ操作 / Touch controls">
+    <div class="grp">
+      <button class="tb" data-k="left" type="button" aria-label="左 Left">◀<small>LEFT</small></button>
+      <button class="tb" data-k="right" type="button" aria-label="右 Right">▶<small>RIGHT</small></button>
+    </div>
+    <div class="grp">
+      <button class="tb" data-k="down" type="button" aria-label="しゃがむ Crouch">▼<small>しゃがむ HIDE</small></button>
+      <button class="tb" data-k="jump" type="button" aria-label="ジャンプ Jump">▲<small>ジャンプ JUMP</small></button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+ *  脱獄 PRISON BREAK  —  Canvas + Web Audio only / single file
+ * ===================================================================== */
+const W = 640, H = 360, GY = 300;           // 画面サイズ・床の高さ
+const WORLD = 4700, GOAL_X = 4440;          // ステージ全長・脱出ライン
+const AREAS = [
+  { x: 0,    ja: '独房', en: 'CELL' },
+  { x: 820,  ja: '廊下', en: 'CORRIDOR' },
+  { x: 2100, ja: '中庭', en: 'YARD' },
+  { x: 3600, ja: '外壁', en: 'OUTER WALL' }
+];
+const RESPAWN_X = [60, 832, 2112, 3612];
+const START_LIFE = 3, TIME_LIMIT = 300, ALARM_TIME = 10, GAUGE_ALARM = 35;
+
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const cv = $('c'), ctx = cv.getContext('2d');
+const lc = document.createElement('canvas'); lc.width = W; lc.height = H;
+const lctx = lc.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+let HI = 0;
+try { HI = parseInt(localStorage.getItem('prisonbreak_hi') || '0', 10) || 0; } catch (e) {}
+function saveHi() {
+  if (G && G.score > HI) { HI = G.score; try { localStorage.setItem('prisonbreak_hi', String(HI)); } catch (e) {} }
+}
+
+/* ===================== サウンド（Web Audio） ===================== */
+const SND = (() => {
+  let ac = null, master = null, noiseBuf = null, muted = false, bgm = false, nextT = 0, step = 0, timer = null, alarmMode = false;
+  try { muted = localStorage.getItem('prisonbreak_mute') === '1'; } catch (e) {}
+  const f = m => 440 * Math.pow(2, (m - 69) / 12);
+  function init() {
+    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+      ac = new AC(); master = ac.createGain(); master.gain.value = muted ? 0 : 0.7; master.connect(ac.destination);
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      timer = setInterval(sched, 50);
+    } catch (e) { ac = null; }
+  }
+  function env(g, t, v, d) {
+    g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(v, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  }
+  function tone(freq, d, type, v, to, at) {
+    if (!ac) return; const t = at || ac.currentTime;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type || 'square'; o.frequency.setValueAtTime(freq, t);
+    if (to) o.frequency.exponentialRampToValueAtTime(to, t + d);
+    env(g, t, v == null ? 0.12 : v, d); o.connect(g); g.connect(master); o.start(t); o.stop(t + d + 0.03);
+  }
+  function noise(d, v, fc, type, at) {
+    if (!ac) return; const t = at || ac.currentTime;
+    const s = ac.createBufferSource(); s.buffer = noiseBuf;
+    const fl = ac.createBiquadFilter(); fl.type = type || 'lowpass'; fl.frequency.value = fc || 1200;
+    const g = ac.createGain(); env(g, t, v, d); s.connect(fl); fl.connect(g); g.connect(master); s.start(t); s.stop(t + d + 0.03);
+  }
+  // BGM: Aマイナーの4小節ループ
+  const BASS = [45,0,45,0,52,0,45,0, 41,0,41,0,48,0,41,0, 43,0,43,0,50,0,43,0, 40,0,40,0,47,0,52,0];
+  const LEAD = [0,0,0,0,0,0,72,0, 0,0,0,0,69,0,0,0, 0,0,0,0,0,0,71,0, 0,0,76,0,0,0,0,0];
+  function playStep(i, t) {
+    const s = i % 32;
+    const b = alarmMode ? (s % 2 ? 57 : (s % 8 < 4 ? 45 : 43)) : BASS[s];
+    if (b) tone(f(b), alarmMode ? 0.16 : 0.24, 'triangle', 0.16, null, t);
+    if (!alarmMode && LEAD[s]) tone(f(LEAD[s]), 0.2, 'square', 0.035, null, t);
+    if (s % 2 === 1 || alarmMode) noise(0.04, alarmMode ? 0.05 : 0.035, 6000, 'highpass', t);
+    if (s % 8 === 0) tone(120, 0.12, 'sine', 0.2, 45, t);
+  }
+  function sched() {
+    if (!ac || !bgm) return;
+    while (nextT < ac.currentTime + 0.15) { playStep(step, nextT); nextT += alarmMode ? 0.19 : 0.27; step++; }
+  }
+  return {
+    init,
+    get muted() { return muted; },
+    setMuted(m) { muted = m; try { localStorage.setItem('prisonbreak_mute', m ? '1' : '0'); } catch (e) {} if (master) master.gain.value = m ? 0 : 0.7; },
+    bgmStart() { if (!ac) return; bgm = true; nextT = ac.currentTime + 0.08; step = 0; },
+    bgmStop() { bgm = false; },
+    setAlarm(a) { alarmMode = a; },
+    key() { tone(880, 0.09, 'square', 0.12); tone(1320, 0.18, 'square', 0.12, null, ac && ac.currentTime + 0.09); },
+    door() { noise(0.6, 0.18, 500, 'lowpass'); tone(110, 0.55, 'square', 0.08, 55); tone(70, 0.2, 'sawtooth', 0.12, 40, ac && ac.currentTime + 0.5); },
+    jump() { tone(260, 0.13, 'square', 0.09, 560); },
+    area() { [523, 659, 784].forEach((n, i) => tone(n, 0.14, 'triangle', 0.14, null, ac && ac.currentTime + i * 0.09)); },
+    siren(alt) { tone(alt ? 920 : 700, 0.22, 'square', 0.07); },
+    caught() { tone(420, 0.6, 'sawtooth', 0.16, 70); noise(0.35, 0.2, 900, 'lowpass'); },
+    hide() { tone(300, 0.06, 'triangle', 0.08, 180); },
+    lose() { [392, 330, 262, 196].forEach((n, i) => tone(n, 0.28, 'triangle', 0.15, null, ac && ac.currentTime + i * 0.2)); },
+    fanfare() {
+      if (!ac) return; const t0 = ac.currentTime + 0.05;
+      [[60,.12],[64,.12],[67,.12],[72,.34],[67,.12],[72,.55]].reduce((t, [m, d]) => {
+        tone(f(m + 12), d + 0.05, 'square', 0.1, null, t); tone(f(m), d + 0.05, 'triangle', 0.14, null, t); return t + d + 0.02;
+      }, t0);
+    }
+  };
+})();
+
+/* ===================== ドット絵スプライト ===================== */
+function spr(rows, pal) {
+  const h = rows.length, w = rows[0].length, c = document.createElement('canvas');
+  c.width = w * 2; c.height = h * 2; const x = c.getContext('2d');
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    const ch = rows[j][i]; if (ch !== '.' && pal[ch]) { x.fillStyle = pal[ch]; x.fillRect(i * 2, j * 2, 2, 2); }
+  }
+  return c;
+}
+const BODY = ['..kkkk..', '.kkkkkk.', '.ssssss.', '.sssses.', '.ssssss.', '..oooo..', '.oooooo.', 'sooOOoos', 's.oooo.s'];
+const LEGS = {
+  stand: ['..oo.oo.', '..oo.oo.', '..oo.oo.', '..bb.bb.'],
+  run1:  ['.oo..oo.', 'oo....oo', 'oo....bb', 'bb......'],
+  run2:  ['..oooo..', '..oo.oo.', '.oo...oo', '.bb...bb'],
+  jump:  ['.oo..oo.', 'oo....oo', 'bb....bb', '........']
+};
+const CROUCH = ['..kkkk..', '.kkkkkk.', '.ssssss.', '.sssses.', '..oooo..', '.oooooo.', 'oooooooo', '.bb..bb.'];
+const PAL_P = { k: '#3a2a20', s: '#e8b890', e: '#101010', o: '#e8742a', O: '#b8561c', b: '#2a2a33' };
+const PAL_G = { k: '#1c2740', s: '#e0b08a', e: '#101010', o: '#3c5a96', O: '#e0c040', b: '#12161f' };
+function sprSet(pal) {
+  const o = {}; for (const k in LEGS) o[k] = spr(BODY.concat(LEGS[k]), pal); o.crouch = spr(CROUCH, pal); return o;
+}
+const SP = sprSet(PAL_P), SG = sprSet(PAL_G);
+function putSprite(c, cx, bottom, flip) {
+  ctx.save(); ctx.translate(Math.round(cx), Math.round(bottom)); if (flip) ctx.scale(-1, 1);
+  ctx.drawImage(c, -c.width / 2, -c.height); ctx.restore();
+}
+
+// 背景用レンガパターン
+const brick = (() => {
+  const c = document.createElement('canvas'); c.width = 32; c.height = 16; const x = c.getContext('2d');
+  x.fillStyle = '#202638'; x.fillRect(0, 0, 32, 16);
+  x.fillStyle = '#171b29'; x.fillRect(0, 0, 32, 1); x.fillRect(0, 8, 32, 1); x.fillRect(0, 1, 1, 7); x.fillRect(16, 9, 1, 7);
+  x.fillStyle = '#262d42'; x.fillRect(2, 2, 12, 1); x.fillRect(18, 10, 12, 1);
+  return ctx.createPattern(c, 'repeat');
+})();
+const STARS = []; (() => { let s = 7; const r = () => (s = (s * 16807) % 2147483647) / 2147483647; for (let i = 0; i < 90; i++) STARS.push({ x: r() * W, y: r() * 150, s: r() < .2 ? 2 : 1 }); })();
+
+/* ===================== ステージ定義 ===================== */
+let L = null, G = null, state = 'title';
+
+function buildLevel() {
+  const hide = (k, x, w, h, base) => ({ k, x, w, h, y: (base || GY) - h });
+  const guard = (min, max, x, dir, speed) => ({ x, y: GY - 26, w: 14, h: 26, min, max, dir, speed, anim: 0, wait: 0 });
+  return {
+    solids: [
+      { x: 210, y: 284, w: 80, h: 16 },                                   // ベッド
+      { x: 1400, y: 278, w: 30, h: 22 }, { x: 1436, y: 260, w: 30, h: 40 },// 廊下のバリケード
+      { x: 2520, y: 272, w: 36, h: 28 }, { x: 3110, y: 272, w: 36, h: 28 },// 中庭のコンクリ塊
+      { x: 4296, y: 120, w: 104, h: 180 },                                 // 外壁
+      { x: 4236, y: 120, w: 62, h: 6, oneway: true }                       // ハシゴ上の足場
+    ],
+    hides: [
+      hide('locker', 560, 22, 42), hide('locker', 1120, 22, 42), hide('locker', 1740, 22, 42),
+      hide('crate', 2390, 38, 30), hide('crate', 2700, 38, 30), hide('crate', 2990, 38, 30), hide('crate', 3340, 38, 30),
+      hide('crate', 3770, 38, 30), hide('crate', 4040, 38, 30), hide('crate', 4322, 30, 24, 120)
+    ],
+    guards: [guard(960, 1320, 1100, 1, 45), guard(1540, 1980, 1700, -1, 50), guard(3680, 3990, 3800, 1, 58)],
+    cams: [
+      { ox: 700,  oy: 36, mid: 1.57, amp: .55, spd: .9,  ph: 0,   range: 275, half: .26, pole: 0 },
+      { ox: 2600, oy: 76, mid: 1.57, amp: .75, spd: 1.05, ph: 0,   range: 240, half: .26, pole: GY },
+      { ox: 3220, oy: 76, mid: 1.57, amp: .75, spd: 1.05, ph: 2.2, range: 240, half: .26, pole: GY },
+      { ox: 4395, oy: 72, mid: 2.6,  amp: .5,  spd: 1.0,  ph: 1,   range: 210, half: .26, pole: 120 }
+    ],
+    lights: [
+      { tx: 2190, ty: 110, cx: 2560, amp: 270, spd: .8, ph: 0,   r: 44 },
+      { tx: 3570, ty: 110, cx: 3170, amp: 270, spd: .7, ph: 2.5, r: 44 },
+      { tx: 4180, ty: 110, cx: 4090, amp: 170, spd: .9, ph: 1.2, r: 44 }
+    ],
+    lamps: [250, 530, 810, 1090, 1370, 1650, 1930],
+    key: { x: 250, y: 266 },
+    door: { x: 420, y: 150, w: 12, h: 150 },
+    ladder: { x: 4258, y: 120, w: 20, h: 180 }
+  };
+}
+
+function newGame() {
+  L = buildLevel();
+  G = {
+    score: 0, life: START_LIFE, time: TIME_LIMIT, area: 0, maxArea: 0, hasKey: false,
+    doorAnim: 0, doorOpening: false, gauge: 0, alarm: 0, dirty: [false, false, false, false],
+    caught: 0, inv: 0, t: 0, jumpBuf: 0, hidden: false, popups: [], toast: null, shake: 0, cam: 0,
+    siren: 0, sirenAlt: false, hint: '', reason: '', parts: [], result: null, wasHidden: false,
+    p: { x: 60, y: GY - 24, w: 12, h: 24, vx: 0, vy: 0, face: 1, onGround: true, crouch: false, climb: false, anim: 0, coyote: 0, noGrab: 0 }
+  };
+}
+
+/* ===================== 入力 ===================== */
+const keys = { left: false, right: false, up: false, down: false, jump: false };
+const touch = { left: false, right: false, up: false, down: false, jump: false };
+const KMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', Space: 'jump' };
+const inp = () => ({
+  left: keys.left || touch.left, right: keys.right || touch.right,
+  up: keys.up || touch.up, down: keys.down || touch.down, jump: keys.jump || touch.jump
+});
+function pressJump() { if (G) G.jumpBuf = 0.12; }
+function clearInput() { for (const k in keys) { keys[k] = false; touch[k] = false; } document.querySelectorAll('.tb.on').forEach(b => b.classList.remove('on')); }
+
+addEventListener('keydown', e => {
+  const c = e.code;
+  if (KMAP[c] || c === 'Enter') e.preventDefault();
+  if (c === 'KeyP' || c === 'Escape') { if (!e.repeat) togglePause(); return; }
+  if (c === 'KeyM') { if (!e.repeat) toggleMute(); return; }
+  if ((state === 'title' || state === 'gameover' || state === 'clear') && (c === 'Enter' || c === 'Space') && !e.repeat) { startGame(); return; }
+  if (state === 'paused' && (c === 'Enter') && !e.repeat) { togglePause(); return; }
+  const a = KMAP[c]; if (!a) return;
+  keys[a] = true;
+  if (!e.repeat && (a === 'up' || a === 'jump') && state === 'playing') pressJump();
+});
+addEventListener('keyup', e => { const a = KMAP[e.code]; if (a) keys[a] = false; });
+addEventListener('blur', () => { clearInput(); if (state === 'playing') togglePause(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'playing') togglePause(); });
+
+document.querySelectorAll('.tb').forEach(b => {
+  const k = b.dataset.k;
+  const on = e => { e.preventDefault(); SND.init(); touch[k] = true; b.classList.add('on'); try { b.setPointerCapture(e.pointerId); } catch (_) {} if (k === 'jump' && state === 'playing') pressJump(); };
+  const off = e => { e.preventDefault(); touch[k] = false; b.classList.remove('on'); };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off);
+  b.addEventListener('pointercancel', off); b.addEventListener('lostpointercapture', off);
+  b.addEventListener('contextmenu', e => e.preventDefault());
+});
+$('stage').addEventListener('pointerdown', e => {
+  SND.init();
+  if (state === 'title' || state === 'gameover' || state === 'clear') startGame();
+  else if (state === 'paused') togglePause();
+});
+if ('ontouchstart' in window || navigator.maxTouchPoints > 0 || (matchMedia && matchMedia('(pointer:coarse)').matches)) document.body.classList.add('touch');
+
+function toggleMute() { SND.setMuted(!SND.muted); $('bMute').textContent = '音 SOUND: ' + (SND.muted ? 'OFF' : 'ON') + ' (M)'; }
+function togglePause() {
+  if (state === 'playing') { state = 'paused'; SND.bgmStop(); clearInput(); $('bPause').textContent = '再開 RESUME (P)'; }
+  else if (state === 'paused') { state = 'playing'; SND.init(); SND.bgmStart(); $('bPause').textContent = 'ポーズ PAUSE (P)'; }
+}
+$('bPause').addEventListener('click', () => { SND.init(); if (state === 'playing' || state === 'paused') togglePause(); cv.focus(); });
+$('bMute').addEventListener('click', () => { SND.init(); toggleMute(); });
+$('bMute').textContent = '音 SOUND: ' + (SND.muted ? 'OFF' : 'ON') + ' (M)';
+
+function startGame() {
+  SND.init(); clearInput(); newGame(); state = 'playing'; SND.setAlarm(false); SND.bgmStart();
+  $('bPause').textContent = 'ポーズ PAUSE (P)';
+  toast('独房から脱出せよ！ / ESCAPE THE PRISON', 3);
+}
+
+/* ===================== ゲームロジック ===================== */
+const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+function toast(text, sec) { G.toast = { text, t: sec || 2.2 }; }
+function popup(x, y, text, color) { G.popups.push({ x, y, text, t: 1.6, color: color || '#f2d66b' }); }
+function addScore(n, x, y, label) { G.score += n; if (label) popup(x, y, label + ' +' + n); }
+
+function inCone(ox, oy, ang, half, range, px, py) {
+  const dx = px - ox, dy = py - oy, d = Math.hypot(dx, dy);
+  if (d > range || d < 1) return false;
+  let a = Math.atan2(dy, dx) - ang;
+  while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI;
+  return Math.abs(a) < half;
+}
+const camAng = c => c.mid + c.amp * Math.sin(G.t * c.spd + c.ph);
+const lightX = l => l.cx + l.amp * Math.sin(G.t * l.spd + l.ph);
+const guardCone = g => ({ ox: g.x + g.w / 2 + g.dir * 4, oy: g.y + 8, ang: g.dir > 0 ? 0 : Math.PI, half: 0.45, range: 78 });
+
+function nearLadder(p) {
+  const l = L.ladder, cx = p.x + p.w / 2;
+  return cx > l.x - 4 && cx < l.x + l.w + 4 && p.y + p.h > l.y - 2 && p.y < l.y + l.h;
+}
+function setCrouch(p, want) {
+  if (want && !p.crouch) { p.crouch = true; p.y += 10; p.h = 14; }
+  else if (!want && p.crouch) { p.crouch = false; p.y -= 10; p.h = 24; }
+}
+function activeSolids() {
+  const s = L.solids.slice();
+  if (G.doorAnim < 0.97) s.push({ x: L.door.x, y: L.door.y, w: L.door.w, h: L.door.h * (1 - G.doorAnim) });
+  return s;
+}
+function physics(p, dt, solids) {
+  p.x += p.vx * dt;
+  for (const s of solids) {
+    if (s.oneway || !overlap(p, s)) continue;
+    if (p.vx > 0) p.x = s.x - p.w; else if (p.vx < 0) p.x = s.x + s.w;
+    p.vx = 0;
+  }
+  p.x = clamp(p.x, 0, WORLD - p.w);
+  const pb = p.y + p.h; p.y += p.vy * dt; p.onGround = false;
+  for (const s of solids) {
+    if (!overlap(p, s)) continue;
+    if (s.oneway) { if (p.vy >= 0 && pb <= s.y + 2) { p.y = s.y - p.h; p.vy = 0; p.onGround = true; } }
+    else if (p.vy > 0 || pb <= s.y + 2) { p.y = s.y - p.h; p.vy = 0; p.onGround = true; }
+    else if (p.vy < 0) { p.y = s.y + s.h; p.vy = 0; }
+  }
+  if (p.y + p.h >= GY) { p.y = GY - p.h; p.vy = 0; p.onGround = true; }
+}
+
+function stepActors(dt) {
+  const mult = G.alarm > 0 ? 1.8 : 1;
+  for (const g of L.guards) {
+    g.anim += dt;
+    if (g.wait > 0) { g.wait -= dt; continue; }
+    g.x += g.dir * g.speed * mult * dt;
+    if (g.x <= g.min) { g.x = g.min; g.dir = 1; g.wait = G.alarm > 0 ? 0.25 : 0.8; }
+    if (g.x + g.w >= g.max) { g.x = g.max - g.w; g.dir = -1; g.wait = G.alarm > 0 ? 0.25 : 0.8; }
+  }
+}
+
+function update(dt) {
+  G.t += dt;
+  G.jumpBuf = Math.max(0, G.jumpBuf - dt);
+  if (G.toast && (G.toast.t -= dt) <= 0) G.toast = null;
+  G.popups.forEach(o => { o.t -= dt; o.y -= 18 * dt; }); G.popups = G.popups.filter(o => o.t > 0);
+  G.shake = Math.max(0, G.shake - dt);
+  if (G.inv > 0) G.inv -= dt;
+
+  if (G.caught > 0) {                     // 捕まった演出（時間は止めない）
+    G.caught -= dt; G.time -= dt;
+    if (G.time <= 0) { G.time = 0; endGame('time'); return; }
+    if (G.caught <= 0) {
+      G.life--;
+      if (G.life <= 0) endGame('dead'); else respawn();
+    }
+    return;
+  }
+  G.time -= dt;
+  if (G.time <= 0) { G.time = 0; endGame('time'); return; }
+
+  const p = G.p, I = inp(), lad = L.ladder;
+  const dir = (I.right ? 1 : 0) - (I.left ? 1 : 0);
+  const holdUp = I.up || I.jump;
+  p.anim += dt; p.noGrab = Math.max(0, p.noGrab - dt);
+  const solids = activeSolids();
+
+  // --- ハシゴ ---
+  if (!p.climb && p.noGrab <= 0 && nearLadder(p)) {
+    const below = p.y + p.h > lad.y + 6;
+    const atTop = p.onGround && p.y + p.h <= lad.y + 4;
+    if ((holdUp && below) || (I.down && atTop)) {
+      p.climb = true; setCrouch(p, false); p.x = lad.x + lad.w / 2 - p.w / 2; p.vx = 0; p.vy = 0; G.jumpBuf = 0;
+    }
+  }
+  if (p.climb) {
+    p.vx = 0; p.vy = 0;
+    const cd = (I.down ? 1 : 0) - (holdUp ? 1 : 0);
+    p.y += cd * 80 * dt;
+    if (dir !== 0) { p.climb = false; p.vx = dir * 90; p.noGrab = 0.3; p.face = dir; }
+    else if (p.y + p.h <= lad.y + 1) { p.y = lad.y - p.h; p.climb = false; p.onGround = true; p.noGrab = 0.3; }
+    else if (p.y + p.h >= GY) { p.y = GY - p.h; p.climb = false; p.onGround = true; p.noGrab = 0.25; }
+  } else {
+    setCrouch(p, I.down && p.onGround);
+    if (dir) p.face = dir;
+    const sp = p.crouch ? 52 : 125;
+    p.vx += (dir * sp - p.vx) * Math.min(1, dt * 18);
+    if (p.onGround) p.coyote = 0.1; else p.coyote -= dt;
+    if (G.jumpBuf > 0 && p.coyote > 0 && !p.crouch) { p.vy = -340; p.onGround = false; p.coyote = 0; G.jumpBuf = 0; SND.jump(); }
+    if (p.vy < -150 && !holdUp) p.vy += 1800 * dt;       // 可変ジャンプ
+    p.vy = Math.min(560, p.vy + 980 * dt);
+    physics(p, dt, solids);
+  }
+
+  // --- 隠れる判定 ---
+  G.hidden = false;
+  if (p.crouch && p.onGround && !p.climb) {
+    const cx = p.x + p.w / 2;
+    for (const h of L.hides) if (cx > h.x - 2 && cx < h.x + h.w + 2 && Math.abs(p.y + p.h - (h.y + h.h)) < 3) { G.hidden = true; break; }
+  }
+  if (G.hidden && !G.wasHidden) SND.hide();
+  G.wasHidden = G.hidden;
+
+  // --- 鍵と扉 ---
+  if (!G.hasKey && Math.hypot(p.x + p.w / 2 - L.key.x, p.y + p.h / 2 - L.key.y) < 18) {
+    G.hasKey = true; addScore(100, L.key.x, L.key.y - 10, '鍵 KEY'); SND.key(); toast('鍵を手に入れた！ / GOT THE KEY', 2.4);
+  }
+  if (G.hasKey && !G.doorOpening && Math.abs(p.x + p.w / 2 - (L.door.x + 6)) < 46) {
+    G.doorOpening = true; SND.door(); toast('扉が開いた！ / DOOR OPENED', 2.2);
+  }
+  if (G.doorOpening && G.doorAnim < 1) G.doorAnim = Math.min(1, G.doorAnim + dt / 0.9);
+
+  // --- 敵 ---
+  stepActors(dt);
+  const pcx = p.x + p.w / 2, pcy = p.y + p.h / 2;
+  let rate = 0;
+  if (G.inv <= 0 && !G.hidden) {
+    for (const c of L.cams) if (inCone(c.ox, c.oy, camAng(c), c.half, c.range, pcx, pcy)) rate = Math.max(rate, 50);
+    for (const l of L.lights) if (Math.abs(pcx - lightX(l)) < l.r - 4 && p.y + p.h > GY - 40) rate = Math.max(rate, 50);
+    for (const g of L.guards) { const k = guardCone(g); if (inCone(k.ox, k.oy, k.ang, k.half, k.range, pcx, pcy)) rate = Math.max(rate, 80); }
+  }
+  G.gauge = clamp(G.gauge + (rate ? rate : -28) * dt, 0, 100);
+  if (G.gauge > 0) G.dirty[G.area] = true;
+  if (G.alarm > 0) G.alarm -= dt;
+  if (G.gauge >= GAUGE_ALARM && G.alarm <= 0) { G.alarm = ALARM_TIME; G.siren = 0; toast('警報！ 看守が速くなる / ALARM! GUARDS ARE FASTER', 2.6); }
+  SND.setAlarm(G.alarm > 0);
+  if (G.alarm > 0) { G.siren -= dt; if (G.siren <= 0) { G.sirenAlt = !G.sirenAlt; SND.siren(G.sirenAlt); G.siren = 0.4; } }
+
+  if (G.inv <= 0 && !G.hidden) for (const g of L.guards) if (overlap(p, g)) { catchPlayer('guard'); return; }
+  if (G.gauge >= 100) { catchPlayer('seen'); return; }
+
+  // --- エリア進行 ---
+  let ai = 0; for (let i = 0; i < AREAS.length; i++) if (pcx >= AREAS[i].x) ai = i;
+  if (ai > G.maxArea) {
+    for (let k = G.maxArea; k < ai; k++) if (!G.dirty[k]) addScore(300, p.x, p.y - 30, '見つからず NO ALERT');
+    G.maxArea = ai; addScore(500, p.x, p.y - 14, 'AREA ' + (ai + 1)); SND.area();
+    toast('エリア' + (ai + 1) + '：' + AREAS[ai].ja + ' / ' + AREAS[ai].en, 2.6);
+  }
+  G.area = ai;
+
+  // --- 脱出 ---
+  if (p.x > GOAL_X) { win(); return; }
+
+  // --- ヒント ---
+  G.hint = '';
+  if (p.climb) G.hint = '↑↓ 登る・降りる / CLIMB';
+  else if (G.hidden) G.hint = '隠れている… / HIDDEN';
+  else if (G.area === 0 && !G.hasKey) G.hint = '鍵を探せ（ベッドの上） / FIND THE KEY';
+  else if (G.area === 0 && G.doorAnim < 1 && p.x < L.door.x - 40 && p.x > 100) G.hint = '扉へ向かえ / GO TO THE DOOR';
+  else if (L.hides.some(h => pcx > h.x - 6 && pcx < h.x + h.w + 6 && Math.abs(p.y + p.h - (h.y + h.h)) < 3)) G.hint = '↓ しゃがんで隠れる / CROUCH TO HIDE';
+  else if (nearLadder(p) && p.y + p.h > lad.y + 20) G.hint = '↑ ハシゴを登れ / CLIMB UP';
+
+  // カメラ追従
+  const target = clamp(pcx - W * 0.4, 0, WORLD - W);
+  G.cam += (target - G.cam) * Math.min(1, dt * 8);
+}
+
+function catchPlayer(reason) {
+  if (G.caught > 0 || G.inv > 0) return;
+  G.caught = 1.0; G.shake = 0.4; G.dirty[G.area] = true; G.reason = reason;
+  G.p.vx = 0; SND.caught(); SND.bgmStop(); SND.setAlarm(false);
+  toast(reason === 'seen' ? '見つかった！ / SPOTTED!' : '捕まった！ / CAUGHT!', 1.2);
+}
+function respawn() {
+  const p = G.p; setCrouch(p, false); p.climb = false;
+  p.x = RESPAWN_X[G.area]; p.y = GY - p.h; p.vx = 0; p.vy = 0; p.onGround = true;
+  G.gauge = 0; G.alarm = 0; G.inv = 2.2; G.cam = clamp(p.x - W * 0.4, 0, WORLD - W);
+  SND.setAlarm(false); SND.bgmStart(); toast('エリア入口から再開 / RESTART FROM AREA ENTRANCE', 2.4);
+}
+function endGame(reason) {
+  state = 'gameover'; G.reason = reason; saveHi(); SND.bgmStop(); SND.setAlarm(false); clearInput();
+  if (reason === 'time') SND.lose(); else SND.lose();
+}
+function win() {
+  const stealth = !G.dirty[3] ? 300 : 0, timeB = Math.floor(G.time) * 10, lifeB = G.life * 300, clearB = 2000;
+  G.result = { clearB, timeB, lifeB, stealth, base: G.score };
+  G.score += clearB + timeB + lifeB + stealth;
+  state = 'clear'; saveHi(); SND.bgmStop(); SND.setAlarm(false); SND.fanfare(); clearInput();
+  for (let i = 0; i < 70; i++) G.parts.push({ x: Math.random() * W, y: -Math.random() * H, vx: (Math.random() - .5) * 30, vy: 40 + Math.random() * 70, c: ['#f2d66b', '#7fd6e8', '#e8742a', '#c8a2ff', '#ffffff'][i % 5], r: 2 + (i % 3) });
+}
+function stepIdle(dt) {
+  G.t += dt; stepActors(dt);
+  G.parts.forEach(q => { q.x += q.vx * dt; q.y += q.vy * dt; if (q.y > H) { q.y = -6; q.x = Math.random() * W; } });
+  if (state === 'clear' || state === 'gameover') {
+    const p = G.p; G.cam += (clamp(p.x + p.w / 2 - W * 0.4, 0, WORLD - W) - G.cam) * Math.min(1, dt * 4);
+  }
+}
+
+/* ===================== 描画 ===================== */
+function T(s, x, y, size, color, align, bold) {
+  ctx.font = (bold === false ? '' : 'bold ') + size + 'px "Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,"Courier New",monospace';
+  ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.lineJoin = 'round'; ctx.strokeText(s, x, y);
+  ctx.fillStyle = color || '#e8eefc'; ctx.fillText(s, x, y);
+}
+function heart(x, y, on) {
+  ctx.fillStyle = on ? '#e0556a' : '#3a2a30';
+  ctx.beginPath(); ctx.moveTo(x + 5, y + 10); ctx.bezierCurveTo(x - 3, y + 4, x + 1, y - 3, x + 5, y + 2);
+  ctx.bezierCurveTo(x + 9, y - 3, x + 13, y + 4, x + 5, y + 10); ctx.fill();
+}
+const hash = n => { const s = Math.sin(n * 127.1) * 43758.5453; return s - Math.floor(s); };
+
+function drawBackdrop(camX) {
+  const sky = ctx.createLinearGradient(0, 0, 0, GY);
+  sky.addColorStop(0, '#05081a'); sky.addColorStop(1, '#16214a');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#cfd8f0';
+  for (const s of STARS) { const sx = (((s.x - camX * 0.05) % W) + W) % W; ctx.globalAlpha = 0.5 + 0.5 * hash(s.x + Math.floor(G.t * 0.6 + s.y)); ctx.fillRect(sx, s.y, s.s, s.s); }
+  ctx.globalAlpha = 1;
+  const mx = 520 - camX * 0.02; ctx.fillStyle = '#e8eefc'; ctx.beginPath(); ctx.arc(mx, 62, 20, 0, 7); ctx.fill();
+  ctx.fillStyle = '#16214a'; ctx.beginPath(); ctx.arc(mx + 7, 58, 18, 0, 7); ctx.fill();
+  // 遠景の建物シルエット
+  const off = camX * 0.3;
+  for (let i = -1; i < 7; i++) {
+    const bx = i * 120 - (off % 120), id = Math.floor(off / 120) + i, bh = 50 + hash(id) * 70;
+    ctx.fillStyle = '#0b1024'; ctx.fillRect(bx, GY - 40 - bh, 84, bh + 40);
+    if (hash(id + 9) > .55) ctx.fillRect(bx + 30, GY - 40 - bh - 26, 14, 26);
+    ctx.fillStyle = '#c9b46a';
+    for (let w = 0; w < 4; w++) if (hash(id * 7 + w) > .72) ctx.fillRect(bx + 10 + w * 18, GY - 30 - bh + (w % 2) * 20, 5, 5);
+  }
+}
+
+function drawWorld() {
+  const camX = Math.round(G.cam), x0 = camX - 40, x1 = camX + W + 40;
+  drawBackdrop(camX);
+  ctx.save(); ctx.translate(-camX, 0);
+  const vis = (a, b) => b > x0 && a < x1;
+
+  /* --- 屋内（独房・廊下） --- */
+  if (vis(0, 2110)) {
+    ctx.fillStyle = brick; ctx.fillRect(0, 0, 2100, GY);
+    ctx.fillStyle = 'rgba(10,14,26,.18)'; ctx.fillRect(0, 0, 420, GY);                     // 独房は少し暗く
+    ctx.fillStyle = '#0f121c'; ctx.fillRect(0, 0, 2100, 36); ctx.fillStyle = '#1a1f2e'; ctx.fillRect(0, 36, 2100, 3);
+    ctx.fillStyle = '#171b29'; ctx.fillRect(0, GY - 8, 2100, 8);                           // 幅木
+    for (let x = 140; x < 2060; x += 300) {                                                  // 鉄格子の窓
+      if (!vis(x, x + 40)) continue;
+      ctx.fillStyle = '#3a4256'; ctx.fillRect(x - 3, 64, 36, 52); ctx.fillStyle = '#34507e'; ctx.fillRect(x, 67, 30, 46);
+      ctx.fillStyle = 'rgba(190,215,255,.25)'; ctx.fillRect(x, 67, 30, 12);
+      ctx.fillStyle = '#12151f'; for (let b = 6; b < 30; b += 8) ctx.fillRect(x + b, 67, 2, 46);
+    }
+    ctx.fillStyle = '#7a849c';                                                              // 壁の案内
+    T('独房 CELL', 40, 150, 12, '#6f7a95'); T('廊下 CORRIDOR', 846, 150, 12, '#6f7a95');
+    // ベッド・トイレ・机
+    ctx.fillStyle = '#5b6277'; ctx.fillRect(210, 284, 80, 16); ctx.fillStyle = '#7b8aa6'; ctx.fillRect(210, 284, 80, 5);
+    ctx.fillStyle = '#2d3550'; ctx.fillRect(214, 289, 72, 4); ctx.fillStyle = '#3a4256'; ctx.fillRect(214, 300 - 2, 6, 2);
+    ctx.fillStyle = '#8b94a8'; ctx.fillRect(345, 276, 16, 24); ctx.fillStyle = '#aab3c6'; ctx.fillRect(342, 272, 22, 6);
+    // 独房の扉
+    const d = L.door, dh = d.h * (1 - G.doorAnim);
+    ctx.fillStyle = '#2a2f40'; ctx.fillRect(d.x - 6, d.y - 30, d.w + 12, 30);
+    ctx.fillStyle = '#4a5268'; ctx.fillRect(d.x - 6, d.y - 36, d.w + 12, 8);
+    if (dh > 1) {
+      ctx.fillStyle = '#69728a'; ctx.fillRect(d.x, d.y, d.w, dh);
+      ctx.fillStyle = '#1c2030'; for (let y = d.y + 8; y < d.y + dh - 2; y += 12) ctx.fillRect(d.x, y, d.w, 3);
+      if (dh > 60) { ctx.fillStyle = G.hasKey ? '#f2d66b' : '#c0463e'; ctx.fillRect(d.x + 2, d.y + 80, 8, 10); }
+    }
+    // 天井ランプ
+    for (const lx of L.lamps) if (vis(lx - 20, lx + 20)) {
+      ctx.fillStyle = '#2a2f40'; ctx.fillRect(lx - 3, 36, 6, 6);
+      const on = hash(lx + Math.floor(G.t * 7)) > 0.04 || lx % 3 !== 0;
+      ctx.fillStyle = on ? '#e8d9a0' : '#5a5a58'; ctx.fillRect(lx - 9, 42, 18, 5);
+    }
+    // 出口の枠（中庭へ）
+    ctx.fillStyle = '#2a2f40'; ctx.fillRect(2070, 0, 40, 100); ctx.fillRect(2070, 100, 12, 200);
+  }
+
+  /* --- 屋外（中庭・外壁） --- */
+  if (vis(2100, WORLD)) {
+    // 金網フェンス
+    const fx0 = Math.max(2110, camX - 20), fx1 = Math.min(4296, camX + W + 20);
+    if (fx1 > fx0) {
+      ctx.fillStyle = 'rgba(8,12,24,.55)'; ctx.fillRect(fx0, 170, fx1 - fx0, GY - 170);
+      ctx.strokeStyle = 'rgba(150,165,195,.28)'; ctx.lineWidth = 1; ctx.beginPath();
+      for (let x = Math.floor(fx0 / 14) * 14; x < fx1; x += 14) { ctx.moveTo(x, 170); ctx.lineTo(x + 40, GY); ctx.moveTo(x, GY); ctx.lineTo(x + 40, 170); }
+      ctx.stroke();
+      ctx.fillStyle = '#2a3040'; for (let x = Math.floor(fx0 / 70) * 70; x < fx1; x += 70) ctx.fillRect(x, 160, 4, GY - 160);
+      ctx.fillStyle = '#3a4256'; ctx.fillRect(fx0, 160, fx1 - fx0, 3);
+      ctx.strokeStyle = '#8791a8'; ctx.lineWidth = 1; ctx.beginPath(); for (let x = Math.floor(fx0 / 8) * 8; x < fx1; x += 8) { ctx.moveTo(x, 160); ctx.lineTo(x + 4, 152); ctx.lineTo(x + 8, 160); } ctx.stroke();
+    }
+    T('中庭 YARD', 2130, 120, 12, '#6f7a95'); T('外壁 OUTER WALL', 3630, 120, 12, '#6f7a95');
+    // 外（脱出先）
+    if (vis(4400, WORLD)) {
+      ctx.fillStyle = 'rgba(30,60,48,.8)'; ctx.fillRect(4400, 0, 300, 0);
+      ctx.fillStyle = '#9bd6a6'; T('FREEDOM  自由', 4560, 150, 16, '#9bd6a6');
+      ctx.fillStyle = '#9bd6a6'; ctx.fillRect(4546, 176, 4, 40); ctx.beginPath(); ctx.moveTo(4550, 176); ctx.lineTo(4580, 186); ctx.lineTo(4550, 196); ctx.fill();
+    }
+  }
+
+  /* --- 床 --- */
+  ctx.fillStyle = '#2c3144'; ctx.fillRect(Math.max(0, x0), GY, Math.min(2100, x1) - Math.max(0, x0), H - GY);
+  ctx.fillStyle = '#262b3b'; ctx.fillRect(Math.max(2100, x0), GY, Math.min(4400, x1) - Math.max(2100, x0), H - GY);
+  ctx.fillStyle = '#1a2f25'; ctx.fillRect(Math.max(4400, x0), GY, Math.min(WORLD, x1) - Math.max(4400, x0), H - GY);
+  ctx.fillStyle = '#4a5168'; ctx.fillRect(Math.max(0, x0), GY, Math.min(2100, x1) - Math.max(0, x0), 3);
+  ctx.fillStyle = '#3b4258'; ctx.fillRect(Math.max(2100, x0), GY, Math.min(4400, x1) - Math.max(2100, x0), 3);
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; for (let x = Math.floor(x0 / 40) * 40; x < x1; x += 40) ctx.fillRect(x, GY + 3, 1, H - GY);
+
+  /* --- ハシゴ・外壁 --- */
+  if (vis(4230, 4410)) {
+    const wl = { x: 4296, y: 120, w: 104, h: 180 };
+    ctx.fillStyle = '#4b5163'; ctx.fillRect(wl.x, wl.y, wl.w, wl.h);
+    ctx.fillStyle = '#3d4354'; for (let y = wl.y + 10; y < GY; y += 14) ctx.fillRect(wl.x, y, wl.w, 1);
+    for (let y = wl.y; y < GY; y += 14) for (let x = wl.x + ((y / 14) % 2 ? 0 : 12); x < wl.x + wl.w; x += 24) ctx.fillRect(x, y, 1, 14);
+    ctx.fillStyle = '#6a7188'; ctx.fillRect(wl.x - 2, wl.y - 4, wl.w + 4, 6);
+    ctx.strokeStyle = '#a2abc2'; ctx.lineWidth = 1; ctx.beginPath(); for (let x = wl.x; x < wl.x + wl.w; x += 8) { ctx.moveTo(x, wl.y - 4); ctx.lineTo(x + 4, wl.y - 12); ctx.lineTo(x + 8, wl.y - 4); } ctx.stroke();
+    ctx.fillStyle = '#4b5163'; ctx.fillRect(4236, 120, 62, 6);
+    const ld = L.ladder; ctx.fillStyle = '#8a6a3a'; ctx.fillRect(ld.x, ld.y, 3, ld.h); ctx.fillRect(ld.x + ld.w - 3, ld.y, 3, ld.h);
+    ctx.fillStyle = '#a8814a'; for (let y = ld.y + 8; y < GY; y += 12) ctx.fillRect(ld.x, y, ld.w, 3);
+  }
+
+  /* --- 固定ギミックの本体 --- */
+  for (const s of L.solids) {                         // コンクリ塊とバリケード
+    if (s.w === 104 || s.oneway || s.x === 210) continue;
+    if (!vis(s.x, s.x + s.w)) continue;
+    ctx.fillStyle = '#6a7186'; ctx.fillRect(s.x, s.y, s.w, s.h); ctx.fillStyle = '#868ea4'; ctx.fillRect(s.x, s.y, s.w, 3);
+    ctx.fillStyle = '#e0c040'; for (let i = 0; i < s.w; i += 10) ctx.fillRect(s.x + i, s.y + s.h - 6, 5, 3);
+  }
+  for (const h of L.hides) {                          // ロッカー・木箱
+    if (!vis(h.x, h.x + h.w)) continue;
+    if (h.k === 'locker') {
+      ctx.fillStyle = '#4a5a6e'; ctx.fillRect(h.x, h.y, h.w, h.h); ctx.fillStyle = '#5f7188'; ctx.fillRect(h.x, h.y, h.w, 3);
+      ctx.fillStyle = '#2d3848'; for (let i = 0; i < 4; i++) ctx.fillRect(h.x + 4, h.y + 6 + i * 3, h.w - 8, 1);
+      ctx.fillRect(h.x + h.w - 6, h.y + 22, 2, 6);
+      ctx.fillStyle = '#1b2230'; ctx.fillRect(h.x + 4, h.y + 12, h.w - 8, 2);
+    } else {
+      ctx.fillStyle = '#6b4e2e'; ctx.fillRect(h.x, h.y, h.w, h.h); ctx.fillStyle = '#8a6a40'; ctx.fillRect(h.x, h.y, h.w, 3);
+      ctx.fillStyle = '#4a3320'; ctx.fillRect(h.x, h.y + h.h / 2, h.w, 2); ctx.fillRect(h.x + h.w / 2 - 1, h.y, 2, h.h);
+      ctx.fillRect(h.x, h.y, 2, h.h); ctx.fillRect(h.x + h.w - 2, h.y, 2, h.h);
+    }
+  }
+  if (!G.hasKey) {                                    // 鍵
+    const k = L.key, by = k.y + Math.sin(G.t * 3) * 3;
+    ctx.fillStyle = 'rgba(242,214,107,.25)'; ctx.beginPath(); ctx.arc(k.x, by, 13, 0, 7); ctx.fill();
+    ctx.fillStyle = '#f2d66b'; ctx.fillRect(k.x - 7, by - 3, 8, 8); ctx.fillStyle = '#2a2f40'; ctx.fillRect(k.x - 5, by - 1, 4, 4);
+    ctx.fillStyle = '#f2d66b'; ctx.fillRect(k.x + 1, by, 10, 3); ctx.fillRect(k.x + 7, by + 3, 3, 4); ctx.fillRect(k.x + 3, by + 3, 2, 3);
+  }
+  for (const c of L.cams) {                           // 監視カメラ本体
+    if (!vis(c.ox - 30, c.ox + 30)) continue;
+    if (c.pole) { ctx.fillStyle = '#2f3649'; ctx.fillRect(c.ox - 2, c.oy, 4, c.pole - c.oy); ctx.fillRect(c.ox - 8, c.pole - 4, 16, 4); }
+    else { ctx.fillStyle = '#2f3649'; ctx.fillRect(c.ox - 2, 36, 4, c.oy - 36 + 2); }
+    ctx.save(); ctx.translate(c.ox, c.oy); ctx.rotate(camAng(c));
+    ctx.fillStyle = '#9aa3b8'; ctx.fillRect(-4, -5, 16, 10); ctx.fillStyle = '#1d2232'; ctx.fillRect(10, -3, 4, 6);
+    ctx.fillStyle = Math.floor(G.t * 2) % 2 ? '#e0556a' : '#5a2a30'; ctx.fillRect(-2, -4, 3, 2);
+    ctx.restore();
+  }
+  for (const l of L.lights) {                         // サーチライト塔
+    if (!vis(l.tx - 30, l.tx + 30)) continue;
+    ctx.fillStyle = '#2a3040'; ctx.fillRect(l.tx - 3, l.ty + 6, 6, GY - l.ty - 6);
+    ctx.fillStyle = '#3b4258'; ctx.fillRect(l.tx - 6, l.ty + 60, 12, 3); ctx.fillRect(l.tx - 6, l.ty + 140, 12, 3);
+    ctx.fillStyle = '#4a5268'; ctx.fillRect(l.tx - 9, l.ty - 6, 18, 14); ctx.fillStyle = '#f2e6b0'; ctx.fillRect(l.tx - 5, l.ty - 2, 10, 6);
+  }
+
+  /* --- 看守 --- */
+  for (const g of L.guards) {
+    if (!vis(g.x - 20, g.x + 30)) continue;
+    const moving = g.wait <= 0, fr = moving ? (Math.floor(g.anim * (G.alarm > 0 ? 12 : 7)) % 2 ? SG.run1 : SG.run2) : SG.stand;
+    putSprite(fr, g.x + g.w / 2, g.y + g.h, g.dir < 0);
+    ctx.fillStyle = '#f2e6b0'; ctx.fillRect(g.x + g.w / 2 + g.dir * 8 - 1, g.y + 12, 3, 3);   // 懐中電灯
+  }
+
+  /* --- 主人公 --- */
+  drawPlayer();
+
+  /* --- スコアポップアップ --- */
+  ctx.restore();
+  for (const o of G.popups) { ctx.globalAlpha = clamp(o.t / 0.5, 0, 1); T(o.text, Math.round(o.x - camX), Math.round(o.y), 12, o.color, 'center'); }
+  ctx.globalAlpha = 1;
+}
+
+function drawPlayer() {
+  const p = G.p, cx = p.x + p.w / 2, bottom = p.y + p.h;
+  if (G.inv > 0 && Math.floor(G.t * 12) % 2) return;
+  if (G.caught > 0 && Math.floor(G.t * 16) % 2) ctx.globalAlpha = 0.5;
+  if (G.hidden) ctx.globalAlpha = 0.42;
+  let fr;
+  if (p.crouch) fr = SP.crouch;
+  else if (p.climb) fr = (Math.floor(p.y / 8) % 2) ? SP.run1 : SP.run2;
+  else if (!p.onGround) fr = SP.jump;
+  else if (Math.abs(p.vx) > 20) fr = (Math.floor(p.anim * 9) % 2) ? SP.run1 : SP.run2;
+  else fr = SP.stand;
+  putSprite(fr, cx, bottom, p.face < 0 && !p.climb);
+  ctx.globalAlpha = 1;
+  if (G.hidden) { ctx.fillStyle = '#e8eefc'; ctx.fillRect(cx - 5, bottom - 16, 3, 2); ctx.fillRect(cx + 2, bottom - 16, 3, 2); }
+}
+
+function cone(c, ox, oy, ang, half, range, a0) {
+  const g = c.createRadialGradient(ox, oy, 0, ox, oy, range);
+  g.addColorStop(0, 'rgba(255,255,255,' + a0 + ')'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = g; c.beginPath(); c.moveTo(ox, oy); c.arc(ox, oy, range, ang - half, ang + half); c.closePath(); c.fill();
+}
+function glow(c, x, y, r, a) {
+  const g = c.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, 'rgba(0,0,0,' + a + ')'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+}
+function beamPoly(c, l, lx) {
+  c.beginPath(); c.moveTo(l.tx - 3, l.ty); c.lineTo(l.tx + 3, l.ty); c.lineTo(lx + l.r, GY); c.lineTo(lx - l.r, GY); c.closePath();
+}
+
+function drawLighting() {
+  const camX = Math.round(G.cam), p = G.p, alarm = G.alarm > 0;
+  // 1) 夜の闇を作って、光の当たる所をくり抜く
+  lctx.globalCompositeOperation = 'source-over'; lctx.clearRect(0, 0, W, H);
+  lctx.fillStyle = 'rgba(3,5,14,0.60)'; lctx.fillRect(0, 0, W, H);
+  lctx.globalCompositeOperation = 'destination-out';
+  glow(lctx, p.x + p.w / 2 - camX, p.y + p.h / 2, 78, 0.55);
+  for (const lx of L.lamps) glow(lctx, lx - camX, 46, 130, 0.62);
+  for (const c of L.cams) { const a = camAng(c); lctx.save(); lctx.translate(-camX, 0); cone(lctx, c.ox, c.oy, a, c.half, c.range, 0.8); lctx.restore(); }
+  for (const g of L.guards) { const k = guardCone(g); lctx.save(); lctx.translate(-camX, 0); cone(lctx, k.ox, k.oy, k.ang, k.half, k.range, 0.7); lctx.restore(); }
+  for (const l of L.lights) {
+    const lx = lightX(l); lctx.save(); lctx.translate(-camX, 0);
+    const gr = lctx.createLinearGradient(0, l.ty, 0, GY); gr.addColorStop(0, 'rgba(0,0,0,0.25)'); gr.addColorStop(1, 'rgba(0,0,0,0.85)');
+    lctx.fillStyle = gr; beamPoly(lctx, l, lx); lctx.fill();
+    lctx.fillStyle = 'rgba(0,0,0,0.9)'; lctx.beginPath(); lctx.ellipse(lx, GY + 1, l.r, 9, 0, 0, 7); lctx.fill();
+    lctx.restore();
+  }
+  lctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(lc, 0, 0);
+  // 2) 光そのものの色（ほんのり）
+  const col = alarm ? '255,150,130' : '255,243,190';
+  ctx.save(); ctx.translate(-camX, 0);
+  const tint = (a) => 'rgba(' + col + ',' + a + ')';
+  for (const c of L.cams) {
+    const g = ctx.createRadialGradient(c.ox, c.oy, 0, c.ox, c.oy, c.range); g.addColorStop(0, tint(0.30)); g.addColorStop(1, tint(0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(c.ox, c.oy); ctx.arc(c.ox, c.oy, c.range, camAng(c) - c.half, camAng(c) + c.half); ctx.closePath(); ctx.fill();
+  }
+  for (const g0 of L.guards) {
+    const k = guardCone(g0), g = ctx.createRadialGradient(k.ox, k.oy, 0, k.ox, k.oy, k.range); g.addColorStop(0, tint(0.30)); g.addColorStop(1, tint(0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(k.ox, k.oy); ctx.arc(k.ox, k.oy, k.range, k.ang - k.half, k.ang + k.half); ctx.closePath(); ctx.fill();
+  }
+  for (const l of L.lights) {
+    const lx = lightX(l), gr = ctx.createLinearGradient(0, l.ty, 0, GY); gr.addColorStop(0, tint(0.05)); gr.addColorStop(1, tint(0.26));
+    ctx.fillStyle = gr; beamPoly(ctx, l, lx); ctx.fill();
+    ctx.fillStyle = tint(0.30); ctx.beginPath(); ctx.ellipse(lx, GY + 1, l.r, 8, 0, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+  // 3) 警報の赤（低頻度・低アルファ）
+  if (alarm) { ctx.fillStyle = 'rgba(190,40,40,' + (0.07 + 0.06 * Math.sin(G.t * 12)) + ')'; ctx.fillRect(0, 0, W, H); }
+}
+
+function drawHUD() {
+  const p = G.p;
+  ctx.fillStyle = 'rgba(4,6,14,.72)'; ctx.fillRect(0, 0, W, 40);
+  ctx.fillStyle = 'rgba(127,214,232,.35)'; ctx.fillRect(0, 40, W, 1);
+  T('SCORE ' + String(G.score).padStart(6, '0'), 10, 13, 14, '#e8eefc');
+  T('HI-SCORE ' + String(Math.max(HI, G.score)).padStart(6, '0'), 10, 30, 11, '#9fb0cf');
+  const a = AREAS[G.area];
+  T('AREA ' + (G.area + 1) + '  ' + a.ja + ' ' + a.en, W / 2, 13, 14, '#7fd6e8', 'center');
+  const low = G.time < 30 && Math.floor(G.t * 2) % 2 === 0;
+  T('TIME ' + Math.ceil(G.time), W - 10, 13, 14, low ? '#ff8f8f' : '#e8eefc', 'right');
+  for (let i = 0; i < START_LIFE; i++) heart(W - 70 + i * 20, 22, i < G.life);
+  T('LIFE', W - 80, 30, 10, '#9fb0cf', 'right');
+  // 警戒ゲージ
+  const gx = W / 2 - 70, gy = 25;
+  ctx.fillStyle = '#10141f'; ctx.fillRect(gx, gy, 140, 8);
+  const gc = G.gauge < GAUGE_ALARM ? '#7fd6a0' : G.gauge < 70 ? '#e8c04a' : '#e0556a';
+  ctx.fillStyle = gc; ctx.fillRect(gx, gy, 140 * G.gauge / 100, 8);
+  ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.fillRect(gx + 140 * GAUGE_ALARM / 100, gy - 1, 1, 10);
+  ctx.strokeStyle = '#4a5878'; ctx.lineWidth = 1; ctx.strokeRect(gx + .5, gy + .5, 139, 7);
+  T('警戒 ALERT', gx - 6, 30, 10, '#9fb0cf', 'right');
+  if (G.alarm > 0 && Math.floor(G.t * 3) % 2 === 0) T('警報 ALARM ' + Math.ceil(G.alarm) + 's', W / 2, 54, 13, '#ff8f8f', 'center');
+  if (G.hasKey) T('鍵 KEY', 10, 50, 11, '#f2d66b');
+  // 進捗ゲージ
+  const prog = clamp((p.x + p.w / 2) / GOAL_X, 0, 1), bx = 40, bw = W - 80, by = 342;
+  ctx.fillStyle = 'rgba(4,6,14,.62)'; ctx.fillRect(0, 326, W, 34);
+  ctx.fillStyle = '#10141f'; ctx.fillRect(bx, by, bw, 8);
+  const pg = ctx.createLinearGradient(bx, 0, bx + bw, 0); pg.addColorStop(0, '#4a78c8'); pg.addColorStop(1, '#7fd6e8');
+  ctx.fillStyle = pg; ctx.fillRect(bx, by, bw * prog, 8);
+  ctx.strokeStyle = '#4a5878'; ctx.strokeRect(bx + .5, by + .5, bw - 1, 7);
+  AREAS.forEach((ar, i) => { const x = bx + bw * ar.x / GOAL_X; ctx.fillStyle = '#9fb0cf'; ctx.fillRect(x, by - 3, 1, 14); T(ar.ja, x + 3, 333, 9, '#9fb0cf', 'left', false); });
+  T('脱出', bx + bw + 4, by + 4, 10, '#9bd6a6', 'left');
+  ctx.fillStyle = '#e8742a'; ctx.fillRect(bx + bw * prog - 3, by - 4, 6, 16);
+  if (prog > 0.88 && Math.floor(G.t * 2.5) % 2 === 0) T('あと少しで脱出！ ALMOST OUT!', W / 2, 70, 15, '#9bd6a6', 'center');
+  // ヒント・トースト
+  if (G.hint) { ctx.fillStyle = 'rgba(4,6,14,.6)'; const tw = 12 + G.hint.length * 8.2; ctx.fillRect(W / 2 - tw / 2, 296 - 18 - 6 + 0, 0, 0); T(G.hint, W / 2, 312, 12, '#e8eefc', 'center'); }
+  if (G.toast) { ctx.globalAlpha = clamp(G.toast.t / 0.4, 0, 1); T(G.toast.text, W / 2, 96, 15, '#f2d66b', 'center'); ctx.globalAlpha = 1; }
+}
+
+function panel(y, h) { ctx.fillStyle = 'rgba(4,6,14,.78)'; ctx.fillRect(60, y, W - 120, h); ctx.strokeStyle = 'rgba(127,214,232,.5)'; ctx.lineWidth = 1; ctx.strokeRect(60.5, y + .5, W - 121, h - 1); }
+function drawOverlay() {
+  if (state === 'title') {
+    ctx.fillStyle = 'rgba(2,3,10,.62)'; ctx.fillRect(0, 0, W, H);
+    T('脱獄', W / 2, 58, 46, '#e8742a', 'center'); T('PRISON BREAK', W / 2, 98, 22, '#e8eefc', 'center');
+    T('独房から外壁まで、見つからずに脱出せよ！', W / 2, 128, 13, '#9fb0cf', 'center', false);
+    T('Escape from the cell to the outer wall — stay unseen!', W / 2, 146, 11, '#7d8aa8', 'center', false);
+    panel(160, 112);
+    const rows = [['← → / A D', '移動 MOVE'], ['↑ / W / SPACE', 'ジャンプ・登る JUMP / CLIMB'], ['↓ / S', 'しゃがむ（物陰で隠れる）CROUCH / HIDE'], ['P / ESC', 'ポーズ PAUSE'], ['M', 'ミュート MUTE']];
+    rows.forEach((r, i) => { T(r[0], 84, 178 + i * 19, 12, '#7fd6e8'); T(r[1], 232, 178 + i * 19, 12, '#d8e2f2', 'left', false); });
+    T('ロッカーや木箱の前でしゃがむと、看守・カメラに見つからない', W / 2, 288, 11, '#f2d66b', 'center', false);
+    if (Math.floor(G.t * 2) % 2 === 0) T('ENTER / SPACE / TAP でスタート  PRESS START', W / 2, 312, 14, '#e8eefc', 'center');
+    T('HI-SCORE ' + String(HI).padStart(6, '0'), W / 2, 338, 12, '#9fb0cf', 'center');
+  } else if (state === 'paused') {
+    ctx.fillStyle = 'rgba(2,3,10,.7)'; ctx.fillRect(0, 0, W, H);
+    T('ポーズ PAUSED', W / 2, 140, 30, '#e8eefc', 'center');
+    T('P / ESC / TAP で再開  RESUME', W / 2, 190, 14, '#7fd6e8', 'center');
+  } else if (state === 'gameover') {
+    ctx.fillStyle = 'rgba(20,2,6,.66)'; ctx.fillRect(0, 0, W, H);
+    T('GAME OVER', W / 2, 90, 38, '#e0556a', 'center');
+    T(G.reason === 'time' ? '時間切れ… TIME UP' : '捕まってしまった… YOU WERE CAUGHT', W / 2, 132, 15, '#e8eefc', 'center');
+    panel(158, 84);
+    T('SCORE  ' + String(G.score).padStart(6, '0'), W / 2, 182, 18, '#f2d66b', 'center');
+    T('HI-SCORE  ' + String(HI).padStart(6, '0') + (G.score >= HI && G.score > 0 ? '  NEW!' : ''), W / 2, 208, 13, '#9fb0cf', 'center');
+    T('到達エリア  ' + (G.maxArea + 1) + ' / 4  ' + AREAS[G.maxArea].ja, W / 2, 228, 12, '#9fb0cf', 'center');
+    if (Math.floor(G.t * 2) % 2 === 0) T('ENTER / SPACE / TAP でもう一度  RETRY', W / 2, 290, 14, '#e8eefc', 'center');
+  } else if (state === 'clear') {
+    ctx.fillStyle = 'rgba(2,10,10,.5)'; ctx.fillRect(0, 0, W, H);
+    for (const q of G.parts) { ctx.fillStyle = q.c; ctx.fillRect(q.x, q.y, q.r, q.r); }
+    T('脱獄成功！', W / 2, 52, 38, '#9bd6a6', 'center'); T('YOU ESCAPED!', W / 2, 88, 20, '#e8eefc', 'center');
+    panel(106, 166);
+    const r = G.result, row = (i, a, b, c) => { T(a, 90, 126 + i * 21, 12, '#9fb0cf', 'left', false); T(b, W - 90, 126 + i * 21, 13, c || '#e8eefc', 'right'); };
+    row(0, 'ここまでのスコア  Score', r.base); row(1, '脱出ボーナス  Escape', '+' + r.clearB); row(2, 'のこり時間  Time ×10', '+' + r.timeB);
+    row(3, 'のこりLIFE  Life ×300', '+' + r.lifeB); row(4, '外壁ノーアラート  No-alert', '+' + r.stealth);
+    ctx.fillStyle = 'rgba(127,214,232,.4)'; ctx.fillRect(90, 232, W - 180, 1);
+    T('TOTAL', 90, 252, 16, '#f2d66b'); T(String(G.score).padStart(6, '0') + (G.score >= HI ? '  NEW!' : ''), W - 90, 252, 18, '#f2d66b', 'right');
+    T('HI-SCORE ' + String(HI).padStart(6, '0'), W / 2, 290, 12, '#9fb0cf', 'center');
+    if (Math.floor(G.t * 2) % 2 === 0) T('ENTER / SPACE / TAP でもう一度  PLAY AGAIN', W / 2, 322, 13, '#e8eefc', 'center');
+  }
+}
+
+function render() {
+  ctx.save();
+  if (G.shake > 0) ctx.translate((Math.random() - .5) * 8 * G.shake * 2.5, (Math.random() - .5) * 6 * G.shake * 2.5);
+  drawWorld(); drawLighting();
+  ctx.restore();
+  if (state === 'playing' || state === 'paused') drawHUD();
+  drawOverlay();
+}
+
+/* ===================== メインループ ===================== */
+let last = 0;
+function frame(ts) {
+  const dt = Math.min(0.033, (ts - last) / 1000 || 0); last = ts;
+  if (state === 'playing') update(dt); else if (state !== 'paused') stepIdle(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+function fitCanvasRendering() {
+  const scale = cv.clientWidth * (window.devicePixelRatio || 1) / W;
+  cv.style.imageRendering = scale >= 1 ? 'pixelated' : 'auto';
+}
+addEventListener('resize', fitCanvasRendering); addEventListener('orientationchange', fitCanvasRendering);
+
+newGame(); fitCanvasRendering();
+requestAnimationFrame(frame);
+
+// 動作検査用ブリッジ（通常のプレイには影響しない）
+if (window.__PB_TEST) {
+  window.PB = {
+    get G() { return G; }, get L() { return L; }, get state() { return state; },
+    start: startGame, update, render, SND, endGame, win,
+    tp(x, y) { const p = G.p; p.x = x; if (y != null) p.y = y; p.vx = 0; p.vy = 0; },
+    key: keys, touch
+  };
+}
+})();
+</script>
+</body>
+</html>
