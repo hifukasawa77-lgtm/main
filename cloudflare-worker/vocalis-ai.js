@@ -37,8 +37,8 @@ export async function handleVocalSong(env, body) {
     const prompt = `テーマ=${request.theme} 長さ=${request.minutes}分 声=${request.voice} ジャンル=${request.genre}。
 JSONのみで日本語歌詞と作曲設計を返す。形式:
 {"title":"曲名","bpm":96,"sections":[{"name":"Aメロ","weight":2,"phrases":[{"text":"歌詞の一節","notes":[{"pitch":60,"duration":0.5,"lyric":"あ"}]}]}]}
-制約: 2〜8 sections。weight比で時間配分。各フレーズは歌詞と対応する音符。pitch MIDIは${request.voice==='male'?'48〜72':'60〜84'}。音符は0.25〜2拍、1〜3音/モーラ。独創的で自然に。JSON以外は出力しない。`;
-    const generated = await generate(env, prompt, 900);
+制約: 2〜8 sections。weight比で時間配分。各フレーズは歌詞と対応する音符。pitch MIDIは${request.voice==='male'?'48〜72':'60〜84'}。音符は0.25〜2拍、1〜3音/モーラ。独創的で自然に。JSON以外は出力しない。tonic(0〜11)とmode(major/minor)も返す。イントロ、Aメロ、Bメロ、サビ、間奏、最後のサビ、アウトロの展開を検討する。各主要セクションに最低4つの異なるフレーズを作る。サビは記憶に残るモチーフ、Aメロは控えめな動きとし、歌詞はテーマを展開する。モーラにかなのreadingを付ける。拗音を1モーラとして扱う。息継ぎにはpitch:null,lyric:""の休符を使う。4拍の小節を意識し、過大な跳躍を避ける。`;
+    const generated = await generate(env, prompt, 4096);
     const plan = JSON.parse(generated.output);
     const result = SongCoreModule.compile(plan, request);
     return { status: 200, body: { ...result, usage: { kind: 'song', model: generated.model, estimated: true, estimatedUsd: generated.estimatedUsd } } };

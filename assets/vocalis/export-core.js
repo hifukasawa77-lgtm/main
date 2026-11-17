@@ -1,0 +1,5 @@
+(function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;else root.ExportCore=api;})(globalThis,()=>{
+'use strict';
+function wav(buffer){const channels=buffer.numberOfChannels,frames=buffer.length,rate=buffer.sampleRate,bytes=new ArrayBuffer(44+frames*channels*2),v=new DataView(bytes),str=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};str(0,'RIFF');v.setUint32(4,bytes.byteLength-8,true);str(8,'WAVE');str(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,channels,true);v.setUint32(24,rate,true);v.setUint32(28,rate*channels*2,true);v.setUint16(32,channels*2,true);v.setUint16(34,16,true);str(36,'data');v.setUint32(40,frames*channels*2,true);const data=Array.from({length:channels},(_,c)=>buffer.getChannelData(c));for(let i=0;i<frames;i++)for(let c=0;c<channels;c++){const x=Math.max(-1,Math.min(1,data[c][i]||0));v.setInt16(44+(i*channels+c)*2,x<0?x*32768:x*32767,true);}return bytes;}
+return {wav};
+});
