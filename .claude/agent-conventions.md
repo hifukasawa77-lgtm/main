@@ -78,6 +78,7 @@ SWが理由を消す／0%で永久に待つ）。だから完了の定義は「�
 | `taihei.html` | `node scripts/verify-taihei-boot.mjs` / `node scripts/verify-taihei-balance.mjs` |
 | `genpei.html` | `node scripts/verify-genpei-boot.mjs` / `node scripts/verify-genpei-balance.mjs` / `node scripts/verify-genpei-kyoten.mjs` |
 | `bakumatsu.html` / `game.js` / `bakumatsu.css` / `bakumatsu-guide.js` | `node scripts/verify-bakumatsu-map.mjs` ＋ `node scripts/playtest-fuzz.mjs bakumatsu.html --seconds 8`（複数の `--seed` で。無限ループ型の固まりは操作しないと出ない） |
+| `index.html` / `assets/css/portal.css` / `assets/js/portal.js` / `assets/css/main.css`（トップページ） | `node scripts/verify-portal.mjs`（`--inject` で故障注入4種）＋ `node scripts/gen-catalog-meta.mjs --check`（カードを足したら引数なしで再生成・**浅いクローンでは拒否**）＋ `python3 scripts/gen-top-thumbs.py --check`（カードの画像を足したら引数なしで軽量版を生成） |
 | `sw.js` | `node scripts/verify-service-worker.mjs` |
 | `assets/js/frame-guard.js` / `scripts/security-baseline.mjs`（全ページのセキュリティ基礎線） | `node scripts/security-baseline.mjs`（`--inject` で故障注入）/ `node scripts/verify-frame-guard.mjs`（実ブラウザ。`--inject` で故障注入） |
 | `cloudflare-worker/request-security.js` / `cloudflare-worker/security-monitor.js` / `cloudflare-worker/gemini-proxy.js` / `cloudflare-worker/notebook-worker.js` | `node --test tests/security.test.mjs`（遮断・シスログ・通知・IP遮断・ページ通報） |
