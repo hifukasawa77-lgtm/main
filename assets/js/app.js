@@ -419,21 +419,51 @@ document.addEventListener('click', event => {
         return '<svg viewBox="0 0 ' + vw + ' ' + vh + '" width="' + vw + '" height="' + vh + '" style="display:block">' + bars + '</svg>';
       }
 
+      // サイト全体の訪問数。自前の Worker（ai-proxy）の Durable Object が数だけを数える（IP・UAは保存しない）。
+      // 1ブラウザにつき1日1回だけ POST /visit で数え、同じ日の再読込は GET /visits で読むだけ（再読込で水増ししない）。
+      // 旧版の api.countapi.xyz は2023年に終了済み。取れないときは「このブラウザでの回数」と明示して表示する。
+      const SITE_VISITS_URL = 'https://ai-proxy.hi-fukasawa77.workers.dev';
+      const SITE_VISIT_COUNTED_KEY = 'site-visit-counted-v1';
+
+      async function fetchSiteVisits() {
+        const today = toDateKey(new Date());
+        let counted = false;
+        try { counted = localStorage.getItem(SITE_VISIT_COUNTED_KEY) === today; } catch (e) { /* 保存できない端末は毎回数える */ }
+        const res = counted
+          ? await fetchWithTimeout(SITE_VISITS_URL + '/visits', 5000)
+          : await fetchWithTimeout(SITE_VISITS_URL + '/visit', 5000, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!res.ok) throw new Error('site visits ' + res.status);
+        const d = await res.json();
+        const isNum = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+        if (!isNum(d.total) || !isNum(d.today) || !isNum(d.yesterday) || !Array.isArray(d.history)
+          || !d.history.every((e) => e && typeof e.date === 'string' && isNum(e.count))) throw new Error('site visits: bad response');
+        if (!counted) { try { localStorage.setItem(SITE_VISIT_COUNTED_KEY, today); } catch (e) { /* ignore */ } }
+        return d;
+      }
+
       async function initVisitCard() {
-        const local = incrementLocalVisit();
-        // ★ここで数えているのは「このブラウザで開いた回数」だけ（localStorage）。サイト全体の
-        //   アクセス数ではない。旧版は api.countapi.xyz（2023年にサービス終了）を叩いて失敗し、
-        //   端末内の数を「サイト訪問数」と表示していた。サイト全体の数字は Cloudflare Web Analytics
-        //   等の管理画面で見る（docs/portal-redesign/03-analytics.md）。
-        const total = local.total;
         const isEnVisit = document.documentElement.lang === 'en';
-        visitSub.textContent = isEnVisit
-          ? `Today: ${fmtNum(local.todayCount)} — counted in this browser only, not site-wide traffic`
-          : `本日 ${fmtNum(local.todayCount)} 回（このブラウザでの記録。サイト全体のアクセス数ではありません）`;
+        let total, todayCount, yesterday, history;
+        try {
+          const site = await fetchSiteVisits();
+          total = site.total; todayCount = site.today; yesterday = site.yesterday; history = site.history;
+          visitSub.textContent = isEnVisit
+            ? `Today: ${fmtNum(todayCount)} — site-wide, counted once per browser per day`
+            : `本日 ${fmtNum(todayCount)} 回（サイト全体・1ブラウザにつき1日1回まで集計）`;
+        } catch (e) {
+          // 取得できない（オフライン・Worker 側の停止など）→ このブラウザでの回数に落とし、見出しも正直に変える
+          const local = incrementLocalVisit();
+          total = local.total; todayCount = local.todayCount; yesterday = local.yesterday; history = local.weeklyHistory;
+          const title = document.querySelector('#dash-card-visit h3');
+          if (title) title.textContent = isEnVisit ? '👁️ Visits from this browser' : '👁️ この端末での訪問回数';
+          visitSub.textContent = isEnVisit
+            ? `Today: ${fmtNum(todayCount)} — site-wide count unavailable, showing this browser only`
+            : `本日 ${fmtNum(todayCount)} 回（サイト全体の数を取得できないため、このブラウザでの記録を表示しています）`;
+        }
         // F: yesterday comparison
         const trendEl = document.getElementById('home-visit-trend');
-        if (trendEl && local.yesterday > 0) {
-          const diff = local.todayCount - local.yesterday;
+        if (trendEl && yesterday > 0) {
+          const diff = todayCount - yesterday;
           const sign = diff > 0 ? '+' : '';
           const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '→';
           const color = diff > 0 ? 'var(--green)' : diff < 0 ? '#ef4444' : 'var(--muted)';
@@ -441,7 +471,7 @@ document.addEventListener('click', event => {
         }
         // G: sparkline
         const sparkEl = document.getElementById('home-visit-sparkline');
-        if (sparkEl) sparkEl.innerHTML = renderVisitSparkline(local.weeklyHistory);
+        if (sparkEl) sparkEl.innerHTML = renderVisitSparkline(history);
         // E: count-up + H: milestone
         animateCount(visitKpi, total, function() {
           const milestones = [
@@ -5395,7 +5425,7 @@ document.addEventListener('click', event => {
 
         const STORAGE_KEY = 'home-dashboard-layout-v1';
         const CARD_DEFS = [
-          { id: 'dash-card-visit', ja: 'この端末での訪問回数', en: 'Visits from this browser' },
+          { id: 'dash-card-visit', ja: 'サイト全体の訪問数', en: 'Site-wide visits' },
           { id: 'dash-card-weather', ja: '天気', en: 'Weather' },
           { id: 'dash-card-fx', ja: '円相場', en: 'Yen Rate' },
           { id: 'dash-card-stock', ja: '株価指数', en: 'Stock Index' },
@@ -5626,7 +5656,7 @@ document.addEventListener('click', event => {
       // ── ダッシュボード説明文 動的更新 ─────────────────────────
       (function initDashboardDesc() {
         const CARD_LABELS = {
-          'dash-card-visit':      { ja: 'この端末での訪問回数', en: 'Visits from this browser' },
+          'dash-card-visit':      { ja: 'サイト全体の訪問数', en: 'Site-wide visits' },
           'dash-card-weather':    { ja: '天気',              en: 'Weather' },
           'dash-card-fx':         { ja: '円相場',            en: 'Yen Rate' },
           'dash-card-stock':      { ja: '株価指数',          en: 'Stock Index' },
@@ -6865,7 +6895,7 @@ document.addEventListener('click', event => {
           'dash-layout-reset': '初期配置に戻す',
           'dash-layout-title': 'ダッシュボードの表示設定',
           'dash-layout-note': 'チェックで表示/非表示を切り替え、上下ボタンでカードの位置を変更できます。この設定はこのブラウザに保存されます。',
-          'dash-visit-title': '👁️ この端末での訪問回数',
+          'dash-visit-title': '👁️ サイト全体の訪問数',
           'dash-visit-link': '詳細ダッシュボードを開く →',
           'dash-fx-title': '💴 円相場（JPY）',
           'dash-fx-chart-label': '📉 過去30日間の対円レート推移（前月比%）',
@@ -7210,7 +7240,7 @@ document.addEventListener('click', event => {
           'dash-layout-reset': 'Reset Layout',
           'dash-layout-title': 'Dashboard Display Settings',
           'dash-layout-note': 'Use checkboxes to show or hide cards, and arrow buttons to change their order. This layout is saved in this browser.',
-          'dash-visit-title': '👁️ Visits from this browser',
+          'dash-visit-title': '👁️ Site-wide visits',
           'dash-visit-link': 'Open Full Dashboard →',
           'dash-fx-title': '💴 Yen Rate (JPY)',
           'dash-fx-chart-label': '📉 30-Day JPY Rate Trend (MoM%)',
