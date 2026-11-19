@@ -204,6 +204,18 @@ async function handleVideoTts(env, body, origin) {
   }
 }
 
+/** Site-wide visit count: POST /visit counts one visit and returns the totals, GET /visits only reads them. */
+async function handleSiteVisits(request, env, origin, increment) {
+  if (!env.VOCALIS_BUDGET) return jsonResponse({ error: 'unavailable' }, origin, 503);
+  const limited = await limitRequest(request, env, corsHeaders(origin));
+  if (limited) return limited;
+  try {
+    const object = env.VOCALIS_BUDGET.get(env.VOCALIS_BUDGET.idFromName('site-visits'));
+    const response = await object.fetch('https://budget/site-visits', { method: increment ? 'POST' : 'GET' });
+    return jsonResponseWithHeaders(await response.json(), { ...corsHeaders(origin), 'Cache-Control': 'no-store' }, response.status);
+  } catch { return jsonResponse({ error: 'unavailable' }, origin, 503); }
+}
+
 export default withSecurityGate('ai-proxy', {
   async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
@@ -237,10 +249,12 @@ export default withSecurityGate('ai-proxy', {
       return getVocalUsage(request, env, origin);
     }
     if (!isAllowed) return errorResponse(403, 'Forbidden');
+    if (request.method === 'GET' && url.pathname === '/visits') return handleSiteVisits(request, env, origin, false);
     if (request.method !== 'POST') return errorResponse(405, 'Method Not Allowed', corsHeaders(origin));
-    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts', '/oshi/research', '/health/photo', '/vocal/song', '/vocal/portrait', '/vocal/budget'].includes(url.pathname)) {
+    if (!['/', '/feedback', '/visit', '/video/script', '/video/image', '/video/tts', '/oshi/research', '/health/photo', '/vocal/song', '/vocal/portrait', '/vocal/budget'].includes(url.pathname)) {
       return errorResponse(404, 'Not Found', corsHeaders(origin));
     }
+    if (url.pathname === '/visit') return handleSiteVisits(request, env, origin, true);
     const limited = await limitRequest(request, env, corsHeaders(origin));
     if (limited) return limited;
 
@@ -485,7 +499,33 @@ export class VocalisBudget {
     if (url.pathname === '/configure' && request.method === 'POST') return this.configure(await request.json());
     if (url.pathname === '/settle' && request.method === 'POST') return this.settle(await request.json());
     if (url.pathname === '/quota' && request.method === 'POST') return this.quota(await request.json());
+    if (url.pathname === '/site-visits' && request.method === 'GET') return this.siteVisits(false);
+    if (url.pathname === '/site-visits' && request.method === 'POST') return this.siteVisits(true);
     return new Response('Not Found', { status: 404 });
+  }
+  /**
+   * Site-wide visit counter (home page card). Only the 'site-visits' instance is used for this, so it never mixes with
+   * the AI budgets. Stores numbers only (a running total + per-day counts for the last 14 days): no IP, no user agent.
+   * Days are Japan time (UTC+9) so "today" matches the visitors' day.
+   */
+  async siteVisits(increment) {
+    const dayOf = ms => new Date(ms + 9 * 3600_000).toISOString().slice(0, 10);
+    const now = Date.now();
+    const today = dayOf(now), yesterday = dayOf(now - 86400_000);
+    const result = await this.state.storage.transaction(async tx => {
+      const value = await tx.get('site') || { total: 0, days: {} };
+      if (increment) {
+        value.total += 1;
+        value.days[today] = (value.days[today] || 0) + 1;
+        const keep = new Set(Array.from({ length: 14 }, (_, i) => dayOf(now - i * 86400_000)));
+        for (const d of Object.keys(value.days)) if (!keep.has(d)) delete value.days[d];
+        await tx.put('site', value);
+      }
+      const history = Array.from({ length: 7 }, (_, i) => dayOf(now - (6 - i) * 86400_000))
+        .map(date => ({ date, count: value.days[date] || 0 }));
+      return { total: value.total, today: value.days[today] || 0, yesterday: value.days[yesterday] || 0, history };
+    });
+    return Response.json(result);
   }
   /**
    * Daily units shared by every AI path (chat, video, notebook). Only the 'ai-daily' instance is used for this,
