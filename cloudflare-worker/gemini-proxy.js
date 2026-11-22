@@ -204,6 +204,18 @@ async function handleVideoTts(env, body, origin) {
   }
 }
 
+/** Site-wide visit count: POST /visit counts one visit and returns the totals, GET /visits only reads them. */
+async function handleSiteVisits(request, env, origin, increment) {
+  if (!env.VOCALIS_BUDGET) return jsonResponse({ error: 'unavailable' }, origin, 503);
+  const limited = await limitRequest(request, env, corsHeaders(origin));
+  if (limited) return limited;
+  try {
+    const object = env.VOCALIS_BUDGET.get(env.VOCALIS_BUDGET.idFromName('site-visits'));
+    const response = await object.fetch('https://budget/site-visits', { method: increment ? 'POST' : 'GET' });
+    return jsonResponseWithHeaders(await response.json(), { ...corsHeaders(origin), 'Cache-Control': 'no-store' }, response.status);
+  } catch { return jsonResponse({ error: 'unavailable' }, origin, 503); }
+}
+
 export default withSecurityGate('ai-proxy', {
   async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
@@ -237,10 +249,12 @@ export default withSecurityGate('ai-proxy', {
       return getVocalUsage(request, env, origin);
     }
     if (!isAllowed) return errorResponse(403, 'Forbidden');
+    if (request.method === 'GET' && url.pathname === '/visits') return handleSiteVisits(request, env, origin, false);
     if (request.method !== 'POST') return errorResponse(405, 'Method Not Allowed', corsHeaders(origin));
-    if (!['/', '/feedback', '/video/script', '/video/image', '/video/tts', '/oshi/research', '/health/photo', '/vocal/song', '/vocal/portrait', '/vocal/budget'].includes(url.pathname)) {
+    if (!['/', '/feedback', '/visit', '/video/script', '/video/image', '/video/tts', '/oshi/research', '/health/photo', '/vocal/song', '/vocal/portrait', '/vocal/budget'].includes(url.pathname)) {
       return errorResponse(404, 'Not Found', corsHeaders(origin));
     }
+    if (url.pathname === '/visit') return handleSiteVisits(request, env, origin, true);
     const limited = await limitRequest(request, env, corsHeaders(origin));
     if (limited) return limited;
 
@@ -278,13 +292,14 @@ export default withSecurityGate('ai-proxy', {
       if (!secureEqual(request.headers.get('X-Vocalis-Code') || '', pin)) return jsonResponse({ error: 'アクセスコードが正しくありません。' }, origin, 401);
       if (!env.VOCALIS_BUDGET) return jsonResponse({ error: 'VOCALIS budget service is unavailable.' }, origin, 503);
       const ceiling = Number(env.VOCALIS_MONTHLY_BUDGET_USD) || 0.50;
-      const reservation = await reserveVocalisBudget(env.VOCALIS_BUDGET, operation, ceiling);
+      const reservation = await reserveVocalisBudget(env.VOCALIS_BUDGET, operation, ceiling, body.requestId);
+      if (reservation.duplicate) return jsonResponse({ error: 'この生成リクエストは処理中または処理済みです。利用額を更新してください。' }, origin, 409);
       if (!reservation.ok) return jsonResponse({ error: '今月のVOCALIS AI利用上限に達しました。来月まで生成を停止します。', usage: reservation.usage }, origin, 429);
       const result = operation === 'song' ? await handleVocalSong(env, body) : await handleVocalPortrait(env, body);
       const { usage, ...payload } = result.body || {};
       const actual = result.status >= 400 ? reservation.reservedUsd : (usage?.estimatedUsd || reservation.reservedUsd);
       const settled = await settleVocalisBudget(env.VOCALIS_BUDGET, reservation.id, actual);
-      return jsonResponse({ ...(payload || {}), usage: settled }, origin, result.status);
+      return jsonResponse({ ...(payload || {}), usage: { ...settled, requestEstimatedUsd: actual } }, origin, result.status);
     }
 
     // ── 推し活ログ: イベントリサーチ（ニュースRSS・AI不使用・キー不要）──
@@ -459,10 +474,10 @@ function secureEqual(a, b) {
   return diff === 0;
 }
 
-async function reserveVocalisBudget(namespace, operation, ceiling) {
+async function reserveVocalisBudget(namespace, operation, ceiling, requestId) {
   const id = namespace.idFromName('vocalis-global');
   const response = await namespace.get(id).fetch('https://budget/reserve', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation, ceiling }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation, ceiling, requestId }),
   });
   return response.json();
 }
@@ -484,7 +499,33 @@ export class VocalisBudget {
     if (url.pathname === '/configure' && request.method === 'POST') return this.configure(await request.json());
     if (url.pathname === '/settle' && request.method === 'POST') return this.settle(await request.json());
     if (url.pathname === '/quota' && request.method === 'POST') return this.quota(await request.json());
+    if (url.pathname === '/site-visits' && request.method === 'GET') return this.siteVisits(false);
+    if (url.pathname === '/site-visits' && request.method === 'POST') return this.siteVisits(true);
     return new Response('Not Found', { status: 404 });
+  }
+  /**
+   * Site-wide visit counter (home page card). Only the 'site-visits' instance is used for this, so it never mixes with
+   * the AI budgets. Stores numbers only (a running total + per-day counts for the last 14 days): no IP, no user agent.
+   * Days are Japan time (UTC+9) so "today" matches the visitors' day.
+   */
+  async siteVisits(increment) {
+    const dayOf = ms => new Date(ms + 9 * 3600_000).toISOString().slice(0, 10);
+    const now = Date.now();
+    const today = dayOf(now), yesterday = dayOf(now - 86400_000);
+    const result = await this.state.storage.transaction(async tx => {
+      const value = await tx.get('site') || { total: 0, days: {} };
+      if (increment) {
+        value.total += 1;
+        value.days[today] = (value.days[today] || 0) + 1;
+        const keep = new Set(Array.from({ length: 14 }, (_, i) => dayOf(now - i * 86400_000)));
+        for (const d of Object.keys(value.days)) if (!keep.has(d)) delete value.days[d];
+        await tx.put('site', value);
+      }
+      const history = Array.from({ length: 7 }, (_, i) => dayOf(now - (6 - i) * 86400_000))
+        .map(date => ({ date, count: value.days[date] || 0 }));
+      return { total: value.total, today: value.days[today] || 0, yesterday: value.days[yesterday] || 0, history };
+    });
+    return Response.json(result);
   }
   /**
    * Daily units shared by every AI path (chat, video, notebook). Only the 'ai-daily' instance is used for this,
@@ -517,33 +558,53 @@ export class VocalisBudget {
     await this.state.storage.put('ceilingUsd', ceilingUsd);
     return Response.json({ ...(await this.read()), saved: true });
   }
+  async loadJobs(tx) {
+    const jobs=await tx.get('vocalJobs')||{};
+    // Older deployments kept reservations separately. Import in the same
+    // transaction as settlement, preserving the already reserved aggregate.
+    if(tx.list){
+      const legacy=await tx.list({prefix:'reservation:'});
+      for(const [key,job] of legacy){
+        const id=key.slice('reservation:'.length);
+        if(!Object.hasOwn(jobs,id)&&job&&['song','portrait'].includes(job.operation)&&Number.isFinite(job.reserve)&&job.reserve>0)
+          jobs[id]={...job,expires:Date.now()+10*60*1000,done:false};
+        await tx.delete(key);
+      }
+    }
+    return jobs;
+  }
   async reserve(body) {
-    const operation = ['song', 'portrait'].includes(body.operation) ? body.operation : null;
-    if (!operation) return Response.json({ ok: false, error: 'invalid operation' }, { status: 400 });
-    const id = crypto.randomUUID(), reserve = operation === 'song' ? 0.02 : 0.01;
-    const ceiling = await this.configuredCeiling();
-    const result = await this.state.storage.transaction(async tx => {
-      let value = await tx.get('usage') || { month: this.month(), spentUsd: 0, reservedUsd: 0, songs: 0, portraits: 0 };
-      if (value.month !== this.month()) value = { month: this.month(), spentUsd: 0, reservedUsd: 0, songs: 0, portraits: 0 };
-      if (value.spentUsd + value.reservedUsd + reserve > ceiling + 1e-9) return { ok: false, usage: { ...value, ceilingUsd: ceiling } };
-      value.reservedUsd += reserve; value[operation === 'song' ? 'songs' : 'portraits'] += 1;
-      await tx.put('usage', value);
-      return { ok: true, usage: { ...value, ceilingUsd: ceiling } };
-    });
-    if (result.ok) await this.state.storage.put('reservation:' + id, { month: result.usage.month, reserve, operation });
-    return Response.json({ ...result, ...(result.ok ? { id, reservedUsd: reserve } : {}) });
+    const operation = ['song','portrait'].includes(body.operation) ? body.operation : null;
+    if (!operation || (body.requestId !== undefined && !/^[a-zA-Z0-9-]{16,64}$/.test(body.requestId))) return Response.json({ok:false,error:'invalid request'}, {status:400});
+    const id=body.requestId||crypto.randomUUID(), reserve=operation==='song'?.02:.01, ceiling=await this.configuredCeiling(), month=this.month(), now=Date.now();
+    const result=await this.state.storage.transaction(async tx=>{
+      const jobs=await this.loadJobs(tx);
+      let value=await tx.get('usage')||{month,spentUsd:0,reservedUsd:0,songs:0,portraits:0};
+      if(value.month!==month)value={month,spentUsd:0,reservedUsd:0,songs:0,portraits:0};
+      for(const [key,job]of Object.entries(jobs)){
+        if(job.month!==month){delete jobs[key];continue;}
+        if(!job.done&&job.expires<=now){value.reservedUsd=Math.max(0,value.reservedUsd-job.reserve);value.spentUsd+=job.reserve;job.done=true;}
+      }
+      if(jobs[id]){await tx.put('usage',value);await tx.put('vocalJobs',jobs);return {ok:false,duplicate:true};}
+      if(value.spentUsd+value.reservedUsd+reserve>ceiling+1e-9){await tx.put('usage',value);await tx.put('vocalJobs',jobs);return {ok:false,usage:{...value,ceilingUsd:ceiling}};}
+      // Bound metadata independently of the public monthly spending limit.
+      if(Object.keys(jobs).length>=400)return {ok:false,usage:{...value,ceilingUsd:ceiling}};
+      jobs[id]={month,reserve,operation,expires:now+10*60*1000,done:false};
+      value.reservedUsd+=reserve;value[operation==='song'?'songs':'portraits']++;
+      await tx.put('usage',value);await tx.put('vocalJobs',jobs);
+      return {ok:true,id,reservedUsd:reserve,usage:{...value,ceilingUsd:ceiling}};
+    });return Response.json(result);
   }
   async settle(body) {
-    const pending = await this.state.storage.get('reservation:' + body.reservationId);
-    if (!pending) return Response.json(await this.read());
-    await this.state.storage.delete('reservation:' + body.reservationId);
-    const actual = Math.max(0, Math.min(pending.reserve, Number(body.actualUsd) || 0));
-    const value = await this.state.storage.transaction(async tx => {
-      let usage = await tx.get('usage') || { month: this.month(), spentUsd: 0, reservedUsd: 0, songs: 0, portraits: 0 };
-      if (usage.month !== pending.month) return usage;
-      usage.reservedUsd = Math.max(0, usage.reservedUsd - pending.reserve); usage.spentUsd += actual;
-      await tx.put('usage', usage); return usage;
-    });
-    return Response.json({ ...value, ceilingUsd: await this.configuredCeiling() });
+    const value=await this.state.storage.transaction(async tx=>{
+      const jobs=await this.loadJobs(tx),job=jobs[body.reservationId];
+      let usage=await tx.get('usage')||{month:this.month(),spentUsd:0,reservedUsd:0,songs:0,portraits:0};
+      if(usage.month!==this.month())usage={month:this.month(),spentUsd:0,reservedUsd:0,songs:0,portraits:0};
+      if(!job||job.done||job.month!==usage.month){await tx.put('vocalJobs',jobs);await tx.put('usage',usage);return usage;}
+      const actual=Number.isFinite(body.actualUsd)?Math.max(0,body.actualUsd):job.reserve;
+      usage.reservedUsd=Math.max(0,usage.reservedUsd-job.reserve);usage.spentUsd+=actual;job.done=true;
+      await tx.put('usage',usage);await tx.put('vocalJobs',jobs);return usage;
+    });return Response.json({...value,ceilingUsd:await this.configuredCeiling()});
   }
+
 }
