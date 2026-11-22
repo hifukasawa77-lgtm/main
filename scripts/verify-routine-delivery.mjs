@@ -100,6 +100,23 @@ function remoteBranch(branch) {
   } catch { return undefined; }
 }
 
+/**
+ * `claude/<skill>*` に一致するリモートブランチを全部探す（CLAUDE.mdの表に未反映の新しい
+ * 日付付きブランチを拾うため）。表の更新を忘れても検査が偽の赤を出さないようにする
+ * （2026-10-12・2026-10-25の2回、表が古いブランチ名のままで「動いていない」と誤報した実例あり）。
+ * ネットワークが無ければ undefined を返す（判定不能。表に書かれた分だけで判定を続ける）。
+ */
+function discoverBranches(skill) {
+  try {
+    const out = execFileSync('git', ['ls-remote', '--heads', 'origin', `claude/${skill}*`],
+      { cwd: ROOT, encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.trim().split('\n').filter(Boolean).map((line) => {
+      const [sha, ref] = line.split('\t');
+      return { br: ref.replace(/^refs\/heads\//, ''), sha };
+    });
+  } catch { return undefined; }
+}
+
 /** そのコミットの日付（取得できなければ null）。 */
 function commitDate(sha) {
   try {
@@ -153,11 +170,22 @@ let offline = false;
 const branchShas = new Map();
 for (const r of rows) {
   const resolved = [];
+  const seen = new Set();
   for (const br of artifactBranches(r.artifact)) {
     const sha = remoteBranch(br);
     if (sha === undefined) offline = true;
     resolved.push({ br, sha });
+    seen.add(br);
     if (sha) { try { execFileSync('git', ['fetch', '-q', 'origin', sha], { cwd: ROOT, timeout: 30000, stdio: 'ignore' }); } catch {} }
+  }
+  // 表に書かれていない `claude/<skill>-*` ブランチも拾う（表の更新忘れを偽の赤にしない）。
+  const discovered = discoverBranches(r.skill);
+  if (discovered === undefined) offline = true;
+  for (const { br, sha } of discovered ?? []) {
+    if (seen.has(br)) continue;
+    resolved.push({ br, sha });
+    seen.add(br);
+    try { execFileSync('git', ['fetch', '-q', 'origin', sha], { cwd: ROOT, timeout: 30000, stdio: 'ignore' }); } catch {}
   }
   branchShas.set(r.skill, resolved);
 }

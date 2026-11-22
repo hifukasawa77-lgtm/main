@@ -255,7 +255,8 @@ python3 scripts/gen-top-thumbs.py         # カードに画像を足したら軽
 - **新着順の日付は `data/catalog-meta.json`（git 履歴から生成）だけ**。手で書かない。**浅いクローンでは生成を拒否する**
   （全部がクローンした日になる）。`git fetch --filter=blob:none --unshallow origin main` で直る
 - **人気順・アクセスランキングは作らない**（元データが無い。解析は未導入＝`docs/portal-redesign/03-analytics.md`）。
-  訪問数カードは**この端末の回数**しか数えていないので、そう表示する
+  訪問数カードは2026-11-19（PR #440）から**サイト全体の集計**（Cloudflare Worker の Durable Object）。
+  以前は「この端末の回数のみ」だったが、この変更で全訪問者分を数えるようになった（`tests/site-visits.test.mjs`）
 - サムネは原画を直接使わず `assets/thumbs/` の軽量版（原画はゲームが原寸前提で使うので縮めない）
 
 ## Service Worker（sw.js）の必須チェック — 全ページの通信に効く
@@ -769,7 +770,7 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 
 | スキル | スケジュール（JST） | 成果物 | mainへの直接push |
 |---|---|---|---|
-| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-09-30`・PR #363） | 禁止（深澤承認制） |
+| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-11-18`・PR #439。`claude/agent-evolve-2026-10-14`はPR #411として2026-11-18にマージ済み。`claude/agent-evolve-2026-09-30`はPR #363として2026-10-12にマージ済み。旧`claude/agent-evolve`はPR #272と共にclose。理由は下記） | 禁止（深澤承認制） |
 | `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ。Vaultの写しと痕跡は `claude/site-proposal-vault` | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
@@ -797,6 +798,14 @@ node scripts/verify-routine-delivery.mjs   # 表の各Routineが成果物を出�
 - harness-lint 検査#15 は同じ内容を**△警告**で出す（✗にしない理由は検査#15のコメント参照。
   Routineが動くかはAPI側の設定に依存し、リポジトリのコードでは直せないため）。
   **△が出たら必ず中身を見ること**
+- **原因2（2026-09-30 特定）: 固定ブランチ名が「`origin/main`と共通祖先を持たない（unrelated
+  histories）」状態になることがある**。`claude/agent-evolve`は2026-07-22時点の旧mainから分岐した
+  まま2ヶ月以上放置され、リポジトリ本体側の履歴操作（詳細未特定）で`origin/main`との共通祖先を
+  失っていた。通常pushもfast-forwardマージも効かず、`force-with-lease`はauto-modeの破壊的git操作
+  ガードに正しく拒否される。**直し方は強制上書きではない**: `git checkout -B claude/<skill>-<日付>
+  origin/main`で新しいブランチ名から作り直し、新PRを起票して旧PR（本件はPR #272）はcloseする。
+  この表の「成果物」欄は実際に使われているブランチ名（日付suffix付き）を正として常に更新すること
+  （古い名前のまま載せると、検査#15がその死んだブランチを見張り続けて△が消えない）
 
 ## Obsidian 第二の脳（セカンドブレイン）
 - `obsidian-vault/` をClaude Codeの永続メモリとして運用する（Obsidian互換のMarkdown Vault）
@@ -1223,6 +1232,14 @@ node --test tests/security.test.mjs          # Worker: 全応答に nosniff / CS
 - **ディスクが厳しいときは軽量クローンを使う**。全部落とすと1.3GB（9割がassets）。
   `--depth 1 --filter=blob:none --sparse` で18MBまで落ち、触るゲームのassetsだけ後から足せる。
   手順とスクリプト: `docs/クローンを軽くする.md` / `scripts/slim-clone.ps1`
+- **常駐セッションで「no space left on device」が出たら、まず `.git/objects/pack/tmp_pack_*` を見る**。
+  `git fetch` が中断（バックグラウンドのタイムアウト強制終了・ディスク枯渇自体）すると、確定しきれなかった
+  一時パックファイルが残り続け、参照されない「garbage」のまま積み上がる（`git count-objects -v` の
+  `size-garbage` で確認。2026-11-01、週次 `/self-improve` セッションで27GB・30本まで蓄積しリポジトリが
+  全体で30GB超に膨張していた）。`rm -f .git/objects/pack/tmp_pack_*` は未参照の一時ファイルなので安全に
+  削除できる（削除後は `git fsck --connectivity-only` で実害が無いことを確認）。
+  `verify-routine-delivery.mjs` のブランチ自動発見機能（`discoverBranches()`）は候補ブランチごとに
+  `git fetch` するため、他の検査より発生源になりやすい
 - `.edge-test-profile/` はMicrosoft Edgeのブラウザデータ。gitignoreすること
 - `shogi_rpg_enhanced.jsx` はJSX形式だがビルド環境なし。取り扱い注意
 
