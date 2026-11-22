@@ -446,6 +446,29 @@ else
   note_warn "verify-routine-delivery.mjs か node が無い（Routineの成果物を確認できない）"
 fi
 
+echo "== 16. git一時パックファイルの肥大化（.git/objects/pack/tmp_pack_*・ディスク枯渇の既知再発パターン）=="
+# git fetch が中断（バックグラウンドタスクのタイムアウト強制終了・ディスク枯渇自体）すると、
+# 確定しきれなかった一時パックファイルが参照されない garbage のまま積み上がる
+# （2026-11-01に27GB・2026-11-22に15.5GBで3週間を空けて2回発生。verify-routine-delivery.mjsの
+# discoverBranches()が候補ブランチごとにgit fetchするため発生源になりやすい）。
+# CLAUDE.mdに手順を書いただけでは気づかれず再発したため、機械検査として追加する（警告のみ：
+# 削除は`rm -f`で安全だが実行判断はLLM/人の作業）。閾値500MBは「今すぐ困る量」でなく
+# 「気づかず放置されると困る量」を狙った値
+TMP_PACK_BYTES=0
+if [ -d .git/objects/pack ]; then
+  for f in .git/objects/pack/tmp_pack_*; do
+    [ -f "$f" ] || continue
+    sz=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+    TMP_PACK_BYTES=$((TMP_PACK_BYTES + sz))
+  done
+fi
+TMP_PACK_MB=$((TMP_PACK_BYTES / 1024 / 1024))
+if [ "$TMP_PACK_MB" -ge 500 ]; then
+  note_warn "git一時パックファイルが${TMP_PACK_MB}MBまで肥大化。rm -f .git/objects/pack/tmp_pack_* で削除可（削除後 git fsck --connectivity-only で実害なしを確認）"
+else
+  ok ".git/objects/pack/tmp_pack_*（${TMP_PACK_MB}MB・問題なし）"
+fi
+
 echo ""
 if [ "$FAIL" = 0 ]; then
   if [ "$WARN" = 0 ]; then

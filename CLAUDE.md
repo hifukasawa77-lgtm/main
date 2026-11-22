@@ -255,7 +255,8 @@ python3 scripts/gen-top-thumbs.py         # カードに画像を足したら軽
 - **新着順の日付は `data/catalog-meta.json`（git 履歴から生成）だけ**。手で書かない。**浅いクローンでは生成を拒否する**
   （全部がクローンした日になる）。`git fetch --filter=blob:none --unshallow origin main` で直る
 - **人気順・アクセスランキングは作らない**（元データが無い。解析は未導入＝`docs/portal-redesign/03-analytics.md`）。
-  訪問数カードは**この端末の回数**しか数えていないので、そう表示する
+  訪問数カードは2026-11-19（PR #440）から**サイト全体の集計**（Cloudflare Worker の Durable Object）。
+  以前は「この端末の回数のみ」だったが、この変更で全訪問者分を数えるようになった（`tests/site-visits.test.mjs`）
 - サムネは原画を直接使わず `assets/thumbs/` の軽量版（原画はゲームが原寸前提で使うので縮めない）
 
 ## Service Worker（sw.js）の必須チェック — 全ページの通信に効く
@@ -769,7 +770,7 @@ Claude Code Remote の Routine で自動起動されるスキル。**Routineを�
 
 | スキル | スケジュール（JST） | 成果物 | mainへの直接push |
 |---|---|---|---|
-| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-10-14`・PR #411。`claude/agent-evolve-2026-09-30`はPR #363として2026-10-12にマージ済み。旧`claude/agent-evolve`はPR #272と共にclose。理由は下記） | 禁止（深澤承認制） |
+| `/agent-evolve` | 毎週木曜 05:00 | ローリングPR `claude/agent-evolve`（常駐セッションの書き込み先は `claude/agent-evolve-2026-11-18`・PR #439。`claude/agent-evolve-2026-10-14`はPR #411として2026-11-18にマージ済み。`claude/agent-evolve-2026-09-30`はPR #363として2026-10-12にマージ済み。旧`claude/agent-evolve`はPR #272と共にclose。理由は下記） | 禁止（深澤承認制） |
 | `/site-proposal` | 毎週月曜 07:00 | GitHub Issue（ラベル `proposal`）※提案のみ。Vaultの写しと痕跡は `claude/site-proposal-vault` | 禁止（コード変更なし） |
 | `/self-improve` | 毎週日曜 21:00 | ローリングPR `claude/self-improve` | 禁止（深澤承認制） |
 | `/marketer-evolve` | 毎週火曜 20:00 | ローリングPR `claude/marketer-evolve` | 禁止（深澤承認制） |
