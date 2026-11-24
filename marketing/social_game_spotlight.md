@@ -1695,7 +1695,7 @@ Free in your browser, no install required.
 カタン風ボードゲーム。1人vsAI3体で資源収集・開拓地建設・開発カードを駆使しVP10点を目指す
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hexlan.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -1707,7 +1707,7 @@ Free in your browser, no install required.
 Catan-style board game vs 3 AI opponents — gather resources, build settlements and race to 10 victory points
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hexlan.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -1717,7 +1717,7 @@ Free in your browser, no install required.
 🏝️ HEXLAN AI
 カタン風ボードゲーム。1人vsAI3体で資源収集・開拓地建設・開発カードを駆使しVP10点を目指す
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/catan.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/hexlan.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
@@ -1730,7 +1730,7 @@ Free in your browser, no install required.
 ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/tetra_territory.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -1742,7 +1742,7 @@ Free in your browser, no install required.
 Blokus-style board game — place polyomino pieces on a 20x20 grid, corner-touch rule, vs AI
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/tetra_territory.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -1752,17 +1752,17 @@ Free in your browser, no install required.
 🧩 テトラ陣地
 ブロックス風ボードゲーム。20×20マスにポリオミノを配置し角タッチルールで陣地を拡大するAI対戦
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/tetra_territory.html
 #ブラウザゲーム #個人開発 #ボードゲーム
 ```
 
-## GLASS PINBALL / Glass Pinball (`pinball`)
+## NEON PINBALL / Neon Pinball (`pinball`)
 
 ### game-pinball-x-ja
 ```
-🎯 GLASS PINBALL
+🪩 NEON PINBALL
 
-物理エンジンの縦型ピンボール。フリッパーでバンパー・ドロップターゲットを狙う
+GameKit製の縦型ピンボール。重力と反射の物理エンジンで、左右フリッパーを操りバンパー・スリングショット・ドロップターゲットを狙う。プランジャー長押しで発射、残ボール3、ハイスコア記録
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pinball.html
@@ -1772,9 +1772,9 @@ Free in your browser, no install required.
 
 ### game-pinball-x-en
 ```
-🎯 Glass Pinball
+🪩 Neon Pinball
 
-Physics pinball — flippers, bumpers and drop targets
+A neon-styled physics pinball built on GameKit — flip the flippers, hit bumpers and slingshots, launch with the plunger
 
 Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pinball.html
@@ -1784,20 +1784,20 @@ Free in your browser, no install required.
 
 ### game-pinball-bsky-ja
 ```
-🎯 GLASS PINBALL
-物理エンジンの縦型ピンボール。フリッパーでバンパー・ドロップターゲットを狙う
+🪩 NEON PINBALL
+GameKit製の縦型ピンボール。重力と反射の物理エンジンで、左右フリッパーを操りバンパー・スリングショット・ドロップターゲットを狙う。プランジャー長押しで発射、残ボール3、ハイスコア記録
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/pinball.html
 #ブラウザゲーム #個人開発 #アクションゲーム
 ```
 
-## 影修羅伝 / Kage Shura Den (`kage-shura`)
+## 影修羅伝 / Kage Shura Den (`kage-shura-den`)
 
-### game-kage-shura-x-ja
+### game-kage-shura-den-x-ja
 ```
 🥷 影修羅伝
 
-忍者が戦国の街道を駆ける和風2Dアクション。必殺技3種と大鬼ボス戦
+明王の力を宿した忍者が戦国の街道を駆ける、色彩豊かな和風伝奇2Dアクション。超大跳躍・斬撃・必殺技3種（火界呪・風斬・雷鼓）で戦う。全2ステージ＋大鬼ボス戦
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kage_shura_den.html
@@ -1805,11 +1805,11 @@ Free in your browser, no install required.
 #個人開発 #ブラウザゲーム #アクションゲーム
 ```
 
-### game-kage-shura-x-en
+### game-kage-shura-den-x-en
 ```
 🥷 Kage Shura Den
 
-Japanese 2D ninja action — 3 special arts and an ogre boss
+Colorful Japanese period 2D action — a ninja with Myo-o power dashes through the Sengoku era with huge jumps, slashes and 3 special moves
 
 Free in your browser, no install required.
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kage_shura_den.html
@@ -1817,12 +1817,47 @@ Free in your browser, no install required.
 #indiedev #browsergames #actiongame
 ```
 
-### game-kage-shura-bsky-ja
+### game-kage-shura-den-bsky-ja
 ```
 🥷 影修羅伝
-忍者が戦国の街道を駆ける和風2Dアクション。必殺技3種と大鬼ボス戦
+明王の力を宿した忍者が戦国の街道を駆ける、色彩豊かな和風伝奇2Dアクション。超大跳躍・斬撃・必殺技3種（火界呪・風斬・雷鼓）で戦う。全2ステージ＋大鬼ボス戦
 ブラウザで無料・インストール不要。
 ▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kage_shura_den.html
+#ブラウザゲーム #個人開発 #アクションゲーム
+```
+
+## ターボカート・グランプリ / Turbo Kart Grand Prix (`kart-racer`)
+
+### game-kart-racer-x-ja
+```
+🏎️ ターボカート・グランプリ
+
+オリジナルキャラのカートで3周レース。擬似3D三人称視点、ドリフトでミニターボ発動、ニトロ・オイル缶・スターショット等のアイテムでライバル5台を抜き去る
+
+ブラウザで無料・インストール不要、今すぐ遊べます。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
+
+#個人開発 #ブラウザゲーム #アクションゲーム
+```
+
+### game-kart-racer-x-en
+```
+🏎️ Turbo Kart Grand Prix
+
+3-lap kart race with original characters, pseudo-3D third-person view — drift for mini-turbos and use items to pass 5 rivals
+
+Free in your browser, no install required.
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
+
+#indiedev #browsergames #actiongame
+```
+
+### game-kart-racer-bsky-ja
+```
+🏎️ ターボカート・グランプリ
+オリジナルキャラのカートで3周レース。擬似3D三人称視点、ドリフトでミニターボ発動、ニトロ・オイル缶・スターショット等のアイテムでライバル5台を抜き去る
+ブラウザで無料・インストール不要。
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
 #ブラウザゲーム #個人開発 #アクションゲーム
 ```
 
@@ -1870,7 +1905,7 @@ Free in your browser, no install required.
 三角形ピースをひし形の盤に敷き詰める陣取りAI対戦。角タッチルール
 
 ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus_trigon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/tri_territory.html
 
 #個人開発 #ブラウザゲーム #ボードゲーム
 ```
@@ -1882,7 +1917,7 @@ Free in your browser, no install required.
 Triangle-piece territory game on a hex-diamond board vs AI, corner-touch rule
 
 Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus_trigon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/tri_territory.html
 
 #indiedev #browsergames #boardgame
 ```
@@ -1892,41 +1927,6 @@ Free in your browser, no install required.
 🔺 トライ陣地
 三角形ピースをひし形の盤に敷き詰める陣取りAI対戦。角タッチルール
 ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/blokus_trigon.html
+▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/tri_territory.html
 #ブラウザゲーム #個人開発 #ボードゲーム
-```
-
-## ターボカート・グランプリ / Turbo Kart Grand Prix (`kart`)
-
-### game-kart-x-ja
-```
-🏎️ ターボカート・グランプリ
-
-世界9コースを巡るカートレース。ドリフトのミニターボとアイテムで5台を抜く
-
-ブラウザで無料・インストール不要、今すぐ遊べます。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
-
-#個人開発 #ブラウザゲーム #アクションゲーム
-```
-
-### game-kart-x-en
-```
-🏎️ Turbo Kart Grand Prix
-
-Kart racing world tour across 9 courses — drift boosts and items vs 5 rivals
-
-Free in your browser, no install required.
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
-
-#indiedev #browsergames #actiongame
-```
-
-### game-kart-bsky-ja
-```
-🏎️ ターボカート・グランプリ
-世界9コースを巡るカートレース。ドリフトのミニターボとアイテムで5台を抜く
-ブラウザで無料・インストール不要。
-▶ hideの部屋 https://hifukasawa77-lgtm.github.io/main/kart_racer.html
-#ブラウザゲーム #個人開発 #アクションゲーム
 ```
