@@ -167,4 +167,3 @@ https://hifukasawa77-lgtm.github.io/main/
 
 - スクリーンショット: OGP画像（assets/og-image.png、1200×630px）が使えます
 - 各ゲームのサムネイル: `assets/` フォルダ内に `.png` / `.svg` 形式で保存
-- メールアドレス: hi.fukasawa77@gmail.com
